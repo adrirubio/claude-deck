@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Backgrounds - Clean white */
+    --background: 0 0% 99%;
+    --foreground: 0 0% 9%;
+
+    /* Cards & Surfaces */
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    /* Primary - Matrix green (deeper for light mode contrast) */
+    --primary: 142 60% 35%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary - Neutral gray */
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 20%;
+
+    /* Muted */
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    /* Accent - Matching green */
+    --accent: 142 60% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Destructive */
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Status Colors */
+    --success: 142 60% 35%;
+    --success-foreground: 0 0% 100%;
+    --warning: 45 80% 45%;
+    --warning-foreground: 0 0% 9%;
+    --info: 200 60% 45%;
+    --info-foreground: 0 0% 100%;
+
+    /* Borders & Inputs */
+    --border: 0 0% 88%;
+    --input: 0 0% 88%;
+    --ring: 142 60% 35%;
+
+    --radius: 0.5rem;
+
+    /* Chart Colors - distinguishable palette */
+    --chart-1: 142 60% 40%;
+    --chart-2: 180 50% 40%;
+    --chart-3: 45 70% 45%;
+    --chart-4: 200 50% 45%;
+    --chart-5: 0 55% 45%;
+  }
+
+  .dark {
+    /* Backgrounds - Near-black terminal */
+    --background: 0 0% 6%;
+    --foreground: 0 0% 90%;
+
+    /* Cards & Surfaces */
+    --card: 0 0% 9%;
+    --card-foreground: 0 0% 90%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 90%;
+
+    /* Primary - Matrix green (bright for dark mode) */
+    --primary: 142 70% 45%;
+    --primary-foreground: 0 0% 6%;
+
+    /* Secondary */
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 85%;
+
+    /* Muted */
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 55%;
+
+    /* Accent - Matching green */
+    --accent: 142 70% 45%;
+    --accent-foreground: 0 0% 6%;
+
+    /* Destructive */
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Status Colors */
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 6%;
+    --warning: 45 90% 50%;
+    --warning-foreground: 0 0% 6%;
+    --info: 200 70% 50%;
+    --info-foreground: 0 0% 100%;
+
+    /* Borders & Inputs */
+    --border: 0 0% 18%;
+    --input: 0 0% 18%;
+    --ring: 142 70% 45%;
+
+    /* Chart Colors - brighter for dark mode */
+    --chart-1: 142 70% 50%;
+    --chart-2: 180 50% 50%;
+    --chart-3: 45 80% 55%;
+    --chart-4: 200 60% 55%;
+    --chart-5: 0 60% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  .bg-gradient-brand {
+    background: linear-gradient(
+      135deg,
+      hsl(0 0% 98%) 0%,
+      hsl(0 0% 99%) 50%,
+      hsl(0 0% 97%) 100%
+    );
+  }
+
+  .dark .bg-gradient-brand {
+    background: linear-gradient(
+      135deg,
+      hsl(0 0% 7%) 0%,
+      hsl(0 0% 6%) 50%,
+      hsl(0 0% 8%) 100%
+    );
+  }
+}

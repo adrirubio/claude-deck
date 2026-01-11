@@ -1,0 +1,206 @@
+import { useState, useEffect, useCallback } from "react";
+import type { Plugin, MarketplacePlugin, MarketplaceResponse, PluginTab } from "@/types/plugins";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { RefreshCw, Package, Store, Settings } from "lucide-react";
+import { InstalledPlugins } from "./InstalledPlugins";
+import { PluginDetails } from "./PluginDetails";
+import { MarketplaceBrowser } from "./MarketplaceBrowser";
+import { PluginInstallWizard } from "./PluginInstallWizard";
+import { MarketplaceManager } from "./MarketplaceManager";
+import { apiClient, buildEndpoint } from "@/lib/api";
+import { useProjectContext } from "@/contexts/ProjectContext";
+import { toast } from "sonner";
+
+export function PluginsPage() {
+  const { activeProject } = useProjectContext();
+  const [activeTab, setActiveTab] = useState<PluginTab>("installed");
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [marketplaces, setMarketplaces] = useState<MarketplaceResponse[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Plugin details dialog
+  const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+
+  // Install wizard
+  const [pluginToInstall, setPluginToInstall] = useState<MarketplacePlugin | null>(null);
+  const [installMarketplaceName, setInstallMarketplaceName] = useState<string | null>(null);
+  const [installWizardOpen, setInstallWizardOpen] = useState(false);
+
+  // Show marketplace manager
+  const [showMarketplaceManager, setShowMarketplaceManager] = useState(false);
+
+  const fetchPlugins = useCallback(async () => {
+    try {
+      const endpoint = buildEndpoint("plugins", { project_path: activeProject?.path });
+      const data = await apiClient<{ plugins: Plugin[] }>(endpoint);
+      setPlugins(data.plugins || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load plugins");
+    }
+  }, [activeProject?.path]);
+
+  const fetchMarketplaces = useCallback(async () => {
+    try {
+      const endpoint = buildEndpoint("plugins/marketplaces", { project_path: activeProject?.path });
+      const data = await apiClient<{ marketplaces: MarketplaceResponse[] }>(endpoint);
+      setMarketplaces(data.marketplaces || []);
+    } catch (err) {
+      console.error("Failed to load marketplaces:", err);
+    }
+  }, [activeProject?.path]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    await Promise.all([fetchPlugins(), fetchMarketplaces()]);
+    setLoading(false);
+  }, [fetchPlugins, fetchMarketplaces]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleViewDetails = (plugin: Plugin) => {
+    setSelectedPlugin(plugin);
+    setDetailsOpen(true);
+  };
+
+  const handleUninstall = async (name: string) => {
+    try {
+      const endpoint = buildEndpoint(`plugins/${name}`, { project_path: activeProject?.path });
+      await apiClient(endpoint, { method: "DELETE" });
+
+      toast.success(`Plugin "${name}" uninstalled successfully`);
+      fetchPlugins();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to uninstall plugin");
+    }
+  };
+
+  const handleInstall = (plugin: MarketplacePlugin, marketplaceName: string) => {
+    setPluginToInstall(plugin);
+    setInstallMarketplaceName(marketplaceName);
+    setInstallWizardOpen(true);
+  };
+
+  const handleInstallComplete = () => {
+    fetchPlugins();
+  };
+
+  const handleToggle = async (plugin: Plugin, enabled: boolean) => {
+    try {
+      const endpoint = buildEndpoint(`plugins/${plugin.name}/toggle`, { project_path: activeProject?.path });
+      const data = await apiClient<{ message: string }>(endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          enabled,
+          source: plugin.source,
+        }),
+      });
+
+      toast.success(data.message);
+      fetchPlugins();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to toggle plugin");
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold flex items-center gap-2">
+          <Package className="h-8 w-8" />
+          Plugins
+        </h1>
+        <p className="text-muted-foreground mt-2">
+          Manage Claude Code plugins and browse marketplace
+        </p>
+      </div>
+
+      {/* Error display */}
+      {error && (
+        <Card className="border-destructive">
+          <CardContent className="py-4">
+            <p className="text-destructive">{error}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <Button onClick={fetchData} variant="outline" disabled={loading}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => setShowMarketplaceManager(!showMarketplaceManager)}
+        >
+          <Settings className="h-4 w-4 mr-2" />
+          {showMarketplaceManager ? "Hide" : "Manage"} Marketplaces
+        </Button>
+      </div>
+
+      {/* Marketplace Manager */}
+      {showMarketplaceManager && (
+        <MarketplaceManager marketplaces={marketplaces} onRefresh={fetchMarketplaces} />
+      )}
+
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PluginTab)}>
+        <TabsList>
+          <TabsTrigger value="installed" className="flex items-center gap-2">
+            <Package className="h-4 w-4" />
+            Installed ({plugins.length})
+          </TabsTrigger>
+          <TabsTrigger value="marketplace" className="flex items-center gap-2">
+            <Store className="h-4 w-4" />
+            Marketplace
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="installed">
+          <InstalledPlugins
+            plugins={plugins}
+            loading={loading}
+            onViewDetails={handleViewDetails}
+            onUninstall={handleUninstall}
+            onToggle={handleToggle}
+          />
+        </TabsContent>
+
+        <TabsContent value="marketplace">
+          <MarketplaceBrowser
+            marketplaces={marketplaces}
+            installedPlugins={plugins}
+            onInstall={handleInstall}
+            onUninstall={handleUninstall}
+          />
+        </TabsContent>
+      </Tabs>
+
+      {/* Plugin Details Dialog */}
+      <PluginDetails
+        plugin={selectedPlugin}
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        onUninstall={handleUninstall}
+        onToggle={handleToggle}
+      />
+
+      {/* Install Wizard Dialog */}
+      <PluginInstallWizard
+        plugin={pluginToInstall}
+        marketplaceName={installMarketplaceName}
+        open={installWizardOpen}
+        onOpenChange={setInstallWizardOpen}
+        onComplete={handleInstallComplete}
+      />
+    </div>
+  );
+}

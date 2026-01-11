@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "id": "bd92d7bf-0903-43c8-9669-b23fb2172bd6",
+        "type": "command",
+        "matcher": "Write(*.py)",
+        "command": "echo \"About to write Python file\"",
+        "timeout": 5
+      }
+    ]
+  }
+}

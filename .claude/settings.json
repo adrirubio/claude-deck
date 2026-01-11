@@ -1,0 +1,14 @@
+{
+  "includeCoAuthoredBy": false,
+  "hooks": {
+    "PreToolUse": []
+  },
+  "permissions": {
+    "allow": [
+      "Read(*.py)"
+    ],
+    "deny": [
+      "Bash(rm:*)"
+    ]
+  }
+}
