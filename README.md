@@ -47,7 +47,7 @@ A self-hosted web application for visualizing and managing Claude Code configura
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd claude-control-registry
+cd claude-deck
 ```
 
 2. Run the install script:
@@ -143,7 +143,7 @@ Visit http://localhost:8000/docs for interactive API documentation.
 ## Project Structure
 
 ```
-claude-control-registry/
+claude-deck/
 ├── backend/
 │   ├── app/
 │   │   ├── api/v1/          # API endpoints
