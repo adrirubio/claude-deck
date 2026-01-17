@@ -24,6 +24,8 @@ from app.utils.path_utils import (
 class MCPService:
     """Service for managing MCP server configurations."""
 
+    SENSITIVE_PATTERNS = ["KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"]
+
     @staticmethod
     def _mask_sensitive_env(env: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
         """Mask sensitive environment variables containing KEY, TOKEN, or SECRET."""
@@ -31,16 +33,28 @@ class MCPService:
             return env
 
         masked = {}
-        sensitive_patterns = ["KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"]
-
         for key, value in env.items():
-            # Check if key contains any sensitive pattern
-            if any(pattern in key.upper() for pattern in sensitive_patterns):
+            if any(pattern in key.upper() for pattern in MCPService.SENSITIVE_PATTERNS):
                 masked[key] = "***MASKED***"
             else:
                 masked[key] = value
 
         return masked
+
+    def _create_mcp_server(
+        self, name: str, config: Dict[str, Any], scope: str
+    ) -> MCPServer:
+        """Create an MCPServer instance from configuration."""
+        return MCPServer(
+            name=name,
+            type=config.get("type", "stdio"),
+            scope=scope,
+            command=config.get("command"),
+            args=config.get("args"),
+            url=config.get("url"),
+            headers=config.get("headers"),
+            env=self._mask_sensitive_env(config.get("env")),
+        )
 
     @staticmethod
     def _read_user_mcp_config(project_path: Optional[str] = None) -> Dict[str, Any]:
@@ -212,34 +226,31 @@ class MCPService:
         """Update or create cache entry after testing."""
         cache_entry = await self.get_cached_server_info(name, scope, db)
 
-        tools_list = test_result.get("tools", [])
-        tool_count = len(tools_list) if tools_list else 0
+        tools_list = test_result.get("tools") or []
+        is_success = test_result.get("success", False)
+        now = datetime.utcnow()
+
+        # Prepare common cache data
+        cache_data = {
+            "is_connected": is_success,
+            "last_tested_at": now,
+            "last_error": None if is_success else test_result.get("message"),
+            "mcp_server_name": test_result.get("server_name"),
+            "mcp_server_version": test_result.get("server_version"),
+            "tools": tools_list,
+            "tool_count": len(tools_list),
+            "cached_at": now,
+            "config_hash": config_hash,
+        }
 
         if cache_entry:
-            # Update existing
-            cache_entry.is_connected = test_result.get("success", False)
-            cache_entry.last_tested_at = datetime.utcnow()
-            cache_entry.last_error = None if test_result.get("success") else test_result.get("message")
-            cache_entry.mcp_server_name = test_result.get("server_name")
-            cache_entry.mcp_server_version = test_result.get("server_version")
-            cache_entry.tools = tools_list
-            cache_entry.tool_count = tool_count
-            cache_entry.cached_at = datetime.utcnow()
-            cache_entry.config_hash = config_hash
+            for key, value in cache_data.items():
+                setattr(cache_entry, key, value)
         else:
-            # Create new
             cache_entry = MCPServerCache(
                 server_name=name,
                 server_scope=scope,
-                is_connected=test_result.get("success", False),
-                last_tested_at=datetime.utcnow(),
-                last_error=None if test_result.get("success") else test_result.get("message"),
-                mcp_server_name=test_result.get("server_name"),
-                mcp_server_version=test_result.get("server_version"),
-                tools=tools_list,
-                tool_count=tool_count,
-                cached_at=datetime.utcnow(),
-                config_hash=config_hash,
+                **cache_data,
             )
             db.add(cache_entry)
 
@@ -272,48 +283,21 @@ class MCPService:
         # Read user-level servers (including project-specific from ~/.claude.json)
         user_servers = self._read_user_mcp_config(project_path)
         for name, config in user_servers.items():
-            server = MCPServer(
-                name=name,
-                type=config.get("type", "stdio"),
-                scope="user",
-                command=config.get("command"),
-                args=config.get("args"),
-                url=config.get("url"),
-                headers=config.get("headers"),
-                env=self._mask_sensitive_env(config.get("env")),
-            )
-            servers.append(server)
+            servers.append(self._create_mcp_server(name, config, "user"))
 
         # Read project-level servers
         project_servers = self._read_project_mcp_config(project_path)
         for name, config in project_servers.items():
-            server = MCPServer(
-                name=name,
-                type=config.get("type", "stdio"),
-                scope="project",
-                command=config.get("command"),
-                args=config.get("args"),
-                url=config.get("url"),
-                headers=config.get("headers"),
-                env=self._mask_sensitive_env(config.get("env")),
-            )
-            servers.append(server)
+            servers.append(self._create_mcp_server(name, config, "project"))
 
         # Read plugin-provided servers
         plugin_servers = self._read_plugin_mcp_servers()
         for plugin_server in plugin_servers:
-            config = plugin_server["config"]
-            server = MCPServer(
-                name=plugin_server["name"],
-                type=config.get("type", "stdio"),
-                scope="plugin",
-                command=config.get("command"),
-                args=config.get("args"),
-                url=config.get("url"),
-                headers=config.get("headers"),
-                env=self._mask_sensitive_env(config.get("env")),
+            servers.append(
+                self._create_mcp_server(
+                    plugin_server["name"], plugin_server["config"], "plugin"
+                )
             )
-            servers.append(server)
 
         # Merge cached data if database session is provided
         if db:
@@ -347,42 +331,20 @@ class MCPService:
             servers = self._read_user_mcp_config()
             if name not in servers:
                 return None
-            config = servers[name]
+            return self._create_mcp_server(name, servers[name], scope)
         elif scope == "project":
             servers = self._read_project_mcp_config()
             if name not in servers:
                 return None
-            config = servers[name]
+            return self._create_mcp_server(name, servers[name], scope)
         elif scope == "plugin":
-            # Search plugin servers by name
             plugin_servers = self._read_plugin_mcp_servers()
             for plugin_server in plugin_servers:
                 if plugin_server["name"] == name:
-                    config = plugin_server["config"]
-                    return MCPServer(
-                        name=name,
-                        type=config.get("type", "stdio"),
-                        scope=scope,
-                        command=config.get("command"),
-                        args=config.get("args"),
-                        url=config.get("url"),
-                        headers=config.get("headers"),
-                        env=self._mask_sensitive_env(config.get("env")),
-                    )
+                    return self._create_mcp_server(name, plugin_server["config"], scope)
             return None
         else:
             return None
-
-        return MCPServer(
-            name=name,
-            type=config.get("type", "stdio"),
-            scope=scope,
-            command=config.get("command"),
-            args=config.get("args"),
-            url=config.get("url"),
-            headers=config.get("headers"),
-            env=self._mask_sensitive_env(config.get("env")),
-        )
 
     async def add_server(
         self, server: MCPServerCreate, project_path: Optional[str] = None
@@ -397,23 +359,14 @@ class MCPService:
         Returns:
             Created MCPServer object
         """
-        # Prepare server config
-        config = {
-            "type": server.type,
-        }
+        # Build config from server fields, excluding None values
+        config = {"type": server.type}
+        for field in ("command", "args", "url", "headers", "env"):
+            value = getattr(server, field)
+            if value:
+                config[field] = value
 
-        if server.command:
-            config["command"] = server.command
-        if server.args:
-            config["args"] = server.args
-        if server.url:
-            config["url"] = server.url
-        if server.headers:
-            config["headers"] = server.headers
-        if server.env:
-            config["env"] = server.env
-
-        # Read existing servers
+        # Read, update, and write config
         if server.scope == "user":
             servers = self._read_user_mcp_config()
             servers[server.name] = config
@@ -423,17 +376,7 @@ class MCPService:
             servers[server.name] = config
             await self._write_project_mcp_config(servers, project_path)
 
-        # Return created server with masked env
-        return MCPServer(
-            name=server.name,
-            type=server.type,
-            scope=server.scope,
-            command=server.command,
-            args=server.args,
-            url=server.url,
-            headers=server.headers,
-            env=self._mask_sensitive_env(server.env),
-        )
+        return self._create_mcp_server(server.name, config, server.scope)
 
     async def update_server(
         self,
@@ -463,20 +406,12 @@ class MCPService:
         if name not in servers:
             return None
 
-        # Update config
+        # Update config with non-None values
         config = servers[name]
-        if server.type is not None:
-            config["type"] = server.type
-        if server.command is not None:
-            config["command"] = server.command
-        if server.args is not None:
-            config["args"] = server.args
-        if server.url is not None:
-            config["url"] = server.url
-        if server.headers is not None:
-            config["headers"] = server.headers
-        if server.env is not None:
-            config["env"] = server.env
+        for field in ("type", "command", "args", "url", "headers", "env"):
+            value = getattr(server, field)
+            if value is not None:
+                config[field] = value
 
         servers[name] = config
 
@@ -486,17 +421,7 @@ class MCPService:
         else:
             await self._write_project_mcp_config(servers, project_path)
 
-        # Return updated server
-        return MCPServer(
-            name=name,
-            type=config.get("type", "stdio"),
-            scope=scope,
-            command=config.get("command"),
-            args=config.get("args"),
-            url=config.get("url"),
-            headers=config.get("headers"),
-            env=self._mask_sensitive_env(config.get("env")),
-        )
+        return self._create_mcp_server(name, config, scope)
 
     async def remove_server(
         self, name: str, scope: str, project_path: Optional[str] = None

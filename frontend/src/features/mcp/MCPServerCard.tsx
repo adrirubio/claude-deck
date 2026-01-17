@@ -18,6 +18,39 @@ interface MCPServerCardProps {
   readOnly?: boolean;
 }
 
+function pluralize(count: number, singular: string, plural?: string): string {
+  return count === 1 ? singular : (plural ?? singular + 's');
+}
+
+function getServerTypeLabel(type: string): string {
+  switch (type) {
+    case "stdio": return "Standard I/O";
+    case "sse": return "Server-Sent Events";
+    default: return "HTTP";
+  }
+}
+
+interface ToolListItemProps {
+  tool: MCPTool;
+  onClick: () => void;
+}
+
+function ToolListItem({ tool, onClick }: ToolListItemProps) {
+  return (
+    <button
+      className="w-full text-left bg-background rounded p-2 text-sm hover:bg-accent transition-colors cursor-pointer"
+      onClick={onClick}
+    >
+      <div className="font-medium font-mono text-xs">{tool.name}</div>
+      {tool.description && (
+        <div className="text-xs text-muted-foreground mt-1 line-clamp-1">
+          {tool.description}
+        </div>
+      )}
+    </button>
+  );
+}
+
 export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOnly = false }: MCPServerCardProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<MCPTestConnectionResponse | null>(null);
@@ -45,23 +78,18 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
   );
 
   // Connection status indicator
-  const getConnectionStatus = () => {
-    if (testResult) {
-      return testResult.success ? "🟢" : "🔴";
+  function getConnectionInfo(): { icon: string; label: string } {
+    const isConnected = testResult?.success ?? server.is_connected;
+    if (isConnected === true) {
+      return { icon: "🟢", label: "Connected" };
     }
-    if (server.is_connected === true) return "🟢";
-    if (server.is_connected === false) return "🔴";
-    return "⚪";
-  };
+    if (isConnected === false) {
+      return { icon: "🔴", label: "Failed" };
+    }
+    return { icon: "⚪", label: "Not tested" };
+  }
 
-  const getConnectionLabel = () => {
-    if (testResult) {
-      return testResult.success ? "Connected" : "Failed";
-    }
-    if (server.is_connected === true) return "Connected";
-    if (server.is_connected === false) return "Failed";
-    return "Not tested";
-  };
+  const connectionInfo = getConnectionInfo();
 
   const handleTest = async () => {
     setTesting(true);
@@ -76,9 +104,9 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
       if (response && typeof response.success === "boolean") {
         setTestResult(response);
         if (response.success) {
-          const toolCount = response.tools?.length || 0;
-          toast.success(`Connected! ${toolCount} tool${toolCount !== 1 ? 's' : ''} available`);
-          if (toolCount > 0) {
+          const responseToolCount = response.tools?.length || 0;
+          toast.success(`Connected! ${responseToolCount} ${pluralize(responseToolCount, 'tool')} available`);
+          if (responseToolCount > 0) {
             setShowTools(true);
           }
           onTestComplete();
@@ -111,17 +139,17 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <CardTitle className="text-lg">{server.name}</CardTitle>
-              <span className="text-xs" title={getConnectionLabel()}>
-                {getConnectionStatus()}
+              <span className="text-xs" title={connectionInfo.label}>
+                {connectionInfo.icon}
               </span>
               {toolCount > 0 && (
                 <Badge variant="secondary" className="text-xs">
-                  {toolCount} tool{toolCount !== 1 ? 's' : ''}
+                  {toolCount} {pluralize(toolCount, 'tool')}
                 </Badge>
               )}
             </div>
             <CardDescription className="mt-1">
-              Type: {server.type === "stdio" ? "Standard I/O" : server.type === "sse" ? "Server-Sent Events" : "HTTP"}
+              Type: {getServerTypeLabel(server.type)}
               {server.last_tested_at && (
                 <span className="ml-2 text-xs">
                   • Tested {new Date(server.last_tested_at).toLocaleString()}
@@ -164,7 +192,7 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
               <div>
                 <span className="font-medium">Environment:</span>{" "}
                 <span className="text-muted-foreground">
-                  {Object.keys(server.env).length} variable(s)
+                  {Object.keys(server.env).length} {pluralize(Object.keys(server.env).length, 'variable')}
                 </span>
               </div>
             )}
@@ -182,7 +210,7 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
                 <div className="flex items-center gap-2">
                   <Wrench className="h-4 w-4" />
                   <span className="text-sm font-medium">
-                    {toolCount} cached tool{toolCount !== 1 ? 's' : ''}
+                    {toolCount} cached {pluralize(toolCount, 'tool')}
                   </span>
                 </div>
                 {showTools ? (
@@ -206,18 +234,11 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
                   )}
                   <div className="space-y-1 max-h-60 overflow-y-auto">
                     {filteredTools?.map((tool, index) => (
-                      <button
+                      <ToolListItem
                         key={index}
-                        className="w-full text-left bg-background rounded p-2 text-sm hover:bg-accent transition-colors cursor-pointer"
+                        tool={tool}
                         onClick={() => setSelectedTool(tool)}
-                      >
-                        <div className="font-medium font-mono text-xs">{tool.name}</div>
-                        {tool.description && (
-                          <div className="text-xs text-muted-foreground mt-1 line-clamp-1">
-                            {tool.description}
-                          </div>
-                        )}
-                      </button>
+                      />
                     ))}
                   </div>
                 </div>
@@ -281,7 +302,7 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
                       onClick={() => setShowTools(!showTools)}
                     >
                       <Wrench className="h-3 w-3 mr-1" />
-                      {testResult.tools.length} tool{testResult.tools.length !== 1 ? 's' : ''}
+                      {testResult.tools.length} {pluralize(testResult.tools.length, 'tool')}
                       {showTools ? (
                         <ChevronUp className="h-3 w-3 ml-1" />
                       ) : (
@@ -305,18 +326,11 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
                 <div className="bg-muted/50 rounded-md p-3 space-y-2">
                   <div className="text-xs font-medium text-muted-foreground">Available Tools</div>
                   {testResult.tools.map((tool, index) => (
-                    <button
+                    <ToolListItem
                       key={index}
-                      className="w-full text-left bg-background rounded p-2 text-sm hover:bg-accent transition-colors cursor-pointer"
+                      tool={tool}
                       onClick={() => setSelectedTool(tool)}
-                    >
-                      <div className="font-medium font-mono text-xs">{tool.name}</div>
-                      {tool.description && (
-                        <div className="text-xs text-muted-foreground mt-1 line-clamp-1">
-                          {tool.description}
-                        </div>
-                      )}
-                    </button>
+                    />
                   ))}
                 </div>
               )}
