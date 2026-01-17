@@ -12,6 +12,14 @@ export interface MCPServer {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
+  // Cache fields
+  is_connected?: boolean | null;
+  last_tested_at?: string | null;
+  last_error?: string | null;
+  mcp_server_name?: string | null;
+  mcp_server_version?: string | null;
+  tools?: MCPTool[] | null;
+  tool_count?: number;
 }
 
 export interface MCPServerCreate {
@@ -46,6 +54,11 @@ export interface MCPTestConnectionRequest {
 export interface MCPTool {
   name: string;
   description?: string;
+  inputSchema?: {
+    type: string;
+    properties?: Record<string, { type: string; description?: string }>;
+    required?: string[];
+  };
 }
 
 export interface MCPTestConnectionResponse {
