@@ -1,13 +1,18 @@
 """Service for managing MCP server configurations."""
 import asyncio
+import hashlib
 import json
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.schemas import MCPServer, MCPServerCreate, MCPServerUpdate
+from app.models.database import MCPServerCache
+from app.models.schemas import MCPServer, MCPServerCreate, MCPServerUpdate, MCPTool
 from app.utils.file_utils import read_json_file, write_json_file
 from app.utils.path_utils import (
     get_claude_user_config_file,
@@ -178,17 +183,89 @@ class MCPService:
         config["mcpServers"] = servers
         return await write_json_file(project_config_path, config)
 
+    @staticmethod
+    def _compute_config_hash(server_config: Dict[str, Any]) -> str:
+        """Compute hash of server configuration for cache invalidation."""
+        config_str = json.dumps(server_config, sort_keys=True)
+        return hashlib.md5(config_str.encode()).hexdigest()
+
+    async def get_cached_server_info(
+        self, name: str, scope: str, db: AsyncSession
+    ) -> Optional[MCPServerCache]:
+        """Retrieve cached data for a server."""
+        result = await db.execute(
+            select(MCPServerCache).where(
+                MCPServerCache.server_name == name,
+                MCPServerCache.server_scope == scope,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_server_cache(
+        self,
+        name: str,
+        scope: str,
+        test_result: Dict[str, Any],
+        config_hash: str,
+        db: AsyncSession,
+    ) -> None:
+        """Update or create cache entry after testing."""
+        cache_entry = await self.get_cached_server_info(name, scope, db)
+
+        tools_list = test_result.get("tools", [])
+        tool_count = len(tools_list) if tools_list else 0
+
+        if cache_entry:
+            # Update existing
+            cache_entry.is_connected = test_result.get("success", False)
+            cache_entry.last_tested_at = datetime.utcnow()
+            cache_entry.last_error = None if test_result.get("success") else test_result.get("message")
+            cache_entry.mcp_server_name = test_result.get("server_name")
+            cache_entry.mcp_server_version = test_result.get("server_version")
+            cache_entry.tools = tools_list
+            cache_entry.tool_count = tool_count
+            cache_entry.cached_at = datetime.utcnow()
+            cache_entry.config_hash = config_hash
+        else:
+            # Create new
+            cache_entry = MCPServerCache(
+                server_name=name,
+                server_scope=scope,
+                is_connected=test_result.get("success", False),
+                last_tested_at=datetime.utcnow(),
+                last_error=None if test_result.get("success") else test_result.get("message"),
+                mcp_server_name=test_result.get("server_name"),
+                mcp_server_version=test_result.get("server_version"),
+                tools=tools_list,
+                tool_count=tool_count,
+                cached_at=datetime.utcnow(),
+                config_hash=config_hash,
+            )
+            db.add(cache_entry)
+
+        await db.commit()
+
+    async def invalidate_cache(
+        self, name: str, scope: str, db: AsyncSession
+    ) -> None:
+        """Clear cache for a specific server."""
+        cache_entry = await self.get_cached_server_info(name, scope, db)
+        if cache_entry:
+            await db.delete(cache_entry)
+            await db.commit()
+
     async def list_servers(
-        self, project_path: Optional[str] = None
+        self, project_path: Optional[str] = None, db: Optional[AsyncSession] = None
     ) -> List[MCPServer]:
         """
         List all MCP servers from user, project, and plugin scopes.
 
         Args:
             project_path: Optional path to project directory
+            db: Optional database session for cache lookup
 
         Returns:
-            List of MCPServer objects
+            List of MCPServer objects with cached data merged
         """
         servers = []
 
@@ -237,6 +314,21 @@ class MCPService:
                 env=self._mask_sensitive_env(config.get("env")),
             )
             servers.append(server)
+
+        # Merge cached data if database session is provided
+        if db:
+            for server in servers:
+                cache_entry = await self.get_cached_server_info(server.name, server.scope, db)
+                if cache_entry:
+                    server.is_connected = cache_entry.is_connected
+                    server.last_tested_at = cache_entry.last_tested_at.isoformat() if cache_entry.last_tested_at else None
+                    server.last_error = cache_entry.last_error
+                    server.mcp_server_name = cache_entry.mcp_server_name
+                    server.mcp_server_version = cache_entry.mcp_server_version
+                    server.tool_count = cache_entry.tool_count
+                    # Convert tools from JSON to MCPTool objects
+                    if cache_entry.tools:
+                        server.tools = [MCPTool(**tool) for tool in cache_entry.tools]
 
         return servers
 
@@ -441,7 +533,7 @@ class MCPService:
         return True
 
     async def test_connection(
-        self, name: str, scope: str, project_path: Optional[str] = None
+        self, name: str, scope: str, project_path: Optional[str] = None, db: Optional[AsyncSession] = None
     ) -> Dict[str, Any]:
         """
         Test connection to an MCP server.
@@ -450,6 +542,7 @@ class MCPService:
             name: Server name
             scope: Server scope ("user" or "project")
             project_path: Optional path to project directory
+            db: Optional database session for caching results
 
         Returns:
             Dictionary with success status and message
@@ -602,17 +695,31 @@ class MCPService:
                                         tools.append({
                                             "name": tool.get("name", "unknown"),
                                             "description": tool.get("description"),
+                                            "inputSchema": tool.get("inputSchema"),
                                         })
                         except Exception:
                             pass  # Tools fetch failed, but init succeeded
 
-                        return {
+                        result = {
                             "success": True,
                             "message": f"MCP server '{server_name}' initialized successfully",
                             "server_name": server_name,
                             "server_version": server_version,
                             "tools": tools if tools else None,
                         }
+
+                        # Cache the result if database session is provided
+                        if db and server:
+                            config_dict = {
+                                "type": server.type,
+                                "command": server.command,
+                                "args": server.args,
+                                "url": server.url,
+                            }
+                            config_hash = self._compute_config_hash(config_dict)
+                            await self.update_server_cache(name, scope, result, config_hash, db)
+
+                        return result
                     elif "error" in response:
                         error_msg = response["error"].get("message", "Unknown error")
                         return {"success": False, "message": f"MCP error: {error_msg}"}

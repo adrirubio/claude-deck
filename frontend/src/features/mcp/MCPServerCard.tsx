@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { Edit2, Trash2, Play, AlertCircle, CheckCircle2, X, Wrench, ChevronDown, ChevronUp } from "lucide-react";
+import { Edit2, Trash2, Play, AlertCircle, CheckCircle2, X, Wrench, ChevronDown, ChevronUp, Search } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import type { MCPServer, MCPTestConnectionResponse, MCPTool } from "@/types/mcp";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api";
@@ -17,11 +18,12 @@ interface MCPServerCardProps {
   readOnly?: boolean;
 }
 
-export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTestComplete, readOnly = false }: MCPServerCardProps) {
+export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOnly = false }: MCPServerCardProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<MCPTestConnectionResponse | null>(null);
   const [showTools, setShowTools] = useState(false);
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
+  const [toolFilter, setToolFilter] = useState("");
 
   // Auto-clear success results after 30 seconds (longer to allow viewing tools)
   useEffect(() => {
@@ -30,6 +32,36 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTes
       return () => clearTimeout(timer);
     }
   }, [testResult]);
+
+  // Get tools to display (from test result or cached data)
+  const displayTools = testResult?.tools || server.tools || null;
+  const toolCount = testResult?.tools?.length || server.tool_count || 0;
+
+  // Filter tools based on search
+  const filteredTools = displayTools?.filter(
+    (tool) =>
+      tool.name.toLowerCase().includes(toolFilter.toLowerCase()) ||
+      tool.description?.toLowerCase().includes(toolFilter.toLowerCase())
+  );
+
+  // Connection status indicator
+  const getConnectionStatus = () => {
+    if (testResult) {
+      return testResult.success ? "🟢" : "🔴";
+    }
+    if (server.is_connected === true) return "🟢";
+    if (server.is_connected === false) return "🔴";
+    return "⚪";
+  };
+
+  const getConnectionLabel = () => {
+    if (testResult) {
+      return testResult.success ? "Connected" : "Failed";
+    }
+    if (server.is_connected === true) return "Connected";
+    if (server.is_connected === false) return "Failed";
+    return "Not tested";
+  };
 
   const handleTest = async () => {
     setTesting(true);
@@ -49,6 +81,7 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTes
           if (toolCount > 0) {
             setShowTools(true);
           }
+          onTestComplete();
         } else {
           toast.error("Connection failed");
         }
@@ -75,10 +108,25 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTes
     <Card>
       <CardHeader>
         <div className="flex items-start justify-between">
-          <div>
-            <CardTitle className="text-lg">{server.name}</CardTitle>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-lg">{server.name}</CardTitle>
+              <span className="text-xs" title={getConnectionLabel()}>
+                {getConnectionStatus()}
+              </span>
+              {toolCount > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {toolCount} tool{toolCount !== 1 ? 's' : ''}
+                </Badge>
+              )}
+            </div>
             <CardDescription className="mt-1">
               Type: {server.type === "stdio" ? "Standard I/O" : server.type === "sse" ? "Server-Sent Events" : "HTTP"}
+              {server.last_tested_at && (
+                <span className="ml-2 text-xs">
+                  • Tested {new Date(server.last_tested_at).toLocaleString()}
+                </span>
+              )}
             </CardDescription>
           </div>
           <Badge variant={server.scope === "user" ? "default" : server.scope === "plugin" ? "secondary" : "outline"}>
@@ -122,6 +170,61 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTes
             )}
           </div>
 
+          {/* Cached Tools Display */}
+          {!testResult && displayTools && displayTools.length > 0 && (
+            <div className="bg-muted/30 rounded-md p-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-between h-auto py-2"
+                onClick={() => setShowTools(!showTools)}
+              >
+                <div className="flex items-center gap-2">
+                  <Wrench className="h-4 w-4" />
+                  <span className="text-sm font-medium">
+                    {toolCount} cached tool{toolCount !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {showTools ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </Button>
+              {showTools && (
+                <div className="mt-2 space-y-2">
+                  {toolCount > 5 && (
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Filter tools..."
+                        value={toolFilter}
+                        onChange={(e) => setToolFilter(e.target.value)}
+                        className="pl-8 h-8 text-sm"
+                      />
+                    </div>
+                  )}
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {filteredTools?.map((tool, index) => (
+                      <button
+                        key={index}
+                        className="w-full text-left bg-background rounded p-2 text-sm hover:bg-accent transition-colors cursor-pointer"
+                        onClick={() => setSelectedTool(tool)}
+                      >
+                        <div className="font-medium font-mono text-xs">{tool.name}</div>
+                        {tool.description && (
+                          <div className="text-xs text-muted-foreground mt-1 line-clamp-1">
+                            {tool.description}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-2 pt-2">
             <Button
@@ -132,7 +235,7 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTes
               className="flex-1"
             >
               <Play className="h-4 w-4 mr-2" />
-              {testing ? "Testing..." : "Test"}
+              {testing ? "Testing..." : "Re-test"}
             </Button>
             {!readOnly && (
               <>
@@ -224,13 +327,52 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete: _onTes
 
       {/* Tool Details Modal */}
       <Dialog open={!!selectedTool} onOpenChange={(open) => !open && setSelectedTool(null)}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="font-mono">{selectedTool?.name}</DialogTitle>
           </DialogHeader>
-          <DialogDescription className="text-sm whitespace-pre-wrap">
-            {selectedTool?.description || "No description available"}
-          </DialogDescription>
+          <div className="space-y-4">
+            <div>
+              <h4 className="text-sm font-medium mb-2">Description</h4>
+              <DialogDescription className="text-sm whitespace-pre-wrap">
+                {selectedTool?.description || "No description available"}
+              </DialogDescription>
+            </div>
+            {selectedTool?.inputSchema && (
+              <div>
+                <h4 className="text-sm font-medium mb-2">Input Schema</h4>
+                <div className="bg-muted rounded-md p-3 space-y-2">
+                  {selectedTool.inputSchema.properties && (
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground mb-2">Parameters</div>
+                      {Object.entries(selectedTool.inputSchema.properties).map(([key, prop]) => (
+                        <div key={key} className="text-sm mb-1">
+                          <span className="font-mono font-medium">{key}</span>
+                          {selectedTool.inputSchema?.required?.includes(key) && (
+                            <span className="text-red-500 ml-1">*</span>
+                          )}
+                          <span className="text-muted-foreground ml-2">({prop.type})</span>
+                          {prop.description && (
+                            <div className="text-xs text-muted-foreground ml-4 mt-1">
+                              {prop.description}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                      View raw schema
+                    </summary>
+                    <pre className="mt-2 bg-background rounded p-2 overflow-x-auto">
+                      {JSON.stringify(selectedTool.inputSchema, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </Card>

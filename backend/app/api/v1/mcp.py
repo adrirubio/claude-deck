@@ -1,8 +1,10 @@
 """MCP server management endpoints."""
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.models.schemas import (
     MCPServer,
     MCPServerCreate,
@@ -19,10 +21,11 @@ mcp_service = MCPService()
 
 @router.get("/servers", response_model=MCPServerListResponse)
 async def list_mcp_servers(
-    project_path: Optional[str] = Query(None, description="Optional project path")
+    project_path: Optional[str] = Query(None, description="Optional project path"),
+    db: AsyncSession = Depends(get_db)
 ):
-    """List all MCP servers from user and project scopes."""
-    servers = await mcp_service.list_servers(project_path)
+    """List all MCP servers from user and project scopes with cached data."""
+    servers = await mcp_service.list_servers(project_path, db)
     return MCPServerListResponse(servers=servers)
 
 
@@ -112,13 +115,14 @@ async def test_mcp_server_connection(
     name: str,
     scope: str = Query(..., description="Server scope (user, project, or plugin)"),
     project_path: Optional[str] = Query(None, description="Optional project path"),
+    db: AsyncSession = Depends(get_db)
 ):
-    """Test connection to an MCP server."""
+    """Test connection to an MCP server and cache the results."""
     # Validate scope
     if scope not in ["user", "project", "plugin"]:
         raise HTTPException(status_code=400, detail="Server scope must be 'user', 'project', or 'plugin'")
 
-    result = await mcp_service.test_connection(name, scope, project_path)
+    result = await mcp_service.test_connection(name, scope, project_path, db)
     return MCPTestConnectionResponse(
         success=result["success"],
         message=result["message"],

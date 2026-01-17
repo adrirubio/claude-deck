@@ -128,6 +128,14 @@ class MCPServer(BaseModel):
     url: Optional[str] = None  # For http type
     headers: Optional[Dict[str, str]] = None  # For http type
     env: Optional[Dict[str, str]] = None  # Environment variables
+    # Cache fields
+    is_connected: Optional[bool] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[str] = None
+    mcp_server_name: Optional[str] = None
+    mcp_server_version: Optional[str] = None
+    tools: Optional[List["MCPTool"]] = None
+    tool_count: Optional[int] = None
 
 
 class MCPServerCreate(BaseModel):
@@ -172,6 +180,7 @@ class MCPTool(BaseModel):
 
     name: str
     description: Optional[str] = None
+    inputSchema: Optional[Dict[str, Any]] = None
 
 
 class MCPTestConnectionResponse(BaseModel):
