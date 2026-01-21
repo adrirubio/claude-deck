@@ -200,6 +200,12 @@ The usage tracking feature parses JSONL files from `~/.claude/projects/` to prov
 - **Billing blocks**: 5-hour billing period tracking with active block detection
 - **Burn rate**: Real-time cost projections for active sessions
 
+## Acknowledgments
+
+The session transcript viewer feature was inspired by and includes code adapted from [claude-code-transcripts](https://github.com/simonw/claude-code-transcripts) by [Simon Willison](https://simonwillison.net/). Simon's project pioneered the approach for parsing and displaying Claude Code session JSONL files.
+
+The usage tracking feature ports algorithms from [ccusage](https://github.com/ryoppippi/ccusage) by [ryoppippi](https://github.com/ryoppippi), including the 5-hour session block identification, tiered pricing calculations, and burn rate projections.
+
 ## License
 
 MIT License

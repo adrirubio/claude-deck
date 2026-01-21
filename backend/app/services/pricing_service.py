@@ -1,6 +1,8 @@
 """Service for model pricing and cost calculation.
 
-Ports pricing logic from ccusage/LiteLLM for calculating token costs.
+Pricing logic adapted from ccusage by ryoppippi
+https://github.com/ryoppippi/ccusage
+Licensed under MIT
 """
 from typing import Optional
 

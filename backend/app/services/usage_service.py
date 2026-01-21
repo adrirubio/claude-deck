@@ -1,7 +1,8 @@
 """Service for usage data loading and aggregation.
 
-Ports usage tracking functionality from ccusage for analyzing Claude Code
-token usage and costs.
+Usage tracking algorithms adapted from ccusage by ryoppippi
+https://github.com/ryoppippi/ccusage
+Licensed under MIT
 """
 import hashlib
 import json

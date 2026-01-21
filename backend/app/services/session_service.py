@@ -1,4 +1,9 @@
-"""Service for managing Claude Code session transcripts."""
+"""Service for managing Claude Code session transcripts.
+
+Session parsing logic adapted from claude-code-transcripts by Simon Willison
+https://github.com/simonw/claude-code-transcripts
+Licensed under Apache 2.0
+"""
 import json
 import hashlib
 from pathlib import Path
