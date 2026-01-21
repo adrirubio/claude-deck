@@ -184,3 +184,11 @@ def get_project_display_name(folder_name: str) -> str:
         # Return the last part as the display name
         return parts[-1]
     return folder_name
+
+
+def convert_path_to_folder_name(absolute_path: str) -> str:
+    """Convert absolute path to Claude's hyphenated folder format.
+
+    Example: '/home/juan/projects/foo' -> '-home-juan-projects-foo'
+    """
+    return absolute_path.rstrip('/').replace('/', '-')
