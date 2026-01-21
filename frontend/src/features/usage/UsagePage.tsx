@@ -13,6 +13,7 @@ import { CostChart } from './CostChart'
 import { SessionUsageTable } from './SessionUsageTable'
 import { BlocksView } from './BlocksView'
 import { MonthlyUsageChart } from './MonthlyUsageChart'
+import { getFromCache, saveToCache, isCacheStale, invalidateCache } from '@/lib/usageCache'
 import type {
   UsageSummary,
   DailyUsage,
@@ -20,6 +21,17 @@ import type {
   MonthlyUsage,
   SessionBlock,
 } from '@/types/usage'
+
+interface UsageCacheData {
+  summary: UsageSummary | null
+  daily: DailyUsage[]
+  sessions: SessionUsage[]
+  monthly: MonthlyUsage[]
+  blocks: SessionBlock[]
+  activeBlock?: SessionBlock
+  totalSessionCost: number
+  totalBlockCost: number
+}
 
 export function UsagePage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -42,9 +54,34 @@ export function UsagePage() {
   const [totalSessionCost, setTotalSessionCost] = useState(0)
   const [totalBlockCost, setTotalBlockCost] = useState(0)
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  const loadData = useCallback(async (forceRefresh = false) => {
     setError(null)
+
+    // Try to load from cache first (instant)
+    if (!forceRefresh) {
+      const cached = getFromCache<UsageCacheData>(selectedProject)
+      if (cached) {
+        // Apply cached data immediately (no loading spinner)
+        setSummary(cached.summary)
+        setDailyData(cached.daily)
+        setSessionData(cached.sessions)
+        setTotalSessionCost(cached.totalSessionCost)
+        setMonthlyData(cached.monthly)
+        setBlocks(cached.blocks)
+        setActiveBlock(cached.activeBlock)
+        setTotalBlockCost(cached.totalBlockCost)
+        setLoading(false)
+
+        // If cache is fresh, we're done
+        if (!isCacheStale(selectedProject)) return
+        // Otherwise, continue to background refresh (don't show loading)
+      }
+    }
+
+    // Show loading only if no cached data or force refresh
+    const hasCachedData = !forceRefresh && getFromCache<UsageCacheData>(selectedProject)
+    if (!hasCachedData) setLoading(true)
+
     try {
       const params = selectedProject ? { project_path: selectedProject } : undefined
 
@@ -57,6 +94,7 @@ export function UsagePage() {
         getBlocks({ ...params, recent: true }),
       ])
 
+      // Update state
       setSummary(summaryRes.summary)
       setDailyData(dailyRes.data)
       setSessionData(sessionRes.data)
@@ -65,12 +103,29 @@ export function UsagePage() {
       setBlocks(blockRes.data)
       setActiveBlock(blockRes.active_block)
       setTotalBlockCost(blockRes.total_cost)
+
+      // Save to cache
+      saveToCache<UsageCacheData>(selectedProject, {
+        summary: summaryRes.summary,
+        daily: dailyRes.data,
+        sessions: sessionRes.data,
+        monthly: monthlyRes.data,
+        blocks: blockRes.data,
+        activeBlock: blockRes.active_block,
+        totalSessionCost: sessionRes.total_cost,
+        totalBlockCost: blockRes.total_cost,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load usage data')
     } finally {
       setLoading(false)
     }
   }, [selectedProject, getSummary, getDaily, getSessions, getMonthly, getBlocks])
+
+  const handleRefresh = useCallback(() => {
+    invalidateCache(selectedProject)
+    loadData(true)
+  }, [loadData, selectedProject])
 
   useEffect(() => {
     loadData()
@@ -95,7 +150,7 @@ export function UsagePage() {
             Monitor your Claude Code token usage and costs
           </p>
         </div>
-        <RefreshButton onClick={loadData} loading={loading} />
+        <RefreshButton onClick={handleRefresh} loading={loading} />
       </div>
 
       {/* Error Display */}

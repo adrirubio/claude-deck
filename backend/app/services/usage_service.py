@@ -31,7 +31,7 @@ from app.models.schemas import (
     UsageSummaryResponse,
 )
 from app.services.pricing_service import PricingService
-from app.utils.path_utils import get_claude_projects_dir, get_project_display_name
+from app.utils.path_utils import get_claude_projects_dir, get_project_display_name, convert_path_to_folder_name
 
 
 @dataclass
@@ -161,8 +161,9 @@ class UsageService:
             return files
 
         if project_path:
-            # Scan specific project folder
-            project_folder = self.projects_dir / project_path
+            # Convert absolute path to Claude's hyphenated folder format
+            folder_name = convert_path_to_folder_name(project_path)
+            project_folder = self.projects_dir / folder_name
             if project_folder.exists():
                 files.extend(project_folder.glob("*.jsonl"))
         else:
