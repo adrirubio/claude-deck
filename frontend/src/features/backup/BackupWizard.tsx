@@ -70,8 +70,8 @@ export function BackupWizard({
       case 0:
         return name.trim().length > 0;
       case 1:
-        // Project scope requires a project path
-        if (scope === "project" && !currentProjectPath) {
+        // Full and project scopes require a project path
+        if ((scope === "full" || scope === "project") && !currentProjectPath) {
           return false;
         }
         return true;
@@ -185,7 +185,7 @@ export function BackupWizard({
               onValueChange={(v) => setScope(v as BackupScope)}
             >
               {BACKUP_SCOPES.map((s) => {
-                const isDisabled = s.value === "project" && !currentProjectPath;
+                const isDisabled = (s.value === "full" || s.value === "project") && !currentProjectPath;
                 return (
                   <div
                     key={s.value}

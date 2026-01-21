@@ -47,7 +47,7 @@ export function BackupPage() {
 
   const handleCreate = async (backup: BackupCreate) => {
     try {
-      const endpoint = buildEndpoint("backup/create", { project_path: activeProject?.path });
+      const endpoint = buildEndpoint("backup/create");
       await apiClient<Backup>(endpoint, {
         method: "POST",
         body: JSON.stringify(backup),

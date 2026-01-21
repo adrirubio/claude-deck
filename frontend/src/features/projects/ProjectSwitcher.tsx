@@ -44,7 +44,7 @@ export function ProjectSwitcher() {
         onChange={(e) => handleChange(e.target.value)}
         className="w-full px-2 py-1 text-sm border rounded-md bg-background"
       >
-        <option value="">Global (User Scope)</option>
+        <option value="">User (All Projects)</option>
         {projects.map((project) => (
           <option key={project.id} value={project.id}>
             {project.name}

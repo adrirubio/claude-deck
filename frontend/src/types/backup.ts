@@ -72,17 +72,17 @@ export function formatDate(dateString: string): string {
 export const BACKUP_SCOPES = [
   {
     value: "full" as BackupScope,
-    label: "Full Backup",
-    description: "All user and project configurations",
+    label: "Complete",
+    description: "User and project configurations",
   },
   {
     value: "user" as BackupScope,
-    label: "User Only",
-    description: "User-level settings, commands, agents, and plugins",
+    label: "User",
+    description: "Settings in ~/.claude/",
   },
   {
     value: "project" as BackupScope,
-    label: "Project Only",
-    description: "Current project's .claude directory and config files",
+    label: "Project",
+    description: "Settings in .claude/",
   },
 ];
