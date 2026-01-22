@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate version format
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: Invalid version format. Expected: MAJOR.MINOR.PATCH (e.g., 1.0.0)"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Build frontend
+        run: cd frontend && npm run build
+
+      - name: Create release archive
+        run: |
+          cd frontend/dist
+          zip -r ../../claude-deck-frontend-v${{ inputs.version }}.zip .
+          cd ../..
+          tar -czvf claude-deck-frontend-v${{ inputs.version }}.tar.gz -C frontend/dist .
+
+      - name: Extract changelog for version
+        id: changelog
+        run: |
+          # Extract changelog section for this version
+          VERSION="${{ inputs.version }}"
+          CHANGELOG=$(awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="Release v${VERSION}"
+          fi
+          # Handle multiline output
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: Claude Deck v${{ inputs.version }}
+          body: ${{ steps.changelog.outputs.content }}
+          draft: false
+          prerelease: ${{ contains(inputs.version, '-') }}
+          files: |
+            claude-deck-frontend-v${{ inputs.version }}.zip
+            claude-deck-frontend-v${{ inputs.version }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** v${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- claude-deck-frontend-v${{ inputs.version }}.zip" >> $GITHUB_STEP_SUMMARY
+          echo "- claude-deck-frontend-v${{ inputs.version }}.tar.gz" >> $GITHUB_STEP_SUMMARY
