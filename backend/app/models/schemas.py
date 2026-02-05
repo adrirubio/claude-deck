@@ -514,6 +514,48 @@ class SkillListResponse(BaseModel):
     skills: List[Skill]
 
 
+# Registry Skills (skills.sh)
+
+
+class RegistrySkillResponse(BaseModel):
+    """A skill from the skills.sh registry."""
+
+    skill_id: str
+    name: str
+    source: str  # GitHub repo path (e.g. "vercel-labs/agent-skills")
+    installs: int
+    registry_id: str
+    url: str  # skills.sh detail page URL
+    github_url: str  # GitHub repo URL
+    installed: bool = False  # Whether this skill is installed locally
+
+
+class RegistrySearchResponse(BaseModel):
+    """Response from registry search/browse."""
+
+    skills: List[RegistrySkillResponse]
+    total: int
+    cached: bool = False
+
+
+class RegistryInstallRequest(BaseModel):
+    """Request to install a skill from the registry."""
+
+    source: str  # GitHub repo path
+    skill_names: Optional[List[str]] = None  # Specific skills to install (None = all)
+    global_install: bool = True  # User-level vs project-level
+
+
+class RegistryInstallResponse(BaseModel):
+    """Response from registry install."""
+
+    success: bool
+    message: str
+    logs: str
+    source: str
+    skill_names: Optional[List[str]] = None
+
+
 # Backup Schemas
 
 

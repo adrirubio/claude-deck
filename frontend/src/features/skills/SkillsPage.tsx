@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
-import { Sparkles, MapPin, CheckCircle2, AlertTriangle } from "lucide-react";
+import {
+  Sparkles,
+  MapPin,
+  CheckCircle2,
+  AlertTriangle,
+  Store,
+  FolderOpen,
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -8,21 +15,32 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import { SkillDetailDialog } from "./SkillDetailDialog";
+import { SkillRegistryBrowser } from "./SkillRegistryBrowser";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
-import { type Skill, type SkillListResponse, type SkillDependencyStatus } from "@/types/agents";
+import {
+  type Skill,
+  type SkillListResponse,
+  type SkillDependencyStatus,
+} from "@/types/agents";
+
+type SkillsTab = "installed" | "discover";
 
 export function SkillsPage() {
   const { activeProject } = useProjectContext();
+  const [activeTab, setActiveTab] = useState<SkillsTab>("installed");
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [depStatuses, setDepStatuses] = useState<Record<string, SkillDependencyStatus>>({});
+  const [depStatuses, setDepStatuses] = useState<
+    Record<string, SkillDependencyStatus>
+  >({});
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
@@ -181,14 +199,17 @@ export function SkillsPage() {
             Skills
           </h1>
           <p className="text-muted-foreground mt-1">
-            Skills extend Claude's capabilities with specialized knowledge and workflows
+            Skills extend Claude's capabilities with specialized knowledge and
+            workflows
           </p>
         </div>
-        <RefreshButton onClick={fetchSkills} loading={loading} />
+        {activeTab === "installed" && (
+          <RefreshButton onClick={fetchSkills} loading={loading} />
+        )}
       </div>
 
       {/* Error Display */}
-      {error && (
+      {error && activeTab === "installed" && (
         <Card className="border-destructive">
           <CardHeader>
             <CardTitle className="text-destructive">Error</CardTitle>
@@ -197,110 +218,155 @@ export function SkillsPage() {
         </Card>
       )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-amber-500" />
-              Total Skills
-            </CardDescription>
-            <CardTitle className="text-3xl">{skills.length}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription className="flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-primary" />
-              User Skills
-            </CardDescription>
-            <CardTitle className="text-3xl">{userSkills.length}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-3">
-            <CardDescription className="flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-secondary-foreground" />
-              Plugin Skills
-            </CardDescription>
-            <CardTitle className="text-3xl">{pluginSkills.length}</CardTitle>
-          </CardHeader>
-        </Card>
-      </div>
+      {/* Tabs */}
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(v as SkillsTab)}
+      >
+        <TabsList>
+          <TabsTrigger value="installed" className="flex items-center gap-2">
+            <FolderOpen className="h-4 w-4" />
+            Installed ({skills.length})
+          </TabsTrigger>
+          <TabsTrigger value="discover" className="flex items-center gap-2">
+            <Store className="h-4 w-4" />
+            Discover
+          </TabsTrigger>
+        </TabsList>
 
-      {loading ? (
-        <div className="text-center py-8 text-muted-foreground">Loading...</div>
-      ) : skills.length === 0 ? (
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            No skills found. Skills are provided by plugins or defined in your
-            ~/.claude/skills directory.
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-6">
-          {/* User Skills */}
-          {userSkills.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <MapPin className="h-5 w-5 text-primary" />
-                  User Skills
-                </CardTitle>
-                <CardDescription>
-                  Skills defined in ~/.claude/skills/
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {userSkills.map(renderSkillCard)}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+        {/* Installed Tab */}
+        <TabsContent value="installed">
+          <div className="space-y-6">
+            {/* Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardDescription className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-amber-500" />
+                    Total Skills
+                  </CardDescription>
+                  <CardTitle className="text-3xl">{skills.length}</CardTitle>
+                </CardHeader>
+              </Card>
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardDescription className="flex items-center gap-2">
+                    <MapPin className="h-4 w-4 text-primary" />
+                    User Skills
+                  </CardDescription>
+                  <CardTitle className="text-3xl">
+                    {userSkills.length}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardDescription className="flex items-center gap-2">
+                    <MapPin className="h-4 w-4 text-secondary-foreground" />
+                    Plugin Skills
+                  </CardDescription>
+                  <CardTitle className="text-3xl">
+                    {pluginSkills.length}
+                  </CardTitle>
+                </CardHeader>
+              </Card>
+            </div>
 
-          {/* Project Skills */}
-          {projectSkills.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <MapPin className="h-5 w-5 text-primary" />
-                  Project Skills
-                </CardTitle>
-                <CardDescription>
-                  Skills defined in .claude/skills/
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {projectSkills.map(renderSkillCard)}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+            {loading ? (
+              <div className="text-center py-8 text-muted-foreground">
+                Loading...
+              </div>
+            ) : skills.length === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  <p>No skills found.</p>
+                  <p className="mt-2">
+                    Check the{" "}
+                    <button
+                      className="underline hover:text-foreground transition-colors"
+                      onClick={() => setActiveTab("discover")}
+                    >
+                      Discover
+                    </button>{" "}
+                    tab to browse and install skills from skills.sh.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-6">
+                {/* User Skills */}
+                {userSkills.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <MapPin className="h-5 w-5 text-primary" />
+                        User Skills
+                      </CardTitle>
+                      <CardDescription>
+                        Skills defined in ~/.claude/skills/
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {userSkills.map(renderSkillCard)}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
 
-          {/* Plugin Skills - Grouped by plugin */}
-          {Object.entries(pluginGroups).map(([pluginName, pluginSkillList]) => (
-            <Card key={pluginName}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="h-5 w-5 text-amber-500" />
-                  {pluginName}
-                </CardTitle>
-                <CardDescription>
-                  {pluginSkillList.length} skill
-                  {pluginSkillList.length !== 1 ? "s" : ""} from this plugin
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {pluginSkillList.map(renderSkillCard)}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+                {/* Project Skills */}
+                {projectSkills.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <MapPin className="h-5 w-5 text-primary" />
+                        Project Skills
+                      </CardTitle>
+                      <CardDescription>
+                        Skills defined in .claude/skills/
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {projectSkills.map(renderSkillCard)}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Plugin Skills - Grouped by plugin */}
+                {Object.entries(pluginGroups).map(
+                  ([pluginName, pluginSkillList]) => (
+                    <Card key={pluginName}>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Sparkles className="h-5 w-5 text-amber-500" />
+                          {pluginName}
+                        </CardTitle>
+                        <CardDescription>
+                          {pluginSkillList.length} skill
+                          {pluginSkillList.length !== 1 ? "s" : ""} from this
+                          plugin
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {pluginSkillList.map(renderSkillCard)}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Discover Tab */}
+        <TabsContent value="discover">
+          <SkillRegistryBrowser onInstallComplete={fetchSkills} />
+        </TabsContent>
+      </Tabs>
 
       {/* Skill Detail Dialog */}
       <SkillDetailDialog

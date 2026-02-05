@@ -8,6 +8,10 @@ from app.models.schemas import (
     AgentCreate,
     AgentListResponse,
     AgentUpdate,
+    RegistryInstallRequest,
+    RegistryInstallResponse,
+    RegistrySearchResponse,
+    RegistrySkillResponse,
     Skill,
     SkillDependencyStatus,
     SkillInstallResult,
@@ -16,6 +20,7 @@ from app.models.schemas import (
 )
 from app.services.agent_service import AgentService
 from app.services.skill_dependency_service import SkillDependencyService
+from app.services.skills_registry_service import SkillsRegistryService
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -188,6 +193,63 @@ async def list_skill_files(
         )
 
     return SkillDependencyService.list_supporting_files(name, location, project_path)
+
+
+@router.get("/skills/registry", response_model=RegistrySearchResponse)
+async def browse_registry_skills(
+    query: Optional[str] = Query(None, description="Search query (min 2 chars)"),
+    limit: int = Query(50, description="Max results", ge=1, le=100),
+    project_path: Optional[str] = Query(None, description="Project path"),
+    force_refresh: bool = Query(False, description="Force cache refresh"),
+):
+    """
+    Browse or search the skills.sh registry.
+
+    If query is provided (>= 2 chars), searches skills.sh API.
+    Otherwise, returns the homepage leaderboard (all skills, sorted by installs).
+
+    Results include an `installed` flag based on local skill directories.
+    """
+    installed_names = SkillsRegistryService.get_installed_skill_sources(project_path)
+
+    if query and len(query) >= 2:
+        raw_skills = SkillsRegistryService.search_skills(query, limit=limit)
+    else:
+        raw_skills = SkillsRegistryService.get_homepage_skills(
+            force_refresh=force_refresh
+        )
+
+    # Mark installed skills
+    skills = []
+    for s in raw_skills[:limit]:
+        s["installed"] = s.get("name", "") in installed_names
+        skills.append(RegistrySkillResponse(**s))
+
+    return RegistrySearchResponse(
+        skills=skills,
+        total=len(skills),
+        cached=not force_refresh,
+    )
+
+
+@router.post("/skills/registry/install", response_model=RegistryInstallResponse)
+async def install_registry_skill(
+    request: RegistryInstallRequest,
+    project_path: Optional[str] = Query(None, description="Project path"),
+):
+    """
+    Install a skill from the skills.sh registry.
+
+    Uses `npx skills add <source>` to install.
+    """
+    result = SkillsRegistryService.install_skill(
+        source=request.source,
+        skill_names=request.skill_names,
+        global_install=request.global_install,
+        project_path=project_path,
+    )
+
+    return RegistryInstallResponse(**result)
 
 
 @router.get("/{scope}/{name}", response_model=Agent)

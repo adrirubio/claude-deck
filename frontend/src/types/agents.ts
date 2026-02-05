@@ -75,6 +75,39 @@ export interface SkillListResponse {
   skills: Skill[];
 }
 
+// Registry Skills (skills.sh)
+
+export interface RegistrySkill {
+  skill_id: string;
+  name: string;
+  source: string; // GitHub repo path (e.g. "vercel-labs/agent-skills")
+  installs: number;
+  registry_id: string;
+  url: string; // skills.sh detail page URL
+  github_url: string; // GitHub repo URL
+  installed: boolean;
+}
+
+export interface RegistrySearchResponse {
+  skills: RegistrySkill[];
+  total: number;
+  cached: boolean;
+}
+
+export interface RegistryInstallRequest {
+  source: string;
+  skill_names?: string[];
+  global_install: boolean;
+}
+
+export interface RegistryInstallResponse {
+  success: boolean;
+  message: string;
+  logs: string;
+  source: string;
+  skill_names?: string[];
+}
+
 // Available tools for agent configuration
 export const AGENT_TOOLS = [
   { name: "Read", description: "Read file contents" },
