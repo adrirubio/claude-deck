@@ -423,7 +423,12 @@ class AgentService:
     @staticmethod
     def _scan_skills_dir(base_dir: Path, location: str) -> List[Skill]:
         """
-        Scan a skills directory for skill files (flat .md files).
+        Scan a skills directory for skill files.
+
+        Supports two layouts:
+        1. Flat .md files: base_dir/skill-name.md
+        2. Subdirectories with SKILL.md: base_dir/skill-name/SKILL.md
+           (used by `npx skills add` and symlinked from ~/.agents/skills/)
 
         Args:
             base_dir: Base skills directory
@@ -433,14 +438,16 @@ class AgentService:
             List of Skill objects
         """
         skills = []
+        seen_names = set()
 
-        # Skills can be .md files with frontmatter
+        # Layout 1: Flat .md files with frontmatter
         for skill_file in base_dir.glob("*.md"):
             try:
                 content = skill_file.read_text(encoding="utf-8")
                 metadata, _ = AgentService._parse_frontmatter(content)
 
                 skill_name = skill_file.stem
+                seen_names.add(skill_name)
 
                 skills.append(
                     Skill(
@@ -451,6 +458,48 @@ class AgentService:
                 )
             except Exception as e:
                 print(f"Error reading skill file {skill_file}: {e}")
+                continue
+
+        # Layout 2: Subdirectories with SKILL.md
+        for item in base_dir.iterdir():
+            if not item.is_dir():
+                continue
+            skill_file = item / "SKILL.md"
+            if not skill_file.exists():
+                # Check for nested skills (e.g. nextjs/vercel-ai-sdk/SKILL.md)
+                for sub in item.iterdir():
+                    if sub.is_dir():
+                        sub_skill = sub / "SKILL.md"
+                        if sub_skill.exists() and sub.name not in seen_names:
+                            try:
+                                content = sub_skill.read_text(encoding="utf-8")
+                                metadata, _ = AgentService._parse_frontmatter(content)
+                                seen_names.add(sub.name)
+                                skills.append(
+                                    Skill(
+                                        name=sub.name,
+                                        description=metadata.get("description"),
+                                        location=location,
+                                    )
+                                )
+                            except Exception as e:
+                                print(f"Error reading skill {sub_skill}: {e}")
+                continue
+            if item.name in seen_names:
+                continue
+            try:
+                content = skill_file.read_text(encoding="utf-8")
+                metadata, _ = AgentService._parse_frontmatter(content)
+                seen_names.add(item.name)
+                skills.append(
+                    Skill(
+                        name=item.name,
+                        description=metadata.get("description"),
+                        location=location,
+                    )
+                )
+            except Exception as e:
+                print(f"Error reading skill {skill_file}: {e}")
                 continue
 
         return skills
