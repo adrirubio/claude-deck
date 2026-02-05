@@ -19,6 +19,52 @@ SKILLS_SH_BASE = "https://skills.sh"
 SKILLS_SH_SEARCH_API = f"{SKILLS_SH_BASE}/api/search"
 
 
+def _clean_terminal_output(text: str) -> str:
+    """Strip ANSI codes, spinner frames, and terminal noise from CLI output."""
+    # Strip ANSI escape sequences (ESC[...m, ESC[...A, etc.)
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+    # Strip OSC sequences
+    text = re.sub(r"\x1b\][^\x07]*\x07", "", text)
+    # Strip remaining ESC chars
+    text = text.replace("\x1b", "")
+
+    # Strip cursor show/hide and movement without ESC prefix
+    text = re.sub(r"\[\?25[hl]", "", text)
+    text = re.sub(r"\[\d+D", "", text)
+    text = re.sub(r"\[J", "", text)
+
+    # Strip color codes without ESC prefix (e.g. [38;5;250m ... [0m)
+    text = re.sub(r"\[\d+(?:;\d+)*m", "", text)
+    text = re.sub(r"\[0m", "", text)
+
+    # Remove the ASCII art banner (box-drawing chars forming "SKILLS")
+    text = re.sub(r"[█╗╔═║╚╝╟╠╣╬╩╦╨╤╥╙╘╒╓╫╪┘┐┌└├┤┬┴┼]+.*\n?", "", text)
+
+    # Collapse spinner animation frames: ◒◐◓◑ are intermediate, ◇✓ are final
+    # Split into lines, collapse spinners, keep final states
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip intermediate spinner frames
+        if re.match(r"^[│├└┌]?\s*[◒◐◓◑]\s+", stripped):
+            continue
+        # Clean up box-drawing prefixes
+        stripped = re.sub(r"^[│├└┌]\s*", "", stripped)
+        if not stripped:
+            continue
+        cleaned.append(stripped)
+
+    result = "\n".join(cleaned)
+    # Remove the "Tip: use --yes" line since we already do that
+    result = re.sub(r"Tip: use the --yes.*\n?", "", result)
+
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
 class RegistrySkill:
     """A skill from the skills.sh registry."""
 
@@ -215,7 +261,7 @@ class SkillsRegistryService:
         Returns:
             dict with success, message, and logs.
         """
-        cmd = ["npx", "-y", "skills", "add", source]
+        cmd = ["npx", "-y", "skills", "add", source, "--yes"]
 
         if global_install:
             cmd.append("--global")
@@ -223,8 +269,15 @@ class SkillsRegistryService:
         if skill_names:
             cmd.extend(["--skill", ",".join(skill_names)])
 
-        env = None
         cwd = project_path if project_path and not global_install else None
+
+        # Force non-interactive mode
+        env_vars = {
+            **__import__("os").environ,
+            "CI": "1",
+            "NO_COLOR": "1",
+            "TERM": "dumb",
+        }
 
         try:
             logger.info(f"Installing skill: {' '.join(cmd)}")
@@ -234,10 +287,11 @@ class SkillsRegistryService:
                 text=True,
                 timeout=120,
                 cwd=cwd,
-                env=env,
+                env=env_vars,
             )
 
-            logs = result.stdout + ("\n" + result.stderr if result.stderr else "")
+            raw_logs = result.stdout + ("\n" + result.stderr if result.stderr else "")
+            logs = _clean_terminal_output(raw_logs)
             success = result.returncode == 0
 
             return {
