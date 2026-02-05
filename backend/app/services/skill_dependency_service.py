@@ -35,6 +35,26 @@ class SkillDependencyService:
         return {}
 
     @staticmethod
+    def _resolve_skill_dir(base: Path, name: str) -> Optional[Path]:
+        """
+        Find a skill directory by name, checking:
+        1. Direct: base/name/SKILL.md
+        2. Nested: base/*/name/SKILL.md (e.g. nextjs/vercel-ai-sdk/)
+        """
+        # Direct subdirectory
+        skill_dir = base / name
+        if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+            return skill_dir
+        # Nested (one level deep)
+        if base.exists():
+            for parent in base.iterdir():
+                if parent.is_dir():
+                    nested = parent / name
+                    if nested.is_dir() and (nested / "SKILL.md").exists():
+                        return nested
+        return None
+
+    @staticmethod
     def _get_skill_dir(name: str, location: str, project_path: Optional[str] = None) -> Optional[Path]:
         """
         Resolve the skill directory path.
@@ -46,10 +66,9 @@ class SkillDependencyService:
         """
         if location == "user":
             base = get_claude_user_skills_dir()
-            # Check directory-based skill first
-            skill_dir = base / name
-            if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-                return skill_dir
+            resolved = SkillDependencyService._resolve_skill_dir(base, name)
+            if resolved:
+                return resolved
             # Flat file skill (no directory, just a .md file)
             flat_file = base / f"{name}.md"
             if flat_file.exists():
@@ -57,9 +76,10 @@ class SkillDependencyService:
             return None
 
         elif location == "project" and project_path:
-            skill_dir = Path(project_path) / ".claude" / "skills" / name
-            if skill_dir.is_dir():
-                return skill_dir
+            base = Path(project_path) / ".claude" / "skills"
+            resolved = SkillDependencyService._resolve_skill_dir(base, name)
+            if resolved:
+                return resolved
             return None
 
         elif location.startswith("plugin:"):

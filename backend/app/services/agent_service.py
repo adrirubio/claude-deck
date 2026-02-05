@@ -549,6 +549,33 @@ class AgentService:
         return skills
 
     @staticmethod
+    def _find_skill_file(base_dir: Path, name: str) -> Optional[Path]:
+        """
+        Find a skill file by name, checking both layouts:
+        1. Flat: base_dir/name.md
+        2. Subdirectory: base_dir/name/SKILL.md
+        3. Nested subdirectory: base_dir/*/name/SKILL.md
+        """
+        # Layout 1: flat .md file
+        flat = base_dir / f"{name}.md"
+        if flat.exists():
+            return flat
+
+        # Layout 2: subdirectory with SKILL.md
+        subdir = base_dir / name / "SKILL.md"
+        if subdir.exists():
+            return subdir
+
+        # Layout 3: nested (e.g. nextjs/vercel-ai-sdk/SKILL.md)
+        for parent in base_dir.iterdir():
+            if parent.is_dir():
+                nested = parent / name / "SKILL.md"
+                if nested.exists():
+                    return nested
+
+        return None
+
+    @staticmethod
     def get_skill(
         name: str, location: str, project_path: Optional[str] = None
     ) -> Optional[Skill]:
@@ -567,10 +594,10 @@ class AgentService:
 
         if location == "user":
             user_skills_dir = get_claude_user_skills_dir()
-            skill_file = user_skills_dir / f"{name}.md"
+            skill_file = AgentService._find_skill_file(user_skills_dir, name)
         elif location == "project" and project_path:
             project_skills_dir = Path(project_path) / ".claude" / "skills"
-            skill_file = project_skills_dir / f"{name}.md"
+            skill_file = AgentService._find_skill_file(project_skills_dir, name)
         elif location.startswith("plugin:"):
             # Find the plugin's skill file
             plugin_name = location.replace("plugin:", "")
