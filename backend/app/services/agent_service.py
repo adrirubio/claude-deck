@@ -150,12 +150,19 @@ class AgentService:
 
                 agent_name = md_file.stem  # filename without .md
 
+                # Handle tools as either a list or comma-separated string
+                tools_raw = metadata.get("tools")
+                if isinstance(tools_raw, str):
+                    tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
+                else:
+                    tools = tools_raw
+
                 agents.append(
                     Agent(
                         name=agent_name,
                         scope=scope,
                         description=metadata.get("description"),
-                        tools=metadata.get("tools"),
+                        tools=tools,
                         model=metadata.get("model"),
                         prompt=markdown_content,
                     )
@@ -194,11 +201,18 @@ class AgentService:
             content = file_path.read_text(encoding="utf-8")
             metadata, markdown_content = AgentService._parse_frontmatter(content)
 
+            # Handle tools as either a list or comma-separated string
+            tools_raw = metadata.get("tools")
+            if isinstance(tools_raw, str):
+                tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
+            else:
+                tools = tools_raw
+
             return Agent(
                 name=name,
                 scope=scope,
                 description=metadata.get("description"),
-                tools=metadata.get("tools"),
+                tools=tools,
                 model=metadata.get("model"),
                 prompt=markdown_content,
             )
@@ -317,11 +331,18 @@ class AgentService:
             # Write file
             file_path.write_text(full_content, encoding="utf-8")
 
+            # Handle tools as either a list or comma-separated string
+            tools_raw = metadata.get("tools")
+            if isinstance(tools_raw, str):
+                tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
+            else:
+                tools = tools_raw
+
             return Agent(
                 name=name,
                 scope=scope,
                 description=metadata.get("description"),
-                tools=metadata.get("tools"),
+                tools=tools,
                 model=metadata.get("model"),
                 prompt=markdown_content,
             )
