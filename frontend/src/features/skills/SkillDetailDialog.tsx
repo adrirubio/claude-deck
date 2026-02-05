@@ -30,7 +30,6 @@ import {
 import { apiClient, buildEndpoint } from "@/lib/api";
 import {
   type Skill,
-  type SkillDependencyStatus,
   type SkillInstallResult,
 } from "@/types/agents";
 import { toast } from "sonner";
