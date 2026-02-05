@@ -62,11 +62,39 @@ export interface SkillSupportingFile {
   is_script: boolean;
 }
 
+export interface SkillFrontmatter {
+  // Identity
+  name?: string | null;
+  description?: string | null;
+  version?: string | null;
+  license?: string | null;
+
+  // Execution context
+  context?: string | null; // "fork" to run in a subagent
+  agent?: string | null; // Subagent type: "Explore", "Plan", custom
+  model?: string | null; // Override model
+
+  // Tool control
+  allowed_tools?: string[] | null;
+
+  // Visibility
+  user_invocable?: boolean | null; // Show in / menu
+  disable_model_invocation?: boolean | null; // Prevent auto-loading
+
+  // UX
+  argument_hint?: string | null; // Autocomplete hint
+
+  // Hooks & metadata
+  hooks?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface Skill {
   name: string;
   description?: string | null;
   location: string; // "user", "project", or plugin path
   content?: string | null; // Full markdown content (optional)
+  frontmatter?: SkillFrontmatter | null;
   dependency_status?: SkillDependencyStatus | null;
   supporting_files?: SkillSupportingFile[] | null;
 }

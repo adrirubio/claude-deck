@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 
-from app.models.schemas import Agent, AgentCreate, AgentUpdate, Skill
+from app.models.schemas import Agent, AgentCreate, AgentUpdate, Skill, SkillFrontmatter
 from app.utils.path_utils import (
     ensure_directory_exists,
     get_claude_user_agents_dir,
@@ -46,6 +46,53 @@ class AgentService:
         except (json.JSONDecodeError, Exception) as e:
             print(f"Error reading installed_plugins.json: {e}")
             return []
+
+    @staticmethod
+    def _metadata_to_frontmatter(metadata: Dict) -> SkillFrontmatter:
+        """Convert raw frontmatter dict to SkillFrontmatter model."""
+        # The "metadata" sub-dict can also contain some fields
+        meta_sub = metadata.get("metadata") or {}
+
+        # Handle hyphenated keys -> underscored fields
+        # Check both top-level and metadata sub-dict
+        allowed_tools = (
+            metadata.get("allowed-tools")
+            or metadata.get("allowed_tools")
+            or meta_sub.get("allowed-tools")
+        )
+        if isinstance(allowed_tools, str):
+            # Can be comma-separated or YAML list
+            allowed_tools = [t.strip() for t in allowed_tools.split(",") if t.strip()]
+
+        user_invocable = metadata.get(
+            "user-invocable", metadata.get("user_invocable")
+        )
+        disable_model = metadata.get(
+            "disable-model-invocation", metadata.get("disable_model_invocation")
+        )
+        argument_hint = (
+            metadata.get("argument-hint")
+            or metadata.get("argument_hint")
+            or meta_sub.get("argument-hint")
+            or meta_sub.get("argument_hint")
+        )
+        version = metadata.get("version") or meta_sub.get("version")
+
+        return SkillFrontmatter(
+            name=metadata.get("name"),
+            description=metadata.get("description"),
+            version=str(version) if version else None,
+            license=metadata.get("license"),
+            context=metadata.get("context"),
+            agent=metadata.get("agent"),
+            model=metadata.get("model"),
+            allowed_tools=allowed_tools if isinstance(allowed_tools, list) else None,
+            user_invocable=user_invocable,
+            disable_model_invocation=disable_model,
+            argument_hint=argument_hint,
+            hooks=metadata.get("hooks"),
+            metadata=meta_sub if meta_sub else None,
+        )
 
     @staticmethod
     def _parse_frontmatter(content: str) -> Tuple[Dict, str]:
@@ -452,6 +499,14 @@ class AgentService:
         skills = []
         seen_names = set()
 
+        def _make_skill(name: str, metadata: Dict) -> Skill:
+            return Skill(
+                name=name,
+                description=metadata.get("description"),
+                location=location,
+                frontmatter=AgentService._metadata_to_frontmatter(metadata),
+            )
+
         # Layout 1: Flat .md files with frontmatter
         for skill_file in base_dir.glob("*.md"):
             try:
@@ -460,14 +515,7 @@ class AgentService:
 
                 skill_name = skill_file.stem
                 seen_names.add(skill_name)
-
-                skills.append(
-                    Skill(
-                        name=skill_name,
-                        description=metadata.get("description"),
-                        location=location,
-                    )
-                )
+                skills.append(_make_skill(skill_name, metadata))
             except Exception as e:
                 print(f"Error reading skill file {skill_file}: {e}")
                 continue
@@ -487,13 +535,7 @@ class AgentService:
                                 content = sub_skill.read_text(encoding="utf-8")
                                 metadata, _ = AgentService._parse_frontmatter(content)
                                 seen_names.add(sub.name)
-                                skills.append(
-                                    Skill(
-                                        name=sub.name,
-                                        description=metadata.get("description"),
-                                        location=location,
-                                    )
-                                )
+                                skills.append(_make_skill(sub.name, metadata))
                             except Exception as e:
                                 print(f"Error reading skill {sub_skill}: {e}")
                 continue
@@ -503,13 +545,7 @@ class AgentService:
                 content = skill_file.read_text(encoding="utf-8")
                 metadata, _ = AgentService._parse_frontmatter(content)
                 seen_names.add(item.name)
-                skills.append(
-                    Skill(
-                        name=item.name,
-                        description=metadata.get("description"),
-                        location=location,
-                    )
-                )
+                skills.append(_make_skill(item.name, metadata))
             except Exception as e:
                 print(f"Error reading skill {skill_file}: {e}")
                 continue
@@ -552,6 +588,7 @@ class AgentService:
                         name=skill_name,
                         description=metadata.get("description"),
                         location=location,
+                        frontmatter=AgentService._metadata_to_frontmatter(metadata),
                     )
                 )
             except Exception as e:
@@ -631,6 +668,7 @@ class AgentService:
                 description=metadata.get("description"),
                 location=location,
                 content=markdown_content,
+                frontmatter=AgentService._metadata_to_frontmatter(metadata),
             )
         except Exception as e:
             print(f"Error reading skill file {skill_file}: {e}")

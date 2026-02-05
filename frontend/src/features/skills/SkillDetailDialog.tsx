@@ -12,6 +12,13 @@ import {
   Package,
   ChevronDown,
   ChevronUp,
+  GitFork,
+  Shield,
+  EyeOff,
+  Cpu,
+  Tag,
+  Zap,
+  Settings2,
 } from "lucide-react";
 import {
   Dialog,
@@ -28,10 +35,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { apiClient, buildEndpoint } from "@/lib/api";
-import {
-  type Skill,
-  type SkillInstallResult,
-} from "@/types/agents";
+import { type Skill, type SkillInstallResult } from "@/types/agents";
 import { toast } from "sonner";
 
 interface SkillDetailDialogProps {
@@ -111,7 +115,6 @@ export function SkillDetailDialog({
 
       if (result.success) {
         toast.success(result.message);
-        // Refresh skill details to update dependency status
         await fetchSkillDetails();
       } else {
         toast.error(result.message);
@@ -153,9 +156,9 @@ export function SkillDetailDialog({
   };
 
   const depStatus = fullSkill?.dependency_status;
-  const hasDeps =
-    depStatus && depStatus.dependencies.length > 0;
+  const hasDeps = depStatus && depStatus.dependencies.length > 0;
   const hasMissing = hasDeps && !depStatus.all_satisfied;
+  const fm = fullSkill?.frontmatter;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -184,6 +187,154 @@ export function SkillDetailDialog({
             </div>
           ) : (
             <>
+              {/* Frontmatter Configuration Section */}
+              {fm && _hasFrontmatterConfig(fm) && (
+                <div className="rounded-lg border p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Settings2 className="h-5 w-5 text-muted-foreground" />
+                    <h3 className="font-semibold">Configuration</h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Context */}
+                    {fm.context && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <GitFork className="h-4 w-4 text-purple-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">Context:</span>
+                        <Badge
+                          variant="outline"
+                          className="text-purple-600 border-purple-200 bg-purple-50"
+                        >
+                          {fm.context}
+                        </Badge>
+                      </div>
+                    )}
+
+                    {/* Agent */}
+                    {fm.agent && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Cpu className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">Agent:</span>
+                        <Badge variant="outline">{fm.agent}</Badge>
+                      </div>
+                    )}
+
+                    {/* Model */}
+                    {fm.model && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Cpu className="h-4 w-4 text-indigo-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">Model:</span>
+                        <Badge variant="outline">{fm.model}</Badge>
+                      </div>
+                    )}
+
+                    {/* User Invocable */}
+                    {fm.user_invocable === false && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <EyeOff className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">
+                          Hidden from / menu
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Disable Model Invocation */}
+                    {fm.disable_model_invocation && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <EyeOff className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">
+                          Auto-loading disabled
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Argument Hint */}
+                    {fm.argument_hint && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Tag className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">Hint:</span>
+                        <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                          {fm.argument_hint}
+                        </code>
+                      </div>
+                    )}
+
+                    {/* Version */}
+                    {fm.version && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Tag className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <span className="text-muted-foreground">Version:</span>
+                        <span>{fm.version}</span>
+                      </div>
+                    )}
+
+                    {/* License */}
+                    {fm.license && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <span className="text-muted-foreground">License:</span>
+                        <span>{fm.license}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Allowed Tools */}
+                  {fm.allowed_tools && fm.allowed_tools.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 text-sm">
+                        <Shield className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">
+                          Allowed tools:
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 ml-6">
+                        {fm.allowed_tools.map((tool) => (
+                          <Badge
+                            key={tool}
+                            variant="outline"
+                            className="text-xs font-mono"
+                          >
+                            {tool}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Hooks */}
+                  {fm.hooks && Object.keys(fm.hooks).length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 text-sm">
+                        <Zap className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                        <span className="text-muted-foreground">Hooks:</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 ml-6">
+                        {Object.keys(fm.hooks).map((hook) => (
+                          <Badge
+                            key={hook}
+                            variant="outline"
+                            className="text-xs font-mono"
+                          >
+                            {hook}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Metadata */}
+                  {fm.metadata && Object.keys(fm.metadata).length > 0 && (
+                    <div className="text-xs text-muted-foreground ml-6">
+                      {Object.entries(fm.metadata).map(([key, val]) => (
+                        <span key={key} className="mr-3">
+                          {key}: {String(val)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Dependency Status Section */}
               {hasDeps && (
                 <div className="rounded-lg border p-4 space-y-3">
@@ -361,5 +512,24 @@ export function SkillDetailDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Check if frontmatter has any interesting config fields to show */
+function _hasFrontmatterConfig(
+  fm: NonNullable<Skill["frontmatter"]>
+): boolean {
+  return !!(
+    fm.context ||
+    fm.agent ||
+    fm.model ||
+    fm.allowed_tools?.length ||
+    fm.user_invocable === false ||
+    fm.disable_model_invocation ||
+    fm.argument_hint ||
+    fm.version ||
+    fm.license ||
+    (fm.hooks && Object.keys(fm.hooks).length > 0) ||
+    (fm.metadata && Object.keys(fm.metadata).length > 0)
   );
 }

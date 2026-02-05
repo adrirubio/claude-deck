@@ -6,6 +6,9 @@ import {
   AlertTriangle,
   Store,
   FolderOpen,
+  GitFork,
+  Shield,
+  EyeOff,
 } from "lucide-react";
 import {
   Card,
@@ -144,6 +147,7 @@ export function SkillsPage() {
     const missingCount = hasDeps
       ? depStatus.dependencies.filter((d) => !d.installed).length
       : 0;
+    const fm = skill.frontmatter;
 
     return (
       <Card
@@ -165,6 +169,33 @@ export function SkillsPage() {
         <CardContent>
           <div className="flex items-center gap-2 flex-wrap">
             {getLocationBadge(skill.location)}
+            {fm?.context === "fork" && (
+              <Badge
+                variant="outline"
+                className="text-purple-600 border-purple-200 bg-purple-50 flex items-center gap-1"
+              >
+                <GitFork className="h-3 w-3" />
+                Fork
+              </Badge>
+            )}
+            {fm?.allowed_tools && fm.allowed_tools.length > 0 && (
+              <Badge
+                variant="outline"
+                className="text-blue-600 border-blue-200 bg-blue-50 flex items-center gap-1"
+              >
+                <Shield className="h-3 w-3" />
+                {fm.allowed_tools.length} tools
+              </Badge>
+            )}
+            {fm?.user_invocable === false && (
+              <Badge
+                variant="outline"
+                className="text-gray-500 border-gray-200 bg-gray-50 flex items-center gap-1"
+              >
+                <EyeOff className="h-3 w-3" />
+                Hidden
+              </Badge>
+            )}
             {hasDeps && !hasMissing && (
               <Badge
                 variant="outline"

@@ -496,6 +496,37 @@ class SkillSupportingFile(BaseModel):
     is_script: bool = False
 
 
+class SkillFrontmatter(BaseModel):
+    """All known skill frontmatter fields."""
+
+    # Identity
+    name: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[str] = None
+    license: Optional[str] = None
+
+    # Execution context
+    context: Optional[str] = None  # "fork" to run in a subagent
+    agent: Optional[str] = None  # Subagent type: "Explore", "Plan", custom
+    model: Optional[str] = None  # Override model for this skill
+
+    # Tool control
+    allowed_tools: Optional[List[str]] = None  # Tools available without permission
+
+    # Visibility & invocability
+    user_invocable: Optional[bool] = None  # Show in / menu (default true)
+    disable_model_invocation: Optional[bool] = None  # Prevent auto-loading
+
+    # UX
+    argument_hint: Optional[str] = None  # Autocomplete hint e.g. "[issue-number]"
+
+    # Hooks
+    hooks: Optional[dict] = None  # Lifecycle hooks scoped to skill
+
+    # Metadata (author, version, etc.)
+    metadata: Optional[dict] = None
+
+
 class Skill(BaseModel):
     """Skill definition."""
 
@@ -503,6 +534,8 @@ class Skill(BaseModel):
     description: Optional[str] = None
     location: str  # "user", "project", or plugin path
     content: Optional[str] = None  # Full markdown content (optional)
+    # Full frontmatter (populated on detail view)
+    frontmatter: Optional[SkillFrontmatter] = None
     # Dependency info (populated on detail view)
     dependency_status: Optional[SkillDependencyStatus] = None
     supporting_files: Optional[List[SkillSupportingFile]] = None
