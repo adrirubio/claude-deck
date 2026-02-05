@@ -210,7 +210,7 @@ async def browse_registry_skills(
 
     Results include an `installed` flag based on local skill directories.
     """
-    installed_names = SkillsRegistryService.get_installed_skill_sources(project_path)
+    installed_names = SkillsRegistryService.get_installed_skill_names(project_path)
 
     if query and len(query) >= 2:
         raw_skills = SkillsRegistryService.search_skills(query, limit=limit)

@@ -218,27 +218,42 @@ class SkillsRegistryService:
             return []
 
     @classmethod
-    def get_installed_skill_sources(cls, project_path: Optional[str] = None) -> set:
+    def get_installed_skill_names(cls, project_path: Optional[str] = None) -> set:
         """
-        Get set of source repos that are currently installed locally.
-        Reads from ~/.claude/skills/ and optionally project .claude/skills/.
+        Get set of skill names that are currently installed locally.
+        Uses AgentService.list_skills() which aggregates user, project,
+        and plugin scopes — matching what the Installed tab shows.
         """
-        installed = set()
-        user_skills_dir = Path.home() / ".claude" / "skills"
+        from app.services.agent_service import AgentService
 
-        if user_skills_dir.exists():
-            for skill_dir in user_skills_dir.iterdir():
-                if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-                    installed.add(skill_dir.name)
-
-        if project_path:
-            project_skills_dir = Path(project_path) / ".claude" / "skills"
-            if project_skills_dir.exists():
-                for skill_dir in project_skills_dir.iterdir():
-                    if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
-                        installed.add(skill_dir.name)
-
-        return installed
+        try:
+            skills = AgentService.list_skills(project_path)
+            return {s.name for s in skills}
+        except Exception as e:
+            logger.warning(f"Failed to list installed skills: {e}")
+            # Fallback: scan common directories
+            installed = set()
+            for skills_dir in [
+                Path.home() / ".claude" / "skills",
+                Path.home() / ".agents" / "skills",
+                Path.home() / ".openclaw" / "skills",
+            ]:
+                if skills_dir.exists():
+                    for item in skills_dir.iterdir():
+                        if item.is_dir():
+                            if (item / "SKILL.md").exists():
+                                installed.add(item.name)
+                            # Check nested skills (e.g. nextjs/vercel-ai-sdk)
+                            for sub in item.iterdir():
+                                if sub.is_dir() and (sub / "SKILL.md").exists():
+                                    installed.add(sub.name)
+            if project_path:
+                project_skills = Path(project_path) / ".claude" / "skills"
+                if project_skills.exists():
+                    for item in project_skills.iterdir():
+                        if item.is_dir() and (item / "SKILL.md").exists():
+                            installed.add(item.name)
+            return installed
 
     @classmethod
     def install_skill(
