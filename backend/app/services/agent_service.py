@@ -412,11 +412,23 @@ class AgentService:
             plugin_path = Path(plugin["path"])
             skills_dir = plugin_path / "skills"
             if skills_dir.exists():
-                skills.extend(
-                    AgentService._scan_plugin_skills_dir(
-                        skills_dir, f"plugin:{plugin['name']}"
-                    )
+                # Get command names so we can exclude skills that are
+                # primarily slash commands (e.g. vercel's deploy/logs/setup)
+                commands_dir = plugin_path / "commands"
+                command_names = set()
+                if commands_dir.exists():
+                    for cmd_file in commands_dir.glob("*.md"):
+                        command_names.add(cmd_file.stem)
+
+                plugin_skills = AgentService._scan_plugin_skills_dir(
+                    skills_dir, f"plugin:{plugin['name']}"
                 )
+                # Filter out skills whose name matches a command
+                if command_names:
+                    plugin_skills = [
+                        s for s in plugin_skills if s.name not in command_names
+                    ]
+                skills.extend(plugin_skills)
 
         return skills
 
