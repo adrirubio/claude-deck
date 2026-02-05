@@ -15,6 +15,22 @@ interface PluginListResponse {
   plugins: unknown[];
 }
 
+interface MCPServerListResponse {
+  servers: unknown[];
+}
+
+interface HookListResponse {
+  hooks: unknown[];
+}
+
+interface PermissionListResponse {
+  rules: { type: string }[];
+}
+
+interface CommandListResponse {
+  commands: unknown[];
+}
+
 export function DashboardPage() {
   const { projects, activeProject } = useProjectContext()
   const { getDashboardStats } = useSessionsApi()
@@ -47,28 +63,46 @@ export function DashboardPage() {
     try {
       const params = { project_path: activeProject?.path }
 
-      // Fetch all data in parallel
-      const [configData, agentsData, skillsData, pluginsData, outputStylesData, sessionStatsData] = await Promise.all([
+      // Fetch all data in parallel using dedicated endpoints for accurate counts
+      const [
+        configData,
+        mcpData,
+        agentsData,
+        skillsData,
+        pluginsData,
+        hooksData,
+        permissionsData,
+        commandsData,
+        outputStylesData,
+        sessionStatsData,
+      ] = await Promise.all([
         apiClient<MergedConfig>(buildEndpoint('config', params)),
+        apiClient<MCPServerListResponse>(buildEndpoint('mcp/servers', params)),
         apiClient<AgentListResponse>(buildEndpoint('agents', params)),
         apiClient<SkillListResponse>(buildEndpoint('agents/skills', params)),
         apiClient<PluginListResponse>(buildEndpoint('plugins', params)),
+        apiClient<HookListResponse>(buildEndpoint('hooks', params)),
+        apiClient<PermissionListResponse>(buildEndpoint('permissions', params)),
+        apiClient<CommandListResponse>(buildEndpoint('commands', params)),
         apiClient<OutputStyleListResponse>(buildEndpoint('output-styles', params)),
         getDashboardStats(),
       ])
 
+      const allowRules = permissionsData.rules.filter(r => r.type === 'allow').length
+      const denyRules = permissionsData.rules.filter(r => r.type === 'deny').length
+
       setStats({
-        mcpServerCount: Object.keys(configData.mcp_servers || {}).length,
-        commandCount: (configData.commands || []).length,
+        mcpServerCount: mcpData.servers.length,
+        commandCount: commandsData.commands.length,
         agentCount: agentsData.agents.length,
         skillCount: skillsData.skills.length,
-        hookCount: Object.values(configData.hooks || {}).reduce((acc, hooks) => acc + hooks.length, 0),
+        hookCount: hooksData.hooks.length,
         pluginCount: pluginsData.plugins.length,
-        permissionCount: (configData.permissions?.allow?.length || 0) + (configData.permissions?.deny?.length || 0),
+        permissionCount: allowRules + denyRules,
         projectCount: projects.length,
         outputStyleCount: outputStylesData?.output_styles?.length || 0,
-        allowRules: configData.permissions?.allow?.length || 0,
-        denyRules: configData.permissions?.deny?.length || 0,
+        allowRules,
+        denyRules,
         settingsKeys: Object.keys(configData.settings || {}).length,
         sessionCount: sessionStatsData.total_sessions,
         sessionsToday: sessionStatsData.sessions_today,
