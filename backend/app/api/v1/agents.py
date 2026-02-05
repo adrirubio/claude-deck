@@ -1,5 +1,5 @@
 """API endpoints for agent and skill management."""
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -9,9 +9,13 @@ from app.models.schemas import (
     AgentListResponse,
     AgentUpdate,
     Skill,
+    SkillDependencyStatus,
+    SkillInstallResult,
     SkillListResponse,
+    SkillSupportingFile,
 )
 from app.services.agent_service import AgentService
+from app.services.skill_dependency_service import SkillDependencyService
 
 router = APIRouter(prefix="/agents", tags=["Agents"])
 
@@ -54,7 +58,8 @@ async def list_skills(
 async def get_skill(
     location: str,
     name: str,
-    project_path: Optional[str] = Query(None, description="Project path")
+    project_path: Optional[str] = Query(None, description="Project path"),
+    include_deps: bool = Query(True, description="Include dependency status"),
 ):
     """
     Get a specific skill by location and name with full content.
@@ -63,9 +68,10 @@ async def get_skill(
         location: Skill location ("user", "project", or "plugin:pluginname")
         name: Skill name
         project_path: Optional project directory path
+        include_deps: Whether to include dependency status check
 
     Returns:
-        Skill definition with full content
+        Skill definition with full content and dependency info
     """
     skill = AgentService.get_skill(name, location, project_path)
     if not skill:
@@ -73,7 +79,115 @@ async def get_skill(
             status_code=404,
             detail=f"Skill '{name}' not found in location '{location}'"
         )
+
+    # Enrich with dependency status and supporting files
+    if include_deps:
+        skill.dependency_status = SkillDependencyService.check_dependencies(
+            name, location, project_path
+        )
+        skill.supporting_files = SkillDependencyService.list_supporting_files(
+            name, location, project_path
+        )
+
     return skill
+
+
+@router.get(
+    "/skills/{location}/{name}/dependencies",
+    response_model=SkillDependencyStatus,
+)
+async def check_skill_dependencies(
+    location: str,
+    name: str,
+    project_path: Optional[str] = Query(None, description="Project path"),
+):
+    """
+    Check dependency status for a skill.
+
+    Parses the skill's frontmatter metadata for dependency declarations
+    and checks each one against the system.
+
+    Args:
+        location: Skill location ("user", "project", or "plugin:pluginname")
+        name: Skill name
+        project_path: Optional project directory path
+
+    Returns:
+        Dependency status report
+    """
+    # Verify skill exists
+    skill = AgentService.get_skill(name, location, project_path)
+    if not skill:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{name}' not found in location '{location}'"
+        )
+
+    return SkillDependencyService.check_dependencies(name, location, project_path)
+
+
+@router.post(
+    "/skills/{location}/{name}/install",
+    response_model=SkillInstallResult,
+)
+async def install_skill_dependencies(
+    location: str,
+    name: str,
+    project_path: Optional[str] = Query(None, description="Project path"),
+):
+    """
+    Install missing dependencies for a skill.
+
+    Runs install scripts and installs missing npm/pip packages.
+
+    Args:
+        location: Skill location ("user", "project", or "plugin:pluginname")
+        name: Skill name
+        project_path: Optional project directory path
+
+    Returns:
+        Installation result with success status, installed/failed deps, and logs
+    """
+    # Verify skill exists
+    skill = AgentService.get_skill(name, location, project_path)
+    if not skill:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{name}' not found in location '{location}'"
+        )
+
+    return SkillDependencyService.install_dependencies(name, location, project_path)
+
+
+@router.get(
+    "/skills/{location}/{name}/files",
+    response_model=List[SkillSupportingFile],
+)
+async def list_skill_files(
+    location: str,
+    name: str,
+    project_path: Optional[str] = Query(None, description="Project path"),
+):
+    """
+    List supporting files in a skill directory.
+
+    Args:
+        location: Skill location ("user", "project", or "plugin:pluginname")
+        name: Skill name
+        project_path: Optional project directory path
+
+    Returns:
+        List of supporting files (excluding SKILL.md)
+    """
+    # Verify skill exists
+    skill = AgentService.get_skill(name, location, project_path)
+    if not skill:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Skill '{name}' not found in location '{location}'"
+        )
+
+    return SkillDependencyService.list_supporting_files(name, location, project_path)
 
 
 @router.get("/{scope}/{name}", response_model=Agent)

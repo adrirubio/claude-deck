@@ -457,6 +457,45 @@ class AgentListResponse(BaseModel):
     agents: List[Agent]
 
 
+class SkillDependency(BaseModel):
+    """A single skill dependency."""
+
+    kind: str  # "bin", "npm", "pip", "script"
+    name: str  # Binary name, package name, or script path
+    installed: bool = False  # Whether the dependency is currently satisfied
+    version: Optional[str] = None  # Required version (if specified)
+    installed_version: Optional[str] = None  # Currently installed version
+
+
+class SkillDependencyStatus(BaseModel):
+    """Dependency status report for a skill."""
+
+    skill_name: str
+    all_satisfied: bool
+    dependencies: List[SkillDependency]
+    has_install_script: bool = False
+    install_script_path: Optional[str] = None
+
+
+class SkillInstallResult(BaseModel):
+    """Result of installing skill dependencies."""
+
+    success: bool
+    message: str
+    installed: List[str] = []  # Successfully installed deps
+    failed: List[str] = []  # Failed deps
+    logs: str = ""  # Combined stdout/stderr
+
+
+class SkillSupportingFile(BaseModel):
+    """A supporting file in a skill directory."""
+
+    name: str
+    path: str
+    size_bytes: int
+    is_script: bool = False
+
+
 class Skill(BaseModel):
     """Skill definition."""
 
@@ -464,6 +503,9 @@ class Skill(BaseModel):
     description: Optional[str] = None
     location: str  # "user", "project", or plugin path
     content: Optional[str] = None  # Full markdown content (optional)
+    # Dependency info (populated on detail view)
+    dependency_status: Optional[SkillDependencyStatus] = None
+    supporting_files: Optional[List[SkillSupportingFile]] = None
 
 
 class SkillListResponse(BaseModel):

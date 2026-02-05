@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Sparkles, MapPin } from "lucide-react";
+import { Sparkles, MapPin, CheckCircle2, AlertTriangle } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -13,7 +13,7 @@ import { SkillDetailDialog } from "./SkillDetailDialog";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
-import { type Skill, type SkillListResponse } from "@/types/agents";
+import { type Skill, type SkillListResponse, type SkillDependencyStatus } from "@/types/agents";
 
 export function SkillsPage() {
   const { activeProject } = useProjectContext();
@@ -22,6 +22,7 @@ export function SkillsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [depStatuses, setDepStatuses] = useState<Record<string, SkillDependencyStatus>>({});
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
@@ -43,6 +44,34 @@ export function SkillsPage() {
   useEffect(() => {
     fetchSkills();
   }, [fetchSkills]);
+
+  // Fetch dependency status for all skills (in parallel, non-blocking)
+  useEffect(() => {
+    if (skills.length === 0) return;
+
+    const fetchDeps = async () => {
+      const statuses: Record<string, SkillDependencyStatus> = {};
+      await Promise.allSettled(
+        skills.map(async (skill) => {
+          try {
+            const params = { project_path: activeProject?.path };
+            const status = await apiClient<SkillDependencyStatus>(
+              buildEndpoint(
+                `agents/skills/${encodeURIComponent(skill.location)}/${encodeURIComponent(skill.name)}/dependencies`,
+                params
+              )
+            );
+            statuses[`${skill.location}:${skill.name}`] = status;
+          } catch {
+            // Silently ignore — dep check is best-effort
+          }
+        })
+      );
+      setDepStatuses(statuses);
+    };
+
+    fetchDeps();
+  }, [skills, activeProject?.path]);
 
   // Group skills by location
   const userSkills = skills.filter((s) => s.location === "user");
@@ -89,26 +118,58 @@ export function SkillsPage() {
     setDialogOpen(true);
   };
 
-  const renderSkillCard = (skill: Skill) => (
-    <Card
-      key={`${skill.location}-${skill.name}`}
-      className="hover:bg-muted/50 transition-colors cursor-pointer"
-      onClick={() => handleSkillClick(skill)}
-    >
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-amber-500" />
-          <CardTitle className="text-lg">{skill.name}</CardTitle>
-        </div>
-        {skill.description && (
-          <CardDescription className="line-clamp-2">
-            {skill.description}
-          </CardDescription>
-        )}
-      </CardHeader>
-      <CardContent>{getLocationBadge(skill.location)}</CardContent>
-    </Card>
-  );
+  const renderSkillCard = (skill: Skill) => {
+    const depKey = `${skill.location}:${skill.name}`;
+    const depStatus = depStatuses[depKey];
+    const hasDeps = depStatus && depStatus.dependencies.length > 0;
+    const hasMissing = hasDeps && !depStatus.all_satisfied;
+    const missingCount = hasDeps
+      ? depStatus.dependencies.filter((d) => !d.installed).length
+      : 0;
+
+    return (
+      <Card
+        key={`${skill.location}-${skill.name}`}
+        className="hover:bg-muted/50 transition-colors cursor-pointer"
+        onClick={() => handleSkillClick(skill)}
+      >
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-amber-500" />
+            <CardTitle className="text-lg">{skill.name}</CardTitle>
+          </div>
+          {skill.description && (
+            <CardDescription className="line-clamp-2">
+              {skill.description}
+            </CardDescription>
+          )}
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-2 flex-wrap">
+            {getLocationBadge(skill.location)}
+            {hasDeps && !hasMissing && (
+              <Badge
+                variant="outline"
+                className="text-green-600 border-green-200 bg-green-50 flex items-center gap-1"
+              >
+                <CheckCircle2 className="h-3 w-3" />
+                Deps OK
+              </Badge>
+            )}
+            {hasMissing && (
+              <Badge
+                variant="outline"
+                className="text-amber-600 border-amber-200 bg-amber-50 flex items-center gap-1"
+              >
+                <AlertTriangle className="h-3 w-3" />
+                {missingCount} missing
+              </Badge>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
 
   return (
     <div className="space-y-6">

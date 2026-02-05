@@ -31,11 +31,44 @@ export interface AgentListResponse {
   agents: Agent[];
 }
 
+export interface SkillDependency {
+  kind: "bin" | "npm" | "pip" | "script";
+  name: string;
+  installed: boolean;
+  version?: string | null;
+  installed_version?: string | null;
+}
+
+export interface SkillDependencyStatus {
+  skill_name: string;
+  all_satisfied: boolean;
+  dependencies: SkillDependency[];
+  has_install_script: boolean;
+  install_script_path?: string | null;
+}
+
+export interface SkillInstallResult {
+  success: boolean;
+  message: string;
+  installed: string[];
+  failed: string[];
+  logs: string;
+}
+
+export interface SkillSupportingFile {
+  name: string;
+  path: string;
+  size_bytes: number;
+  is_script: boolean;
+}
+
 export interface Skill {
   name: string;
   description?: string | null;
   location: string; // "user", "project", or plugin path
   content?: string | null; // Full markdown content (optional)
+  dependency_status?: SkillDependencyStatus | null;
+  supporting_files?: SkillSupportingFile[] | null;
 }
 
 export interface SkillListResponse {
