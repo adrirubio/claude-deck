@@ -14,6 +14,7 @@ from .output_styles import router as output_styles_router
 from .statusline import router as statusline_router
 from .sessions import router as sessions_router
 from .usage import router as usage_router
+from .memory import router as memory_router
 
 router = APIRouter()
 
@@ -44,3 +45,4 @@ router.include_router(output_styles_router, tags=["Output Styles"])
 router.include_router(statusline_router, tags=["Status Line"])
 router.include_router(sessions_router, tags=["Sessions"])
 router.include_router(usage_router, tags=["Usage"])
+router.include_router(memory_router, tags=["Memory"])

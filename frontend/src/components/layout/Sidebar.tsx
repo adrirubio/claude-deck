@@ -11,6 +11,7 @@ import {
   Shield,
   Bot,
   Sparkles,
+  Brain,
   Paintbrush,
   Activity,
   MessageSquare,
@@ -34,6 +35,7 @@ const navigation: { name: string; href: string; icon: LucideIcon }[] = [
   { name: 'Permissions', href: '/permissions', icon: Shield },
   { name: 'Agents', href: '/agents', icon: Bot },
   { name: 'Skills', href: '/skills', icon: Sparkles },
+  { name: 'Memory', href: '/memory', icon: Brain },
 
   // Tier 3: Customization
   { name: 'Output Styles', href: '/output-styles', icon: Paintbrush },

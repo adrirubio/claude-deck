@@ -18,6 +18,7 @@ import { StatusLinePage } from './features/statusline/StatusLinePage'
 import { SessionsPage } from './features/sessions/SessionsPage'
 import { SessionViewPage } from './features/sessions/SessionViewPage'
 import { UsagePage } from './features/usage/UsagePage'
+import { MemoryPage } from './features/memory/MemoryPage'
 
 function App() {
   return (
@@ -35,6 +36,7 @@ function App() {
             <Route path="permissions" element={<PermissionsPage />} />
             <Route path="agents" element={<AgentsPage />} />
             <Route path="skills" element={<SkillsPage />} />
+            <Route path="memory" element={<MemoryPage />} />
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="backup" element={<BackupPage />} />
             <Route path="output-styles" element={<OutputStylesPage />} />
