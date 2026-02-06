@@ -84,6 +84,7 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
         if (formData.type === "stdio") {
           return formData.name.trim() !== "" && (formData.command?.trim() ?? "") !== "";
         } else {
+          // Both http and sse types require URL
           return formData.name.trim() !== "" && (formData.url?.trim() ?? "") !== "";
         }
       case 3:
@@ -144,6 +145,21 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
 
             <button
               type="button"
+              onClick={() => setFormData({ ...formData, type: "sse" })}
+              className={`w-full p-4 border rounded-lg text-left transition-colors ${
+                formData.type === "sse"
+                  ? "border-primary bg-primary/5"
+                  : "border-input hover:bg-muted/50"
+              }`}
+            >
+              <div className="font-medium">Server-Sent Events (SSE)</div>
+              <div className="text-sm text-muted-foreground mt-1">
+                Connects via SSE stream. Recommended for remote MCP servers.
+              </div>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setFormData({ ...formData, type: "http" })}
               className={`w-full p-4 border rounded-lg text-left transition-colors ${
                 formData.type === "http"
@@ -153,7 +169,7 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
             >
               <div className="font-medium">HTTP</div>
               <div className="text-sm text-muted-foreground mt-1">
-                Communicates via HTTP requests. Connects to a remote server.
+                Communicates via HTTP requests. Legacy remote server support.
               </div>
             </button>
           </div>
@@ -209,7 +225,7 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
             </>
           )}
 
-          {formData.type === "http" && (
+          {(formData.type === "http" || formData.type === "sse") && (
             <div>
               <Label htmlFor="url">Server URL *</Label>
               <Input
@@ -217,9 +233,14 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
                 type="url"
                 value={formData.url}
                 onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-                placeholder="https://example.com/mcp"
+                placeholder={formData.type === "sse" ? "https://example.com/sse" : "https://example.com/mcp"}
                 required
               />
+              {formData.type === "sse" && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  The SSE endpoint URL for the MCP server
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -328,7 +349,7 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
             <div>
               <div className="text-sm font-medium">Type</div>
               <div className="text-sm text-muted-foreground">
-                {formData.type === "stdio" ? "Standard I/O" : "HTTP"}
+                {formData.type === "stdio" ? "Standard I/O" : formData.type === "sse" ? "Server-Sent Events" : "HTTP"}
               </div>
             </div>
 
@@ -351,7 +372,7 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
               </>
             )}
 
-            {formData.type === "http" && (
+            {(formData.type === "http" || formData.type === "sse") && (
               <div>
                 <div className="text-sm font-medium">URL</div>
                 <div className="text-sm text-muted-foreground font-mono break-all">

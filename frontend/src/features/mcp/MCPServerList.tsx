@@ -7,9 +7,10 @@ interface MCPServerListProps {
   onEdit: (server: MCPServer) => void;
   onDelete: (name: string, scope: string) => void;
   onTestComplete: () => void;
+  readOnly?: boolean;
 }
 
-export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComplete }: MCPServerListProps) {
+export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComplete, readOnly = false }: MCPServerListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -29,7 +30,25 @@ export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComple
     );
   }
 
-  // Group servers by scope
+  // If readOnly is set at list level, just render all servers in a grid
+  if (readOnly) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {servers.map((server) => (
+          <MCPServerCard
+            key={`${server.scope}-${server.name}`}
+            server={server}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onTestComplete={onTestComplete}
+            readOnly
+          />
+        ))}
+      </div>
+    );
+  }
+
+  // Group servers by scope (excluding managed which are shown separately)
   const userServers = servers.filter(s => s.scope === "user");
   const projectServers = servers.filter(s => s.scope === "project");
   const pluginServers = servers.filter(s => s.scope === "plugin");

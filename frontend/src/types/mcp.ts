@@ -6,7 +6,8 @@
 export interface MCPServer {
   name: string;
   type: "stdio" | "http" | "sse";
-  scope: "user" | "project" | "plugin";
+  scope: "user" | "project" | "plugin" | "managed";
+  source?: string; // Original source (e.g., plugin name, "enterprise")
   command?: string;
   args?: string[];
   url?: string;
@@ -67,4 +68,16 @@ export interface MCPTestConnectionResponse {
   server_name?: string;
   server_version?: string;
   tools?: MCPTool[];
+}
+
+// Server Approval Settings
+
+export interface MCPServerApprovalMode {
+  server_name: string;
+  mode: "always-allow" | "always-deny" | "ask-every-time";
+}
+
+export interface MCPServerApprovalSettings {
+  default_mode: "always-allow" | "always-deny" | "ask-every-time";
+  server_overrides: MCPServerApprovalMode[];
 }

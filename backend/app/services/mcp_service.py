@@ -12,11 +12,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import MCPServerCache
-from app.models.schemas import MCPServer, MCPServerCreate, MCPServerUpdate, MCPTool
+from app.models.schemas import (
+    MCPServer,
+    MCPServerCreate,
+    MCPServerUpdate,
+    MCPTool,
+    MCPServerApprovalSettings,
+    MCPServerApprovalMode,
+)
 from app.utils.file_utils import read_json_file, write_json_file
 from app.utils.path_utils import (
     get_claude_user_config_file,
+    get_claude_user_settings_file,
     get_installed_plugins_file,
+    get_managed_mcp_config_file,
     get_project_mcp_config_file,
 )
 
@@ -178,6 +187,26 @@ class MCPService:
         return plugin_servers
 
     @staticmethod
+    def _read_managed_mcp_config() -> Dict[str, Any]:
+        """
+        Read MCP configuration from managed config file (read-only).
+        
+        This file is typically managed by enterprise/system admins and
+        cannot be modified by users. Servers from this file are always
+        enabled and marked with scope="managed".
+        
+        Returns:
+            Dict of MCP server configurations
+        """
+        managed_config_path = get_managed_mcp_config_file()
+        config = read_json_file(managed_config_path)
+        
+        if not config or "mcpServers" not in config:
+            return {}
+        
+        return config.get("mcpServers", {})
+
+    @staticmethod
     async def _write_user_mcp_config(servers: Dict[str, Any]) -> bool:
         """Write MCP configuration to user-level ~/.claude.json."""
         user_config_path = get_claude_user_config_file()
@@ -269,7 +298,7 @@ class MCPService:
         self, project_path: Optional[str] = None, db: Optional[AsyncSession] = None
     ) -> List[MCPServer]:
         """
-        List all MCP servers from user, project, and plugin scopes.
+        List all MCP servers from user, project, plugin, and managed scopes.
 
         Args:
             project_path: Optional path to project directory
@@ -279,6 +308,13 @@ class MCPService:
             List of MCPServer objects with cached data merged
         """
         servers = []
+
+        # Read managed servers (admin-enforced, read-only)
+        managed_servers = self._read_managed_mcp_config()
+        for name, config in managed_servers.items():
+            server = self._create_mcp_server(name, config, "managed")
+            server.source = "enterprise"  # Mark source for UI
+            servers.append(server)
 
         # Read user-level servers (including project-specific from ~/.claude.json)
         user_servers = self._read_user_mcp_config(project_path)
@@ -293,11 +329,11 @@ class MCPService:
         # Read plugin-provided servers
         plugin_servers = self._read_plugin_mcp_servers()
         for plugin_server in plugin_servers:
-            servers.append(
-                self._create_mcp_server(
-                    plugin_server["name"], plugin_server["config"], "plugin"
-                )
+            server = self._create_mcp_server(
+                plugin_server["name"], plugin_server["config"], "plugin"
             )
+            server.source = plugin_server.get("plugin_name")
+            servers.append(server)
 
         # Merge cached data if database session is provided
         if db:
@@ -322,12 +358,19 @@ class MCPService:
 
         Args:
             name: Server name
-            scope: Server scope ("user", "project", or "plugin")
+            scope: Server scope ("user", "project", "plugin", or "managed")
 
         Returns:
             MCPServer object or None if not found
         """
-        if scope == "user":
+        if scope == "managed":
+            servers = self._read_managed_mcp_config()
+            if name not in servers:
+                return None
+            server = self._create_mcp_server(name, servers[name], scope)
+            server.source = "enterprise"
+            return server
+        elif scope == "user":
             servers = self._read_user_mcp_config()
             if name not in servers:
                 return None
@@ -341,7 +384,9 @@ class MCPService:
             plugin_servers = self._read_plugin_mcp_servers()
             for plugin_server in plugin_servers:
                 if plugin_server["name"] == name:
-                    return self._create_mcp_server(name, plugin_server["config"], scope)
+                    server = self._create_mcp_server(name, plugin_server["config"], scope)
+                    server.source = plugin_server.get("plugin_name")
+                    return server
             return None
         else:
             return None
@@ -721,5 +766,105 @@ class MCPService:
             except Exception as e:
                 return {"success": False, "message": f"Unexpected error: {str(e)}"}
 
+        elif server.type == "sse":
+            # Test SSE (Server-Sent Events) connection
+            if not server.url:
+                return {"success": False, "message": "No URL specified for SSE server"}
+
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    # SSE servers should respond to GET with text/event-stream
+                    # First try a HEAD request to check availability
+                    headers = {**(server.headers or {}), "Accept": "text/event-stream"}
+                    response = await client.get(
+                        server.url,
+                        headers=headers,
+                        follow_redirects=True,
+                        timeout=5.0,
+                    )
+                    
+                    content_type = response.headers.get("content-type", "")
+                    
+                    if response.status_code < 400:
+                        if "text/event-stream" in content_type:
+                            return {
+                                "success": True,
+                                "message": f"SSE server connected (status {response.status_code})",
+                            }
+                        else:
+                            return {
+                                "success": True,
+                                "message": f"Server responded (status {response.status_code}, type: {content_type})",
+                            }
+                    else:
+                        return {
+                            "success": False,
+                            "message": f"SSE server returned error status {response.status_code}",
+                        }
+            except httpx.TimeoutException:
+                return {"success": False, "message": "Connection timeout"}
+            except httpx.RequestError as e:
+                return {"success": False, "message": f"Request error: {str(e)}"}
+            except Exception as e:
+                return {"success": False, "message": f"Unexpected error: {str(e)}"}
+
         else:
             return {"success": False, "message": f"Unknown server type: {server.type}"}
+
+    def get_approval_settings(self) -> MCPServerApprovalSettings:
+        """
+        Get MCP server approval settings from user settings.
+
+        These settings control automatic tool approval for MCP servers.
+
+        Returns:
+            MCPServerApprovalSettings object
+        """
+        settings_path = get_claude_user_settings_file()
+        config = read_json_file(settings_path)
+
+        if not config:
+            return MCPServerApprovalSettings()
+
+        mcp_settings = config.get("mcpServerApproval", {})
+        default_mode = mcp_settings.get("defaultMode", "ask-every-time")
+        server_overrides = []
+
+        for server_name, mode in mcp_settings.get("serverOverrides", {}).items():
+            server_overrides.append(
+                MCPServerApprovalMode(server_name=server_name, mode=mode)
+            )
+
+        return MCPServerApprovalSettings(
+            default_mode=default_mode,
+            server_overrides=server_overrides,
+        )
+
+    async def update_approval_settings(
+        self, settings: MCPServerApprovalSettings
+    ) -> MCPServerApprovalSettings:
+        """
+        Update MCP server approval settings.
+
+        Args:
+            settings: New approval settings
+
+        Returns:
+            Updated MCPServerApprovalSettings object
+        """
+        settings_path = get_claude_user_settings_file()
+        config = read_json_file(settings_path) or {}
+
+        # Build the mcpServerApproval structure
+        mcp_approval = {
+            "defaultMode": settings.default_mode,
+            "serverOverrides": {
+                override.server_name: override.mode
+                for override in settings.server_overrides
+            },
+        }
+
+        config["mcpServerApproval"] = mcp_approval
+        await write_json_file(settings_path, config)
+
+        return settings

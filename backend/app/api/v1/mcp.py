@@ -12,6 +12,8 @@ from app.models.schemas import (
     MCPServerUpdate,
     MCPTestConnectionRequest,
     MCPTestConnectionResponse,
+    MCPServerApprovalSettings,
+    MCPServerApprovalSettingsUpdate,
 )
 from app.services.mcp_service import MCPService
 
@@ -49,8 +51,8 @@ async def create_mcp_server(
 ):
     """Add a new MCP server."""
     # Validate server type
-    if server.type not in ["stdio", "http"]:
-        raise HTTPException(status_code=400, detail="Server type must be 'stdio' or 'http'")
+    if server.type not in ["stdio", "http", "sse"]:
+        raise HTTPException(status_code=400, detail="Server type must be 'stdio', 'http', or 'sse'")
 
     # Validate scope
     if server.scope not in ["user", "project"]:
@@ -60,9 +62,9 @@ async def create_mcp_server(
     if server.type == "stdio" and not server.command:
         raise HTTPException(status_code=400, detail="Command is required for stdio servers")
 
-    # Validate http requirements
-    if server.type == "http" and not server.url:
-        raise HTTPException(status_code=400, detail="URL is required for http servers")
+    # Validate http/sse requirements
+    if server.type in ["http", "sse"] and not server.url:
+        raise HTTPException(status_code=400, detail="URL is required for http/sse servers")
 
     try:
         created_server = await mcp_service.add_server(server, project_path)
@@ -113,14 +115,14 @@ async def delete_mcp_server(
 @router.post("/servers/{name}/test", response_model=MCPTestConnectionResponse)
 async def test_mcp_server_connection(
     name: str,
-    scope: str = Query(..., description="Server scope (user, project, or plugin)"),
+    scope: str = Query(..., description="Server scope (user, project, plugin, or managed)"),
     project_path: Optional[str] = Query(None, description="Optional project path"),
     db: AsyncSession = Depends(get_db)
 ):
     """Test connection to an MCP server and cache the results."""
     # Validate scope
-    if scope not in ["user", "project", "plugin"]:
-        raise HTTPException(status_code=400, detail="Server scope must be 'user', 'project', or 'plugin'")
+    if scope not in ["user", "project", "plugin", "managed"]:
+        raise HTTPException(status_code=400, detail="Server scope must be 'user', 'project', 'plugin', or 'managed'")
 
     result = await mcp_service.test_connection(name, scope, project_path, db)
     return MCPTestConnectionResponse(
@@ -130,3 +132,23 @@ async def test_mcp_server_connection(
         server_version=result.get("server_version"),
         tools=result.get("tools"),
     )
+
+
+@router.get("/approval-settings", response_model=MCPServerApprovalSettings)
+async def get_approval_settings():
+    """Get MCP server approval settings."""
+    return mcp_service.get_approval_settings()
+
+
+@router.put("/approval-settings", response_model=MCPServerApprovalSettings)
+async def update_approval_settings(settings: MCPServerApprovalSettingsUpdate):
+    """Update MCP server approval settings."""
+    # Build full settings from update
+    current = mcp_service.get_approval_settings()
+    
+    updated = MCPServerApprovalSettings(
+        default_mode=settings.default_mode or current.default_mode,
+        server_overrides=settings.server_overrides if settings.server_overrides is not None else current.server_overrides,
+    )
+    
+    return await mcp_service.update_approval_settings(updated)

@@ -1,7 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Server } from "lucide-react";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Plus, Server, Shield, Info } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -9,11 +18,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { MCPServerList } from "./MCPServerList";
 import { MCPServerWizard } from "./MCPServerWizard";
 import { MCPServerForm } from "./MCPServerForm";
 import { RefreshButton } from "@/components/shared/RefreshButton";
-import type { MCPServer, MCPServerCreate, MCPServerUpdate, MCPServerListResponse } from "@/types/mcp";
+import type { MCPServer, MCPServerCreate, MCPServerUpdate, MCPServerListResponse, MCPServerApprovalSettings } from "@/types/mcp";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
@@ -25,6 +39,12 @@ export function MCPServersPage() {
   const [error, setError] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
+  const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
+  const [approvalSettings, setApprovalSettings] = useState<MCPServerApprovalSettings | null>(null);
+
+  // Separate managed servers from editable ones
+  const managedServers = servers.filter(s => s.scope === "managed");
+  const editableServers = servers.filter(s => s.scope !== "managed");
 
   const fetchServers = useCallback(async () => {
     setLoading(true);
@@ -42,9 +62,35 @@ export function MCPServersPage() {
     }
   }, [activeProject?.path]);
 
+  const fetchApprovalSettings = useCallback(async () => {
+    try {
+      const response = await apiClient<MCPServerApprovalSettings>("mcp/approval-settings");
+      setApprovalSettings(response);
+    } catch {
+      // Silently fail - approval settings are optional
+    }
+  }, []);
+
   useEffect(() => {
     fetchServers();
-  }, [fetchServers]);
+    fetchApprovalSettings();
+  }, [fetchServers, fetchApprovalSettings]);
+
+  const handleApprovalSettingsChange = async (defaultMode: string) => {
+    try {
+      const updated = await apiClient<MCPServerApprovalSettings>("mcp/approval-settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          default_mode: defaultMode,
+          server_overrides: approvalSettings?.server_overrides || [],
+        }),
+      });
+      setApprovalSettings(updated);
+      toast.success("Approval settings updated");
+    } catch {
+      toast.error("Failed to update approval settings");
+    }
+  };
 
   const handleAddServer = async (server: MCPServerCreate) => {
     try {
@@ -135,9 +181,85 @@ export function MCPServersPage() {
         </Card>
       )}
 
+      {/* Managed Servers Section */}
+      {managedServers.length > 0 && (
+        <Card className="border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Shield className="h-5 w-5 text-amber-600" />
+              <CardTitle className="text-lg">Managed Servers</CardTitle>
+              <Badge variant="outline" className="text-amber-600 border-amber-600">
+                Enterprise
+              </Badge>
+            </div>
+            <CardDescription>
+              These servers are configured by your organization and cannot be modified.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <MCPServerList
+              servers={managedServers}
+              loading={false}
+              onEdit={() => {}}
+              onDelete={() => {}}
+              onTestComplete={fetchServers}
+              readOnly
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Approval Settings Panel */}
+      <Collapsible open={approvalSettingsOpen} onOpenChange={setApprovalSettingsOpen}>
+        <Card>
+          <CollapsibleTrigger asChild>
+            <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Info className="h-5 w-5" />
+                  <CardTitle className="text-lg">Server Approval Settings</CardTitle>
+                </div>
+                <Badge variant="outline">
+                  {approvalSettings?.default_mode === "always-allow" ? "Auto-approve" :
+                   approvalSettings?.default_mode === "always-deny" ? "Always deny" : "Ask each time"}
+                </Badge>
+              </div>
+              <CardDescription>
+                Control how MCP tool calls are approved
+              </CardDescription>
+            </CardHeader>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <CardContent className="pt-0">
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="default-approval">Default Approval Mode</Label>
+                  <Select
+                    value={approvalSettings?.default_mode || "ask-every-time"}
+                    onValueChange={handleApprovalSettingsChange}
+                  >
+                    <SelectTrigger id="default-approval" className="mt-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ask-every-time">Ask every time</SelectItem>
+                      <SelectItem value="always-allow">Always allow (trust all servers)</SelectItem>
+                      <SelectItem value="always-deny">Always deny</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    This controls whether Claude Code asks for permission before using MCP tools.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
+
       {/* Server List */}
       <MCPServerList
-        servers={servers}
+        servers={editableServers}
         loading={loading}
         onEdit={setEditingServer}
         onDelete={handleDeleteServer}

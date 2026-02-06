@@ -30,6 +30,24 @@ function getServerTypeLabel(type: string): string {
   }
 }
 
+function getScopeBadgeVariant(scope: string): "default" | "secondary" | "outline" | "destructive" {
+  switch (scope) {
+    case "managed": return "destructive";
+    case "user": return "default";
+    case "plugin": return "secondary";
+    case "project": return "outline";
+    default: return "outline";
+  }
+}
+
+function getScopeLabel(scope: string, source?: string): string {
+  switch (scope) {
+    case "managed": return "enforced";
+    case "plugin": return source ? `plugin:${source}` : "plugin";
+    default: return scope;
+  }
+}
+
 interface ToolListItemProps {
   tool: MCPTool;
   onClick: () => void;
@@ -157,8 +175,8 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
               )}
             </CardDescription>
           </div>
-          <Badge variant={server.scope === "user" ? "default" : server.scope === "plugin" ? "secondary" : "outline"}>
-            {server.scope}
+          <Badge variant={getScopeBadgeVariant(server.scope)}>
+            {getScopeLabel(server.scope, server.source)}
           </Badge>
         </div>
       </CardHeader>
@@ -182,7 +200,7 @@ export function MCPServerCard({ server, onEdit, onDelete, onTestComplete, readOn
                 )}
               </>
             )}
-            {server.type === "http" && (
+            {(server.type === "http" || server.type === "sse") && (
               <div>
                 <span className="font-medium">URL:</span>{" "}
                 <span className="text-muted-foreground font-mono break-all">{server.url}</span>
