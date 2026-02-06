@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Settings } from 'lucide-react'
+import { Settings, Eye, Edit } from 'lucide-react'
 import type { ConfigFileListResponse } from '@/types/config'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
+import { SettingsEditor } from './SettingsEditor'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
@@ -15,6 +17,7 @@ export function ConfigViewerPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'viewer' | 'editor'>('editor')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -42,51 +45,70 @@ export function ConfigViewerPage() {
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <Settings className="h-8 w-8" />
-            Configuration Viewer
+            Configuration
           </h1>
           <p className="text-muted-foreground">
-            Browse and view Claude Code configuration files
+            View and edit Claude Code configuration
           </p>
         </div>
         <RefreshButton onClick={fetchData} loading={loading} />
       </div>
 
-      {error && (
-        <Card className="border-destructive">
-          <CardHeader>
-            <CardTitle className="text-destructive">Error</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm">{error}</p>
-          </CardContent>
-        </Card>
-      )}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'viewer' | 'editor')} className="flex-1 flex flex-col overflow-hidden">
+        <TabsList className="w-fit">
+          <TabsTrigger value="editor" className="flex items-center gap-2">
+            <Edit className="h-4 w-4" />
+            Settings Editor
+          </TabsTrigger>
+          <TabsTrigger value="viewer" className="flex items-center gap-2">
+            <Eye className="h-4 w-4" />
+            Raw Viewer
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="grid grid-cols-12 gap-6 flex-1 overflow-hidden">
-        <div className="col-span-4 overflow-y-auto">
-          <Card className="h-full">
-            <CardHeader>
-              <CardTitle>Config Files</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {loading && !data && (
-                <p className="text-sm text-muted-foreground">Loading files...</p>
-              )}
-              {data && (
-                <ConfigFileList
-                  files={data.files}
-                  selectedFile={selectedFile}
-                  onSelectFile={setSelectedFile}
-                />
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <TabsContent value="editor" className="flex-1 overflow-auto mt-4">
+          <SettingsEditor onSave={fetchData} />
+        </TabsContent>
 
-        <div className="col-span-8 overflow-y-auto">
-          <ConfigFileViewer filePath={selectedFile} />
-        </div>
-      </div>
+        <TabsContent value="viewer" className="flex-1 overflow-hidden mt-4">
+          {error && (
+            <Card className="border-destructive mb-4">
+              <CardHeader>
+                <CardTitle className="text-destructive">Error</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm">{error}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="grid grid-cols-12 gap-6 h-full overflow-hidden">
+            <div className="col-span-4 overflow-y-auto">
+              <Card className="h-full">
+                <CardHeader>
+                  <CardTitle>Config Files</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {loading && !data && (
+                    <p className="text-sm text-muted-foreground">Loading files...</p>
+                  )}
+                  {data && (
+                    <ConfigFileList
+                      files={data.files}
+                      selectedFile={selectedFile}
+                      onSelectFile={setSelectedFile}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="col-span-8 overflow-y-auto">
+              <ConfigFileViewer filePath={selectedFile} />
+            </div>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

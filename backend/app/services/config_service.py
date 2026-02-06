@@ -2,7 +2,14 @@
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from ..utils.path_utils import ClaudePathUtils
+from ..utils.path_utils import (
+    ClaudePathUtils,
+    get_claude_user_settings_file,
+    get_claude_user_settings_local_file,
+    get_project_settings_file,
+    get_project_settings_local_file,
+    ensure_directory_exists,
+)
 from ..utils.file_utils import read_json_file
 
 
@@ -265,3 +272,115 @@ class ConfigService:
                 masked[key] = value
 
         return masked
+
+    def update_settings(
+        self, scope: str, settings: Dict[str, Any], project_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Update settings for a given scope.
+
+        Args:
+            scope: "user", "project", or "local"
+            settings: Settings dictionary to write
+            project_path: Required for project/local scope
+
+        Returns:
+            Dict with success status, message, and path
+
+        Raises:
+            ValueError: If scope is invalid or project_path is missing for project scopes
+        """
+        # Determine which file to write to
+        if scope == "user":
+            file_path = get_claude_user_settings_file()
+        elif scope == "user_local":
+            file_path = get_claude_user_settings_local_file()
+        elif scope == "project":
+            if not project_path:
+                raise ValueError("project_path is required for project scope")
+            file_path = get_project_settings_file(project_path)
+        elif scope == "local":
+            if not project_path:
+                raise ValueError("project_path is required for local scope")
+            file_path = get_project_settings_local_file(project_path)
+        else:
+            raise ValueError(f"Invalid scope: {scope}. Must be user, user_local, project, or local")
+
+        # Ensure parent directory exists
+        ensure_directory_exists(file_path.parent)
+
+        # Load existing settings if file exists
+        existing_settings = {}
+        if file_path.exists():
+            existing_settings = read_json_file(file_path) or {}
+
+        # Deep merge settings (new settings override existing)
+        merged_settings = self._deep_merge(existing_settings, settings)
+
+        # Write the merged settings
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(merged_settings, f, indent=2)
+
+            return {
+                "success": True,
+                "message": f"Settings updated successfully",
+                "path": str(file_path)
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to write settings: {str(e)}",
+                "path": str(file_path)
+            }
+
+    def _deep_merge(self, base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Deep merge two dictionaries.
+
+        Args:
+            base: Base dictionary
+            override: Override dictionary (takes precedence)
+
+        Returns:
+            Merged dictionary
+        """
+        result = base.copy()
+
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = value
+
+        return result
+
+    def get_settings_by_scope(self, scope: str, project_path: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get settings for a specific scope (not merged).
+
+        Args:
+            scope: "user", "user_local", "project", or "local"
+            project_path: Required for project/local scope
+
+        Returns:
+            Settings dictionary for the specified scope
+        """
+        if scope == "user":
+            file_path = get_claude_user_settings_file()
+        elif scope == "user_local":
+            file_path = get_claude_user_settings_local_file()
+        elif scope == "project":
+            if not project_path:
+                return {}
+            file_path = get_project_settings_file(project_path)
+        elif scope == "local":
+            if not project_path:
+                return {}
+            file_path = get_project_settings_local_file(project_path)
+        else:
+            return {}
+
+        if file_path.exists():
+            return read_json_file(file_path) or {}
+        return {}

@@ -33,3 +33,22 @@ export interface DashboardStats {
   commandCount: number
   agentCount: number
 }
+
+export type SettingsScope = 'user' | 'user_local' | 'project' | 'local'
+
+export interface SettingsUpdateRequest {
+  scope: SettingsScope
+  settings: Record<string, any>
+  project_path?: string
+}
+
+export interface SettingsUpdateResponse {
+  success: boolean
+  message: string
+  path: string
+}
+
+export interface ScopedSettingsResponse {
+  settings: Record<string, any>
+  scope: SettingsScope
+}

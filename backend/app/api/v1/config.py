@@ -2,7 +2,14 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from ...services.config_service import ConfigService
-from ...models.schemas import ConfigFileListResponse, MergedConfig, RawFileContent, ConfigFile
+from ...models.schemas import (
+    ConfigFileListResponse,
+    MergedConfig,
+    RawFileContent,
+    ConfigFile,
+    SettingsUpdateRequest,
+    SettingsUpdateResponse,
+)
 
 router = APIRouter(prefix="/config", tags=["config"])
 config_service = ConfigService()
@@ -65,5 +72,51 @@ async def get_raw_file_content(path: str = Query(..., description="File path to 
         return RawFileContent(**content_data)
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/settings", response_model=SettingsUpdateResponse)
+async def update_settings(request: SettingsUpdateRequest):
+    """
+    Update settings for a specific scope.
+
+    Args:
+        request: Settings update request with scope, settings, and optional project_path
+
+    Returns:
+        Update result with success status and file path
+    """
+    try:
+        result = config_service.update_settings(
+            scope=request.scope,
+            settings=request.settings,
+            project_path=request.project_path
+        )
+        return SettingsUpdateResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/settings/{scope}")
+async def get_settings_by_scope(
+    scope: str,
+    project_path: Optional[str] = Query(None)
+):
+    """
+    Get settings for a specific scope (not merged).
+
+    Args:
+        scope: user, user_local, project, or local
+        project_path: Required for project/local scope
+
+    Returns:
+        Settings dictionary for the specified scope
+    """
+    try:
+        settings = config_service.get_settings_by_scope(scope, project_path)
+        return {"settings": settings, "scope": scope}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
