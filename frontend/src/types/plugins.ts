@@ -95,17 +95,66 @@ export interface PluginInstallResponse {
   stderr?: string;
 }
 
+// Plugin Update Types
+export interface PluginUpdateInfo {
+  name: string;
+  installed_version?: string;
+  latest_version?: string;
+  has_update: boolean;
+  source?: string;
+}
+
+export interface PluginUpdatesResponse {
+  plugins: PluginUpdateInfo[];
+  outdated_count: number;
+}
+
+export interface PluginValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface AvailablePluginsResponse {
+  plugins: MarketplacePlugin[];
+}
+
+export interface PluginUpdateResponse {
+  success: boolean;
+  message: string;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface PluginUpdateAllResponse {
+  success: boolean;
+  message: string;
+  updated_count: number;
+  failed_count: number;
+  results: PluginUpdateResponse[];
+}
+
+// Plugin with status (combines Plugin with update info)
+export interface PluginWithStatus extends Plugin {
+  updateInfo?: PluginUpdateInfo;
+}
+
 // UI-specific types
-export type PluginTab = "installed" | "marketplace";
+export type PluginTab = "installed" | "marketplace" | "available";
 export type PluginScope = "user" | "project" | "local";
+export type PluginStatusFilter = "all" | "enabled" | "disabled";
+export type PluginUpdateFilter = "all" | "updates-available" | "up-to-date";
 
 export interface PluginCardProps {
   plugin: Plugin;
+  updateInfo?: PluginUpdateInfo;
   onDetails: (plugin: Plugin) => void;
   onUninstall: (name: string) => void;
+  onUpdate?: (name: string) => void;
 }
 
 export interface MarketplacePluginCardProps {
   plugin: MarketplacePlugin;
+  isInstalled?: boolean;
   onInstall: (plugin: MarketplacePlugin) => void;
 }

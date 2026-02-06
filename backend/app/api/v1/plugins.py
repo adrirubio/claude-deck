@@ -19,6 +19,12 @@ from ...models.schemas import (
     MarketplaceResponse,
     MarketplaceListResponse,
     MarketplacePluginListResponse,
+    PluginUpdatesResponse,
+    PluginUpdateResponse,
+    PluginUpdateAllResponse,
+    PluginValidationResult,
+    PluginValidateRequest,
+    AvailablePluginsResponse,
 )
 
 router = APIRouter()
@@ -179,6 +185,89 @@ def set_marketplace_auto_update(name: str, request: dict):
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to set auto-update: {str(e)}"
+        )
+
+
+# Plugin Updates Endpoints
+
+
+@router.get("/plugins/updates", response_model=PluginUpdatesResponse)
+def check_plugin_updates():
+    """
+    Check for available plugin updates.
+
+    Compares installed plugins with marketplace versions and returns
+    plugins that have available updates.
+    """
+    try:
+        service = PluginService()
+        return service.check_for_updates()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to check for updates: {str(e)}"
+        )
+
+
+@router.get("/plugins/available", response_model=AvailablePluginsResponse)
+def get_all_available_plugins():
+    """
+    Get all available plugins from all configured marketplaces.
+
+    Returns a combined list of plugins from all marketplaces.
+    """
+    try:
+        service = PluginService()
+        plugins = service.get_all_available_plugins()
+        return AvailablePluginsResponse(plugins=plugins)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get available plugins: {str(e)}"
+        )
+
+
+@router.post("/plugins/validate", response_model=PluginValidationResult)
+def validate_plugin(request: PluginValidateRequest):
+    """
+    Validate a plugin at the given path.
+
+    Checks for required files and valid plugin.json structure.
+    """
+    try:
+        service = PluginService()
+        return service.validate_plugin(request.path)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to validate plugin: {str(e)}"
+        )
+
+
+@router.post("/plugins/update-all", response_model=PluginUpdateAllResponse)
+def update_all_plugins():
+    """
+    Update all plugins that have available updates.
+    """
+    try:
+        service = PluginService()
+        return service.update_all_plugins()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update plugins: {str(e)}"
+        )
+
+
+@router.post("/plugins/{name}/update", response_model=PluginUpdateResponse)
+def update_plugin(name: str):
+    """
+    Update a specific plugin.
+
+    Uses the Claude CLI to update the plugin.
+    """
+    try:
+        service = PluginService()
+        return service.update_plugin(name)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update plugin: {str(e)}"
         )
 
 

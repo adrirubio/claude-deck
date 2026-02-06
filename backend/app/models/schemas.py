@@ -398,6 +398,65 @@ class PluginToggleResponse(BaseModel):
     plugin: Optional["Plugin"] = None
 
 
+# Plugin Update Schemas
+
+
+class PluginUpdateInfo(BaseModel):
+    """Information about a plugin update."""
+
+    name: str
+    installed_version: Optional[str] = None
+    latest_version: Optional[str] = None
+    has_update: bool = False
+    source: Optional[str] = None
+
+
+class PluginUpdatesResponse(BaseModel):
+    """Response containing plugins with available updates."""
+
+    plugins: List[PluginUpdateInfo]
+    outdated_count: int
+
+
+class PluginValidationResult(BaseModel):
+    """Result of validating a plugin."""
+
+    valid: bool
+    errors: List[str] = []
+    warnings: List[str] = []
+
+
+class AvailablePluginsResponse(BaseModel):
+    """Response containing all available plugins from all marketplaces."""
+
+    plugins: List[MarketplacePlugin]
+
+
+class PluginValidateRequest(BaseModel):
+    """Request to validate a plugin."""
+
+    path: str
+
+
+class PluginUpdateResponse(BaseModel):
+    """Response from updating a plugin."""
+
+    success: bool
+    message: str
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+
+
+class PluginUpdateAllResponse(BaseModel):
+    """Response from updating all plugins."""
+
+    success: bool
+    message: str
+    updated_count: int
+    failed_count: int
+    results: List[PluginUpdateResponse] = []
+
+
 # Hook Schemas
 
 # Valid hook event types

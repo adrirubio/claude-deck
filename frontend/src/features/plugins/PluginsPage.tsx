@@ -1,14 +1,21 @@
-import { useState, useEffect, useCallback } from "react";
-import type { Plugin, MarketplacePlugin, MarketplaceResponse, PluginTab } from "@/types/plugins";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import type {
+  Plugin,
+  MarketplacePlugin,
+  MarketplaceResponse,
+  PluginTab,
+  PluginUpdateInfo,
+} from "@/types/plugins";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Package, Store, Settings } from "lucide-react";
+import { RefreshCw, Package, Store, Settings, Globe, ArrowUpCircle } from "lucide-react";
 import { InstalledPlugins } from "./InstalledPlugins";
 import { PluginDetails } from "./PluginDetails";
 import { MarketplaceBrowser } from "./MarketplaceBrowser";
 import { PluginInstallWizard } from "./PluginInstallWizard";
 import { MarketplaceManager } from "./MarketplaceManager";
+import { AllAvailablePlugins } from "./AllAvailablePlugins";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
@@ -21,6 +28,13 @@ export function PluginsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Update tracking
+  const [updateInfo, setUpdateInfo] = useState<Map<string, PluginUpdateInfo>>(new Map());
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+
+  // Search state (shared across tabs)
+  const [searchQuery, setSearchQuery] = useState("");
+
   // Plugin details dialog
   const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -32,6 +46,15 @@ export function PluginsPage() {
 
   // Show marketplace manager
   const [showMarketplaceManager, setShowMarketplaceManager] = useState(false);
+
+  // Count updates available
+  const updatesCount = useMemo(() => {
+    let count = 0;
+    updateInfo.forEach((info) => {
+      if (info.has_update) count++;
+    });
+    return count;
+  }, [updateInfo]);
 
   const fetchPlugins = useCallback(async () => {
     try {
@@ -63,6 +86,118 @@ export function PluginsPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleCheckUpdates = useCallback(async () => {
+    setCheckingUpdates(true);
+    try {
+      const data = await apiClient<{ plugins: PluginUpdateInfo[]; outdated_count: number }>(
+        "/api/v1/plugins/updates"
+      );
+      const newUpdateInfo = new Map<string, PluginUpdateInfo>();
+      data.plugins.forEach((info) => {
+        newUpdateInfo.set(info.name, info);
+      });
+      setUpdateInfo(newUpdateInfo);
+      if (data.outdated_count > 0) {
+        toast.info(`${data.outdated_count} plugin(s) have updates available`);
+      } else {
+        toast.success("All plugins are up to date");
+      }
+    } catch (err) {
+      toast.error("Failed to check for updates");
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }, []);
+
+  const handleUpdatePlugin = useCallback(async (name: string) => {
+    try {
+      const data = await apiClient<{ success: boolean; message: string }>(
+        `/api/v1/plugins/${name}/update`,
+        { method: "POST" }
+      );
+      if (data.success) {
+        toast.success(`Plugin "${name}" updated successfully`);
+        // Refresh plugins and clear update info for this plugin
+        fetchPlugins();
+        setUpdateInfo((prev) => {
+          const newMap = new Map(prev);
+          newMap.delete(name);
+          return newMap;
+        });
+      } else {
+        toast.error(data.message);
+      }
+    } catch (err) {
+      toast.error(`Failed to update plugin "${name}"`);
+    }
+  }, [fetchPlugins]);
+
+  const handleUpdateAll = useCallback(async () => {
+    try {
+      const data = await apiClient<{
+        success: boolean;
+        message: string;
+        updated_count: number;
+        failed_count: number;
+      }>("/api/v1/plugins/update-all", { method: "POST" });
+      
+      if (data.updated_count > 0) {
+        toast.success(`Updated ${data.updated_count} plugin(s)`);
+      }
+      if (data.failed_count > 0) {
+        toast.error(`${data.failed_count} plugin(s) failed to update`);
+      }
+      
+      // Refresh plugins and clear update info
+      fetchPlugins();
+      setUpdateInfo(new Map());
+    } catch (err) {
+      toast.error("Failed to update plugins");
+    }
+  }, [fetchPlugins]);
+
+  const handleEnableAll = useCallback(async () => {
+    let successCount = 0;
+    for (const plugin of plugins) {
+      if (plugin.enabled === false && plugin.source !== "local" && plugin.source !== "local-project") {
+        try {
+          await apiClient(`/api/v1/plugins/${plugin.name}/toggle`, {
+            method: "POST",
+            body: JSON.stringify({ enabled: true, source: plugin.source }),
+          });
+          successCount++;
+        } catch {
+          // Continue with other plugins
+        }
+      }
+    }
+    if (successCount > 0) {
+      toast.success(`Enabled ${successCount} plugin(s)`);
+      fetchPlugins();
+    }
+  }, [plugins, fetchPlugins]);
+
+  const handleDisableAll = useCallback(async () => {
+    let successCount = 0;
+    for (const plugin of plugins) {
+      if (plugin.enabled !== false && plugin.source !== "local" && plugin.source !== "local-project") {
+        try {
+          await apiClient(`/api/v1/plugins/${plugin.name}/toggle`, {
+            method: "POST",
+            body: JSON.stringify({ enabled: false, source: plugin.source }),
+          });
+          successCount++;
+        } catch {
+          // Continue with other plugins
+        }
+      }
+    }
+    if (successCount > 0) {
+      toast.success(`Disabled ${successCount} plugin(s)`);
+      fetchPlugins();
+    }
+  }, [plugins, fetchPlugins]);
 
   const handleViewDetails = (plugin: Plugin) => {
     setSelectedPlugin(plugin);
@@ -112,14 +247,22 @@ export function PluginsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <Package className="h-8 w-8" />
-          Plugins
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          Manage Claude Code plugins and browse marketplace
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <Package className="h-8 w-8" />
+            Plugins
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            Manage Claude Code plugins and browse marketplace
+          </p>
+        </div>
+        {updatesCount > 0 && (
+          <Button variant="default" onClick={handleUpdateAll} className="bg-orange-500 hover:bg-orange-600">
+            <ArrowUpCircle className="h-4 w-4 mr-2" />
+            Update All ({updatesCount})
+          </Button>
+        )}
       </div>
 
       {/* Error display */}
@@ -157,10 +300,19 @@ export function PluginsPage() {
           <TabsTrigger value="installed" className="flex items-center gap-2">
             <Package className="h-4 w-4" />
             Installed ({plugins.length})
+            {updatesCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-xs bg-orange-500 text-white rounded-full">
+                {updatesCount}
+              </span>
+            )}
           </TabsTrigger>
           <TabsTrigger value="marketplace" className="flex items-center gap-2">
             <Store className="h-4 w-4" />
             Marketplace
+          </TabsTrigger>
+          <TabsTrigger value="available" className="flex items-center gap-2">
+            <Globe className="h-4 w-4" />
+            All Available
           </TabsTrigger>
         </TabsList>
 
@@ -168,9 +320,18 @@ export function PluginsPage() {
           <InstalledPlugins
             plugins={plugins}
             loading={loading}
+            updateInfo={updateInfo}
+            checkingUpdates={checkingUpdates}
             onViewDetails={handleViewDetails}
             onUninstall={handleUninstall}
             onToggle={handleToggle}
+            onUpdate={handleUpdatePlugin}
+            onCheckUpdates={handleCheckUpdates}
+            onUpdateAll={handleUpdateAll}
+            onEnableAll={handleEnableAll}
+            onDisableAll={handleDisableAll}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
           />
         </TabsContent>
 
@@ -180,6 +341,15 @@ export function PluginsPage() {
             installedPlugins={plugins}
             onInstall={handleInstall}
             onUninstall={handleUninstall}
+          />
+        </TabsContent>
+
+        <TabsContent value="available">
+          <AllAvailablePlugins
+            installedPlugins={plugins}
+            onInstall={handleInstall}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
           />
         </TabsContent>
       </Tabs>

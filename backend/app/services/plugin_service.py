@@ -29,6 +29,11 @@ from ..models.schemas import (
     PluginInstallRequest,
     PluginInstallResponse,
     PluginToggleResponse,
+    PluginUpdateInfo,
+    PluginUpdatesResponse,
+    PluginValidationResult,
+    PluginUpdateResponse,
+    PluginUpdateAllResponse,
 )
 from ..utils.path_utils import (
     get_claude_user_plugins_dir,
@@ -1078,3 +1083,239 @@ class PluginService:
         )
         marketplace_data = read_json_file(marketplace_json) or {}
         return marketplace_data.get("plugins", [])
+
+    # =========================================================================
+    # Plugin Update Methods
+    # =========================================================================
+
+    def check_for_updates(self) -> PluginUpdatesResponse:
+        """
+        Compare installed plugins with marketplace versions.
+
+        Uses `claude plugin list --available --json` to get latest versions
+        and compares with installed plugins.
+
+        Returns:
+            PluginUpdatesResponse with list of plugins that have updates
+        """
+        update_info_list = []
+
+        # Get installed plugins
+        installed_response = self.list_installed_plugins()
+        installed_plugins = {p.name: p for p in installed_response.plugins}
+
+        # Get all available plugins from marketplaces
+        available_plugins = self.get_all_available_plugins()
+        available_by_name = {p.name: p for p in available_plugins}
+
+        # Compare versions
+        for name, installed in installed_plugins.items():
+            available = available_by_name.get(name)
+            if available and available.version and installed.version:
+                has_update = self._version_compare(installed.version, available.version) < 0
+                if has_update:
+                    update_info_list.append(
+                        PluginUpdateInfo(
+                            name=name,
+                            installed_version=installed.version,
+                            latest_version=available.version,
+                            has_update=True,
+                            source=installed.source,
+                        )
+                    )
+
+        return PluginUpdatesResponse(
+            plugins=update_info_list,
+            outdated_count=len(update_info_list),
+        )
+
+    def _version_compare(self, v1: str, v2: str) -> int:
+        """
+        Compare two version strings.
+
+        Returns:
+            -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+        """
+        def normalize(v):
+            # Remove 'v' prefix if present
+            v = v.lstrip('v')
+            # Split by dots and convert to integers where possible
+            parts = []
+            for part in v.split('.'):
+                try:
+                    parts.append(int(part))
+                except ValueError:
+                    parts.append(part)
+            return parts
+
+        parts1 = normalize(v1)
+        parts2 = normalize(v2)
+
+        # Compare part by part
+        for i in range(max(len(parts1), len(parts2))):
+            p1 = parts1[i] if i < len(parts1) else 0
+            p2 = parts2[i] if i < len(parts2) else 0
+
+            if isinstance(p1, int) and isinstance(p2, int):
+                if p1 < p2:
+                    return -1
+                elif p1 > p2:
+                    return 1
+            else:
+                # String comparison for non-numeric parts
+                if str(p1) < str(p2):
+                    return -1
+                elif str(p1) > str(p2):
+                    return 1
+
+        return 0
+
+    def update_plugin(self, name: str) -> PluginUpdateResponse:
+        """
+        Update a plugin via CLI: claude plugin update <name>
+
+        Args:
+            name: Plugin name to update
+
+        Returns:
+            PluginUpdateResponse with update result
+        """
+        try:
+            result = self.cli_executor.execute(
+                "plugin", ["update", name], timeout=120
+            )
+
+            success = result.exit_code == 0
+            return PluginUpdateResponse(
+                success=success,
+                message=f"Plugin '{name}' {'updated successfully' if success else 'update failed'}",
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+        except Exception as e:
+            return PluginUpdateResponse(
+                success=False,
+                message=f"Error updating plugin: {str(e)}",
+                stdout="",
+                stderr=str(e),
+            )
+
+    def update_all_plugins(self) -> PluginUpdateAllResponse:
+        """
+        Update all outdated plugins.
+
+        Returns:
+            PluginUpdateAllResponse with results
+        """
+        updates = self.check_for_updates()
+        results = []
+        updated_count = 0
+        failed_count = 0
+
+        for plugin_info in updates.plugins:
+            result = self.update_plugin(plugin_info.name)
+            results.append(result)
+            if result.success:
+                updated_count += 1
+            else:
+                failed_count += 1
+
+        return PluginUpdateAllResponse(
+            success=failed_count == 0,
+            message=f"Updated {updated_count} plugins, {failed_count} failed",
+            updated_count=updated_count,
+            failed_count=failed_count,
+            results=results,
+        )
+
+    def get_all_available_plugins(self) -> List[MarketplacePlugin]:
+        """
+        Get all plugins from all marketplaces.
+
+        Returns:
+            List of MarketplacePlugin from all configured marketplaces
+        """
+        all_plugins = []
+        seen_names = set()
+
+        # Get all marketplaces
+        marketplaces = self.list_marketplaces_from_files()
+
+        for marketplace in marketplaces:
+            plugins = self.browse_marketplace_from_files(marketplace["name"])
+            for plugin_data in plugins:
+                name = plugin_data.get("name", "")
+                if name and name not in seen_names:
+                    seen_names.add(name)
+                    all_plugins.append(
+                        MarketplacePlugin(
+                            name=name,
+                            description=plugin_data.get("description"),
+                            version=plugin_data.get("version"),
+                            install_command=plugin_data.get(
+                                "install_command",
+                                f"claude plugin install {name}"
+                            ),
+                        )
+                    )
+
+        return all_plugins
+
+    def validate_plugin(self, path: str) -> PluginValidationResult:
+        """
+        Validate a plugin via CLI: claude plugin validate <path>
+
+        Args:
+            path: Path to plugin directory
+
+        Returns:
+            PluginValidationResult with validation status
+        """
+        errors = []
+        warnings = []
+
+        # Check if path exists
+        plugin_path = Path(path)
+        if not plugin_path.exists():
+            return PluginValidationResult(
+                valid=False,
+                errors=[f"Path does not exist: {path}"],
+                warnings=[],
+            )
+
+        # Check for plugin.json
+        plugin_json_path = plugin_path / ".claude-plugin" / "plugin.json"
+        if not plugin_json_path.exists():
+            errors.append("Missing .claude-plugin/plugin.json")
+        else:
+            # Validate plugin.json structure
+            try:
+                with open(plugin_json_path, "r", encoding="utf-8") as f:
+                    plugin_data = json.load(f)
+
+                # Check required fields
+                if not plugin_data.get("name"):
+                    errors.append("Missing 'name' field in plugin.json")
+
+                # Check optional but recommended fields
+                if not plugin_data.get("description"):
+                    warnings.append("Missing 'description' field in plugin.json")
+                if not plugin_data.get("version"):
+                    warnings.append("Missing 'version' field in plugin.json")
+
+            except json.JSONDecodeError as e:
+                errors.append(f"Invalid JSON in plugin.json: {str(e)}")
+
+        # Check for README
+        readme_paths = [
+            plugin_path / "README.md",
+            plugin_path / "readme.md",
+        ]
+        if not any(p.exists() for p in readme_paths):
+            warnings.append("Missing README.md")
+
+        return PluginValidationResult(
+            valid=len(errors) == 0,
+            errors=errors,
+            warnings=warnings,
+        )
