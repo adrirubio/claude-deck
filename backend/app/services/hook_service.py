@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from app.models.schemas import Hook, HookCreate, HookUpdate
+from app.models.schemas import Hook, HookCreate, HookUpdate, VALID_HOOK_EVENTS
 from app.utils.path_utils import (
     get_claude_user_settings_file,
     get_project_settings_file,
@@ -17,6 +17,28 @@ class HookService:
     def __init__(self):
         """Initialize the hook service."""
         pass
+
+    def _parse_hook_from_data(self, hook_data: dict, event: str, scope: str) -> Hook:
+        """Parse a hook from JSON data."""
+        hook_id = hook_data.get("id", str(uuid.uuid4()))
+        return Hook(
+            id=hook_id,
+            event=event,
+            matcher=hook_data.get("matcher"),
+            type=hook_data.get("type", "command"),
+            command=hook_data.get("command"),
+            prompt=hook_data.get("prompt"),
+            model=hook_data.get("model"),
+            async_=hook_data.get("async"),  # JSON field is "async"
+            statusMessage=hook_data.get("statusMessage"),
+            once=hook_data.get("once"),
+            timeout=hook_data.get("timeout"),
+            scope=scope
+        )
+
+    def _validate_event(self, event: str) -> bool:
+        """Validate that an event type is valid."""
+        return event in VALID_HOOK_EVENTS
 
     def list_hooks(self, project_path: Optional[str] = None) -> List[Hook]:
         """
@@ -42,17 +64,7 @@ class HookService:
                     for event, event_hooks in user_hooks.items():
                         if isinstance(event_hooks, list):
                             for hook_data in event_hooks:
-                                hook_id = hook_data.get("id", str(uuid.uuid4()))
-                                hooks.append(Hook(
-                                    id=hook_id,
-                                    event=event,
-                                    matcher=hook_data.get("matcher"),
-                                    type=hook_data.get("type", "command"),
-                                    command=hook_data.get("command"),
-                                    prompt=hook_data.get("prompt"),
-                                    timeout=hook_data.get("timeout"),
-                                    scope="user"
-                                ))
+                                hooks.append(self._parse_hook_from_data(hook_data, event, "user"))
             except (json.JSONDecodeError, IOError):
                 pass
 
@@ -68,17 +80,7 @@ class HookService:
                         for event, event_hooks in project_hooks.items():
                             if isinstance(event_hooks, list):
                                 for hook_data in event_hooks:
-                                    hook_id = hook_data.get("id", str(uuid.uuid4()))
-                                    hooks.append(Hook(
-                                        id=hook_id,
-                                        event=event,
-                                        matcher=hook_data.get("matcher"),
-                                        type=hook_data.get("type", "command"),
-                                        command=hook_data.get("command"),
-                                        prompt=hook_data.get("prompt"),
-                                        timeout=hook_data.get("timeout"),
-                                        scope="project"
-                                    ))
+                                    hooks.append(self._parse_hook_from_data(hook_data, event, "project"))
                 except (json.JSONDecodeError, IOError):
                     pass
 
@@ -112,7 +114,14 @@ class HookService:
 
         Returns:
             Created Hook object
+
+        Raises:
+            ValueError: If event type is invalid
         """
+        # Validate event type
+        if not self._validate_event(hook.event):
+            raise ValueError(f"Invalid event type: {hook.event}. Valid types: {', '.join(VALID_HOOK_EVENTS)}")
+
         # Generate unique ID
         hook_id = str(uuid.uuid4())
 
@@ -152,6 +161,14 @@ class HookService:
             hook_data["command"] = hook.command
         if hook.prompt:
             hook_data["prompt"] = hook.prompt
+        if hook.model:
+            hook_data["model"] = hook.model
+        if hook.async_ is not None:
+            hook_data["async"] = hook.async_  # JSON field is "async"
+        if hook.statusMessage:
+            hook_data["statusMessage"] = hook.statusMessage
+        if hook.once is not None:
+            hook_data["once"] = hook.once
         if hook.timeout:
             hook_data["timeout"] = hook.timeout
 
@@ -169,6 +186,10 @@ class HookService:
             type=hook.type,
             command=hook.command,
             prompt=hook.prompt,
+            model=hook.model,
+            async_=hook.async_,
+            statusMessage=hook.statusMessage,
+            once=hook.once,
             timeout=hook.timeout,
             scope=hook.scope
         )
@@ -191,7 +212,14 @@ class HookService:
 
         Returns:
             Updated Hook object or None if not found
+
+        Raises:
+            ValueError: If event type is invalid
         """
+        # Validate event type if provided
+        if hook_update.event and not self._validate_event(hook_update.event):
+            raise ValueError(f"Invalid event type: {hook_update.event}. Valid types: {', '.join(VALID_HOOK_EVENTS)}")
+
         # Determine settings file path
         if scope == "user":
             settings_file = get_claude_user_settings_file()
@@ -233,6 +261,14 @@ class HookService:
                             hook_data["command"] = hook_update.command
                         if hook_update.prompt is not None:
                             hook_data["prompt"] = hook_update.prompt
+                        if hook_update.model is not None:
+                            hook_data["model"] = hook_update.model
+                        if hook_update.async_ is not None:
+                            hook_data["async"] = hook_update.async_
+                        if hook_update.statusMessage is not None:
+                            hook_data["statusMessage"] = hook_update.statusMessage
+                        if hook_update.once is not None:
+                            hook_data["once"] = hook_update.once
                         if hook_update.timeout is not None:
                             hook_data["timeout"] = hook_update.timeout
 
@@ -243,6 +279,10 @@ class HookService:
                             type=hook_data.get("type", "command"),
                             command=hook_data.get("command"),
                             prompt=hook_data.get("prompt"),
+                            model=hook_data.get("model"),
+                            async_=hook_data.get("async"),
+                            statusMessage=hook_data.get("statusMessage"),
+                            once=hook_data.get("once"),
                             timeout=hook_data.get("timeout"),
                             scope=scope
                         )

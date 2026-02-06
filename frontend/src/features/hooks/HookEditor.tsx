@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -21,11 +22,12 @@ import {
   HOOK_EVENTS,
   MATCHER_EXAMPLES,
   HOOK_ENV_VARS,
+  AGENT_MODELS,
   type Hook,
   type HookEvent,
   type HookType,
 } from "@/types/hooks";
-import { ChevronDown, ChevronRight, Info } from "lucide-react";
+import { ChevronDown, ChevronRight, Info, Terminal, MessageSquare, Bot } from "lucide-react";
 
 interface HookEditorProps {
   hook: Hook | null;
@@ -40,6 +42,10 @@ interface HookEditorProps {
       type?: HookType;
       command?: string;
       prompt?: string;
+      model?: string;
+      async_?: boolean;
+      statusMessage?: string;
+      once?: boolean;
       timeout?: number;
     }
   ) => Promise<void>;
@@ -56,6 +62,10 @@ export function HookEditor({
   const [type, setType] = useState<HookType>("command");
   const [command, setCommand] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [model, setModel] = useState("haiku");
+  const [asyncRun, setAsyncRun] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [once, setOnce] = useState(false);
   const [timeout, setTimeout] = useState<number | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [showMatcherHelp, setShowMatcherHelp] = useState(false);
@@ -68,6 +78,10 @@ export function HookEditor({
       setType(hook.type);
       setCommand(hook.command || "");
       setPrompt(hook.prompt || "");
+      setModel(hook.model || "haiku");
+      setAsyncRun(hook.async_ || false);
+      setStatusMessage(hook.statusMessage || "");
+      setOnce(hook.once || false);
       setTimeout(hook.timeout);
     }
   }, [hook]);
@@ -83,6 +97,10 @@ export function HookEditor({
         type?: HookType;
         command?: string;
         prompt?: string;
+        model?: string;
+        async_?: boolean;
+        statusMessage?: string;
+        once?: boolean;
         timeout?: number;
       } = {
         event,
@@ -94,10 +112,21 @@ export function HookEditor({
       if (type === "command") {
         updates.command = command;
         updates.prompt = undefined;
+        updates.model = undefined;
       } else {
         updates.prompt = prompt;
         updates.command = undefined;
+        if (type === "agent") {
+          updates.model = model;
+        } else {
+          updates.model = undefined;
+        }
       }
+
+      // Add optional fields
+      updates.async_ = asyncRun;
+      updates.statusMessage = statusMessage || undefined;
+      updates.once = once;
 
       await onSave(hook.id, hook.scope, updates);
       onOpenChange(false);
@@ -107,6 +136,17 @@ export function HookEditor({
   };
 
   if (!hook) return null;
+
+  const getTypeIcon = (t: HookType) => {
+    switch (t) {
+      case "command":
+        return <Terminal className="h-4 w-4" />;
+      case "prompt":
+        return <MessageSquare className="h-4 w-4" />;
+      case "agent":
+        return <Bot className="h-4 w-4" />;
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -196,6 +236,7 @@ export function HookEditor({
                 className="flex-1"
                 onClick={() => setType("command")}
               >
+                <Terminal className="h-4 w-4 mr-2" />
                 Command
               </Button>
               <Button
@@ -204,13 +245,28 @@ export function HookEditor({
                 className="flex-1"
                 onClick={() => setType("prompt")}
               >
+                <MessageSquare className="h-4 w-4 mr-2" />
                 Prompt
               </Button>
+              <Button
+                type="button"
+                variant={type === "agent" ? "default" : "outline"}
+                className="flex-1"
+                onClick={() => setType("agent")}
+              >
+                <Bot className="h-4 w-4 mr-2" />
+                Agent
+              </Button>
             </div>
+            <p className="text-sm text-muted-foreground">
+              {type === "command" && "Execute a shell command when the hook triggers."}
+              {type === "prompt" && "Append a prompt to Claude's context when the hook triggers."}
+              {type === "agent" && "Spawn a subagent to process the hook with a specific model."}
+            </p>
           </div>
 
-          {/* Command or Prompt */}
-          {type === "command" ? (
+          {/* Command input */}
+          {type === "command" && (
             <div className="space-y-2">
               <Label htmlFor="command">
                 Command
@@ -255,7 +311,10 @@ export function HookEditor({
                 </div>
               )}
             </div>
-          ) : (
+          )}
+
+          {/* Prompt input (for both prompt and agent types) */}
+          {(type === "prompt" || type === "agent") && (
             <div className="space-y-2">
               <Label htmlFor="prompt">Prompt</Label>
               <textarea
@@ -264,35 +323,110 @@ export function HookEditor({
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={4}
                 className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder="Remember to follow security best practices..."
+                placeholder={type === "agent" 
+                  ? "Instructions for the agent to execute..."
+                  : "Remember to follow security best practices..."}
               />
               <p className="text-sm text-muted-foreground">
-                This prompt will be appended to Claude's context when the hook
-                is triggered.
+                {type === "prompt" && "This prompt will be appended to Claude's context when the hook is triggered."}
+                {type === "agent" && "This prompt will be sent to the subagent for processing."}
               </p>
             </div>
           )}
 
-          {/* Timeout (only for command type) */}
-          {type === "command" && (
+          {/* Model selector for agent type */}
+          {type === "agent" && (
             <div className="space-y-2">
-              <Label htmlFor="timeout">Timeout (seconds, optional)</Label>
-              <Input
-                id="timeout"
-                type="number"
-                min="1"
-                max="300"
-                value={timeout || ""}
-                onChange={(e) =>
-                  setTimeout(e.target.value ? parseInt(e.target.value) : undefined)
-                }
-                placeholder="30"
-              />
+              <Label htmlFor="model">Agent Model</Label>
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger id="model">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {AGENT_MODELS.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <p className="text-sm text-muted-foreground">
-                Command will be killed if it runs longer than this timeout.
+                Choose which Claude model the agent should use.
               </p>
             </div>
           )}
+
+          {/* Advanced Options */}
+          <div className="space-y-4 border rounded-lg p-4">
+            <h4 className="font-medium">Advanced Options</h4>
+            
+            {/* Async toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="async-edit">Run Async</Label>
+                <p className="text-sm text-muted-foreground">
+                  Run the hook in the background without blocking
+                </p>
+              </div>
+              <Switch
+                id="async-edit"
+                checked={asyncRun}
+                onCheckedChange={setAsyncRun}
+              />
+            </div>
+
+            {/* Once toggle */}
+            <div className="flex items-center justify-between">
+              <div className="space-y-0.5">
+                <Label htmlFor="once-edit">Run Once</Label>
+                <p className="text-sm text-muted-foreground">
+                  Only run this hook once per session
+                </p>
+              </div>
+              <Switch
+                id="once-edit"
+                checked={once}
+                onCheckedChange={setOnce}
+              />
+            </div>
+
+            {/* Status Message */}
+            <div className="space-y-2">
+              <Label htmlFor="status-message-edit">
+                Status Message (optional)
+              </Label>
+              <Input
+                id="status-message-edit"
+                value={statusMessage}
+                onChange={(e) => setStatusMessage(e.target.value)}
+                placeholder="Custom spinner message..."
+              />
+              <p className="text-sm text-muted-foreground">
+                Custom message to show while the hook is running.
+              </p>
+            </div>
+
+            {/* Timeout (only for command type) */}
+            {type === "command" && (
+              <div className="space-y-2">
+                <Label htmlFor="timeout">Timeout (seconds, optional)</Label>
+                <Input
+                  id="timeout"
+                  type="number"
+                  min="1"
+                  max="300"
+                  value={timeout || ""}
+                  onChange={(e) =>
+                    setTimeout(e.target.value ? parseInt(e.target.value) : undefined)
+                  }
+                  placeholder="30"
+                />
+                <p className="text-sm text-muted-foreground">
+                  Command will be killed if it runs longer than this timeout.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex gap-2">

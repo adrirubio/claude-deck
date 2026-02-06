@@ -3,15 +3,18 @@
 export type HookEvent =
   | "PreToolUse"
   | "PostToolUse"
-  | "PermissionRequest"
+  | "PostToolUseFailure"
   | "Stop"
-  | "SubagentStop"
-  | "Notification"
-  | "UserPromptSubmit"
   | "SessionStart"
+  | "SessionEnd"
+  | "UserPromptSubmit"
+  | "PermissionRequest"
+  | "Notification"
+  | "SubagentStart"
+  | "SubagentStop"
   | "PreCompact";
 
-export type HookType = "command" | "prompt";
+export type HookType = "command" | "prompt" | "agent";
 
 export interface Hook {
   id: string;
@@ -20,6 +23,10 @@ export interface Hook {
   type: HookType;
   command?: string;
   prompt?: string;
+  model?: string;  // For agent hooks (e.g., "haiku")
+  async_?: boolean;  // Run in background (JSON field: "async")
+  statusMessage?: string;  // Custom spinner message
+  once?: boolean;  // Run only once per session
   timeout?: number;
   scope: "user" | "project";
 }
@@ -30,6 +37,10 @@ export interface HookCreate {
   type: HookType;
   command?: string;
   prompt?: string;
+  model?: string;
+  async_?: boolean;
+  statusMessage?: string;
+  once?: boolean;
   timeout?: number;
   scope: "user" | "project";
 }
@@ -40,6 +51,10 @@ export interface HookUpdate {
   type?: HookType;
   command?: string;
   prompt?: string;
+  model?: string;
+  async_?: boolean;
+  statusMessage?: string;
+  once?: boolean;
   timeout?: number;
 }
 
@@ -82,10 +97,10 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
     icon: "✅",
   },
   {
-    name: "PermissionRequest",
-    label: "Permission Request",
-    description: "Triggered when Claude requests user permission",
-    icon: "🔐",
+    name: "PostToolUseFailure",
+    label: "Post-Tool Use Failure",
+    description: "Triggered when a tool execution fails",
+    icon: "❌",
   },
   {
     name: "Stop",
@@ -94,16 +109,16 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
     icon: "🛑",
   },
   {
-    name: "SubagentStop",
-    label: "Subagent Stop",
-    description: "Triggered when a subagent stops",
-    icon: "🤖",
+    name: "SessionStart",
+    label: "Session Start",
+    description: "Triggered when a session starts",
+    icon: "🚀",
   },
   {
-    name: "Notification",
-    label: "Notification",
-    description: "Triggered on notifications",
-    icon: "🔔",
+    name: "SessionEnd",
+    label: "Session End",
+    description: "Triggered when a session ends",
+    icon: "🏁",
   },
   {
     name: "UserPromptSubmit",
@@ -112,10 +127,28 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
     icon: "💬",
   },
   {
-    name: "SessionStart",
-    label: "Session Start",
-    description: "Triggered when a session starts",
-    icon: "🚀",
+    name: "PermissionRequest",
+    label: "Permission Request",
+    description: "Triggered when Claude requests user permission",
+    icon: "🔐",
+  },
+  {
+    name: "Notification",
+    label: "Notification",
+    description: "Triggered on notifications",
+    icon: "🔔",
+  },
+  {
+    name: "SubagentStart",
+    label: "Subagent Start",
+    description: "Triggered when a subagent starts",
+    icon: "🤖",
+  },
+  {
+    name: "SubagentStop",
+    label: "Subagent Stop",
+    description: "Triggered when a subagent stops",
+    icon: "🤖",
   },
   {
     name: "PreCompact",
@@ -123,6 +156,13 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
     description: "Triggered before context compaction",
     icon: "📦",
   },
+];
+
+// Model options for agent hooks
+export const AGENT_MODELS = [
+  { value: "haiku", label: "Haiku (Fast)" },
+  { value: "sonnet", label: "Sonnet (Balanced)" },
+  { value: "opus", label: "Opus (Powerful)" },
 ];
 
 // Matcher pattern examples
@@ -158,6 +198,10 @@ export interface HookTemplate {
   matcher?: string;
   command?: string;
   prompt?: string;
+  model?: string;
+  async_?: boolean;
+  statusMessage?: string;
+  once?: boolean;
   timeout?: number;
 }
 
@@ -203,5 +247,25 @@ export const HOOK_TEMPLATES: HookTemplate[] = [
     type: "command",
     command: 'echo "Session started at $(date)" >> ~/.claude/session.log',
     timeout: 2,
+  },
+  {
+    name: "Code Review Agent",
+    description: "Use an agent to review code changes",
+    event: "PostToolUse",
+    type: "agent",
+    matcher: "Write(*.ts|*.tsx|*.js|*.jsx)",
+    prompt: "Review this code change for best practices, potential bugs, and security issues. Provide brief feedback.",
+    model: "haiku",
+    async_: true,
+    statusMessage: "Reviewing code...",
+  },
+  {
+    name: "Session Summary Agent",
+    description: "Generate session summary on end",
+    event: "SessionEnd",
+    type: "agent",
+    prompt: "Summarize the key accomplishments and changes made during this session.",
+    model: "haiku",
+    once: true,
   },
 ];

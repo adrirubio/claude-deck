@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Terminal, MessageSquare } from "lucide-react";
+import { Pencil, Trash2, Terminal, MessageSquare, Bot, Clock, Repeat, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { Hook } from "@/types/hooks";
+import { AGENT_MODELS } from "@/types/hooks";
 
 interface HookCardProps {
   hook: Hook;
@@ -27,27 +28,68 @@ export function HookCard({ hook, onEdit, onDelete }: HookCardProps) {
     }
   };
 
+  const getTypeIcon = () => {
+    switch (hook.type) {
+      case "command":
+        return <Terminal className="h-4 w-4" />;
+      case "prompt":
+        return <MessageSquare className="h-4 w-4" />;
+      case "agent":
+        return <Bot className="h-4 w-4" />;
+    }
+  };
+
+  const getTypeLabel = () => {
+    switch (hook.type) {
+      case "command":
+        return "Command";
+      case "prompt":
+        return "Prompt";
+      case "agent":
+        return "Agent";
+    }
+  };
+
+  const getModelLabel = (modelValue: string) => {
+    const model = AGENT_MODELS.find((m) => m.value === modelValue);
+    return model?.label || modelValue;
+  };
+
   return (
     <Card>
       <CardHeader>
         <div className="flex items-start justify-between">
           <div className="space-y-1">
             <CardTitle className="text-lg flex items-center gap-2">
-              {hook.type === "command" ? (
-                <Terminal className="h-4 w-4" />
-              ) : (
-                <MessageSquare className="h-4 w-4" />
-              )}
+              {getTypeIcon()}
               {hook.event}
             </CardTitle>
-            <CardDescription>
-              Type: <span className="font-medium">{hook.type}</span>
+            <CardDescription className="flex items-center gap-2">
+              Type: <span className="font-medium">{getTypeLabel()}</span>
+              {hook.type === "agent" && hook.model && (
+                <>
+                  <span className="text-muted-foreground">•</span>
+                  <span className="font-medium">{getModelLabel(hook.model)}</span>
+                </>
+              )}
             </CardDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap justify-end">
             <Badge variant={hook.scope === "user" ? "default" : "secondary"}>
               {hook.scope}
             </Badge>
+            {hook.async_ && (
+              <Badge variant="outline" className="flex items-center gap-1">
+                <Loader2 className="h-3 w-3" />
+                Async
+              </Badge>
+            )}
+            {hook.once && (
+              <Badge variant="outline" className="flex items-center gap-1">
+                <Repeat className="h-3 w-3" />
+                Once
+              </Badge>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -75,23 +117,30 @@ export function HookCard({ hook, onEdit, onDelete }: HookCardProps) {
             </div>
           )}
 
-          {hook.type === "prompt" && hook.prompt && (
+          {(hook.type === "prompt" || hook.type === "agent") && hook.prompt && (
             <div>
               <div className="text-sm font-medium text-muted-foreground">
-                Prompt:
+                {hook.type === "agent" ? "Agent Prompt:" : "Prompt:"}
               </div>
-              <p className="text-sm bg-muted px-3 py-2 rounded">
+              <p className="text-sm bg-muted px-3 py-2 rounded whitespace-pre-wrap">
                 {hook.prompt}
               </p>
             </div>
           )}
 
-          {hook.timeout && (
+          {hook.statusMessage && (
             <div>
               <div className="text-sm font-medium text-muted-foreground">
-                Timeout:
+                Status Message:
               </div>
-              <span className="text-sm">{hook.timeout}s</span>
+              <span className="text-sm italic">"{hook.statusMessage}"</span>
+            </div>
+          )}
+
+          {hook.timeout && (
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm">Timeout: {hook.timeout}s</span>
             </div>
           )}
 
