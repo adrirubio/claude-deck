@@ -137,17 +137,6 @@ export function HookEditor({
 
   if (!hook) return null;
 
-  const getTypeIcon = (t: HookType) => {
-    switch (t) {
-      case "command":
-        return <Terminal className="h-4 w-4" />;
-      case "prompt":
-        return <MessageSquare className="h-4 w-4" />;
-      case "agent":
-        return <Bot className="h-4 w-4" />;
-    }
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,13 +29,13 @@ import {
   type PermissionMode,
   type MemoryScope,
   type Skill,
+  type SkillListResponse,
   AGENT_TOOLS,
   AGENT_MODELS,
   PERMISSION_MODES,
   MEMORY_SCOPES,
 } from "@/types/agents";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { apiClient, buildEndpoint } from "@/lib/api";
 
 interface AgentWizardProps {
   open: boolean;
@@ -68,16 +68,23 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
   const [skills, setSkills] = useState<string[]>([]);
   const [memory, setMemory] = useState<MemoryScope | "">("");
   const [newDisallowedTool, setNewDisallowedTool] = useState("");
+  const [availableSkills, setAvailableSkills] = useState<Skill[]>([]);
 
   // Fetch available skills for multi-select
-  const { data: skillsData } = useQuery({
-    queryKey: ["skills"],
-    queryFn: async () => {
-      const response = await api.get<{ skills: Skill[] }>("/skills");
-      return response.data.skills;
-    },
-    enabled: open,
-  });
+  const fetchSkills = useCallback(async () => {
+    try {
+      const response = await apiClient<SkillListResponse>(buildEndpoint("agents/skills"));
+      setAvailableSkills(response.skills);
+    } catch {
+      // Silently fail - skills list is optional
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      fetchSkills();
+    }
+  }, [open, fetchSkills]);
 
   const resetForm = () => {
     setStep(0);
@@ -363,9 +370,9 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
             {/* Skills to Preload */}
             <div className="space-y-2">
               <Label>Skills to Preload ({skills.length} selected)</Label>
-              {skillsData && skillsData.length > 0 ? (
+              {availableSkills.length > 0 ? (
                 <div className="grid grid-cols-2 gap-2 max-h-[120px] overflow-y-auto p-2 border rounded-md">
-                  {skillsData.map((skill) => (
+                  {availableSkills.map((skill: Skill) => (
                     <div key={skill.name} className="flex items-center space-x-2">
                       <Checkbox
                         id={`wizard-skill-${skill.name}`}
