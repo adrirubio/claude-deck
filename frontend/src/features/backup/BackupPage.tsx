@@ -15,7 +15,12 @@ import { RefreshButton } from "@/components/shared/RefreshButton";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
-import { type Backup, type BackupCreate, type BackupListResponse, formatBytes } from "@/types/backup";
+import {
+  type Backup,
+  type BackupCreate,
+  type BackupListResponse,
+  formatBytes,
+} from "@/types/backup";
 
 export function BackupPage() {
   const { activeProject } = useProjectContext();
@@ -30,9 +35,24 @@ export function BackupPage() {
     setLoading(true);
     setError(null);
     try {
-      const endpoint = buildEndpoint("backup/list", { project_path: activeProject?.path });
+      const endpoint = buildEndpoint("backup/list", {
+        project_path: activeProject?.path,
+      });
       const response = await apiClient<BackupListResponse>(endpoint);
-      setBackups(response.backups);
+      
+      // Fetch detailed info for each backup to get dependency info
+      const detailedBackups = await Promise.all(
+        response.backups.map(async (backup) => {
+          try {
+            const detailed = await apiClient<Backup>(`/api/v1/backup/${backup.id}`);
+            return detailed;
+          } catch {
+            return backup;
+          }
+        })
+      );
+      
+      setBackups(detailedBackups);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch backups");
       toast.error("Failed to load backups");
@@ -45,15 +65,16 @@ export function BackupPage() {
     fetchBackups();
   }, [fetchBackups]);
 
-  const handleCreate = async (backup: BackupCreate) => {
+  const handleCreate = async (backupData: BackupCreate): Promise<Backup> => {
     try {
       const endpoint = buildEndpoint("backup/create");
-      await apiClient<Backup>(endpoint, {
+      const backup = await apiClient<Backup>(endpoint, {
         method: "POST",
-        body: JSON.stringify(backup),
+        body: JSON.stringify(backupData),
       });
       toast.success("Backup created successfully");
       await fetchBackups();
+      return backup;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create backup");
       throw err;
@@ -65,25 +86,16 @@ export function BackupPage() {
     setShowRestoreWizard(true);
   };
 
-  const handleRestoreConfirm = async (backup: Backup) => {
-    try {
-      const endpoint = buildEndpoint(`backup/${backup.id}/restore`, { project_path: activeProject?.path });
-      await apiClient(endpoint, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      toast.success("Backup restored successfully");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to restore backup");
-      throw err;
-    }
+  const handleRestoreComplete = async () => {
+    toast.success("Backup restored successfully");
+    await fetchBackups();
   };
 
   const handleDownload = async (backup: Backup) => {
     try {
       // Create a download link
       const link = document.createElement("a");
-      link.href = `/api/v1/backup/${backup.id}/download`;  // Keep full path for direct link
+      link.href = `/api/v1/backup/${backup.id}/download`; // Keep full path for direct link
       link.download = `${backup.name}.zip`;
       document.body.appendChild(link);
       link.click();
@@ -96,7 +108,9 @@ export function BackupPage() {
 
   const handleDelete = async (backup: Backup) => {
     try {
-      const endpoint = buildEndpoint(`backup/${backup.id}`, { project_path: activeProject?.path });
+      const endpoint = buildEndpoint(`backup/${backup.id}`, {
+        project_path: activeProject?.path,
+      });
       await apiClient(endpoint, { method: "DELETE" });
       toast.success("Backup deleted");
       await fetchBackups();
@@ -106,6 +120,7 @@ export function BackupPage() {
   };
 
   const totalSize = backups.reduce((acc, b) => acc + b.size_bytes, 0);
+  const backupsWithDeps = backups.filter((b) => b.has_dependencies).length;
 
   return (
     <div className="space-y-6">
@@ -117,7 +132,7 @@ export function BackupPage() {
             Backup & Restore
           </h1>
           <p className="text-muted-foreground mt-1">
-            Create and manage configuration backups
+            Create and manage configuration backups with dependency tracking
           </p>
         </div>
         <div className="flex gap-2">
@@ -140,7 +155,7 @@ export function BackupPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-3">
             <CardDescription className="flex items-center gap-2">
@@ -156,6 +171,12 @@ export function BackupPage() {
             <CardTitle className="text-3xl">{formatBytes(totalSize)}</CardTitle>
           </CardHeader>
         </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription>With Dependencies</CardDescription>
+            <CardTitle className="text-3xl">{backupsWithDeps}</CardTitle>
+          </CardHeader>
+        </Card>
       </div>
 
       {/* Backup List */}
@@ -165,15 +186,11 @@ export function BackupPage() {
             <Archive className="h-5 w-5 text-primary" />
             Available Backups
           </CardTitle>
-          <CardDescription>
-            Your saved configuration backups
-          </CardDescription>
+          <CardDescription>Your saved configuration backups</CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Loading...
-            </div>
+            <div className="text-center py-8 text-muted-foreground">Loading...</div>
           ) : (
             <BackupList
               backups={backups}
@@ -201,7 +218,8 @@ export function BackupPage() {
           if (!open) setSelectedBackup(null);
         }}
         backup={selectedBackup}
-        onRestore={handleRestoreConfirm}
+        onRestoreComplete={handleRestoreComplete}
+        projectPath={activeProject?.path}
       />
     </div>
   );

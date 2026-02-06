@@ -1166,3 +1166,167 @@ class SettingsUpdateResponse(BaseModel):
     success: bool
     message: str
     path: str  # File path that was updated
+
+
+# Backup Manifest & Dependency Schemas
+
+
+class BackupSkillDependency(BaseModel):
+    """Dependency detected in a skill."""
+
+    kind: str  # "npm", "pip", "bin", "script"
+    name: str
+    version: Optional[str] = None
+
+
+class BackupSkillInfo(BaseModel):
+    """Skill information in backup manifest."""
+
+    name: str
+    path: str
+    has_package_json: bool = False
+    has_requirements_txt: bool = False
+    has_install_script: bool = False
+    dependencies: List[BackupSkillDependency] = []
+
+
+class BackupPluginInfo(BaseModel):
+    """Plugin information in backup manifest."""
+
+    name: str
+    version: Optional[str] = None
+    source: Optional[str] = None
+    install_command: Optional[str] = None
+    marketplace: Optional[str] = None
+
+
+class BackupMCPServerInfo(BaseModel):
+    """MCP server information in backup manifest."""
+
+    name: str
+    type: str  # "stdio", "http", "sse"
+    scope: str
+    command: Optional[str] = None
+    args: Optional[List[str]] = None
+    url: Optional[str] = None
+    requires_npm_install: bool = False
+
+
+class BackupManifestContents(BaseModel):
+    """Contents tracked in backup manifest."""
+
+    files: List[str] = []
+    skills: List[BackupSkillInfo] = []
+    plugins: List[BackupPluginInfo] = []
+    mcp_servers: List[BackupMCPServerInfo] = []
+    agents: List[str] = []
+    commands: List[str] = []
+
+
+class BackupManifest(BaseModel):
+    """Full backup manifest stored in the backup zip."""
+
+    version: str = "1.0"
+    created_at: str
+    claude_code_version: Optional[str] = None
+    platform: str  # "linux", "darwin", "win32"
+    scope: str  # "full", "user", "project"
+    contents: BackupManifestContents
+
+
+class RestoreOptions(BaseModel):
+    """Options for restore operation."""
+
+    selective_restore: Optional[List[str]] = None  # Specific paths to restore
+    install_dependencies: bool = False  # Auto-install deps after restore
+    dry_run: bool = False  # Preview only, don't actually restore
+    skip_plugins: bool = False
+    skip_skills: bool = False
+    skip_mcp_servers: bool = False
+
+
+class DependencyInstallStatus(BaseModel):
+    """Status of a single dependency installation."""
+
+    name: str
+    kind: str  # "npm", "pip", "plugin", "skill"
+    success: bool
+    message: Optional[str] = None
+
+
+class RestorePlanDependency(BaseModel):
+    """A dependency that needs to be installed during restore."""
+
+    kind: str  # "npm", "pip", "plugin", "mcp_npm"
+    name: str
+    version: Optional[str] = None
+    source: Optional[str] = None  # Skill/plugin name requiring this
+    install_command: Optional[str] = None
+
+
+class RestorePlanWarning(BaseModel):
+    """Warning about restore compatibility."""
+
+    type: str  # "platform", "version", "missing_tool"
+    message: str
+    severity: str = "warning"  # "warning", "error"
+
+
+class RestorePlan(BaseModel):
+    """Plan showing what will be restored and dependencies needed."""
+
+    backup_id: int
+    backup_name: str
+    created_at: str
+    scope: str
+    platform_current: str
+    platform_backup: str
+    platform_compatible: bool
+
+    # What will be restored
+    files_to_restore: List[str] = []
+    skills_to_restore: List[BackupSkillInfo] = []
+    plugins_to_restore: List[BackupPluginInfo] = []
+    mcp_servers_to_restore: List[BackupMCPServerInfo] = []
+
+    # Dependencies needed
+    dependencies: List[RestorePlanDependency] = []
+    has_dependencies: bool = False
+
+    # Warnings
+    warnings: List[RestorePlanWarning] = []
+
+    # Manual steps
+    manual_steps: List[str] = []
+
+
+class RestoreResult(BaseModel):
+    """Result of restore operation."""
+
+    success: bool
+    message: str
+    files_restored: int = 0
+    files_skipped: int = 0
+    dry_run: bool = False
+    dependency_results: List[DependencyInstallStatus] = []
+    manual_steps: List[str] = []
+
+
+class DependencyInstallRequest(BaseModel):
+    """Request to install dependencies from a backup."""
+
+    install_npm: bool = True
+    install_pip: bool = True
+    install_plugins: bool = True
+    skill_names: Optional[List[str]] = None  # Specific skills to install deps for
+    plugin_names: Optional[List[str]] = None  # Specific plugins to reinstall
+
+
+class DependencyInstallResult(BaseModel):
+    """Result of dependency installation."""
+
+    success: bool
+    message: str
+    installed: List[DependencyInstallStatus] = []
+    failed: List[DependencyInstallStatus] = []
+    logs: str = ""
