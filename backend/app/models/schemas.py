@@ -341,18 +341,42 @@ class PluginToggleResponse(BaseModel):
 
 # Hook Schemas
 
+# Valid hook event types
+VALID_HOOK_EVENTS = [
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "PermissionRequest",
+    "Notification",
+    "SubagentStart",
+    "SubagentStop",
+    "PreCompact",
+]
+
 
 class Hook(BaseModel):
     """Hook configuration."""
 
     id: str
-    event: str  # PreToolUse, PostToolUse, PermissionRequest, Stop, SubagentStop, Notification, UserPromptSubmit, SessionStart, PreCompact
+    event: str  # PreToolUse, PostToolUse, PostToolUseFailure, Stop, SessionStart, SessionEnd, UserPromptSubmit, PermissionRequest, Notification, SubagentStart, SubagentStop, PreCompact
     matcher: Optional[str] = None  # Tool matcher pattern (e.g., "Write(*.py)")
-    type: str  # "command" or "prompt"
-    command: Optional[str] = None  # Shell command to execute
-    prompt: Optional[str] = None  # Prompt to append
+    type: str = "command"  # "command", "prompt", or "agent"
+    command: Optional[str] = None  # Shell command to execute (for command type)
+    prompt: Optional[str] = None  # Prompt to append (for prompt/agent type)
+    model: Optional[str] = None  # Model to use (for agent type, e.g., "haiku")
+    async_: Optional[bool] = None  # Run in background (JSON field name: "async")
+    statusMessage: Optional[str] = None  # Custom spinner message
+    once: Optional[bool] = None  # Run only once per session
     timeout: Optional[int] = None  # Timeout in seconds
     scope: str  # "user" or "project"
+
+    class Config:
+        # Map async_ to "async" in JSON
+        populate_by_name = True
 
 
 class HookCreate(BaseModel):
@@ -360,9 +384,13 @@ class HookCreate(BaseModel):
 
     event: str
     matcher: Optional[str] = None
-    type: str  # "command" or "prompt"
+    type: str = "command"  # "command", "prompt", or "agent"
     command: Optional[str] = None
     prompt: Optional[str] = None
+    model: Optional[str] = None  # For agent hooks
+    async_: Optional[bool] = None  # Run in background
+    statusMessage: Optional[str] = None  # Custom spinner message
+    once: Optional[bool] = None  # Run only once per session
     timeout: Optional[int] = None
     scope: str  # "user" or "project"
 
@@ -375,6 +403,10 @@ class HookUpdate(BaseModel):
     type: Optional[str] = None
     command: Optional[str] = None
     prompt: Optional[str] = None
+    model: Optional[str] = None
+    async_: Optional[bool] = None
+    statusMessage: Optional[str] = None
+    once: Optional[bool] = None
     timeout: Optional[int] = None
 
 
@@ -420,6 +452,14 @@ class PermissionListResponse(BaseModel):
 # Agent and Skill Schemas
 
 
+class AgentHook(BaseModel):
+    """Agent lifecycle hook."""
+
+    type: str  # "command" or "prompt"
+    command: Optional[str] = None
+    prompt: Optional[str] = None
+
+
 class Agent(BaseModel):
     """Agent configuration."""
 
@@ -429,6 +469,12 @@ class Agent(BaseModel):
     tools: Optional[List[str]] = None
     model: Optional[str] = None
     prompt: str  # Full prompt content
+    # Subagent management fields
+    disallowed_tools: Optional[List[str]] = None  # Tools to deny
+    permission_mode: Optional[str] = None  # default/acceptEdits/dontAsk/bypassPermissions/plan
+    skills: Optional[List[str]] = None  # Preload skills into context
+    hooks: Optional[Dict[str, List[AgentHook]]] = None  # Lifecycle hooks scoped to subagent
+    memory: Optional[str] = None  # Persistent memory scope (user/project/local/none)
 
 
 class AgentCreate(BaseModel):
@@ -440,6 +486,12 @@ class AgentCreate(BaseModel):
     tools: Optional[List[str]] = None
     model: Optional[str] = None
     prompt: str
+    # Subagent management fields
+    disallowed_tools: Optional[List[str]] = None
+    permission_mode: Optional[str] = None
+    skills: Optional[List[str]] = None
+    hooks: Optional[Dict[str, List[AgentHook]]] = None
+    memory: Optional[str] = None
 
 
 class AgentUpdate(BaseModel):
@@ -449,6 +501,12 @@ class AgentUpdate(BaseModel):
     tools: Optional[List[str]] = None
     model: Optional[str] = None
     prompt: Optional[str] = None
+    # Subagent management fields
+    disallowed_tools: Optional[List[str]] = None
+    permission_mode: Optional[str] = None
+    skills: Optional[List[str]] = None
+    hooks: Optional[Dict[str, List[AgentHook]]] = None
+    memory: Optional[str] = None
 
 
 class AgentListResponse(BaseModel):
@@ -1005,3 +1063,22 @@ class UsageSummaryResponse(BaseModel):
     """Usage summary response."""
 
     summary: UsageSummary
+
+
+# Settings Update Schemas
+
+
+class SettingsUpdateRequest(BaseModel):
+    """Schema for updating settings."""
+
+    scope: str  # "user", "project", or "local"
+    settings: Dict[str, Any]
+    project_path: Optional[str] = None  # Required for project/local scope
+
+
+class SettingsUpdateResponse(BaseModel):
+    """Response from settings update."""
+
+    success: bool
+    message: str
+    path: str  # File path that was updated

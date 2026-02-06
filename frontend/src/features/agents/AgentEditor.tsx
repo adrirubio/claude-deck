@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -24,13 +25,20 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronDown, Wrench } from "lucide-react";
+import { ChevronDown, Wrench, Shield, BookOpen, HardDrive, X } from "lucide-react";
 import {
   type Agent,
   type AgentUpdate,
+  type PermissionMode,
+  type MemoryScope,
+  type Skill,
   AGENT_TOOLS,
   AGENT_MODELS,
+  PERMISSION_MODES,
+  MEMORY_SCOPES,
 } from "@/types/agents";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 interface AgentEditorProps {
   open: boolean;
@@ -51,6 +59,24 @@ export function AgentEditor({
   const [prompt, setPrompt] = useState("");
   const [saving, setSaving] = useState(false);
   const [showTools, setShowTools] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // New subagent management fields
+  const [disallowedTools, setDisallowedTools] = useState<string[]>([]);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode | "">("");
+  const [skills, setSkills] = useState<string[]>([]);
+  const [memory, setMemory] = useState<MemoryScope | "">("");
+  const [newDisallowedTool, setNewDisallowedTool] = useState("");
+
+  // Fetch available skills for multi-select
+  const { data: skillsData } = useQuery({
+    queryKey: ["skills"],
+    queryFn: async () => {
+      const response = await api.get<{ skills: Skill[] }>("/skills");
+      return response.data.skills;
+    },
+    enabled: open,
+  });
 
   // Reset form when agent changes
   useEffect(() => {
@@ -59,6 +85,11 @@ export function AgentEditor({
       setModel(agent.model || "");
       setTools(agent.tools || []);
       setPrompt(agent.prompt || "");
+      // New fields
+      setDisallowedTools(agent.disallowed_tools || []);
+      setPermissionMode(agent.permission_mode || "");
+      setSkills(agent.skills || []);
+      setMemory(agent.memory || "");
     }
   }, [agent]);
 
@@ -68,6 +99,26 @@ export function AgentEditor({
     } else {
       setTools(tools.filter((t) => t !== toolName));
     }
+  };
+
+  const handleSkillToggle = (skillName: string, checked: boolean) => {
+    if (checked) {
+      setSkills([...skills, skillName]);
+    } else {
+      setSkills(skills.filter((s) => s !== skillName));
+    }
+  };
+
+  const handleAddDisallowedTool = () => {
+    const trimmed = newDisallowedTool.trim();
+    if (trimmed && !disallowedTools.includes(trimmed)) {
+      setDisallowedTools([...disallowedTools, trimmed]);
+      setNewDisallowedTool("");
+    }
+  };
+
+  const handleRemoveDisallowedTool = (tool: string) => {
+    setDisallowedTools(disallowedTools.filter((t) => t !== tool));
   };
 
   const handleSave = async () => {
@@ -80,6 +131,11 @@ export function AgentEditor({
         model: model || undefined,
         tools: tools.length > 0 ? tools : undefined,
         prompt,
+        // New subagent fields
+        disallowed_tools: disallowedTools.length > 0 ? disallowedTools : undefined,
+        permission_mode: permissionMode || undefined,
+        skills: skills.length > 0 ? skills : undefined,
+        memory: memory || undefined,
       });
       onOpenChange(false);
     } catch (error) {
@@ -176,6 +232,157 @@ export function AgentEditor({
                     </label>
                   </div>
                 ))}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+
+          {/* Advanced Subagent Settings */}
+          <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="w-full justify-start">
+                <Shield className="h-4 w-4 mr-2" />
+                Advanced Subagent Settings
+                <ChevronDown
+                  className={`h-4 w-4 ml-auto transition-transform ${
+                    showAdvanced ? "rotate-180" : ""
+                  }`}
+                />
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2 space-y-4 p-4 border rounded-md">
+              {/* Permission Mode */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <Shield className="h-4 w-4" />
+                  Permission Mode
+                </Label>
+                <Select
+                  value={permissionMode || "__default__"}
+                  onValueChange={(value) => setPermissionMode(value === "__default__" ? "" : value as PermissionMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select permission mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">
+                      <span className="text-muted-foreground">Default (inherit)</span>
+                    </SelectItem>
+                    {PERMISSION_MODES.map((mode) => (
+                      <SelectItem key={mode.value} value={mode.value}>
+                        <span className="flex items-center gap-2">
+                          <span>{mode.label}</span>
+                          <span className="text-muted-foreground text-sm">
+                            - {mode.description}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Memory Scope */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <HardDrive className="h-4 w-4" />
+                  Memory Scope
+                </Label>
+                <Select
+                  value={memory || "__none__"}
+                  onValueChange={(value) => setMemory(value === "__none__" ? "" : value as MemoryScope)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select memory scope" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MEMORY_SCOPES.map((scope) => (
+                      <SelectItem key={scope.value} value={scope.value}>
+                        <span className="flex items-center gap-2">
+                          <span>{scope.label}</span>
+                          <span className="text-muted-foreground text-sm">
+                            - {scope.description}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Skills to Preload */}
+              <div className="space-y-2">
+                <Label className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4" />
+                  Skills to Preload ({skills.length} selected)
+                </Label>
+                {skillsData && skillsData.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto p-2 border rounded-md">
+                    {skillsData.map((skill) => (
+                      <div key={skill.name} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`skill-${skill.name}`}
+                          checked={skills.includes(skill.name)}
+                          onCheckedChange={(checked) =>
+                            handleSkillToggle(skill.name, checked as boolean)
+                          }
+                        />
+                        <label
+                          htmlFor={`skill-${skill.name}`}
+                          className="text-sm cursor-pointer truncate"
+                          title={skill.description || skill.name}
+                        >
+                          {skill.name}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No skills available</p>
+                )}
+              </div>
+
+              {/* Disallowed Tools */}
+              <div className="space-y-2">
+                <Label>Disallowed Tools</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={newDisallowedTool}
+                    onChange={(e) => setNewDisallowedTool(e.target.value)}
+                    placeholder="Tool name to disallow"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddDisallowedTool();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleAddDisallowedTool}
+                  >
+                    Add
+                  </Button>
+                </div>
+                {disallowedTools.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {disallowedTools.map((tool) => (
+                      <Badge key={tool} variant="secondary" className="flex items-center gap-1">
+                        {tool}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveDisallowedTool(tool)}
+                          className="ml-1 hover:text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Tools that this agent is not allowed to use
+                </p>
               </div>
             </CollapsibleContent>
           </Collapsible>

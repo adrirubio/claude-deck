@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Dialog,
@@ -13,14 +14,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { ChevronLeft, ChevronRight, User, FolderOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, User, FolderOpen, X } from "lucide-react";
 import {
   type AgentCreate,
   type AgentScope,
+  type PermissionMode,
+  type MemoryScope,
+  type Skill,
   AGENT_TOOLS,
   AGENT_MODELS,
+  PERMISSION_MODES,
+  MEMORY_SCOPES,
 } from "@/types/agents";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 interface AgentWizardProps {
   open: boolean;
@@ -32,6 +47,7 @@ const STEPS = [
   { title: "Name & Scope", description: "Choose a name and where to save" },
   { title: "Tools", description: "Select available tools" },
   { title: "Model", description: "Choose the AI model" },
+  { title: "Advanced", description: "Subagent settings (optional)" },
   { title: "System Prompt", description: "Define agent behavior" },
 ];
 
@@ -46,6 +62,23 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // New subagent management fields
+  const [disallowedTools, setDisallowedTools] = useState<string[]>([]);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode | "">("");
+  const [skills, setSkills] = useState<string[]>([]);
+  const [memory, setMemory] = useState<MemoryScope | "">("");
+  const [newDisallowedTool, setNewDisallowedTool] = useState("");
+
+  // Fetch available skills for multi-select
+  const { data: skillsData } = useQuery({
+    queryKey: ["skills"],
+    queryFn: async () => {
+      const response = await api.get<{ skills: Skill[] }>("/skills");
+      return response.data.skills;
+    },
+    enabled: open,
+  });
+
   const resetForm = () => {
     setStep(0);
     setName("");
@@ -55,6 +88,12 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
     setModel("sonnet");
     setPrompt("");
     setError(null);
+    // Reset new fields
+    setDisallowedTools([]);
+    setPermissionMode("");
+    setSkills([]);
+    setMemory("");
+    setNewDisallowedTool("");
   };
 
   const handleOpenChange = (open: boolean) => {
@@ -72,6 +111,26 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
     }
   };
 
+  const handleSkillToggle = (skillName: string, checked: boolean) => {
+    if (checked) {
+      setSkills([...skills, skillName]);
+    } else {
+      setSkills(skills.filter((s) => s !== skillName));
+    }
+  };
+
+  const handleAddDisallowedTool = () => {
+    const trimmed = newDisallowedTool.trim();
+    if (trimmed && !disallowedTools.includes(trimmed)) {
+      setDisallowedTools([...disallowedTools, trimmed]);
+      setNewDisallowedTool("");
+    }
+  };
+
+  const handleRemoveDisallowedTool = (tool: string) => {
+    setDisallowedTools(disallowedTools.filter((t) => t !== tool));
+  };
+
   const canProceed = () => {
     switch (step) {
       case 0:
@@ -81,6 +140,8 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
       case 2:
         return true; // Model is pre-selected
       case 3:
+        return true; // Advanced settings are optional
+      case 4:
         return prompt.trim().length > 0;
       default:
         return false;
@@ -110,6 +171,11 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
         tools: tools.length > 0 ? tools : undefined,
         model: model || undefined,
         prompt: prompt.trim(),
+        // New subagent fields
+        disallowed_tools: disallowedTools.length > 0 ? disallowedTools : undefined,
+        permission_mode: permissionMode || undefined,
+        skills: skills.length > 0 ? skills : undefined,
+        memory: memory || undefined,
       });
       handleOpenChange(false);
     } catch (err) {
@@ -245,6 +311,128 @@ export function AgentWizard({ open, onOpenChange, onCreate }: AgentWizardProps) 
         );
 
       case 3:
+        return (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Configure advanced subagent settings. All fields are optional.
+            </p>
+
+            {/* Permission Mode */}
+            <div className="space-y-2">
+              <Label>Permission Mode</Label>
+              <Select
+                value={permissionMode || "__default__"}
+                onValueChange={(value) => setPermissionMode(value === "__default__" ? "" : value as PermissionMode)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select permission mode" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">
+                    <span className="text-muted-foreground">Default (inherit)</span>
+                  </SelectItem>
+                  {PERMISSION_MODES.map((mode) => (
+                    <SelectItem key={mode.value} value={mode.value}>
+                      {mode.label} - {mode.description}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Memory Scope */}
+            <div className="space-y-2">
+              <Label>Memory Scope</Label>
+              <Select
+                value={memory || "__none__"}
+                onValueChange={(value) => setMemory(value === "__none__" ? "" : value as MemoryScope)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select memory scope" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MEMORY_SCOPES.map((scope) => (
+                    <SelectItem key={scope.value} value={scope.value}>
+                      {scope.label} - {scope.description}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Skills to Preload */}
+            <div className="space-y-2">
+              <Label>Skills to Preload ({skills.length} selected)</Label>
+              {skillsData && skillsData.length > 0 ? (
+                <div className="grid grid-cols-2 gap-2 max-h-[120px] overflow-y-auto p-2 border rounded-md">
+                  {skillsData.map((skill) => (
+                    <div key={skill.name} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`wizard-skill-${skill.name}`}
+                        checked={skills.includes(skill.name)}
+                        onCheckedChange={(checked) =>
+                          handleSkillToggle(skill.name, checked as boolean)
+                        }
+                      />
+                      <label
+                        htmlFor={`wizard-skill-${skill.name}`}
+                        className="text-sm cursor-pointer truncate"
+                        title={skill.description || skill.name}
+                      >
+                        {skill.name}
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No skills available</p>
+              )}
+            </div>
+
+            {/* Disallowed Tools */}
+            <div className="space-y-2">
+              <Label>Disallowed Tools</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={newDisallowedTool}
+                  onChange={(e) => setNewDisallowedTool(e.target.value)}
+                  placeholder="Tool name to disallow"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddDisallowedTool();
+                    }
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleAddDisallowedTool}
+                >
+                  Add
+                </Button>
+              </div>
+              {disallowedTools.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {disallowedTools.map((tool) => (
+                    <Badge key={tool} variant="secondary" className="flex items-center gap-1">
+                      {tool}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveDisallowedTool(tool)}
+                        className="ml-1 hover:text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+      case 4:
         return (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">

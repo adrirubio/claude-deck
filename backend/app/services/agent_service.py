@@ -6,13 +6,18 @@ from typing import Dict, List, Optional, Tuple
 
 import yaml
 
-from app.models.schemas import Agent, AgentCreate, AgentUpdate, Skill, SkillFrontmatter
+from app.models.schemas import Agent, AgentCreate, AgentUpdate, AgentHook, Skill, SkillFrontmatter
 from app.utils.path_utils import (
     ensure_directory_exists,
     get_claude_user_agents_dir,
     get_claude_user_skills_dir,
     get_project_agents_dir,
 )
+
+
+def get_agent_memory_dir(agent_name: str) -> Path:
+    """Get the memory directory for an agent."""
+    return Path.home() / ".claude" / "agent-memory" / agent_name
 
 
 class AgentService:
@@ -176,6 +181,42 @@ class AgentService:
         return agents
 
     @staticmethod
+    def _parse_list_field(value) -> Optional[List[str]]:
+        """Parse a field that can be a list or comma-separated string."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [t.strip() for t in value.split(",") if t.strip()]
+        return value
+
+    @staticmethod
+    def _parse_hooks(hooks_raw: Optional[Dict]) -> Optional[Dict[str, List[AgentHook]]]:
+        """Parse hooks from frontmatter into AgentHook objects."""
+        if not hooks_raw:
+            return None
+        result = {}
+        for event, hook_list in hooks_raw.items():
+            if isinstance(hook_list, list):
+                result[event] = [
+                    AgentHook(
+                        type=h.get("type", "command"),
+                        command=h.get("command"),
+                        prompt=h.get("prompt"),
+                    )
+                    for h in hook_list
+                    if isinstance(h, dict)
+                ]
+            elif isinstance(hook_list, dict):
+                result[event] = [
+                    AgentHook(
+                        type=hook_list.get("type", "command"),
+                        command=hook_list.get("command"),
+                        prompt=hook_list.get("prompt"),
+                    )
+                ]
+        return result if result else None
+
+    @staticmethod
     def _scan_agents_dir(base_dir: Path, scope: str) -> List[Agent]:
         """
         Scan an agents directory for .md files.
@@ -198,11 +239,12 @@ class AgentService:
                 agent_name = md_file.stem  # filename without .md
 
                 # Handle tools as either a list or comma-separated string
-                tools_raw = metadata.get("tools")
-                if isinstance(tools_raw, str):
-                    tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
-                else:
-                    tools = tools_raw
+                tools = AgentService._parse_list_field(metadata.get("tools"))
+                disallowed_tools = AgentService._parse_list_field(
+                    metadata.get("disallowed-tools") or metadata.get("disallowed_tools")
+                )
+                skills = AgentService._parse_list_field(metadata.get("skills"))
+                hooks = AgentService._parse_hooks(metadata.get("hooks"))
 
                 agents.append(
                     Agent(
@@ -212,6 +254,11 @@ class AgentService:
                         tools=tools,
                         model=metadata.get("model"),
                         prompt=markdown_content,
+                        disallowed_tools=disallowed_tools,
+                        permission_mode=metadata.get("permission-mode") or metadata.get("permission_mode"),
+                        skills=skills,
+                        hooks=hooks,
+                        memory=metadata.get("memory"),
                     )
                 )
             except Exception as e:
@@ -249,11 +296,12 @@ class AgentService:
             metadata, markdown_content = AgentService._parse_frontmatter(content)
 
             # Handle tools as either a list or comma-separated string
-            tools_raw = metadata.get("tools")
-            if isinstance(tools_raw, str):
-                tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
-            else:
-                tools = tools_raw
+            tools = AgentService._parse_list_field(metadata.get("tools"))
+            disallowed_tools = AgentService._parse_list_field(
+                metadata.get("disallowed-tools") or metadata.get("disallowed_tools")
+            )
+            skills = AgentService._parse_list_field(metadata.get("skills"))
+            hooks = AgentService._parse_hooks(metadata.get("hooks"))
 
             return Agent(
                 name=name,
@@ -262,10 +310,35 @@ class AgentService:
                 tools=tools,
                 model=metadata.get("model"),
                 prompt=markdown_content,
+                disallowed_tools=disallowed_tools,
+                permission_mode=metadata.get("permission-mode") or metadata.get("permission_mode"),
+                skills=skills,
+                hooks=hooks,
+                memory=metadata.get("memory"),
             )
         except Exception as e:
             print(f"Error reading agent file {file_path}: {e}")
             return None
+
+    @staticmethod
+    def _hooks_to_dict(hooks: Optional[Dict[str, List[AgentHook]]]) -> Optional[Dict]:
+        """Convert AgentHook objects back to dict for YAML serialization."""
+        if not hooks:
+            return None
+        result = {}
+        for event, hook_list in hooks.items():
+            result[event] = [
+                {k: v for k, v in {"type": h.type, "command": h.command, "prompt": h.prompt}.items() if v}
+                for h in hook_list
+            ]
+        return result
+
+    @staticmethod
+    def _ensure_agent_memory_dir(agent_name: str, memory_scope: Optional[str]) -> None:
+        """Create agent memory directory if memory scope is set."""
+        if memory_scope and memory_scope != "none":
+            memory_dir = get_agent_memory_dir(agent_name)
+            ensure_directory_exists(memory_dir)
 
     @staticmethod
     def create_agent(
@@ -308,12 +381,26 @@ class AgentService:
             metadata["tools"] = agent.tools
         if agent.model:
             metadata["model"] = agent.model
+        # New subagent management fields
+        if agent.disallowed_tools:
+            metadata["disallowed-tools"] = agent.disallowed_tools
+        if agent.permission_mode:
+            metadata["permission-mode"] = agent.permission_mode
+        if agent.skills:
+            metadata["skills"] = agent.skills
+        if agent.hooks:
+            metadata["hooks"] = AgentService._hooks_to_dict(agent.hooks)
+        if agent.memory:
+            metadata["memory"] = agent.memory
 
         frontmatter = AgentService._build_frontmatter(metadata)
         full_content = frontmatter + agent.prompt
 
         # Write file
         file_path.write_text(full_content, encoding="utf-8")
+
+        # Create memory directory if needed
+        AgentService._ensure_agent_memory_dir(agent.name, agent.memory)
 
         return Agent(
             name=agent.name,
@@ -322,6 +409,11 @@ class AgentService:
             tools=agent.tools,
             model=agent.model,
             prompt=agent.prompt,
+            disallowed_tools=agent.disallowed_tools,
+            permission_mode=agent.permission_mode,
+            skills=agent.skills,
+            hooks=agent.hooks,
+            memory=agent.memory,
         )
 
     @staticmethod
@@ -367,6 +459,37 @@ class AgentService:
             if agent.model is not None:
                 metadata["model"] = agent.model
 
+            # Update subagent management fields
+            if agent.disallowed_tools is not None:
+                if agent.disallowed_tools:
+                    metadata["disallowed-tools"] = agent.disallowed_tools
+                else:
+                    metadata.pop("disallowed-tools", None)
+                    metadata.pop("disallowed_tools", None)
+            if agent.permission_mode is not None:
+                if agent.permission_mode:
+                    metadata["permission-mode"] = agent.permission_mode
+                else:
+                    metadata.pop("permission-mode", None)
+                    metadata.pop("permission_mode", None)
+            if agent.skills is not None:
+                if agent.skills:
+                    metadata["skills"] = agent.skills
+                else:
+                    metadata.pop("skills", None)
+            if agent.hooks is not None:
+                if agent.hooks:
+                    metadata["hooks"] = AgentService._hooks_to_dict(agent.hooks)
+                else:
+                    metadata.pop("hooks", None)
+            if agent.memory is not None:
+                if agent.memory and agent.memory != "none":
+                    metadata["memory"] = agent.memory
+                    # Create memory directory if needed
+                    AgentService._ensure_agent_memory_dir(name, agent.memory)
+                else:
+                    metadata.pop("memory", None)
+
             # Update content
             if agent.prompt is not None:
                 markdown_content = agent.prompt
@@ -378,12 +501,13 @@ class AgentService:
             # Write file
             file_path.write_text(full_content, encoding="utf-8")
 
-            # Handle tools as either a list or comma-separated string
-            tools_raw = metadata.get("tools")
-            if isinstance(tools_raw, str):
-                tools = [t.strip() for t in tools_raw.split(",") if t.strip()]
-            else:
-                tools = tools_raw
+            # Parse back the result
+            tools = AgentService._parse_list_field(metadata.get("tools"))
+            disallowed_tools = AgentService._parse_list_field(
+                metadata.get("disallowed-tools") or metadata.get("disallowed_tools")
+            )
+            skills = AgentService._parse_list_field(metadata.get("skills"))
+            hooks = AgentService._parse_hooks(metadata.get("hooks"))
 
             return Agent(
                 name=name,
@@ -392,6 +516,11 @@ class AgentService:
                 tools=tools,
                 model=metadata.get("model"),
                 prompt=markdown_content,
+                disallowed_tools=disallowed_tools,
+                permission_mode=metadata.get("permission-mode") or metadata.get("permission_mode"),
+                skills=skills,
+                hooks=hooks,
+                memory=metadata.get("memory"),
             )
         except Exception as e:
             print(f"Error updating agent file {file_path}: {e}")

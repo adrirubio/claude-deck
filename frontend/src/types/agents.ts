@@ -2,6 +2,22 @@
 
 export type AgentScope = "user" | "project";
 
+// Permission modes for subagents
+export type PermissionMode = "default" | "acceptEdits" | "dontAsk" | "bypassPermissions" | "plan";
+
+// Memory scopes for subagents
+export type MemoryScope = "user" | "project" | "local" | "none";
+
+// Agent lifecycle hook
+export interface AgentHook {
+  type: "command" | "prompt";
+  command?: string;
+  prompt?: string;
+}
+
+// Hooks keyed by event name
+export type AgentHooks = Record<string, AgentHook[]>;
+
 export interface Agent {
   name: string;
   scope: AgentScope;
@@ -9,6 +25,12 @@ export interface Agent {
   tools?: string[] | null;
   model?: string | null;
   prompt: string;
+  // Subagent management fields
+  disallowed_tools?: string[] | null;
+  permission_mode?: PermissionMode | null;
+  skills?: string[] | null;
+  hooks?: AgentHooks | null;
+  memory?: MemoryScope | null;
 }
 
 export interface AgentCreate {
@@ -18,6 +40,12 @@ export interface AgentCreate {
   tools?: string[];
   model?: string;
   prompt: string;
+  // Subagent management fields
+  disallowed_tools?: string[];
+  permission_mode?: PermissionMode;
+  skills?: string[];
+  hooks?: AgentHooks;
+  memory?: MemoryScope;
 }
 
 export interface AgentUpdate {
@@ -25,7 +53,30 @@ export interface AgentUpdate {
   tools?: string[];
   model?: string;
   prompt?: string;
+  // Subagent management fields
+  disallowed_tools?: string[];
+  permission_mode?: PermissionMode;
+  skills?: string[];
+  hooks?: AgentHooks;
+  memory?: MemoryScope;
 }
+
+// Permission mode options for UI
+export const PERMISSION_MODES: { value: PermissionMode; label: string; description: string }[] = [
+  { value: "default", label: "Default", description: "Standard permission prompts" },
+  { value: "acceptEdits", label: "Accept Edits", description: "Auto-accept file edits" },
+  { value: "dontAsk", label: "Don't Ask", description: "Skip most permission prompts" },
+  { value: "bypassPermissions", label: "Bypass Permissions", description: "Skip all permission checks" },
+  { value: "plan", label: "Plan Mode", description: "Planning only, no execution" },
+];
+
+// Memory scope options for UI
+export const MEMORY_SCOPES: { value: MemoryScope; label: string; description: string }[] = [
+  { value: "none", label: "None", description: "No persistent memory" },
+  { value: "local", label: "Local", description: "Memory scoped to this agent only" },
+  { value: "project", label: "Project", description: "Shared within project" },
+  { value: "user", label: "User", description: "Shared across all projects" },
+];
 
 export interface AgentListResponse {
   agents: Agent[];
