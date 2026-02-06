@@ -47,8 +47,15 @@ export interface RuleListProps {
   onDelete: (ruleId: string, scope: PermissionScope) => void;
 }
 
+// Permission tool type
+export interface PermissionTool {
+  name: string;
+  description: string;
+  hint?: string;
+}
+
 // Available tools for permission patterns
-export const PERMISSION_TOOLS = [
+export const PERMISSION_TOOLS: PermissionTool[] = [
   { name: "Bash", description: "Shell command execution" },
   { name: "Read", description: "File reading" },
   { name: "Write", description: "File creation" },
@@ -61,7 +68,7 @@ export const PERMISSION_TOOLS = [
   { name: "MCP", description: "MCP server tools", hint: "server:tool or server:*" },
   { name: "TodoWrite", description: "Todo list updates" },
   { name: "NotebookEdit", description: "Jupyter notebook editing" },
-] as const;
+];
 
 // Pattern examples for UI help - expanded with new syntax
 export const PATTERN_EXAMPLES = [

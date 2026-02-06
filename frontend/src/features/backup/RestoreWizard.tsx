@@ -17,7 +17,6 @@ import { Progress } from "@/components/ui/progress";
 import {
   AlertTriangle,
   Check,
-  File,
   ChevronLeft,
   ChevronRight,
   Package,

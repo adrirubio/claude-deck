@@ -1,8 +1,25 @@
 // Plugin TypeScript types matching backend schemas
 
 export interface PluginComponent {
-  type: "command" | "agent" | "hook" | "mcp";
+  type: "command" | "agent" | "hook" | "mcp" | "lsp" | "skill";
   name: string;
+  description?: string;
+}
+
+export interface PluginHook {
+  event: string;  // PreToolUse, PostToolUse, etc.
+  type: "command" | "prompt" | "agent";
+  matcher?: string;
+  command?: string;
+  prompt?: string;
+}
+
+export interface PluginLSPConfig {
+  name: string;
+  language: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
 }
 
 export interface Plugin {
@@ -13,11 +30,22 @@ export interface Plugin {
   category?: string;
   source?: string;  // e.g., "anthropic-agent-skills", "claude-plugins-official", "local"
   enabled?: boolean;
+  scope?: "user" | "project" | "local";  // Installation scope
   components: PluginComponent[];
+  // Component counts
+  skill_count?: number;
+  agent_count?: number;
+  hook_count?: number;
+  mcp_count?: number;
+  lsp_count?: number;
   // Extended information
   usage?: string;  // Usage instructions
   examples?: string[];  // Example use cases
   readme?: string;  // README content (for local plugins)
+  // Plugin-defined hooks (read-only)
+  hooks?: PluginHook[];
+  // LSP configurations
+  lsp_configs?: PluginLSPConfig[];
 }
 
 export interface PluginListResponse {
@@ -47,6 +75,7 @@ export interface MarketplaceResponse {
   install_location: string;
   last_updated?: string;
   plugin_count: number;
+  auto_update: boolean;  // Per-marketplace auto-update setting
 }
 
 export interface MarketplaceListResponse {
@@ -56,6 +85,7 @@ export interface MarketplaceListResponse {
 export interface PluginInstallRequest {
   name: string;
   marketplace_name?: string;
+  scope?: "user" | "project" | "local";  // Installation scope
 }
 
 export interface PluginInstallResponse {
@@ -67,6 +97,7 @@ export interface PluginInstallResponse {
 
 // UI-specific types
 export type PluginTab = "installed" | "marketplace";
+export type PluginScope = "user" | "project" | "local";
 
 export interface PluginCardProps {
   plugin: Plugin;

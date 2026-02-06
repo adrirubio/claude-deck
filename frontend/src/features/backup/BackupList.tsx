@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Download,
   Trash2,
@@ -75,7 +75,9 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
   const [plan, setPlan] = useState<RestorePlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
 
-  const currentPlatform = getCurrentPlatform();
+  // Platform detection for future use
+  const _currentPlatform = getCurrentPlatform();
+  void _currentPlatform; // Silence unused warning
 
   const getScopeIcon = (scope: BackupScope) => {
     switch (scope) {
@@ -129,16 +131,7 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
   return (
     <>
       <div className="space-y-4">
-        {backups.map((backup) => {
-          // Check platform compatibility (simple heuristic based on platform in path or default)
-          const backupPlatform = backup.file_path?.includes("darwin")
-            ? "darwin"
-            : backup.file_path?.includes("win")
-            ? "win32"
-            : "linux";
-          const platformMismatch = false; // We'll get this from plan
-
-          return (
+        {backups.map((backup) => (
             <Card key={backup.id} className="hover:bg-muted/50 transition-colors">
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
@@ -266,8 +259,7 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                 </div>
               </CardContent>
             </Card>
-          );
-        })}
+        ))}
       </div>
 
       {/* View Plan Dialog */}

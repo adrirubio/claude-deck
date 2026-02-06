@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Store, Plus, Trash2, RefreshCw } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Store, Plus, Trash2, RefreshCw, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 interface MarketplaceManagerProps {
@@ -18,6 +19,7 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
   const [marketplaceInput, setMarketplaceInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [togglingAutoUpdate, setTogglingAutoUpdate] = useState<string | null>(null);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,6 +89,32 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
       toast.error(error instanceof Error ? error.message : "Failed to update marketplace");
     } finally {
       setUpdating(null);
+    }
+  };
+
+  const handleAutoUpdateToggle = async (name: string, enabled: boolean) => {
+    setTogglingAutoUpdate(name);
+
+    try {
+      const response = await fetch(`/api/v1/plugins/marketplace/${name}/auto-update`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || "Failed to toggle auto-update");
+      }
+
+      toast.success(
+        `Auto-update ${enabled ? "enabled" : "disabled"} for "${name}"`
+      );
+      onRefresh();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to toggle auto-update");
+    } finally {
+      setTogglingAutoUpdate(null);
     }
   };
 
@@ -169,26 +197,46 @@ export function MarketplaceManager({ marketplaces, onRefresh }: MarketplaceManag
                       {marketplace.repo}
                     </p>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleUpdate(marketplace.name)}
-                      disabled={updating === marketplace.name}
-                      title="Update marketplace"
-                    >
-                      <RefreshCw
-                        className={`h-4 w-4 ${updating === marketplace.name ? "animate-spin" : ""}`}
+                  <div className="flex items-center gap-3">
+                    {/* Auto-update toggle */}
+                    <div className="flex items-center gap-2">
+                      <Label
+                        htmlFor={`auto-update-${marketplace.name}`}
+                        className="text-xs text-muted-foreground cursor-pointer flex items-center gap-1"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Auto-update
+                      </Label>
+                      <Switch
+                        id={`auto-update-${marketplace.name}`}
+                        checked={marketplace.auto_update}
+                        onCheckedChange={(checked) =>
+                          handleAutoUpdateToggle(marketplace.name, checked)
+                        }
+                        disabled={togglingAutoUpdate === marketplace.name}
                       />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => handleRemove(marketplace.name)}
-                      title="Remove marketplace"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleUpdate(marketplace.name)}
+                        disabled={updating === marketplace.name}
+                        title="Update marketplace"
+                      >
+                        <RefreshCw
+                          className={`h-4 w-4 ${updating === marketplace.name ? "animate-spin" : ""}`}
+                        />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleRemove(marketplace.name)}
+                        title="Remove marketplace"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </CardContent>

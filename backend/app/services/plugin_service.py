@@ -18,6 +18,8 @@ from ..models.database import Marketplace
 from ..models.schemas import (
     Plugin,
     PluginComponent,
+    PluginHook,
+    PluginLSPConfig,
     PluginListResponse,
     MarketplacePlugin,
     MarketplacePluginListResponse,
@@ -74,7 +76,7 @@ class PluginService:
         # User-level local plugins
         user_plugins_dir = get_claude_user_plugins_dir()
         if user_plugins_dir.exists():
-            local_plugins = self._scan_plugins_directory(user_plugins_dir)
+            local_plugins = self._scan_plugins_directory(user_plugins_dir, scope="user")
             # Mark local plugins and avoid duplicates
             for plugin in local_plugins:
                 plugin.source = "local"
@@ -85,7 +87,7 @@ class PluginService:
         if project_path:
             project_plugins_dir = get_project_plugins_dir(project_path)
             if project_plugins_dir.exists():
-                local_plugins = self._scan_plugins_directory(project_plugins_dir)
+                local_plugins = self._scan_plugins_directory(project_plugins_dir, scope="project")
                 for plugin in local_plugins:
                     plugin.source = "local-project"
                     if not any(p.name == plugin.name for p in plugins):
@@ -156,7 +158,7 @@ class PluginService:
 
         return plugins
 
-    def _scan_plugins_directory(self, plugins_dir: Path) -> List[Plugin]:
+    def _scan_plugins_directory(self, plugins_dir: Path, scope: str = "user") -> List[Plugin]:
         """
         Scan a plugins directory for installed plugins.
 
@@ -164,6 +166,7 @@ class PluginService:
 
         Args:
             plugins_dir: Path to plugins directory
+            scope: Installation scope ("user", "project", "local")
 
         Returns:
             List of Plugin objects
@@ -185,16 +188,50 @@ class PluginService:
                     with open(plugin_json_path, "r", encoding="utf-8") as f:
                         plugin_data = json.load(f)
 
-                    # Parse components
+                    # Parse components with better aggregation
                     components = []
+                    skill_count = 0
+                    agent_count = 0
+                    hook_count = 0
+                    mcp_count = 0
+                    lsp_count = 0
+
                     if "components" in plugin_data:
                         for comp in plugin_data["components"]:
+                            comp_type = comp.get("type", "")
                             components.append(
                                 PluginComponent(
-                                    type=comp.get("type", ""),
+                                    type=comp_type,
                                     name=comp.get("name", ""),
+                                    description=comp.get("description"),
                                 )
                             )
+                            # Count by type
+                            if comp_type == "skill" or comp_type == "command":
+                                skill_count += 1
+                            elif comp_type == "agent":
+                                agent_count += 1
+                            elif comp_type == "hook":
+                                hook_count += 1
+                            elif comp_type == "mcp":
+                                mcp_count += 1
+                            elif comp_type == "lsp":
+                                lsp_count += 1
+
+                    # Scan for additional components in directories
+                    skill_count += self._count_directory_items(plugin_dir / "skills")
+                    agent_count += self._count_directory_items(plugin_dir / "agents")
+                    mcp_count += self._count_directory_items(plugin_dir / "mcp-servers")
+
+                    # Parse hooks from hooks/hooks.json
+                    hooks = self._parse_plugin_hooks(plugin_dir)
+                    if hooks:
+                        hook_count = len(hooks)
+
+                    # Parse LSP configs from .lsp.json
+                    lsp_configs = self._parse_lsp_config(plugin_dir)
+                    if lsp_configs:
+                        lsp_count = len(lsp_configs)
 
                     # Read README.md if it exists
                     readme_content = self._read_plugin_readme(plugin_dir)
@@ -205,10 +242,18 @@ class PluginService:
                         description=plugin_data.get("description"),
                         author=plugin_data.get("author"),
                         category=plugin_data.get("category"),
+                        scope=scope,
                         components=components,
-                        usage=plugin_data.get("usage"),  # Support usage in plugin.json
-                        examples=plugin_data.get("examples"),  # Support examples in plugin.json
+                        skill_count=skill_count,
+                        agent_count=agent_count,
+                        hook_count=hook_count,
+                        mcp_count=mcp_count,
+                        lsp_count=lsp_count,
+                        usage=plugin_data.get("usage"),
+                        examples=plugin_data.get("examples"),
                         readme=readme_content,
+                        hooks=hooks,
+                        lsp_configs=lsp_configs,
                     )
                     plugins.append(plugin)
                 except Exception as e:
@@ -217,6 +262,124 @@ class PluginService:
                     continue
 
         return plugins
+
+    def _count_directory_items(self, directory: Path) -> int:
+        """Count items in a directory (for component counting)."""
+        if not directory.exists():
+            return 0
+        return len([d for d in directory.iterdir() if d.is_dir() or d.suffix == ".md"])
+
+    def _parse_plugin_hooks(self, plugin_dir: Path) -> Optional[List[PluginHook]]:
+        """
+        Parse hooks from a plugin's hooks/hooks.json file.
+
+        Args:
+            plugin_dir: Path to plugin directory
+
+        Returns:
+            List of PluginHook objects or None
+        """
+        hooks_json_path = plugin_dir / "hooks" / "hooks.json"
+        if not hooks_json_path.exists():
+            return None
+
+        try:
+            with open(hooks_json_path, "r", encoding="utf-8") as f:
+                hooks_data = json.load(f)
+
+            hooks = []
+            # hooks.json can be a dict with event names as keys or a list
+            if isinstance(hooks_data, dict):
+                for event, hook_list in hooks_data.items():
+                    if isinstance(hook_list, list):
+                        for hook in hook_list:
+                            hooks.append(
+                                PluginHook(
+                                    event=event,
+                                    type=hook.get("type", "command"),
+                                    matcher=hook.get("matcher"),
+                                    command=hook.get("command"),
+                                    prompt=hook.get("prompt"),
+                                )
+                            )
+            elif isinstance(hooks_data, list):
+                for hook in hooks_data:
+                    hooks.append(
+                        PluginHook(
+                            event=hook.get("event", ""),
+                            type=hook.get("type", "command"),
+                            matcher=hook.get("matcher"),
+                            command=hook.get("command"),
+                            prompt=hook.get("prompt"),
+                        )
+                    )
+            return hooks if hooks else None
+        except Exception as e:
+            print(f"Warning: Failed to parse hooks.json: {e}")
+            return None
+
+    def _parse_lsp_config(self, plugin_dir: Path) -> Optional[List[PluginLSPConfig]]:
+        """
+        Parse LSP configuration from plugin's .lsp.json file.
+
+        Args:
+            plugin_dir: Path to plugin directory
+
+        Returns:
+            List of PluginLSPConfig objects or None
+        """
+        lsp_json_path = plugin_dir / ".lsp.json"
+        if not lsp_json_path.exists():
+            # Also check in .claude-plugin directory
+            lsp_json_path = plugin_dir / ".claude-plugin" / ".lsp.json"
+            if not lsp_json_path.exists():
+                return None
+
+        try:
+            with open(lsp_json_path, "r", encoding="utf-8") as f:
+                lsp_data = json.load(f)
+
+            configs = []
+            # Can be a single config or list of configs
+            if isinstance(lsp_data, dict):
+                if "servers" in lsp_data:
+                    # Multiple servers format
+                    for server in lsp_data["servers"]:
+                        configs.append(
+                            PluginLSPConfig(
+                                name=server.get("name", ""),
+                                language=server.get("language", ""),
+                                command=server.get("command", ""),
+                                args=server.get("args"),
+                                env=server.get("env"),
+                            )
+                        )
+                else:
+                    # Single server format
+                    configs.append(
+                        PluginLSPConfig(
+                            name=lsp_data.get("name", ""),
+                            language=lsp_data.get("language", ""),
+                            command=lsp_data.get("command", ""),
+                            args=lsp_data.get("args"),
+                            env=lsp_data.get("env"),
+                        )
+                    )
+            elif isinstance(lsp_data, list):
+                for server in lsp_data:
+                    configs.append(
+                        PluginLSPConfig(
+                            name=server.get("name", ""),
+                            language=server.get("language", ""),
+                            command=server.get("command", ""),
+                            args=server.get("args"),
+                            env=server.get("env"),
+                        )
+                    )
+            return configs if configs else None
+        except Exception as e:
+            print(f"Warning: Failed to parse .lsp.json: {e}")
+            return None
 
     def _read_plugin_readme(self, plugin_dir: Path) -> Optional[str]:
         """
@@ -848,6 +1011,9 @@ class PluginService:
         known_file = get_known_marketplaces_file()
         known_data = read_json_file(known_file) or {}
 
+        # Load auto-update settings
+        auto_update_settings = self._load_marketplace_auto_update_settings()
+
         marketplaces = []
         for name, info in known_data.items():
             # Get plugin count from marketplace.json
@@ -863,9 +1029,39 @@ class PluginService:
                 "install_location": info.get("installLocation", ""),
                 "last_updated": info.get("lastUpdated"),
                 "plugin_count": plugin_count,
+                "auto_update": auto_update_settings.get(name, False),
             })
 
         return marketplaces
+
+    def _load_marketplace_auto_update_settings(self) -> Dict[str, bool]:
+        """Load per-marketplace auto-update settings."""
+        settings_file = get_claude_user_plugins_dir() / "marketplace_settings.json"
+        if not settings_file.exists():
+            return {}
+        data = read_json_file(settings_file) or {}
+        return data.get("auto_update", {})
+
+    def set_marketplace_auto_update(self, name: str, enabled: bool) -> bool:
+        """
+        Set auto-update preference for a marketplace.
+
+        Args:
+            name: Marketplace name
+            enabled: Whether auto-update is enabled
+
+        Returns:
+            True if saved successfully
+        """
+        settings_file = get_claude_user_plugins_dir() / "marketplace_settings.json"
+        ensure_directory_exists(settings_file.parent)
+
+        data = read_json_file(settings_file) or {}
+        if "auto_update" not in data:
+            data["auto_update"] = {}
+        data["auto_update"][name] = enabled
+
+        return write_json_file(settings_file, data)
 
     def browse_marketplace_from_files(self, name: str) -> List[dict]:
         """

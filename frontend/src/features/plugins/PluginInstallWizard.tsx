@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { MarketplacePlugin, PluginInstallResponse } from "@/types/plugins";
+import type { MarketplacePlugin, PluginInstallResponse, PluginScope } from "@/types/plugins";
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,24 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, Loader2, CheckCircle, XCircle } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Download,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  FolderOpen,
+  User,
+  Folder,
+  HardDrive,
+} from "lucide-react";
 
 interface PluginInstallWizardProps {
   plugin: MarketplacePlugin | null;
@@ -21,6 +38,27 @@ interface PluginInstallWizardProps {
 
 type WizardStep = "confirm" | "installing" | "result";
 
+const scopeOptions: { value: PluginScope; label: string; description: string; icon: React.ReactNode }[] = [
+  {
+    value: "user",
+    label: "User",
+    description: "Install for current user (~/.claude/plugins)",
+    icon: <User className="h-4 w-4" />,
+  },
+  {
+    value: "project",
+    label: "Project",
+    description: "Install for current project (.claude/plugins)",
+    icon: <Folder className="h-4 w-4" />,
+  },
+  {
+    value: "local",
+    label: "Local",
+    description: "Install in a local directory",
+    icon: <HardDrive className="h-4 w-4" />,
+  },
+];
+
 export function PluginInstallWizard({
   plugin,
   marketplaceName,
@@ -30,6 +68,7 @@ export function PluginInstallWizard({
 }: PluginInstallWizardProps) {
   const [step, setStep] = useState<WizardStep>("confirm");
   const [installResult, setInstallResult] = useState<PluginInstallResponse | null>(null);
+  const [scope, setScope] = useState<PluginScope>("user");
 
   const handleInstall = async () => {
     if (!plugin || marketplaceName === null) return;
@@ -43,6 +82,7 @@ export function PluginInstallWizard({
         body: JSON.stringify({
           name: plugin.name,
           marketplace_name: marketplaceName,
+          scope: scope,
         }),
       });
 
@@ -69,10 +109,13 @@ export function PluginInstallWizard({
     setTimeout(() => {
       setStep("confirm");
       setInstallResult(null);
+      setScope("user");
     }, 300);
   };
 
   if (!plugin) return null;
+
+  const selectedScopeOption = scopeOptions.find((opt) => opt.value === scope);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -83,11 +126,12 @@ export function PluginInstallWizard({
             <DialogHeader>
               <DialogTitle>Install Plugin</DialogTitle>
               <DialogDescription>
-                Confirm plugin installation details
+                Configure and confirm plugin installation
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4">
+            <div className="space-y-6">
+              {/* Plugin Info */}
               <div className="border rounded-lg p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <h3 className="font-semibold">{plugin.name}</h3>
@@ -99,6 +143,44 @@ export function PluginInstallWizard({
                 <div className="text-xs font-mono text-muted-foreground bg-muted p-2 rounded">
                   {plugin.install_command}
                 </div>
+              </div>
+
+              {/* Scope Selector */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                  <Label>Installation Scope</Label>
+                </div>
+                <Select value={scope} onValueChange={(value: PluginScope) => setScope(value)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      <div className="flex items-center gap-2">
+                        {selectedScopeOption?.icon}
+                        <span>{selectedScopeOption?.label}</span>
+                      </div>
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {scopeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        <div className="flex items-center gap-2">
+                          {option.icon}
+                          <div>
+                            <div className="font-medium">{option.label}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {option.description}
+                            </div>
+                          </div>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {scope === "user" && "Plugin will be available in all your Claude projects."}
+                  {scope === "project" && "Plugin will only be available in the current project."}
+                  {scope === "local" && "Plugin will be installed in a local directory you specify."}
+                </p>
               </div>
             </div>
 
@@ -130,6 +212,9 @@ export function PluginInstallWizard({
               <p className="text-xs font-mono text-muted-foreground mt-2">
                 {plugin.install_command}
               </p>
+              <Badge variant="secondary" className="mt-3">
+                Scope: {scope}
+              </Badge>
             </div>
           </>
         )}
@@ -150,6 +235,9 @@ export function PluginInstallWizard({
                   <div className="text-center">
                     <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
                     <p className="text-lg font-semibold">Plugin installed successfully!</p>
+                    <Badge variant="secondary" className="mt-2">
+                      Installed to: {scope}
+                    </Badge>
                   </div>
                 ) : (
                   <div className="text-center">

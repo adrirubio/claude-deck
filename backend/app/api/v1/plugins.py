@@ -153,6 +153,35 @@ def update_marketplace(name: str):
         )
 
 
+@router.put("/plugins/marketplace/{name}/auto-update", status_code=200)
+def set_marketplace_auto_update(name: str, request: dict):
+    """
+    Set auto-update preference for a marketplace.
+
+    Args:
+        name: Marketplace name
+        request: { "enabled": bool }
+    """
+    try:
+        enabled = request.get("enabled", False)
+        service = PluginService()
+        success = service.set_marketplace_auto_update(name, enabled)
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save auto-update setting"
+            )
+
+        return {"success": True, "name": name, "auto_update": enabled}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to set auto-update: {str(e)}"
+        )
+
+
 # Plugin Management Endpoints (must come after marketplace endpoints)
 
 
