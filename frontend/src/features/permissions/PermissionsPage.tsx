@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Shield, ShieldCheck, ShieldX } from "lucide-react";
+import { Plus, Shield, ShieldCheck, ShieldX, ShieldQuestion, Settings2, FolderPlus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -8,6 +11,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RuleList } from "./RuleList";
 import { RuleBuilder } from "./RuleBuilder";
 import { RefreshButton } from "@/components/shared/RefreshButton";
@@ -19,16 +31,23 @@ import {
   type PermissionType,
   type PermissionScope,
   type PermissionListResponse,
+  type PermissionSettings,
+  type PermissionSettingsUpdate,
+  type PermissionMode,
+  PERMISSION_MODES,
 } from "@/types/permissions";
 
 export function PermissionsPage() {
   const { activeProject } = useProjectContext();
   const [rules, setRules] = useState<PermissionRule[]>([]);
+  const [settings, setSettings] = useState<PermissionSettings>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingRule, setEditingRule] = useState<PermissionRule | null>(null);
   const [showBuilder, setShowBuilder] = useState(false);
   const [builderType, setBuilderType] = useState<PermissionType>("allow");
+  const [newDirectory, setNewDirectory] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
 
   const fetchPermissions = useCallback(async () => {
     setLoading(true);
@@ -37,6 +56,7 @@ export function PermissionsPage() {
       const endpoint = buildEndpoint("permissions", { project_path: activeProject?.path });
       const response = await apiClient<PermissionListResponse>(endpoint);
       setRules(response.rules);
+      setSettings(response.settings || {});
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch permissions");
       toast.error("Failed to load permissions");
@@ -109,6 +129,54 @@ export function PermissionsPage() {
     }
   };
 
+  const handleUpdateSettings = async (update: PermissionSettingsUpdate) => {
+    setSavingSettings(true);
+    try {
+      const endpoint = buildEndpoint("permissions/settings", {
+        scope: "user",
+        project_path: activeProject?.path,
+      });
+      await apiClient<PermissionSettings>(endpoint, {
+        method: "PUT",
+        body: JSON.stringify(update),
+      });
+      toast.success("Settings updated");
+      await fetchPermissions();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update settings");
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleModeChange = (mode: PermissionMode) => {
+    handleUpdateSettings({ defaultMode: mode });
+  };
+
+  const handleAddDirectory = () => {
+    if (!newDirectory.trim()) return;
+    const currentDirs = settings.additionalDirectories || [];
+    if (currentDirs.includes(newDirectory.trim())) {
+      toast.error("Directory already added");
+      return;
+    }
+    handleUpdateSettings({
+      additionalDirectories: [...currentDirs, newDirectory.trim()],
+    });
+    setNewDirectory("");
+  };
+
+  const handleRemoveDirectory = (dir: string) => {
+    const currentDirs = settings.additionalDirectories || [];
+    handleUpdateSettings({
+      additionalDirectories: currentDirs.filter((d) => d !== dir),
+    });
+  };
+
+  const handleBypassToggle = (disabled: boolean) => {
+    handleUpdateSettings({ disableBypassPermissionsMode: disabled });
+  };
+
   const openBuilder = (type: PermissionType) => {
     setEditingRule(null);
     setBuilderType(type);
@@ -116,6 +184,7 @@ export function PermissionsPage() {
   };
 
   const allowRules = rules.filter((r) => r.type === "allow");
+  const askRules = rules.filter((r) => r.type === "ask");
   const denyRules = rules.filter((r) => r.type === "deny");
 
   return (
@@ -145,7 +214,7 @@ export function PermissionsPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Total Rules</CardDescription>
@@ -166,6 +235,17 @@ export function PermissionsPage() {
         <Card>
           <CardHeader className="pb-3">
             <CardDescription className="flex items-center gap-2">
+              <ShieldQuestion className="h-4 w-4 text-warning" />
+              Ask Rules
+            </CardDescription>
+            <CardTitle className="text-3xl text-warning">
+              {askRules.length}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription className="flex items-center gap-2">
               <ShieldX className="h-4 w-4 text-destructive" />
               Deny Rules
             </CardDescription>
@@ -176,86 +256,241 @@ export function PermissionsPage() {
         </Card>
       </div>
 
-      {/* Two-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Allow Rules */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <ShieldCheck className="h-5 w-5 text-success" />
-                  Allow Rules
-                </CardTitle>
-                <CardDescription>
-                  Operations that Claude Code is permitted to perform
-                </CardDescription>
-              </div>
-              <Button
-                size="sm"
-                onClick={() => openBuilder("allow")}
-                className="bg-success text-success-foreground hover:bg-success/90"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Allow Rule
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="text-center py-8 text-muted-foreground">
-                Loading...
-              </div>
-            ) : (
-              <RuleList
-                rules={allowRules}
-                type="allow"
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-              />
-            )}
-          </CardContent>
-        </Card>
+      {/* Settings Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings2 className="h-5 w-5" />
+            Permission Settings
+          </CardTitle>
+          <CardDescription>
+            Configure default behavior and additional directories
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Permission Mode */}
+          <div className="space-y-2">
+            <Label>Default Permission Mode</Label>
+            <Select
+              value={settings.defaultMode || "default"}
+              onValueChange={(v) => handleModeChange(v as PermissionMode)}
+              disabled={savingSettings}
+            >
+              <SelectTrigger className="w-full md:w-[300px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PERMISSION_MODES.map((mode) => (
+                  <SelectItem key={mode.value} value={mode.value}>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{mode.label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {mode.description}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-        {/* Deny Rules */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <ShieldX className="h-5 w-5 text-destructive" />
-                  Deny Rules
-                </CardTitle>
-                <CardDescription>
-                  Operations that Claude Code is blocked from performing
-                </CardDescription>
-              </div>
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={() => openBuilder("deny")}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Deny Rule
+          {/* Disable Bypass Mode */}
+          <div className="flex items-center justify-between rounded-lg border p-4">
+            <div className="space-y-0.5">
+              <Label>Disable Bypass Permissions Mode</Label>
+              <p className="text-sm text-muted-foreground">
+                Prevent using --dangerously-skip-permissions flag
+              </p>
+            </div>
+            <Switch
+              checked={settings.disableBypassPermissionsMode || false}
+              onCheckedChange={handleBypassToggle}
+              disabled={savingSettings}
+            />
+          </div>
+
+          {/* Additional Directories */}
+          <div className="space-y-3">
+            <Label className="flex items-center gap-2">
+              <FolderPlus className="h-4 w-4" />
+              Additional Allowed Directories
+            </Label>
+            <p className="text-sm text-muted-foreground">
+              Directories outside the project that Claude can access
+            </p>
+            <div className="flex gap-2">
+              <Input
+                value={newDirectory}
+                onChange={(e) => setNewDirectory(e.target.value)}
+                placeholder="/path/to/directory"
+                onKeyDown={(e) => e.key === "Enter" && handleAddDirectory()}
+              />
+              <Button onClick={handleAddDirectory} disabled={savingSettings}>
+                Add
               </Button>
             </div>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="text-center py-8 text-muted-foreground">
-                Loading...
+            {(settings.additionalDirectories?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {settings.additionalDirectories?.map((dir) => (
+                  <Badge
+                    key={dir}
+                    variant="secondary"
+                    className="flex items-center gap-1 py-1 px-2"
+                  >
+                    <code className="text-xs">{dir}</code>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-4 w-4 p-0 hover:bg-transparent"
+                      onClick={() => handleRemoveDirectory(dir)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </Badge>
+                ))}
               </div>
-            ) : (
-              <RuleList
-                rules={denyRules}
-                type="deny"
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-              />
             )}
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Rules Tabs */}
+      <Tabs defaultValue="allow" className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="allow" className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" />
+            Allow ({allowRules.length})
+          </TabsTrigger>
+          <TabsTrigger value="ask" className="flex items-center gap-2">
+            <ShieldQuestion className="h-4 w-4" />
+            Ask ({askRules.length})
+          </TabsTrigger>
+          <TabsTrigger value="deny" className="flex items-center gap-2">
+            <ShieldX className="h-4 w-4" />
+            Deny ({denyRules.length})
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="allow" className="mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldCheck className="h-5 w-5 text-success" />
+                    Allow Rules
+                  </CardTitle>
+                  <CardDescription>
+                    Operations that Claude Code is permitted to perform automatically
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => openBuilder("allow")}
+                  className="bg-success text-success-foreground hover:bg-success/90"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Allow Rule
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  Loading...
+                </div>
+              ) : (
+                <RuleList
+                  rules={allowRules}
+                  type="allow"
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="ask" className="mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldQuestion className="h-5 w-5 text-warning" />
+                    Ask Rules
+                  </CardTitle>
+                  <CardDescription>
+                    Operations that will prompt for confirmation before executing
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => openBuilder("ask")}
+                  className="bg-warning text-warning-foreground hover:bg-warning/90"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Ask Rule
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  Loading...
+                </div>
+              ) : (
+                <RuleList
+                  rules={askRules}
+                  type="ask"
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="deny" className="mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <ShieldX className="h-5 w-5 text-destructive" />
+                    Deny Rules
+                  </CardTitle>
+                  <CardDescription>
+                    Operations that Claude Code is blocked from performing
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => openBuilder("deny")}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Deny Rule
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  Loading...
+                </div>
+              ) : (
+                <RuleList
+                  rules={denyRules}
+                  type="deny"
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Pattern Syntax Help */}
       <Card>
@@ -266,9 +501,9 @@ export function PermissionsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
             <div>
-              <h4 className="font-medium mb-2">Format</h4>
+              <h4 className="font-medium mb-2">Basic Format</h4>
               <ul className="space-y-1 text-muted-foreground">
                 <li><code className="bg-muted px-1 rounded">Tool</code> - Match any use of the tool</li>
                 <li><code className="bg-muted px-1 rounded">Tool(pattern)</code> - Match with argument pattern</li>
@@ -277,12 +512,21 @@ export function PermissionsPage() {
               </ul>
             </div>
             <div>
+              <h4 className="font-medium mb-2">Extended Patterns</h4>
+              <ul className="space-y-1 text-muted-foreground">
+                <li><code className="bg-muted px-1 rounded">WebFetch(domain:*.com)</code> - Domain matching</li>
+                <li><code className="bg-muted px-1 rounded">MCP(server:tool)</code> - MCP server tools</li>
+                <li><code className="bg-muted px-1 rounded">Task(*)</code> - All subagent tasks</li>
+                <li><code className="bg-muted px-1 rounded">Skill(name)</code> - Specific skills</li>
+              </ul>
+            </div>
+            <div>
               <h4 className="font-medium mb-2">Examples</h4>
               <ul className="space-y-1 text-muted-foreground">
                 <li><code className="bg-muted px-1 rounded">Bash(npm:*)</code> - Any npm command</li>
                 <li><code className="bg-muted px-1 rounded">Read(*.env)</code> - Read .env files</li>
                 <li><code className="bg-muted px-1 rounded">Write(/tmp/*)</code> - Write to /tmp</li>
-                <li><code className="bg-muted px-1 rounded">Bash(rm:*)</code> - Remove commands</li>
+                <li><code className="bg-muted px-1 rounded">MCP(postgres:*)</code> - All postgres MCP</li>
               </ul>
             </div>
           </div>

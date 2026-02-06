@@ -121,12 +121,13 @@ class MCPServer(BaseModel):
     """MCP Server configuration."""
 
     name: str
-    type: str  # "stdio" or "http"
-    scope: str  # "user" or "project"
+    type: str  # "stdio", "http", or "sse"
+    scope: str  # "user", "project", "plugin", or "managed"
+    source: Optional[str] = None  # Original source for display (e.g., plugin name)
     command: Optional[str] = None  # For stdio type
     args: Optional[List[str]] = None  # For stdio type
-    url: Optional[str] = None  # For http type
-    headers: Optional[Dict[str, str]] = None  # For http type
+    url: Optional[str] = None  # For http/sse type
+    headers: Optional[Dict[str, str]] = None  # For http/sse type
     env: Optional[Dict[str, str]] = None  # Environment variables
     # Cache fields
     is_connected: Optional[bool] = None
@@ -142,7 +143,7 @@ class MCPServerCreate(BaseModel):
     """Schema for creating an MCP server."""
 
     name: str
-    type: str  # "stdio" or "http"
+    type: str  # "stdio", "http", or "sse"
     scope: str  # "user" or "project"
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -160,6 +161,30 @@ class MCPServerUpdate(BaseModel):
     url: Optional[str] = None
     headers: Optional[Dict[str, str]] = None
     env: Optional[Dict[str, str]] = None
+
+
+# MCP Server Approval Settings Schemas
+
+
+class MCPServerApprovalMode(BaseModel):
+    """Server-level approval mode configuration."""
+
+    server_name: str
+    mode: str  # "always-allow", "always-deny", "ask-every-time"
+
+
+class MCPServerApprovalSettings(BaseModel):
+    """MCP server approval settings for automatic tool permissions."""
+
+    default_mode: str = "ask-every-time"  # "always-allow", "always-deny", "ask-every-time"
+    server_overrides: List[MCPServerApprovalMode] = []
+
+
+class MCPServerApprovalSettingsUpdate(BaseModel):
+    """Schema for updating MCP server approval settings."""
+
+    default_mode: Optional[str] = None
+    server_overrides: Optional[List[MCPServerApprovalMode]] = None
 
 
 class MCPServerListResponse(BaseModel):
@@ -235,10 +260,31 @@ class SlashCommandListResponse(BaseModel):
 
 
 class PluginComponent(BaseModel):
-    """Plugin component (command, agent, hook, or MCP server)."""
+    """Plugin component (command, agent, hook, mcp, lsp, or skill)."""
 
-    type: str  # "command", "agent", "hook", "mcp"
+    type: str  # "command", "agent", "hook", "mcp", "lsp", "skill"
     name: str
+    description: Optional[str] = None
+
+
+class PluginHook(BaseModel):
+    """Plugin-defined hook."""
+
+    event: str  # PreToolUse, PostToolUse, etc.
+    type: str = "command"  # "command", "prompt", "agent"
+    matcher: Optional[str] = None
+    command: Optional[str] = None
+    prompt: Optional[str] = None
+
+
+class PluginLSPConfig(BaseModel):
+    """Plugin LSP server configuration."""
+
+    name: str
+    language: str
+    command: str
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
 
 
 class Plugin(BaseModel):
@@ -251,11 +297,22 @@ class Plugin(BaseModel):
     category: Optional[str] = None
     source: Optional[str] = None  # e.g., "anthropic-agent-skills", "claude-plugins-official", "local"
     enabled: bool = True
+    scope: Optional[str] = None  # "user", "project", "local"
     components: List[PluginComponent] = []
+    # Component counts for quick display
+    skill_count: int = 0
+    agent_count: int = 0
+    hook_count: int = 0
+    mcp_count: int = 0
+    lsp_count: int = 0
     # Extended information for plugin details
     usage: Optional[str] = None  # Usage instructions
     examples: Optional[List[str]] = None  # Example use cases
     readme: Optional[str] = None  # README content (for local plugins)
+    # Plugin-defined hooks (read-only)
+    hooks: Optional[List[PluginHook]] = None
+    # LSP configurations
+    lsp_configs: Optional[List[PluginLSPConfig]] = None
 
 
 class PluginListResponse(BaseModel):
@@ -300,6 +357,7 @@ class MarketplaceResponse(BaseModel):
     install_location: str
     last_updated: Optional[str] = None
     plugin_count: int = 0
+    auto_update: bool = False  # Per-marketplace auto-update setting
 
 
 class MarketplaceListResponse(BaseModel):
@@ -313,6 +371,7 @@ class PluginInstallRequest(BaseModel):
 
     name: str
     marketplace_name: Optional[str] = None
+    scope: str = "user"  # "user", "project", "local"
 
 
 class PluginInstallResponse(BaseModel):
@@ -418,21 +477,29 @@ class HookListResponse(BaseModel):
 
 # Permission Schemas
 
+# Valid permission modes
+VALID_PERMISSION_MODES = [
+    "default",
+    "acceptEdits",
+    "dontAsk",
+    "plan",
+]
+
 
 class PermissionRule(BaseModel):
     """Permission rule configuration."""
 
     id: str
-    type: str  # "allow" or "deny"
-    pattern: str  # Tool(pattern) or Tool:subcommand
+    type: str  # "allow", "deny", or "ask"
+    pattern: str  # Tool(pattern), Tool:subcommand, WebFetch(domain:...), MCP(server:tool), Task(*), Skill(skill-name)
     scope: str  # "user" or "project"
 
 
 class PermissionRuleCreate(BaseModel):
     """Schema for creating a permission rule."""
 
-    type: str  # "allow" or "deny"
-    pattern: str  # Tool(pattern) or Tool:subcommand
+    type: str  # "allow", "deny", or "ask"
+    pattern: str  # Tool(pattern), Tool:subcommand, WebFetch(domain:...), MCP(server:tool), Task(*), Skill(skill-name)
     scope: str  # "user" or "project"
 
 
@@ -443,10 +510,27 @@ class PermissionRuleUpdate(BaseModel):
     pattern: Optional[str] = None
 
 
+class PermissionSettings(BaseModel):
+    """Full permission settings including mode and directories."""
+
+    defaultMode: Optional[str] = "default"  # default/acceptEdits/dontAsk/plan
+    additionalDirectories: Optional[List[str]] = None  # Additional allowed directories
+    disableBypassPermissionsMode: Optional[bool] = False  # Disable bypass mode
+
+
 class PermissionListResponse(BaseModel):
-    """List of permission rules."""
+    """List of permission rules with settings."""
 
     rules: List[PermissionRule]
+    settings: Optional[PermissionSettings] = None
+
+
+class PermissionSettingsUpdate(BaseModel):
+    """Schema for updating permission settings."""
+
+    defaultMode: Optional[str] = None
+    additionalDirectories: Optional[List[str]] = None
+    disableBypassPermissionsMode: Optional[bool] = None
 
 
 # Agent and Skill Schemas

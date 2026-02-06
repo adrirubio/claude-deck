@@ -8,6 +8,9 @@ from app.models.schemas import (
     PermissionRule,
     PermissionRuleCreate,
     PermissionRuleUpdate,
+    PermissionSettings,
+    PermissionSettingsUpdate,
+    VALID_PERMISSION_MODES,
 )
 from app.services.permission_service import PermissionService
 
@@ -25,7 +28,7 @@ def list_permissions(
         project_path: Optional path to project directory for project-level permissions
 
     Returns:
-        List of all permission rules
+        List of all permission rules with settings
     """
     try:
         return PermissionService.list_permissions(project_path)
@@ -33,7 +36,7 @@ def list_permissions(
         raise HTTPException(status_code=500, detail=f"Failed to list permissions: {str(e)}")
 
 
-@router.get("/{scope}", response_model=PermissionListResponse)
+@router.get("/scope/{scope}", response_model=PermissionListResponse)
 def list_permissions_by_scope(
     scope: str,
     project_path: Optional[str] = Query(None, description="Path to project directory"),
@@ -54,11 +57,56 @@ def list_permissions_by_scope(
     try:
         all_rules = PermissionService.list_permissions(project_path)
         filtered_rules = [rule for rule in all_rules.rules if rule.scope == scope]
-        return PermissionListResponse(rules=filtered_rules)
+        return PermissionListResponse(rules=filtered_rules, settings=all_rules.settings)
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list permissions for scope {scope}: {str(e)}"
         )
+
+
+@router.put("/settings", response_model=PermissionSettings)
+async def update_settings(
+    settings_update: PermissionSettingsUpdate,
+    scope: str = Query("user", description="Scope to update (user or project)"),
+    project_path: Optional[str] = Query(None, description="Path to project directory"),
+) -> PermissionSettings:
+    """
+    Update permission settings (mode, directories, etc.).
+
+    Args:
+        settings_update: Settings to update
+        scope: Scope to update (user or project)
+        project_path: Optional path to project directory for project-level settings
+
+    Returns:
+        Updated permission settings
+    """
+    # Validate scope
+    if scope not in ["user", "project"]:
+        raise HTTPException(status_code=400, detail="Scope must be 'user' or 'project'")
+
+    # Validate project_path for project scope
+    if scope == "project" and not project_path:
+        raise HTTPException(
+            status_code=400,
+            detail="project_path query parameter is required for project scope",
+        )
+
+    # Validate mode if provided
+    if settings_update.defaultMode and settings_update.defaultMode not in VALID_PERMISSION_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"defaultMode must be one of: {', '.join(VALID_PERMISSION_MODES)}",
+        )
+
+    try:
+        return await PermissionService.update_settings(settings_update, scope, project_path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except IOError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {str(e)}")
 
 
 @router.post("", response_model=PermissionRule, status_code=201)
@@ -77,8 +125,8 @@ async def add_permission(
         Created permission rule with generated ID
     """
     # Validate type
-    if rule.type not in ["allow", "deny"]:
-        raise HTTPException(status_code=400, detail="Type must be 'allow' or 'deny'")
+    if rule.type not in ["allow", "ask", "deny"]:
+        raise HTTPException(status_code=400, detail="Type must be 'allow', 'ask', or 'deny'")
 
     # Validate scope
     if rule.scope not in ["user", "project"]:
@@ -132,8 +180,8 @@ async def update_permission(
         )
 
     # Validate type if provided
-    if rule_update.type and rule_update.type not in ["allow", "deny"]:
-        raise HTTPException(status_code=400, detail="Type must be 'allow' or 'deny'")
+    if rule_update.type and rule_update.type not in ["allow", "ask", "deny"]:
+        raise HTTPException(status_code=400, detail="Type must be 'allow', 'ask', or 'deny'")
 
     try:
         return await PermissionService.update_permission(
