@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Settings, Eye, Edit } from 'lucide-react'
+import { Settings, Eye, Edit, Shield } from 'lucide-react'
 import type { ConfigFileListResponse } from '@/types/config'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
 import { SettingsEditor } from './SettingsEditor'
+import { ScopeResolver } from './ScopeResolver'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiClient, buildEndpoint } from '@/lib/api'
@@ -17,7 +18,7 @@ export function ConfigViewerPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'viewer' | 'editor'>('editor')
+  const [activeTab, setActiveTab] = useState<'editor' | 'scopes' | 'viewer'>('editor')
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -39,6 +40,33 @@ export function ConfigViewerPage() {
     fetchData()
   }, [fetchData])
 
+  const handleOverrideInLocal = async (key: string, value: any) => {
+    // Convert dot notation key to nested object
+    const parts = key.split('.')
+    let settings: Record<string, any> = {}
+    let current = settings
+    for (let i = 0; i < parts.length - 1; i++) {
+      current[parts[i]] = {}
+      current = current[parts[i]]
+    }
+    current[parts[parts.length - 1]] = value
+
+    try {
+      await apiClient('config/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          scope: 'local',
+          settings,
+          project_path: activeProject?.path
+        })
+      })
+      toast.success(`Setting "${key}" copied to local scope`)
+      fetchData()
+    } catch (err) {
+      toast.error('Failed to copy setting to local scope')
+    }
+  }
+
   return (
     <div className="space-y-6 h-full flex flex-col">
       <div className="flex items-center justify-between">
@@ -54,11 +82,15 @@ export function ConfigViewerPage() {
         <RefreshButton onClick={fetchData} loading={loading} />
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'viewer' | 'editor')} className="flex-1 flex flex-col overflow-hidden">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="w-fit">
           <TabsTrigger value="editor" className="flex items-center gap-2">
             <Edit className="h-4 w-4" />
             Settings Editor
+          </TabsTrigger>
+          <TabsTrigger value="scopes" className="flex items-center gap-2">
+            <Shield className="h-4 w-4" />
+            Scope Resolver
           </TabsTrigger>
           <TabsTrigger value="viewer" className="flex items-center gap-2">
             <Eye className="h-4 w-4" />
@@ -68,6 +100,10 @@ export function ConfigViewerPage() {
 
         <TabsContent value="editor" className="flex-1 overflow-auto mt-4">
           <SettingsEditor onSave={fetchData} />
+        </TabsContent>
+
+        <TabsContent value="scopes" className="flex-1 overflow-auto mt-4">
+          <ScopeResolver onOverride={activeProject ? handleOverrideInLocal : undefined} />
         </TabsContent>
 
         <TabsContent value="viewer" className="flex-1 overflow-hidden mt-4">

@@ -1,16 +1,22 @@
 """Configuration service for reading and merging Claude Code configurations."""
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from ..utils.path_utils import (
     ClaudePathUtils,
     get_claude_user_settings_file,
     get_claude_user_settings_local_file,
     get_project_settings_file,
     get_project_settings_local_file,
+    get_managed_settings_file,
     ensure_directory_exists,
 )
 from ..utils.file_utils import read_json_file
+
+
+# Settings scope priority (highest to lowest)
+SCOPE_PRIORITY = ["managed", "local", "project", "user"]
+ScopeType = Literal["managed", "local", "project", "user"]
 
 
 class ConfigService:
@@ -360,13 +366,15 @@ class ConfigService:
         Get settings for a specific scope (not merged).
 
         Args:
-            scope: "user", "user_local", "project", or "local"
+            scope: "user", "user_local", "project", "local", or "managed"
             project_path: Required for project/local scope
 
         Returns:
             Settings dictionary for the specified scope
         """
-        if scope == "user":
+        if scope == "managed":
+            file_path = get_managed_settings_file()
+        elif scope == "user":
             file_path = get_claude_user_settings_file()
         elif scope == "user_local":
             file_path = get_claude_user_settings_local_file()
@@ -384,3 +392,148 @@ class ConfigService:
         if file_path.exists():
             return read_json_file(file_path) or {}
         return {}
+
+    def get_all_scoped_settings(self, project_path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        """
+        Get settings from all scopes separately.
+
+        Args:
+            project_path: Optional project directory path
+
+        Returns:
+            Dictionary with settings from each scope
+        """
+        result = {
+            "managed": {},
+            "user": {},
+            "project": {},
+            "local": {}
+        }
+
+        # Load managed settings (read-only, admin-enforced)
+        managed_path = get_managed_settings_file()
+        if managed_path.exists():
+            result["managed"] = read_json_file(managed_path) or {}
+
+        # Load user settings
+        user_settings = self.path_utils.get_user_settings_json()
+        if user_settings and user_settings.exists():
+            result["user"] = read_json_file(user_settings) or {}
+
+        # Load project settings
+        if project_path:
+            proj_settings = get_project_settings_file(project_path)
+            if proj_settings.exists():
+                result["project"] = read_json_file(proj_settings) or {}
+
+            # Load local settings (project-level local overrides)
+            proj_local_settings = get_project_settings_local_file(project_path)
+            if proj_local_settings.exists():
+                result["local"] = read_json_file(proj_local_settings) or {}
+
+        return result
+
+    def get_resolved_config(self, project_path: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get resolved configuration showing effective values and their source scopes.
+        
+        Merge priority (highest to lowest): Managed → Local → Project → User
+
+        Args:
+            project_path: Optional project directory path
+
+        Returns:
+            Dictionary with resolved settings, showing effective value and source scope for each key
+        """
+        scoped_settings = self.get_all_scoped_settings(project_path)
+        
+        # Build resolved config with source tracking
+        resolved = {}
+        
+        # Collect all unique keys from all scopes
+        all_keys = set()
+        for scope_settings in scoped_settings.values():
+            all_keys.update(self._flatten_keys(scope_settings))
+        
+        # For each key, find the effective value and its source
+        for key in all_keys:
+            effective_value, source_scope, all_values = self._resolve_key(key, scoped_settings)
+            resolved[key] = {
+                "effective_value": effective_value,
+                "source_scope": source_scope,
+                "values_by_scope": all_values
+            }
+        
+        return {
+            "resolved": resolved,
+            "scopes": {
+                "managed": {
+                    "settings": scoped_settings["managed"],
+                    "path": str(get_managed_settings_file()),
+                    "exists": get_managed_settings_file().exists(),
+                    "readonly": True
+                },
+                "user": {
+                    "settings": scoped_settings["user"],
+                    "path": str(get_claude_user_settings_file()),
+                    "exists": get_claude_user_settings_file().exists(),
+                    "readonly": False
+                },
+                "project": {
+                    "settings": scoped_settings["project"],
+                    "path": str(get_project_settings_file(project_path)) if project_path else None,
+                    "exists": get_project_settings_file(project_path).exists() if project_path else False,
+                    "readonly": False
+                },
+                "local": {
+                    "settings": scoped_settings["local"],
+                    "path": str(get_project_settings_local_file(project_path)) if project_path else None,
+                    "exists": get_project_settings_local_file(project_path).exists() if project_path else False,
+                    "readonly": False
+                }
+            }
+        }
+
+    def _flatten_keys(self, d: Dict[str, Any], parent_key: str = "") -> set:
+        """Flatten nested dict keys using dot notation."""
+        keys = set()
+        for k, v in d.items():
+            new_key = f"{parent_key}.{k}" if parent_key else k
+            if isinstance(v, dict):
+                keys.update(self._flatten_keys(v, new_key))
+            else:
+                keys.add(new_key)
+        return keys
+
+    def _get_nested_value(self, d: Dict[str, Any], key: str) -> Tuple[Any, bool]:
+        """Get a nested value by dot-notation key. Returns (value, found)."""
+        parts = key.split(".")
+        current = d
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None, False
+        return current, True
+
+    def _resolve_key(self, key: str, scoped_settings: Dict[str, Dict[str, Any]]) -> Tuple[Any, str, Dict[str, Any]]:
+        """
+        Resolve a setting key across all scopes.
+        
+        Returns (effective_value, source_scope, values_by_scope)
+        """
+        values_by_scope = {}
+        effective_value = None
+        source_scope = None
+        
+        # Check each scope in priority order (managed first, then local, project, user)
+        for scope in SCOPE_PRIORITY:
+            value, found = self._get_nested_value(scoped_settings.get(scope, {}), key)
+            if found:
+                values_by_scope[scope] = value
+                # First found value wins (due to priority order)
+                if effective_value is None:
+                    effective_value = value
+                    source_scope = scope
+        
+        return effective_value, source_scope, values_by_scope

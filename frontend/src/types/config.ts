@@ -1,6 +1,6 @@
 export interface ConfigFile {
   path: string
-  scope: 'user' | 'project'
+  scope: 'user' | 'project' | 'managed'
   exists: boolean
   content?: Record<string, any>
 }
@@ -34,7 +34,7 @@ export interface DashboardStats {
   agentCount: number
 }
 
-export type SettingsScope = 'user' | 'user_local' | 'project' | 'local'
+export type SettingsScope = 'user' | 'user_local' | 'project' | 'local' | 'managed'
 
 export interface SettingsUpdateRequest {
   scope: SettingsScope
@@ -51,4 +51,37 @@ export interface SettingsUpdateResponse {
 export interface ScopedSettingsResponse {
   settings: Record<string, any>
   scope: SettingsScope
+}
+
+// Resolved config types for scope management
+export interface ResolvedSettingValue {
+  effective_value: any
+  source_scope: 'managed' | 'local' | 'project' | 'user'
+  values_by_scope: Record<string, any>
+}
+
+export interface ScopeInfo {
+  settings: Record<string, any>
+  path: string | null
+  exists: boolean
+  readonly: boolean
+}
+
+export interface ResolvedConfigResponse {
+  resolved: Record<string, ResolvedSettingValue>
+  scopes: {
+    managed: ScopeInfo
+    user: ScopeInfo
+    project: ScopeInfo
+    local: ScopeInfo
+  }
+}
+
+export interface AllScopedSettingsResponse {
+  scopes: {
+    managed: Record<string, any>
+    user: Record<string, any>
+    project: Record<string, any>
+    local: Record<string, any>
+  }
 }

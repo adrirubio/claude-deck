@@ -1,6 +1,52 @@
 """Path utilities for Claude Code configuration file locations."""
+import platform
 from pathlib import Path
 from typing import Optional
+
+
+def get_managed_settings_file() -> Path:
+    """
+    Get the managed settings file path (admin-enforced, read-only).
+    
+    Returns OS-specific path:
+    - macOS: /Library/Application Support/ClaudeCode/managed-settings.json
+    - Linux: /etc/claude-code/managed-settings.json
+    - Windows: C:\\ProgramData\\ClaudeCode\\managed-settings.json
+    """
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        return Path("/Library/Application Support/ClaudeCode/managed-settings.json")
+    elif system == "Linux":
+        return Path("/etc/claude-code/managed-settings.json")
+    elif system == "Windows":
+        return Path("C:/ProgramData/ClaudeCode/managed-settings.json")
+    else:
+        # Fallback to Linux path for unknown systems
+        return Path("/etc/claude-code/managed-settings.json")
+
+
+def get_managed_mcp_config_file() -> Path:
+    """
+    Get the managed MCP config file path (admin-enforced, read-only).
+    
+    This file contains MCP servers configured by enterprise/system admins.
+    These servers are always enabled and cannot be modified by users.
+    
+    Returns OS-specific path:
+    - macOS: /Library/Application Support/ClaudeCode/managed-mcp.json
+    - Linux: /etc/claude-code/managed-mcp.json
+    - Windows: C:\\ProgramData\\ClaudeCode\\managed-mcp.json
+    """
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        return Path("/Library/Application Support/ClaudeCode/managed-mcp.json")
+    elif system == "Linux":
+        return Path("/etc/claude-code/managed-mcp.json")
+    elif system == "Windows":
+        return Path("C:/ProgramData/ClaudeCode/managed-mcp.json")
+    else:
+        # Fallback to Linux path for unknown systems
+        return Path("/etc/claude-code/managed-mcp.json")
 
 
 class ClaudePathUtils:
@@ -35,6 +81,11 @@ class ClaudePathUtils:
     def get_user_skills_dir() -> Optional[Path]:
         """Get user-level skills directory path."""
         return get_claude_user_skills_dir()
+
+    @staticmethod
+    def get_managed_settings_json() -> Path:
+        """Get managed settings file path (admin-enforced, read-only)."""
+        return get_managed_settings_file()
 
 
 def get_user_home() -> Path:

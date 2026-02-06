@@ -109,7 +109,7 @@ async def get_settings_by_scope(
     Get settings for a specific scope (not merged).
 
     Args:
-        scope: user, user_local, project, or local
+        scope: user, user_local, project, local, or managed
         project_path: Required for project/local scope
 
     Returns:
@@ -118,5 +118,45 @@ async def get_settings_by_scope(
     try:
         settings = config_service.get_settings_by_scope(scope, project_path)
         return {"settings": settings, "scope": scope}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/resolved")
+async def get_resolved_config(project_path: Optional[str] = Query(None)):
+    """
+    Get resolved configuration with effective values and source scopes.
+    
+    Shows the 4-level merge result: Managed (highest) → Local → Project → User (lowest)
+    
+    Args:
+        project_path: Optional project directory path
+
+    Returns:
+        Resolved configuration with effective values and their source scopes
+    """
+    try:
+        resolved = config_service.get_resolved_config(project_path)
+        return resolved
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/scopes")
+async def get_all_scoped_settings(project_path: Optional[str] = Query(None)):
+    """
+    Get settings from all scopes separately (not merged).
+    
+    Returns settings from: managed, user, project, local
+    
+    Args:
+        project_path: Optional project directory path
+
+    Returns:
+        Dictionary with settings from each scope
+    """
+    try:
+        scoped_settings = config_service.get_all_scoped_settings(project_path)
+        return {"scopes": scoped_settings}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
