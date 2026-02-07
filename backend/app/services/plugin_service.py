@@ -245,7 +245,7 @@ class PluginService:
                 description=plugin_info.get("description", f"Plugin from {source}") if plugin_info else f"Plugin from {source}",
                 usage=plugin_info.get("usage") if plugin_info else None,
                 examples=plugin_info.get("examples") if plugin_info else None,
-                components=components if components else None,
+                components=components,
                 skill_count=skill_count,
                 agent_count=agent_count,
                 hook_count=hook_count,
