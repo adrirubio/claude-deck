@@ -164,6 +164,22 @@ export function DashboardPage() {
 
       {stats && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {/* Order matches sidebar navigation */}
+          
+          {/* Tier 1: Overview & Setup */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Projects</CardDescription>
+              <CardTitle className="text-3xl">{stats.projectCount}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Tracked projects
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Tier 2: Core Configuration */}
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>MCP Servers</CardDescription>
@@ -202,30 +218,6 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Agents</CardDescription>
-              <CardTitle className="text-3xl">{stats.agentCount}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground">
-                Custom agents (user, project, plugin)
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Skills</CardDescription>
-              <CardTitle className="text-3xl">{stats.skillCount}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground">
-                Available skills
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
               <CardDescription>Hooks</CardDescription>
               <CardTitle className="text-3xl">{stats.hookCount}</CardTitle>
             </CardHeader>
@@ -250,16 +242,29 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Projects</CardDescription>
-              <CardTitle className="text-3xl">{stats.projectCount}</CardTitle>
+              <CardDescription>Agents</CardDescription>
+              <CardTitle className="text-3xl">{stats.agentCount}</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Tracked projects
+                Custom agents (user, project, plugin)
               </p>
             </CardContent>
           </Card>
 
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Skills</CardDescription>
+              <CardTitle className="text-3xl">{stats.skillCount}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Available skills
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Tier 3: Customization */}
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Output Styles</CardDescription>
@@ -272,6 +277,7 @@ export function DashboardPage() {
             </CardContent>
           </Card>
 
+          {/* Tier 4: Monitoring */}
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Sessions</CardDescription>
