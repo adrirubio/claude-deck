@@ -124,7 +124,7 @@ export function MarkdownEditor({
           <textarea
             value={content}
             onChange={(e) => onContentChange(e.target.value)}
-            className="w-full h-80 p-4 font-mono text-sm border rounded-md resize-y focus:outline-none focus:ring-2 focus:ring-primary"
+            className="w-full h-80 p-4 font-mono text-sm border rounded-md resize-y focus:outline-none focus:ring-2 focus:ring-primary bg-background text-foreground"
             placeholder="Write your command instructions here...
 
 Usage: /command-name <args>
