@@ -10,7 +10,9 @@ from app.utils.path_utils import (
     ensure_directory_exists,
     get_project_commands_dir,
     get_claude_user_commands_dir,
+    get_claude_user_plugins_dir,
 )
+from app.utils.file_utils import read_json_file
 
 
 class CommandService:
@@ -89,7 +91,7 @@ class CommandService:
     @staticmethod
     def list_commands(project_path: Optional[str] = None) -> List[SlashCommand]:
         """
-        List all commands from user and project scopes.
+        List all commands from user, project, and plugin scopes.
 
         Args:
             project_path: Optional project path for project-scoped commands
@@ -115,6 +117,82 @@ class CommandService:
                         project_commands_dir, "project"
                     )
                 )
+
+        # Plugin commands - scan installed plugins from installed_plugins.json
+        commands.extend(CommandService._scan_plugin_commands())
+
+        return commands
+
+    @staticmethod
+    def _scan_plugin_commands() -> List[SlashCommand]:
+        """
+        Scan installed plugin directories for commands.
+
+        Returns:
+            List of SlashCommand objects from plugins
+        """
+        commands = []
+
+        installed_file = get_claude_user_plugins_dir() / "installed_plugins.json"
+        if not installed_file.exists():
+            return commands
+
+        installed_data = read_json_file(installed_file)
+        if not installed_data or "plugins" not in installed_data:
+            return commands
+
+        # Get enabled plugins from settings
+        from app.utils.path_utils import get_claude_user_settings_file
+        settings_file = get_claude_user_settings_file()
+        settings_data = read_json_file(settings_file) or {}
+        enabled_plugins = settings_data.get("enabledPlugins", {})
+
+        for plugin_key, install_list in installed_data.get("plugins", {}).items():
+            # Check if plugin is enabled
+            if not enabled_plugins.get(plugin_key, False):
+                continue
+
+            if not install_list or len(install_list) == 0:
+                continue
+
+            install_path = install_list[0].get("installPath")
+            if not install_path:
+                continue
+
+            plugin_dir = Path(install_path)
+            commands_dir = plugin_dir / "commands"
+
+            if commands_dir.exists():
+                # Extract plugin name for scope
+                plugin_name = plugin_key.split("@")[0] if "@" in plugin_key else plugin_key
+                scope = f"plugin:{plugin_name}"
+
+                for md_file in commands_dir.glob("*.md"):
+                    try:
+                        content = md_file.read_text(encoding="utf-8")
+                        metadata, markdown_content = CommandService._parse_frontmatter(content)
+
+                        command_name = md_file.stem  # filename without .md
+
+                        # Handle allowed-tools which can be string or list
+                        allowed_tools = metadata.get("allowed-tools")
+                        if isinstance(allowed_tools, str):
+                            # Split comma-separated string into list
+                            allowed_tools = [t.strip() for t in allowed_tools.split(",")]
+
+                        commands.append(
+                            SlashCommand(
+                                name=command_name,
+                                path=str(md_file.relative_to(plugin_dir)),
+                                scope=scope,
+                                description=metadata.get("description"),
+                                allowed_tools=allowed_tools,
+                                content=markdown_content,
+                            )
+                        )
+                    except Exception as e:
+                        print(f"Error reading plugin command {md_file}: {e}")
+                        continue
 
         return commands
 
