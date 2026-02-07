@@ -5,10 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Package, Download, Search, CheckCircle, Loader2 } from "lucide-react";
+import { CLICKABLE_CARD } from "@/lib/constants";
 
 interface AllAvailablePluginsProps {
   installedPlugins: Plugin[];
   onInstall: (plugin: MarketplacePlugin, marketplaceName: string) => void;
+  onViewDetails: (plugin: Plugin) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
 }
@@ -16,6 +18,7 @@ interface AllAvailablePluginsProps {
 export function AllAvailablePlugins({
   installedPlugins,
   onInstall,
+  onViewDetails,
   searchQuery,
   onSearchChange,
 }: AllAvailablePluginsProps) {
@@ -135,9 +138,29 @@ export function AllAvailablePlugins({
             return (
               <Card
                 key={plugin.name}
-                className={`hover:border-primary/50 transition-colors ${
+                className={`${CLICKABLE_CARD} ${
                   isInstalled ? "border-green-500/30 bg-green-500/5" : ""
                 }`}
+                tabIndex={0}
+                onClick={() => {
+                  if (isInstalled) {
+                    const fullPlugin = installedPlugins.find((p) => p.name === plugin.name);
+                    if (fullPlugin) onViewDetails(fullPlugin);
+                  } else {
+                    onInstall(plugin, "");
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (isInstalled) {
+                      const fullPlugin = installedPlugins.find((p) => p.name === plugin.name);
+                      if (fullPlugin) onViewDetails(fullPlugin);
+                    } else {
+                      onInstall(plugin, "");
+                    }
+                  }
+                }}
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">
@@ -164,7 +187,7 @@ export function AllAvailablePlugins({
                       {plugin.description}
                     </p>
                   )}
-                  <div className="flex gap-2">
+                  <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                     {isInstalled ? (
                       <Button
                         variant="outline"

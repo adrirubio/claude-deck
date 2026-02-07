@@ -23,6 +23,7 @@ import { RefreshButton } from "@/components/shared/RefreshButton";
 import { SkillDetailDialog } from "./SkillDetailDialog";
 import { SkillRegistryBrowser } from "./SkillRegistryBrowser";
 import { apiClient, buildEndpoint } from "@/lib/api";
+import { CLICKABLE_CARD } from "@/lib/constants";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
 import {
@@ -152,7 +153,7 @@ export function SkillsPage() {
     return (
       <Card
         key={`${skill.location}-${skill.name}`}
-        className="hover:bg-muted/50 transition-colors cursor-pointer"
+        className={CLICKABLE_CARD}
         onClick={() => handleSkillClick(skill)}
       >
         <CardHeader className="pb-2">

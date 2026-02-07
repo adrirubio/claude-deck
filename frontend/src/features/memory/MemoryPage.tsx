@@ -24,6 +24,7 @@ import { MemoryEditor } from "./MemoryEditor";
 import { RulesManager } from "./RulesManager";
 import { ImportTree } from "./ImportTree";
 import { apiClient, buildEndpoint } from "@/lib/api";
+import { CLICKABLE_CARD } from "@/lib/constants";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
 import type { MemoryHierarchyItem, MemoryHierarchyResponse } from "@/types/memory";
@@ -245,7 +246,7 @@ export function MemoryPage() {
                     {claudeMdFiles.map((file) => (
                       <div
                         key={file.path}
-                        className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors hover:bg-muted/50 ${
+                        className={`flex items-center justify-between p-3 rounded-lg ${CLICKABLE_CARD} ${
                           file.exists ? "" : "opacity-60"
                         }`}
                         onClick={() => handleFileClick(file)}

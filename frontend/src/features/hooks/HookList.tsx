@@ -5,9 +5,10 @@ interface HookListProps {
   hooks: Hook[];
   onEdit: (hook: Hook) => void;
   onDelete: (hookId: string, scope: "user" | "project") => void;
+  onViewDetail?: (hook: Hook) => void;
 }
 
-export function HookList({ hooks, onEdit, onDelete }: HookListProps) {
+export function HookList({ hooks, onEdit, onDelete, onViewDetail }: HookListProps) {
   if (hooks.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
@@ -38,6 +39,7 @@ export function HookList({ hooks, onEdit, onDelete }: HookListProps) {
                 hook={hook}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onViewDetail={onViewDetail}
               />
             ))}
           </div>
@@ -59,6 +61,7 @@ export function HookList({ hooks, onEdit, onDelete }: HookListProps) {
                 hook={hook}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onViewDetail={onViewDetail}
               />
             ))}
           </div>

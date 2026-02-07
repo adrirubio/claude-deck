@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Pencil, Trash2, User, FolderOpen, Bot, Wrench, Cpu, Puzzle, Info, Shield, Brain, Zap, FileText } from "lucide-react";
+import { Pencil, Trash2, User, FolderOpen, Bot, Wrench, Cpu, Puzzle, Shield, Brain, Zap, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -13,6 +13,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -28,6 +29,8 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
+import { CLICKABLE_CARD, MODAL_SIZES } from "@/lib/constants";
 import { type Agent, type AgentScope, PERMISSION_MODES, MEMORY_SCOPES } from "@/types/agents";
 
 interface AgentListProps {
@@ -62,25 +65,25 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
   const isPluginAgent = (agent: Agent) => agent.scope.startsWith("plugin:");
 
   const renderAgentCard = (agent: Agent) => (
-    <Card key={`${agent.scope}-${agent.name}`} className="hover:bg-muted/50 transition-colors">
+    <Card
+      key={`${agent.scope}-${agent.name}`}
+      className={CLICKABLE_CARD}
+      tabIndex={0}
+      onClick={() => handleViewDetails(agent)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          handleViewDetails(agent);
+        }
+      }}
+    >
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
-          <button
-            className="flex items-center gap-2 text-left hover:text-primary transition-colors"
-            onClick={() => handleViewDetails(agent)}
-          >
+          <div className="flex items-center gap-2">
             <Bot className="h-5 w-5 text-primary" />
             <CardTitle className="text-lg">{agent.name}</CardTitle>
-          </button>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => handleViewDetails(agent)}
-              title="View details"
-            >
-              <Info className="h-4 w-4" />
-            </Button>
+          </div>
+          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
             {/* Only show edit/delete for non-plugin agents */}
             {!isPluginAgent(agent) && (
               <>
@@ -88,7 +91,7 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
                   variant="ghost"
                   size="icon"
                   onClick={() => onEdit(agent)}
-                  title="Edit agent"
+                  aria-label={`Edit ${agent.name}`}
                 >
                   <Pencil className="h-4 w-4" />
                 </Button>
@@ -99,7 +102,7 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
                       variant="ghost"
                       size="icon"
                       className="text-destructive hover:text-destructive"
-                      title="Delete agent"
+                      aria-label={`Delete ${agent.name}`}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -243,7 +246,7 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
 
       {/* Agent Details Dialog */}
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
-        <DialogContent className="sm:max-w-[600px] max-h-[80vh]">
+        <DialogContent className={`${MODAL_SIZES.MD} flex flex-col`}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Bot className="h-5 w-5" />
@@ -255,7 +258,7 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
           </DialogHeader>
 
           {selectedAgent && (
-            <ScrollArea className="max-h-[55vh]">
+            <ScrollArea className="flex-1 max-h-[60vh]">
               <div className="space-y-4 pr-4">
                 {/* Scope & Model */}
                 <div className="flex flex-wrap gap-2">
@@ -282,9 +285,13 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
                     <FileText className="h-4 w-4" />
                     System Prompt
                   </h4>
-                  <div className="bg-muted/50 rounded-lg p-3 text-sm whitespace-pre-wrap font-mono text-xs max-h-[150px] overflow-auto">
-                    {selectedAgent.prompt || "No prompt defined"}
-                  </div>
+                  {selectedAgent.prompt ? (
+                    <div className="rounded-lg border p-4">
+                      <MarkdownRenderer content={selectedAgent.prompt} />
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground italic">No prompt defined</p>
+                  )}
                 </div>
 
                 {/* Tools */}
@@ -392,6 +399,23 @@ export function AgentList({ agents, onEdit, onDelete }: AgentListProps) {
               </div>
             </ScrollArea>
           )}
+
+          <DialogFooter>
+            {selectedAgent && !isPluginAgent(selectedAgent) && (
+              <Button
+                onClick={() => {
+                  setDetailsOpen(false);
+                  onEdit(selectedAgent);
+                }}
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setDetailsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

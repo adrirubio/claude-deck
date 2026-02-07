@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
 import { RefreshButton } from '../../components/shared/RefreshButton';
+import { MODAL_SIZES } from '@/lib/constants';
 import { CommandList } from './CommandList';
 import { CommandEditor } from './CommandEditor';
 import { CommandWizard } from './CommandWizard';
@@ -148,7 +149,7 @@ export function CommandsPage() {
 
       {/* Command Editor Dialog */}
       <Dialog open={showEditor} onOpenChange={setShowEditor}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className={`${MODAL_SIZES.LG} overflow-y-auto`}>
           <DialogHeader>
             <DialogTitle>Edit Command</DialogTitle>
             <DialogDescription>Modify command settings and content</DialogDescription>

@@ -28,6 +28,8 @@ import {
   Code,
   FolderOpen,
 } from "lucide-react";
+import { MODAL_SIZES } from "@/lib/constants";
+import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 
 interface PluginDetailsProps {
   plugin: Plugin | null;
@@ -105,7 +107,7 @@ export function PluginDetails({ plugin, open, onOpenChange, onUninstall, onToggl
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className={`${MODAL_SIZES.MD} overflow-y-auto`}>
         <DialogHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 flex-wrap">
@@ -266,7 +268,7 @@ export function PluginDetails({ plugin, open, onOpenChange, onUninstall, onToggl
                   <h3 className="font-semibold text-sm">Documentation</h3>
                 </div>
                 <div className="border rounded-lg p-4 bg-muted/30 max-h-64 overflow-y-auto">
-                  <pre className="text-sm whitespace-pre-wrap font-mono">{plugin.readme}</pre>
+                  <MarkdownRenderer content={plugin.readme} />
                 </div>
               </div>
             )}

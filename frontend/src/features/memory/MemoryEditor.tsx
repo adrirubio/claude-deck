@@ -9,8 +9,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { MarkdownPreviewToggle } from "@/components/shared/MarkdownPreviewToggle";
+import { MODAL_SIZES } from "@/lib/constants";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -197,7 +198,7 @@ Personal preferences for this project (not committed to git).
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
-      <DialogContent className="max-w-4xl h-[80vh] flex flex-col">
+      <DialogContent className={`${MODAL_SIZES.LG} h-[80vh] flex flex-col`}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
@@ -241,12 +242,13 @@ Personal preferences for this project (not committed to git).
               <span className="text-muted-foreground">Loading...</span>
             </div>
           ) : (
-            <Textarea
+            <MarkdownPreviewToggle
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="flex-1 h-full min-h-[400px] font-mono text-sm resize-none"
+              onChange={setContent}
               placeholder="Enter markdown content..."
+              minHeight="400px"
               disabled={file.readonly}
+              defaultTab={file.readonly ? "preview" : "edit"}
             />
           )}
         </div>

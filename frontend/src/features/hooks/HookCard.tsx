@@ -10,15 +10,18 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { Hook } from "@/types/hooks";
 import { AGENT_MODELS } from "@/types/hooks";
+import { CLICKABLE_CARD } from "@/lib/constants";
 
 interface HookCardProps {
   hook: Hook;
   onEdit: (hook: Hook) => void;
   onDelete: (hookId: string, scope: "user" | "project") => void;
+  onViewDetail?: (hook: Hook) => void;
 }
 
-export function HookCard({ hook, onEdit, onDelete }: HookCardProps) {
-  const handleDelete = () => {
+export function HookCard({ hook, onEdit, onDelete, onViewDetail }: HookCardProps) {
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (
       confirm(
         `Are you sure you want to delete this ${hook.type} hook for ${hook.event}?`
@@ -56,7 +59,17 @@ export function HookCard({ hook, onEdit, onDelete }: HookCardProps) {
   };
 
   return (
-    <Card>
+    <Card
+      className={CLICKABLE_CARD}
+      tabIndex={0}
+      onClick={() => onViewDetail?.(hook)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onViewDetail?.(hook);
+        }
+      }}
+    >
       <CardHeader>
         <div className="flex items-start justify-between">
           <div className="space-y-1">
@@ -122,7 +135,7 @@ export function HookCard({ hook, onEdit, onDelete }: HookCardProps) {
               <div className="text-sm font-medium text-muted-foreground">
                 {hook.type === "agent" ? "Agent Prompt:" : "Prompt:"}
               </div>
-              <p className="text-sm bg-muted px-3 py-2 rounded whitespace-pre-wrap">
+              <p className="text-sm bg-muted px-3 py-2 rounded whitespace-pre-wrap line-clamp-3">
                 {hook.prompt}
               </p>
             </div>
@@ -144,7 +157,7 @@ export function HookCard({ hook, onEdit, onDelete }: HookCardProps) {
             </div>
           )}
 
-          <div className="flex gap-2 pt-2">
+          <div className="flex gap-2 pt-2" onClick={(e) => e.stopPropagation()}>
             <Button
               variant="outline"
               size="sm"

@@ -348,6 +348,7 @@ export function PluginsPage() {
           <AllAvailablePlugins
             installedPlugins={plugins}
             onInstall={handleInstall}
+            onViewDetails={handleViewDetails}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
           />

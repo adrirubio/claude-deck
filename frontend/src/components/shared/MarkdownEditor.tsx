@@ -5,6 +5,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Badge } from '../ui/badge';
+import { MarkdownPreviewToggle } from './MarkdownPreviewToggle';
 import { AVAILABLE_TOOLS } from '../../types/commands';
 
 interface MarkdownEditorProps {
@@ -121,10 +122,9 @@ export function MarkdownEditor({
               </CardContent>
             </Card>
           )}
-          <textarea
+          <MarkdownPreviewToggle
             value={content}
-            onChange={(e) => onContentChange(e.target.value)}
-            className="w-full h-80 p-4 font-mono text-sm border rounded-md resize-y focus:outline-none focus:ring-2 focus:ring-primary bg-background text-foreground"
+            onChange={onContentChange}
             placeholder="Write your command instructions here...
 
 Usage: /command-name <args>
@@ -134,6 +134,7 @@ You can use markdown formatting:
 - *Italic text*
 - `Code blocks`
 - Lists and more"
+            minHeight="320px"
           />
         </CardContent>
       </Card>

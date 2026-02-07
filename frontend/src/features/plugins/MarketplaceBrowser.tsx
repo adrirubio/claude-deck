@@ -13,7 +13,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Download, Search, Store, AlertCircle, Trash2, CheckCircle, Info, ExternalLink, Loader2, Terminal, Bot, Puzzle, Server } from "lucide-react";
+import { Download, Search, Store, AlertCircle, Trash2, Package, ExternalLink, Loader2, Terminal, Bot, Puzzle, Server } from "lucide-react";
+import { CLICKABLE_CARD, MODAL_SIZES } from "@/lib/constants";
+import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 
 interface MarketplaceBrowserProps {
   marketplaces: MarketplaceResponse[];
@@ -209,40 +211,39 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
           {filteredPlugins.map((plugin) => {
             const installed = isInstalled(plugin.name);
             return (
-              <Card key={plugin.name} className="hover:border-primary/50 transition-colors">
+              <Card
+                key={plugin.name}
+                className={CLICKABLE_CARD}
+                tabIndex={0}
+                onClick={() => handlePreview(plugin)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handlePreview(plugin);
+                  }
+                }}
+              >
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center gap-2">
-                    {installed ? (
-                      <CheckCircle className="h-4 w-4 text-green-500" />
-                    ) : (
-                      <Download className="h-4 w-4" />
-                    )}
+                    <Package className="h-4 w-4" />
                     {plugin.name}
+                  </CardTitle>
+                  <CardDescription className="flex items-center gap-2">
+                    {plugin.version && <span>v{plugin.version}</span>}
                     {installed && (
-                      <Badge variant="secondary" className="ml-auto">
+                      <Badge variant="secondary">
                         Installed
                       </Badge>
                     )}
-                  </CardTitle>
-                  {plugin.version && (
-                    <CardDescription>v{plugin.version}</CardDescription>
-                  )}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   {plugin.description && (
-                    <p className="text-sm text-muted-foreground mb-4 line-clamp-3">
+                    <p className="text-sm text-muted-foreground mb-4 line-clamp-2">
                       {plugin.description}
                     </p>
                   )}
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handlePreview(plugin)}
-                    >
-                      <Info className="h-4 w-4 mr-1" />
-                      Info
-                    </Button>
+                  <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                     {installed ? (
                       <Button
                         className="flex-1"
@@ -273,7 +274,7 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
 
       {/* Plugin Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh]">
+        <DialogContent className={MODAL_SIZES.MD}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Puzzle className="h-5 w-5" />
@@ -348,9 +349,7 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
                 {previewDetails?.readme && (
                   <div>
                     <h4 className="text-sm font-medium mb-2">README</h4>
-                    <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3 whitespace-pre-wrap font-mono text-xs max-h-[300px] overflow-auto">
-                      {previewDetails.readme}
-                    </div>
+                    <MarkdownRenderer content={previewDetails.readme} />
                   </div>
                 )}
               </div>

@@ -35,6 +35,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { apiClient, buildEndpoint } from "@/lib/api";
+import { MODAL_SIZES } from "@/lib/constants";
+import { MarkdownRenderer } from "@/components/shared/MarkdownRenderer";
 import { type Skill, type SkillInstallResult } from "@/types/agents";
 import { toast } from "sonner";
 
@@ -162,7 +164,7 @@ export function SkillDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
+      <DialogContent className={`${MODAL_SIZES.MD} flex flex-col`}>
         <DialogHeader>
           <div className="flex items-center gap-3">
             <Sparkles className="h-6 w-6 text-amber-500 flex-shrink-0" />
@@ -495,10 +497,8 @@ export function SkillDetailDialog({
 
               {/* Skill Content */}
               {fullSkill?.content ? (
-                <div className="rounded-lg border bg-muted/50 p-4">
-                  <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-foreground">
-                    {fullSkill.content}
-                  </pre>
+                <div className="rounded-lg border p-4">
+                  <MarkdownRenderer content={fullSkill.content} />
                 </div>
               ) : (
                 !loading && (

@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MarkdownPreviewToggle } from "@/components/shared/MarkdownPreviewToggle";
+import { MODAL_SIZES } from "@/lib/constants";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -156,7 +157,7 @@ export function AgentEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className={`${MODAL_SIZES.LG} overflow-y-auto`}>
         <DialogHeader>
           <DialogTitle>Edit Agent: {agent.name}</DialogTitle>
           <DialogDescription>
@@ -396,13 +397,12 @@ export function AgentEditor({
 
           {/* System Prompt */}
           <div className="space-y-2">
-            <Label htmlFor="prompt">System Prompt</Label>
-            <Textarea
-              id="prompt"
+            <Label>System Prompt</Label>
+            <MarkdownPreviewToggle
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={setPrompt}
               placeholder="The system prompt that defines this agent's behavior..."
-              className="min-h-[300px] font-mono text-sm"
+              minHeight="300px"
             />
             <p className="text-xs text-muted-foreground">
               This is the markdown content of the agent definition file

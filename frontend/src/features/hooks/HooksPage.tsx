@@ -17,6 +17,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { HookList } from "./HookList";
 import { HookEditor } from "./HookEditor";
+import { HookDetailDialog } from "./HookDetailDialog";
 import { HookWizard } from "./HookWizard";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import { apiClient, buildEndpoint } from "@/lib/api";
@@ -39,6 +40,8 @@ export function HooksPage() {
   const [editingHook, setEditingHook] = useState<Hook | null>(null);
   const [showEditor, setShowEditor] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  const [detailHook, setDetailHook] = useState<Hook | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
 
   const fetchHooks = useCallback(async () => {
     setLoading(true);
@@ -77,6 +80,11 @@ export function HooksPage() {
       toast.error(err instanceof Error ? err.message : "Failed to create hook");
       throw err;
     }
+  };
+
+  const handleViewDetail = (hook: Hook) => {
+    setDetailHook(hook);
+    setShowDetail(true);
   };
 
   const handleEdit = (hook: Hook) => {
@@ -252,6 +260,7 @@ export function HooksPage() {
                       hooks={getHooksByEvent(event.name)}
                       onEdit={handleEdit}
                       onDelete={handleDelete}
+                      onViewDetail={handleViewDetail}
                     />
                   )}
                 </div>
@@ -260,6 +269,14 @@ export function HooksPage() {
           </Tabs>
         </CardContent>
       </Card>
+
+      {/* Hook Detail Dialog */}
+      <HookDetailDialog
+        hook={detailHook}
+        open={showDetail}
+        onOpenChange={setShowDetail}
+        onEdit={handleEdit}
+      />
 
       {/* Hook Editor Dialog */}
       <HookEditor

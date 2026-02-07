@@ -14,13 +14,13 @@ import {
 } from "@/components/ui/select";
 import {
   Package,
-  Info,
   Search,
   RefreshCw,
   Power,
   PowerOff,
   ArrowUpCircle,
 } from "lucide-react";
+import { CLICKABLE_CARD } from "@/lib/constants";
 
 interface InstalledPluginsProps {
   plugins: Plugin[];
@@ -225,9 +225,17 @@ export function InstalledPlugins({
             return (
               <Card
                 key={`${plugin.name}-${plugin.source}`}
-                className={`hover:border-primary/50 transition-colors ${
+                className={`${CLICKABLE_CARD} ${
                   plugin.enabled === false ? "opacity-60" : ""
                 } ${hasUpdate ? "border-orange-500/50" : ""}`}
+                tabIndex={0}
+                onClick={() => onViewDetails(plugin)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onViewDetails(plugin);
+                  }
+                }}
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">
@@ -264,7 +272,7 @@ export function InstalledPlugins({
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                       {plugin.category && (
                         <Badge variant="outline">{plugin.category}</Badge>
                       )}
@@ -301,16 +309,7 @@ export function InstalledPlugins({
                       )}
                     </div>
                   )}
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => onViewDetails(plugin)}
-                    >
-                      <Info className="h-4 w-4 mr-2" />
-                      Details
-                    </Button>
+                  <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                     {hasUpdate && (
                       <Button
                         variant="default"

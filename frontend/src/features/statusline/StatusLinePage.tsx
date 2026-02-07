@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/collapsible";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import { apiClient } from "@/lib/api";
+import { CLICKABLE_CARD } from "@/lib/constants";
 import { toast } from "sonner";
 import { TerminalPreview } from "./TerminalPreview";
 import type {
@@ -294,7 +295,7 @@ export function StatusLinePage() {
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {presets.map((preset) => (
-              <Card key={preset.id} className="border-2 hover:border-primary/50 transition-colors">
+              <Card key={preset.id} className={CLICKABLE_CARD}>
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
                     <div>
@@ -357,7 +358,7 @@ export function StatusLinePage() {
             {powerlinePresets.map((preset) => (
               <Card
                 key={preset.id}
-                className="border-2 hover:border-purple-500/50 transition-colors"
+                className={CLICKABLE_CARD}
               >
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">

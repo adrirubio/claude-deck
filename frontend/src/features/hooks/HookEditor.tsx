@@ -28,6 +28,8 @@ import {
   type HookType,
 } from "@/types/hooks";
 import { ChevronDown, ChevronRight, Info, Terminal, MessageSquare, Bot } from "lucide-react";
+import { MarkdownPreviewToggle } from "@/components/shared/MarkdownPreviewToggle";
+import { MODAL_SIZES } from "@/lib/constants";
 
 interface HookEditorProps {
   hook: Hook | null;
@@ -139,7 +141,7 @@ export function HookEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className={MODAL_SIZES.SM}>
         <DialogHeader>
           <DialogTitle>Edit Hook</DialogTitle>
           <DialogDescription>
@@ -305,16 +307,14 @@ export function HookEditor({
           {/* Prompt input (for both prompt and agent types) */}
           {(type === "prompt" || type === "agent") && (
             <div className="space-y-2">
-              <Label htmlFor="prompt">Prompt</Label>
-              <textarea
-                id="prompt"
+              <Label>Prompt</Label>
+              <MarkdownPreviewToggle
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={4}
-                className="w-full px-3 py-2 border rounded-md text-sm"
-                placeholder={type === "agent" 
+                onChange={setPrompt}
+                placeholder={type === "agent"
                   ? "Instructions for the agent to execute..."
                   : "Remember to follow security best practices..."}
+                minHeight="150px"
               />
               <p className="text-sm text-muted-foreground">
                 {type === "prompt" && "This prompt will be appended to Claude's context when the hook is triggered."}

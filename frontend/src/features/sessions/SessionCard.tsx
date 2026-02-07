@@ -5,6 +5,7 @@ import { ExternalLink } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { useNavigate } from 'react-router-dom'
 import type { SessionSummary } from '@/types/sessions'
+import { CLICKABLE_CARD } from '@/lib/constants'
 
 interface Props {
   session: SessionSummary
@@ -34,7 +35,7 @@ export function SessionCard({ session }: Props) {
 
   return (
     <Card
-      className="cursor-pointer hover:bg-accent transition-colors group"
+      className={`${CLICKABLE_CARD} group`}
       onClick={handleClick}
       onAuxClick={handleClick}
     >
