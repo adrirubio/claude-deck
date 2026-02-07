@@ -273,7 +273,7 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
 
       {/* Plugin Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="sm:max-w-[600px] max-h-[80vh]">
+        <DialogContent className="sm:max-w-[700px] max-h-[85vh]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Puzzle className="h-5 w-5" />
@@ -292,7 +292,7 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <ScrollArea className="max-h-[50vh]">
+            <ScrollArea className="max-h-[60vh]">
               <div className="space-y-4 pr-4">
                 {/* Description */}
                 <p className="text-sm text-muted-foreground">
@@ -348,7 +348,7 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
                 {previewDetails?.readme && (
                   <div>
                     <h4 className="text-sm font-medium mb-2">README</h4>
-                    <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3 whitespace-pre-wrap font-mono text-xs max-h-[200px] overflow-auto">
+                    <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3 whitespace-pre-wrap font-mono text-xs max-h-[300px] overflow-auto">
                       {previewDetails.readme}
                     </div>
                   </div>
