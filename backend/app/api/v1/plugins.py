@@ -133,6 +133,27 @@ def browse_marketplace(name: str):
         )
 
 
+@router.get("/plugins/marketplace/{marketplace_name}/plugin/{plugin_name}")
+def get_marketplace_plugin_details(marketplace_name: str, plugin_name: str):
+    """
+    Get detailed information about a plugin from a marketplace.
+
+    Returns README content, components, GitHub links, etc.
+    """
+    try:
+        service = PluginService()
+        details = service.get_marketplace_plugin_details(marketplace_name, plugin_name)
+        if details is None:
+            raise HTTPException(status_code=404, detail="Plugin not found in marketplace")
+        return details
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get plugin details: {str(e)}"
+        )
+
+
 @router.post("/plugins/marketplace/{name}/update", status_code=200)
 def update_marketplace(name: str):
     """

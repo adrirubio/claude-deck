@@ -4,13 +4,36 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Download, Search, Store, AlertCircle, Trash2, CheckCircle } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Download, Search, Store, AlertCircle, Trash2, CheckCircle, Info, ExternalLink, Loader2, Terminal, Bot, Puzzle, Server } from "lucide-react";
 
 interface MarketplaceBrowserProps {
   marketplaces: MarketplaceResponse[];
   installedPlugins: Plugin[];
   onInstall: (plugin: MarketplacePlugin, marketplaceName: string) => void;
   onUninstall: (name: string) => void;
+}
+
+interface PluginDetails {
+  name: string;
+  description?: string;
+  version?: string;
+  author?: { name: string; email?: string } | string;
+  category?: string;
+  homepage?: string;
+  github_url?: string;
+  readme?: string;
+  components?: { type: string; name: string }[];
+  has_mcp?: boolean;
+  has_lsp?: boolean;
 }
 
 export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, onUninstall }: MarketplaceBrowserProps) {
@@ -20,6 +43,12 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Preview dialog state
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPlugin, setPreviewPlugin] = useState<MarketplacePlugin | null>(null);
+  const [previewDetails, setPreviewDetails] = useState<PluginDetails | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   // Check if a plugin is already installed
   const isInstalled = (pluginName: string) => {
@@ -64,6 +93,28 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
         setLoading(false);
       });
   }, [selectedMarketplace, marketplaces]);
+
+  // Handle preview dialog
+  const handlePreview = async (plugin: MarketplacePlugin) => {
+    setPreviewPlugin(plugin);
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    setPreviewDetails(null);
+    
+    try {
+      const response = await fetch(
+        `/api/v1/plugins/marketplace/${selectedMarketplace}/plugin/${plugin.name}`
+      );
+      if (response.ok) {
+        const details = await response.json();
+        setPreviewDetails(details);
+      }
+    } catch {
+      // Silently fail - we still show basic info
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   // Filter plugins based on search query
   useEffect(() => {
@@ -183,30 +234,158 @@ export function MarketplaceBrowser({ marketplaces, installedPlugins, onInstall, 
                       {plugin.description}
                     </p>
                   )}
-                  {installed ? (
+                  <div className="flex gap-2">
                     <Button
-                      className="w-full"
-                      variant="destructive"
-                      onClick={() => onUninstall(plugin.name)}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePreview(plugin)}
                     >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Uninstall
+                      <Info className="h-4 w-4 mr-1" />
+                      Info
                     </Button>
-                  ) : (
-                    <Button
-                      className="w-full"
-                      onClick={() => selectedMarketplace && onInstall(plugin, selectedMarketplace)}
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Install
-                    </Button>
-                  )}
+                    {installed ? (
+                      <Button
+                        className="flex-1"
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => onUninstall(plugin.name)}
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Uninstall
+                      </Button>
+                    ) : (
+                      <Button
+                        className="flex-1"
+                        size="sm"
+                        onClick={() => selectedMarketplace && onInstall(plugin, selectedMarketplace)}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Install
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             );
           })}
         </div>
       )}
+
+      {/* Plugin Preview Dialog */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Puzzle className="h-5 w-5" />
+              {previewPlugin?.name}
+            </DialogTitle>
+            <DialogDescription>
+              {previewDetails?.category && (
+                <Badge variant="outline" className="mr-2">{previewDetails.category}</Badge>
+              )}
+              {previewDetails?.version && `v${previewDetails.version}`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <ScrollArea className="max-h-[50vh]">
+              <div className="space-y-4 pr-4">
+                {/* Description */}
+                <p className="text-sm text-muted-foreground">
+                  {previewDetails?.description || previewPlugin?.description}
+                </p>
+
+                {/* Author */}
+                {previewDetails?.author && (
+                  <div className="text-sm">
+                    <span className="font-medium">Author: </span>
+                    {typeof previewDetails.author === "string"
+                      ? previewDetails.author
+                      : previewDetails.author.name}
+                  </div>
+                )}
+
+                {/* Components */}
+                {previewDetails?.components && previewDetails.components.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2">Included Components</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {previewDetails.components.map((c, i) => (
+                        <Badge key={i} variant="secondary" className="flex items-center gap-1">
+                          {c.type === "command" && <Terminal className="h-3 w-3" />}
+                          {c.type === "agent" && <Bot className="h-3 w-3" />}
+                          {c.type === "skill" && <Puzzle className="h-3 w-3" />}
+                          {c.name}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Features */}
+                {(previewDetails?.has_mcp || previewDetails?.has_lsp) && (
+                  <div className="flex gap-2">
+                    {previewDetails.has_mcp && (
+                      <Badge variant="outline" className="flex items-center gap-1">
+                        <Server className="h-3 w-3" />
+                        MCP Server
+                      </Badge>
+                    )}
+                    {previewDetails.has_lsp && (
+                      <Badge variant="outline" className="flex items-center gap-1">
+                        <Terminal className="h-3 w-3" />
+                        LSP Server
+                      </Badge>
+                    )}
+                  </div>
+                )}
+
+                {/* README */}
+                {previewDetails?.readme && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-2">README</h4>
+                    <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-3 whitespace-pre-wrap font-mono text-xs max-h-[200px] overflow-auto">
+                      {previewDetails.readme}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          )}
+
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            {previewDetails?.homepage && (
+              <a
+                href={previewDetails.homepage}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 w-full sm:w-auto"
+              >
+                <ExternalLink className="h-4 w-4" />
+                View on GitHub
+              </a>
+            )}
+            {previewPlugin && !isInstalled(previewPlugin.name) && (
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => {
+                  if (selectedMarketplace && previewPlugin) {
+                    onInstall(previewPlugin, selectedMarketplace);
+                    setPreviewOpen(false);
+                  }
+                }}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Install Plugin
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

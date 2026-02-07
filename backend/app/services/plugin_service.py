@@ -1180,6 +1180,108 @@ class PluginService:
         marketplace_data = read_json_file(marketplace_json) or {}
         return marketplace_data.get("plugins", [])
 
+    def get_marketplace_plugin_details(self, marketplace_name: str, plugin_name: str) -> Optional[dict]:
+        """
+        Get detailed information about a plugin from a marketplace.
+
+        Reads the plugin's README, metadata, and constructs GitHub links.
+
+        Args:
+            marketplace_name: Name of the marketplace
+            plugin_name: Name of the plugin
+
+        Returns:
+            Dict with plugin details or None if not found
+        """
+        marketplace_dir = get_marketplaces_dir() / marketplace_name
+        marketplace_json = marketplace_dir / ".claude-plugin" / "marketplace.json"
+        
+        marketplace_data = read_json_file(marketplace_json) or {}
+        plugins = marketplace_data.get("plugins", [])
+        
+        # Find the plugin in marketplace
+        plugin_info = None
+        for p in plugins:
+            if p.get("name") == plugin_name:
+                plugin_info = p
+                break
+        
+        if not plugin_info:
+            return None
+        
+        # Get the plugin source path
+        source_path = plugin_info.get("source", "")
+        if source_path.startswith("./"):
+            source_path = source_path[2:]
+        
+        plugin_dir = marketplace_dir / source_path
+        
+        # Read README if available
+        readme_content = None
+        for readme_name in ["README.md", "readme.md", "README.MD"]:
+            readme_path = plugin_dir / readme_name
+            if readme_path.exists():
+                try:
+                    with open(readme_path, "r", encoding="utf-8") as f:
+                        readme_content = f.read()
+                    break
+                except Exception:
+                    pass
+        
+        # Try to read plugin.json for more details
+        plugin_json_path = plugin_dir / ".claude-plugin" / "plugin.json"
+        plugin_json_data = read_json_file(plugin_json_path) or {}
+        
+        # Get known marketplace info for GitHub link
+        known_file = get_known_marketplaces_file()
+        known_data = read_json_file(known_file) or {}
+        marketplace_info = known_data.get(marketplace_name, {})
+        repo = marketplace_info.get("source", {}).get("repo", "")
+        
+        # Construct GitHub URL
+        github_url = None
+        if repo:
+            github_url = f"https://github.com/{repo}"
+            if source_path:
+                github_url = f"https://github.com/{repo}/tree/main/{source_path}"
+        
+        # Use homepage from plugin_info if available
+        homepage = plugin_info.get("homepage") or github_url
+        
+        # Scan for components
+        components = []
+        commands_dir = plugin_dir / "commands"
+        if commands_dir.exists():
+            for f in commands_dir.iterdir():
+                if f.suffix == ".md":
+                    components.append({"type": "command", "name": f.stem})
+        
+        agents_dir = plugin_dir / "agents"
+        if agents_dir.exists():
+            for f in agents_dir.iterdir():
+                if f.suffix == ".md":
+                    components.append({"type": "agent", "name": f.stem})
+        
+        skills_dir = plugin_dir / "skills"
+        if skills_dir.exists():
+            for f in skills_dir.iterdir():
+                if f.is_dir() or f.suffix == ".md":
+                    components.append({"type": "skill", "name": f.stem if f.is_file() else f.name})
+        
+        return {
+            "name": plugin_info.get("name"),
+            "description": plugin_info.get("description"),
+            "version": plugin_info.get("version") or plugin_json_data.get("version"),
+            "author": plugin_info.get("author") or plugin_json_data.get("author"),
+            "category": plugin_info.get("category"),
+            "homepage": homepage,
+            "github_url": github_url,
+            "readme": readme_content,
+            "components": components,
+            "has_mcp": bool(plugin_info.get("mcpServers") or plugin_json_data.get("mcpServers")),
+            "has_lsp": bool(plugin_info.get("lspServers") or plugin_json_data.get("lspServers")),
+        }
+
     # =========================================================================
     # Plugin Update Methods
     # =========================================================================
