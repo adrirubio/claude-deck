@@ -91,7 +91,7 @@ export function PluginsPage() {
     setCheckingUpdates(true);
     try {
       const data = await apiClient<{ plugins: PluginUpdateInfo[]; outdated_count: number }>(
-        "/api/v1/plugins/updates"
+        "plugins/updates"
       );
       const newUpdateInfo = new Map<string, PluginUpdateInfo>();
       data.plugins.forEach((info) => {
@@ -140,7 +140,7 @@ export function PluginsPage() {
         message: string;
         updated_count: number;
         failed_count: number;
-      }>("/api/v1/plugins/update-all", { method: "POST" });
+}>("plugins/update-all", { method: "POST" });
       
       if (data.updated_count > 0) {
         toast.success(`Updated ${data.updated_count} plugin(s)`);
