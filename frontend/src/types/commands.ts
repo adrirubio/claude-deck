@@ -3,7 +3,7 @@
 export interface SlashCommand {
   name: string;
   path: string;
-  scope: 'user' | 'project';
+  scope: string;
   description?: string;
   allowed_tools?: string[];
   content: string;

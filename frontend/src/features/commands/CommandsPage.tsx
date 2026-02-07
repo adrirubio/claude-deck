@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Terminal } from 'lucide-react';
-import { Button } from '../../components/ui/button';
-import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog';
-import { RefreshButton } from '../../components/shared/RefreshButton';
+import { Plus, Terminal, Search } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { RefreshButton } from '@/components/shared/RefreshButton';
 import { MODAL_SIZES } from '@/lib/constants';
 import { CommandList } from './CommandList';
 import { CommandEditor } from './CommandEditor';
 import { CommandWizard } from './CommandWizard';
-import type { SlashCommand } from '../../types/commands';
-import { apiClient, buildEndpoint } from '../../lib/api';
+import { CommandDetailDialog } from './CommandDetailDialog';
+import type { SlashCommand } from '@/types/commands';
+import { apiClient, buildEndpoint } from '@/lib/api';
 import { useProjectContext } from '@/contexts/ProjectContext';
 import { toast } from 'sonner';
 
@@ -21,6 +23,9 @@ export function CommandsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [detailCommand, setDetailCommand] = useState<SlashCommand | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
 
   const fetchCommands = useCallback(async () => {
     setLoading(true);
@@ -29,8 +34,9 @@ export function CommandsPage() {
       const endpoint = buildEndpoint("commands", { project_path: activeProject?.path });
       const data = await apiClient<{ commands: SlashCommand[] }>(endpoint);
       setCommands(data.commands || []);
-    } catch (err: any) {
-      setError(err.message || 'Failed to fetch commands');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to fetch commands';
+      setError(message);
       toast.error('Failed to fetch commands');
     } finally {
       setLoading(false);
@@ -41,9 +47,15 @@ export function CommandsPage() {
     fetchCommands();
   }, [fetchCommands]);
 
-  const handleSelectCommand = async (command: SlashCommand) => {
+  const handleViewDetail = (command: SlashCommand) => {
+    setDetailCommand(command);
+    setShowDetail(true);
+  };
+
+  const handleEditFromDetail = async (command: SlashCommand) => {
+    setShowDetail(false);
+    // Fetch full content for editor
     try {
-      // Fetch full command content
       const endpoint = buildEndpoint(
         `commands/${command.scope}/${command.path}`,
         { project_path: activeProject?.path }
@@ -51,7 +63,21 @@ export function CommandsPage() {
       const fullCommand = await apiClient<SlashCommand>(endpoint);
       setSelectedCommand(fullCommand);
       setShowEditor(true);
-    } catch (err: any) {
+    } catch {
+      toast.error('Failed to load command');
+    }
+  };
+
+  const handleEdit = async (command: SlashCommand) => {
+    try {
+      const endpoint = buildEndpoint(
+        `commands/${command.scope}/${command.path}`,
+        { project_path: activeProject?.path }
+      );
+      const fullCommand = await apiClient<SlashCommand>(endpoint);
+      setSelectedCommand(fullCommand);
+      setShowEditor(true);
+    } catch {
       toast.error('Failed to load command');
     }
   };
@@ -73,16 +99,12 @@ export function CommandsPage() {
       toast.success('Command saved successfully');
       setShowEditor(false);
       fetchCommands();
-    } catch (err: any) {
+    } catch {
       toast.error('Failed to save command');
     }
   };
 
   const handleDeleteCommand = async (command: SlashCommand) => {
-    if (!confirm(`Are you sure you want to delete the command "${command.name}"?`)) {
-      return;
-    }
-
     try {
       const endpoint = buildEndpoint(
         `commands/${command.scope}/${command.path}`,
@@ -91,8 +113,9 @@ export function CommandsPage() {
       await apiClient(endpoint, { method: "DELETE" });
       toast.success('Command deleted successfully');
       setShowEditor(false);
+      setShowDetail(false);
       fetchCommands();
-    } catch (err: any) {
+    } catch {
       toast.error('Failed to delete command');
     }
   };
@@ -105,6 +128,10 @@ export function CommandsPage() {
     setShowWizard(false);
     fetchCommands();
   };
+
+  const userCount = commands.filter((c) => c.scope === "user").length;
+  const projectCount = commands.filter((c) => c.scope === "project").length;
+  const pluginCount = commands.filter((c) => c.scope.startsWith("plugin:")).length;
 
   return (
     <div className="space-y-6">
@@ -140,11 +167,44 @@ export function CommandsPage() {
         </Card>
       )}
 
+      {/* Search Bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Search commands..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-9"
+        />
+      </div>
+
+      {/* Stats */}
+      {commands.length > 0 && (
+        <div className="text-sm text-muted-foreground">
+          {commands.length} command{commands.length !== 1 ? "s" : ""}
+          {userCount > 0 && ` \u00B7 ${userCount} user`}
+          {projectCount > 0 && ` \u00B7 ${projectCount} project`}
+          {pluginCount > 0 && ` \u00B7 ${pluginCount} plugin`}
+        </div>
+      )}
+
       {/* Commands List */}
       <CommandList
         commands={commands}
         loading={loading}
-        onSelectCommand={handleSelectCommand}
+        searchQuery={searchQuery}
+        onViewDetail={handleViewDetail}
+        onEdit={handleEdit}
+        onDelete={handleDeleteCommand}
+      />
+
+      {/* Command Detail Dialog */}
+      <CommandDetailDialog
+        command={detailCommand}
+        open={showDetail}
+        onOpenChange={setShowDetail}
+        onEdit={handleEditFromDetail}
+        onDelete={handleDeleteCommand}
       />
 
       {/* Command Editor Dialog */}

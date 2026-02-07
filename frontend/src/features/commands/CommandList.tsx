@@ -1,177 +1,145 @@
-import { FileText, Folder, FolderOpen } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import { Badge } from '../../components/ui/badge';
-import type { SlashCommand, CommandTreeNode } from '../../types/commands';
-import { useState } from 'react';
+import { User, FolderOpen, Puzzle, Loader2, Search } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import type { SlashCommand } from "@/types/commands";
+import { CommandCard } from "./CommandCard";
 
 interface CommandListProps {
   commands: SlashCommand[];
   loading: boolean;
-  onSelectCommand: (command: SlashCommand) => void;
+  searchQuery: string;
+  onViewDetail: (command: SlashCommand) => void;
+  onEdit: (command: SlashCommand) => void;
+  onDelete: (command: SlashCommand) => void;
 }
 
-export function CommandList({ commands, loading, onSelectCommand }: CommandListProps) {
-  const [expandedNamespaces, setExpandedNamespaces] = useState<Set<string>>(new Set());
-
-  // Build tree structure for commands
-  const buildTree = (commands: SlashCommand[]): { user: CommandTreeNode[]; project: CommandTreeNode[] } => {
-    const userTree: CommandTreeNode[] = [];
-    const projectTree: CommandTreeNode[] = [];
-
-    commands.forEach((command) => {
-      const tree = command.scope === 'user' ? userTree : projectTree;
-      const parts = command.name.split(':');
-
-      if (parts.length === 1) {
-        // Root level command
-        tree.push({
-          name: command.name,
-          path: command.path,
-          scope: command.scope,
-          isNamespace: false,
-          command,
-        });
-      } else {
-        // Namespaced command
-        const namespace = parts.slice(0, -1).join(':');
-        const commandName = parts[parts.length - 1];
-
-        let namespaceNode = tree.find((n) => n.isNamespace && n.name === namespace);
-        if (!namespaceNode) {
-          namespaceNode = {
-            name: namespace,
-            path: '',
-            scope: command.scope,
-            isNamespace: true,
-            children: [],
-          };
-          tree.push(namespaceNode);
-        }
-
-        namespaceNode.children!.push({
-          name: commandName,
-          path: command.path,
-          scope: command.scope,
-          isNamespace: false,
-          command,
-        });
-      }
-    });
-
-    return { user: userTree, project: projectTree };
-  };
-
-  const toggleNamespace = (namespace: string) => {
-    const newExpanded = new Set(expandedNamespaces);
-    if (newExpanded.has(namespace)) {
-      newExpanded.delete(namespace);
-    } else {
-      newExpanded.add(namespace);
-    }
-    setExpandedNamespaces(newExpanded);
-  };
-
-  const renderTreeNode = (node: CommandTreeNode, depth: number = 0) => {
-    if (node.isNamespace) {
-      const isExpanded = expandedNamespaces.has(node.name);
-      return (
-        <div key={node.name} style={{ paddingLeft: `${depth * 16}px` }}>
-          <div
-            className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer"
-            onClick={() => toggleNamespace(node.name)}
-          >
-            {isExpanded ? (
-              <FolderOpen className="h-4 w-4 text-primary" />
-            ) : (
-              <Folder className="h-4 w-4 text-primary" />
-            )}
-            <span className="font-medium">{node.name}</span>
-          </div>
-          {isExpanded && node.children && (
-            <div>
-              {node.children.map((child) => renderTreeNode(child, depth + 1))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div key={node.path} style={{ paddingLeft: `${depth * 16}px` }}>
-        <div
-          className="flex items-center gap-2 p-2 hover:bg-muted rounded cursor-pointer group"
-          onClick={() => node.command && onSelectCommand(node.command)}
-        >
-          <FileText className="h-4 w-4 text-muted-foreground group-hover:text-foreground" />
-          <span className="group-hover:text-foreground">{node.name}</span>
-        </div>
-      </div>
-    );
-  };
-
+export function CommandList({
+  commands,
+  loading,
+  searchQuery,
+  onViewDetail,
+  onEdit,
+  onDelete,
+}: CommandListProps) {
   if (loading) {
     return (
-      <Card>
-        <CardContent className="pt-6">
-          <p className="text-center text-muted-foreground">Loading commands...</p>
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
     );
   }
-
-  const { user, project } = buildTree(commands);
 
   if (commands.length === 0) {
     return (
-      <Card>
-        <CardContent className="pt-6">
-          <p className="text-center text-muted-foreground">
-            No commands found. Click "Add Command" to create one.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="text-center py-8 text-muted-foreground">
+        No commands found. Click "Add Command" to create one.
+      </div>
     );
   }
 
+  // Filter by search query
+  const query = searchQuery.toLowerCase();
+  const filtered = query
+    ? commands.filter(
+        (cmd) =>
+          cmd.name.toLowerCase().includes(query) ||
+          (cmd.description?.toLowerCase().includes(query)) ||
+          (cmd.content?.toLowerCase().includes(query))
+      )
+    : commands;
+
+  if (filtered.length === 0) {
+    return (
+      <div className="text-center py-8 text-muted-foreground">
+        <Search className="h-8 w-8 mx-auto mb-2 opacity-50" />
+        <p>No commands match "{searchQuery}"</p>
+      </div>
+    );
+  }
+
+  // Group by scope
+  const userCommands = filtered.filter((c) => c.scope === "user");
+  const projectCommands = filtered.filter((c) => c.scope === "project");
+  const pluginCommands = filtered.filter((c) => c.scope.startsWith("plugin:"));
+
+  // Group plugin commands by plugin name
+  const pluginGroups: Record<string, SlashCommand[]> = {};
+  pluginCommands.forEach((cmd) => {
+    const pluginName = cmd.scope.replace("plugin:", "");
+    if (!pluginGroups[pluginName]) {
+      pluginGroups[pluginName] = [];
+    }
+    pluginGroups[pluginName].push(cmd);
+  });
+
   return (
-    <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
+    <div className="space-y-6">
       {/* User Commands */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      {userCommands.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <User className="h-5 w-5" />
             User Commands
-            <Badge variant="secondary">{user.length}</Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {user.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No user commands</p>
-          ) : (
-            <div className="space-y-1">
-              {user.map((node) => renderTreeNode(node))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            <Badge variant="secondary">{userCommands.length}</Badge>
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {userCommands.map((cmd) => (
+              <CommandCard
+                key={`${cmd.scope}-${cmd.path}`}
+                command={cmd}
+                onViewDetail={onViewDetail}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Project Commands */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      {projectCommands.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <FolderOpen className="h-5 w-5" />
             Project Commands
-            <Badge variant="secondary">{project.length}</Badge>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {project.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No project commands</p>
-          ) : (
-            <div className="space-y-1">
-              {project.map((node) => renderTreeNode(node))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            <Badge variant="secondary">{projectCommands.length}</Badge>
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {projectCommands.map((cmd) => (
+              <CommandCard
+                key={`${cmd.scope}-${cmd.path}`}
+                command={cmd}
+                onViewDetail={onViewDetail}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Plugin Commands - Grouped by plugin */}
+      {Object.entries(pluginGroups).map(([pluginName, cmds]) => (
+        <div key={pluginName} className="space-y-3">
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Puzzle className="h-5 w-5 text-emerald-500" />
+            {pluginName}
+            <Badge variant="secondary">
+              {cmds.length} command{cmds.length !== 1 ? "s" : ""}
+            </Badge>
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {cmds.map((cmd) => (
+              <CommandCard
+                key={`${cmd.scope}-${cmd.path}`}
+                command={cmd}
+                onViewDetail={onViewDetail}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
