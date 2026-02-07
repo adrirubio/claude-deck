@@ -44,7 +44,7 @@ async def get_command(
     Get a specific command by scope and path.
 
     Args:
-        scope: Command scope (user or project)
+        scope: Command scope (user, project, or plugin:name)
         path: Relative path to command file
         project_path: Optional project path for project-scoped commands
 
@@ -54,8 +54,9 @@ async def get_command(
     Raises:
         HTTPException: 400 if invalid scope, 404 if command not found
     """
-    if scope not in ["user", "project"]:
-        raise HTTPException(status_code=400, detail=f"Invalid scope: {scope}. Must be 'user' or 'project'")
+    # Allow user, project, or plugin:* scopes
+    if scope not in ["user", "project"] and not scope.startswith("plugin:"):
+        raise HTTPException(status_code=400, detail=f"Invalid scope: {scope}. Must be 'user', 'project', or 'plugin:name'")
 
     try:
         command = CommandService.get_command(scope, path, project_path)

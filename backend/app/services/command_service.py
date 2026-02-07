@@ -244,7 +244,7 @@ class CommandService:
         Get a specific command by scope and path.
 
         Args:
-            scope: "user" or "project"
+            scope: "user", "project", or "plugin:name"
             path: Relative path to command file
             project_path: Optional project path for project-scoped commands
 
@@ -253,10 +253,17 @@ class CommandService:
         """
         if scope == "user":
             base_dir = get_claude_user_commands_dir()
-        else:
+            file_path = base_dir / path
+        elif scope == "project":
             base_dir = get_project_commands_dir(project_path)
+            file_path = base_dir / path
+        elif scope.startswith("plugin:"):
+            # Handle plugin commands
+            plugin_name = scope.replace("plugin:", "")
+            return CommandService._get_plugin_command(plugin_name, path)
+        else:
+            return None
 
-        file_path = base_dir / path
         if not file_path.exists():
             return None
 
@@ -266,17 +273,86 @@ class CommandService:
 
             command_name = CommandService._path_to_name(file_path, base_dir)
 
+            # Handle allowed-tools which can be string or list
+            allowed_tools = metadata.get("allowed-tools")
+            if isinstance(allowed_tools, str):
+                allowed_tools = [t.strip() for t in allowed_tools.split(",")]
+
             return SlashCommand(
                 name=command_name,
                 path=path,
                 scope=scope,
                 description=metadata.get("description"),
-                allowed_tools=metadata.get("allowed-tools"),
+                allowed_tools=allowed_tools,
                 content=markdown_content,
             )
         except Exception as e:
             print(f"Error reading command file {file_path}: {e}")
             return None
+
+    @staticmethod
+    def _get_plugin_command(plugin_name: str, path: str) -> Optional[SlashCommand]:
+        """
+        Get a command from a plugin directory.
+
+        Args:
+            plugin_name: Plugin name (e.g., "posthog")
+            path: Relative path to command file (e.g., "commands/docs.md")
+
+        Returns:
+            SlashCommand object or None if not found
+        """
+        installed_file = get_claude_user_plugins_dir() / "installed_plugins.json"
+        if not installed_file.exists():
+            return None
+
+        installed_data = read_json_file(installed_file)
+        if not installed_data or "plugins" not in installed_data:
+            return None
+
+        # Find matching plugin
+        for plugin_key, install_list in installed_data.get("plugins", {}).items():
+            key_plugin_name = plugin_key.split("@")[0] if "@" in plugin_key else plugin_key
+            if key_plugin_name != plugin_name:
+                continue
+
+            if not install_list or len(install_list) == 0:
+                continue
+
+            install_path = install_list[0].get("installPath")
+            if not install_path:
+                continue
+
+            plugin_dir = Path(install_path)
+            file_path = plugin_dir / path
+
+            if not file_path.exists():
+                return None
+
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                metadata, markdown_content = CommandService._parse_frontmatter(content)
+
+                command_name = file_path.stem
+
+                # Handle allowed-tools which can be string or list
+                allowed_tools = metadata.get("allowed-tools")
+                if isinstance(allowed_tools, str):
+                    allowed_tools = [t.strip() for t in allowed_tools.split(",")]
+
+                return SlashCommand(
+                    name=command_name,
+                    path=path,
+                    scope=f"plugin:{plugin_name}",
+                    description=metadata.get("description"),
+                    allowed_tools=allowed_tools,
+                    content=markdown_content,
+                )
+            except Exception as e:
+                print(f"Error reading plugin command {file_path}: {e}")
+                return None
+
+        return None
 
     @staticmethod
     def create_command(
