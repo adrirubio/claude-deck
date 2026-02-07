@@ -9,6 +9,7 @@ import {
   GitFork,
   Shield,
   EyeOff,
+  Search,
 } from "lucide-react";
 import {
   Card,
@@ -18,6 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import { SkillDetailDialog } from "./SkillDetailDialog";
@@ -45,6 +47,7 @@ export function SkillsPage() {
   const [depStatuses, setDepStatuses] = useState<
     Record<string, SkillDependencyStatus>
   >({});
+  const [searchQuery, setSearchQuery] = useState("");
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
@@ -95,10 +98,21 @@ export function SkillsPage() {
     fetchDeps();
   }, [skills, activeProject?.path]);
 
-  // Group skills by location
-  const userSkills = skills.filter((s) => s.location === "user");
-  const projectSkills = skills.filter((s) => s.location === "project");
-  const pluginSkills = skills.filter((s) => s.location.startsWith("plugin:"));
+  // Filter skills by search query
+  const query = searchQuery.toLowerCase();
+  const filteredSkills = query
+    ? skills.filter(
+        (s) =>
+          s.name.toLowerCase().includes(query) ||
+          s.description?.toLowerCase().includes(query) ||
+          s.content?.toLowerCase().includes(query)
+      )
+    : skills;
+
+  // Group filtered skills by location
+  const userSkills = filteredSkills.filter((s) => s.location === "user");
+  const projectSkills = filteredSkills.filter((s) => s.location === "project");
+  const pluginSkills = filteredSkills.filter((s) => s.location.startsWith("plugin:"));
 
   // Group plugin skills by plugin name
   const pluginGroups: Record<string, Skill[]> = {};
@@ -269,44 +283,35 @@ export function SkillsPage() {
         {/* Installed Tab */}
         <TabsContent value="installed">
           <div className="space-y-6">
-            {/* Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardDescription className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-amber-500" />
-                    Total Skills
-                  </CardDescription>
-                  <CardTitle className="text-3xl">{skills.length}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardDescription className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-primary" />
-                    User Skills
-                  </CardDescription>
-                  <CardTitle className="text-3xl">
-                    {userSkills.length}
-                  </CardTitle>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardDescription className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-secondary-foreground" />
-                    Plugin Skills
-                  </CardDescription>
-                  <CardTitle className="text-3xl">
-                    {pluginSkills.length}
-                  </CardTitle>
-                </CardHeader>
-              </Card>
+            {/* Search Bar */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search installed skills..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+              />
             </div>
+
+            {/* Stats */}
+            {skills.length > 0 && (
+              <div className="text-sm text-muted-foreground">
+                {skills.length} skill{skills.length !== 1 ? "s" : ""}
+                {userSkills.length > 0 && ` \u00B7 ${userSkills.length} user`}
+                {projectSkills.length > 0 && ` \u00B7 ${projectSkills.length} project`}
+                {pluginSkills.length > 0 && ` \u00B7 ${pluginSkills.length} plugin`}
+              </div>
+            )}
 
             {loading ? (
               <div className="text-center py-8 text-muted-foreground">
                 Loading...
+              </div>
+            ) : filteredSkills.length === 0 && searchQuery ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <Search className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p>No skills match "{searchQuery}"</p>
               </div>
             ) : skills.length === 0 ? (
               <Card>
