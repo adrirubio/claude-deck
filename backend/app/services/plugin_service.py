@@ -100,17 +100,29 @@ class PluginService:
 
         return PluginListResponse(plugins=plugins)
 
+    def _get_installed_plugins_map(self) -> Dict[str, Any]:
+        """
+        Read installed_plugins.json to get install paths.
+
+        Returns:
+            Dict mapping plugin key to install info
+        """
+        installed_file = get_claude_user_plugins_dir() / "installed_plugins.json"
+        if not installed_file.exists():
+            return {}
+
+        data = read_json_file(installed_file)
+        if not data or "plugins" not in data:
+            return {}
+
+        return data.get("plugins", {})
+
     def _get_enabled_plugins_from_settings(self) -> List[Plugin]:
         """
         Read enabled plugins from ~/.claude/settings.json.
 
-        The enabledPlugins setting has the format:
-        {
-            "enabledPlugins": {
-                "plugin-name@source": true/false,
-                ...
-            }
-        }
+        Also scans actual install directories from installed_plugins.json
+        to get component information (agents, commands, skills, etc).
 
         Returns:
             List of Plugin objects for enabled plugins
@@ -129,6 +141,9 @@ class PluginService:
         if not isinstance(enabled_plugins, dict):
             return plugins
 
+        # Get install paths from installed_plugins.json
+        installed_map = self._get_installed_plugins_map()
+
         for plugin_key, is_enabled in enabled_plugins.items():
             # Parse plugin key format: "name@source" or just "name"
             if "@" in plugin_key:
@@ -140,26 +155,107 @@ class PluginService:
             # Look up detailed info from hardcoded descriptions
             plugin_info = get_plugin_info(name)
 
-            if plugin_info:
-                plugins.append(
-                    Plugin(
-                        name=name,
-                        source=source,
-                        enabled=bool(is_enabled),
-                        description=plugin_info.get("description", f"Plugin from {source}"),
-                        usage=plugin_info.get("usage"),
-                        examples=plugin_info.get("examples"),
-                    )
-                )
-            else:
-                plugins.append(
-                    Plugin(
-                        name=name,
-                        source=source,
-                        enabled=bool(is_enabled),
-                        description=f"Plugin from {source}",
-                    )
-                )
+            # Get install path and scan for components
+            install_info = installed_map.get(plugin_key, [])
+            install_path = None
+            version = None
+            if install_info and len(install_info) > 0:
+                install_path = install_info[0].get("installPath")
+                version = install_info[0].get("version")
+
+            # Scan plugin directory for components
+            components = []
+            skill_count = 0
+            agent_count = 0
+            hook_count = 0
+            mcp_count = 0
+            lsp_count = 0
+            hooks = None
+            lsp_configs = None
+            readme = None
+
+            if install_path:
+                plugin_dir = Path(install_path)
+                if plugin_dir.exists():
+                    # Count commands as skills
+                    commands_dir = plugin_dir / "commands"
+                    if commands_dir.exists():
+                        for cmd_file in commands_dir.iterdir():
+                            if cmd_file.suffix == ".md":
+                                skill_count += 1
+                                components.append(
+                                    PluginComponent(
+                                        type="command",
+                                        name=cmd_file.stem,
+                                        description=f"Command: {cmd_file.stem}",
+                                    )
+                                )
+
+                    # Count skills
+                    skills_dir = plugin_dir / "skills"
+                    if skills_dir.exists():
+                        for skill_item in skills_dir.iterdir():
+                            if skill_item.is_dir() or skill_item.suffix == ".md":
+                                skill_count += 1
+                                components.append(
+                                    PluginComponent(
+                                        type="skill",
+                                        name=skill_item.stem if skill_item.is_file() else skill_item.name,
+                                        description=f"Skill: {skill_item.stem if skill_item.is_file() else skill_item.name}",
+                                    )
+                                )
+
+                    # Count agents
+                    agents_dir = plugin_dir / "agents"
+                    if agents_dir.exists():
+                        for agent_file in agents_dir.iterdir():
+                            if agent_file.suffix == ".md":
+                                agent_count += 1
+                                components.append(
+                                    PluginComponent(
+                                        type="agent",
+                                        name=agent_file.stem,
+                                        description=f"Agent: {agent_file.stem}",
+                                    )
+                                )
+
+                    # Count MCP servers
+                    mcp_dir = plugin_dir / "mcp-servers"
+                    if mcp_dir.exists():
+                        mcp_count = self._count_directory_items(mcp_dir)
+
+                    # Parse hooks
+                    hooks = self._parse_plugin_hooks(plugin_dir)
+                    if hooks:
+                        hook_count = len(hooks)
+
+                    # Parse LSP configs
+                    lsp_configs = self._parse_lsp_config(plugin_dir)
+                    if lsp_configs:
+                        lsp_count = len(lsp_configs)
+
+                    # Read README
+                    readme = self._read_plugin_readme(plugin_dir)
+
+            plugin = Plugin(
+                name=name,
+                version=version,
+                source=source,
+                enabled=bool(is_enabled),
+                description=plugin_info.get("description", f"Plugin from {source}") if plugin_info else f"Plugin from {source}",
+                usage=plugin_info.get("usage") if plugin_info else None,
+                examples=plugin_info.get("examples") if plugin_info else None,
+                components=components if components else None,
+                skill_count=skill_count,
+                agent_count=agent_count,
+                hook_count=hook_count,
+                mcp_count=mcp_count,
+                lsp_count=lsp_count,
+                hooks=hooks,
+                lsp_configs=lsp_configs,
+                readme=readme,
+            )
+            plugins.append(plugin)
 
         return plugins
 
