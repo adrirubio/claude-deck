@@ -12,21 +12,27 @@ export function Message({ message }: Props) {
   const isUser = message.type === 'user'
   const timeAgo = formatDistanceToNow(new Date(message.timestamp), { addSuffix: true })
 
+  // Helper to extract total from token number or records
+  const sumTokens = (tokens: number | Record<string, number> | undefined) => {
+    if (!tokens) return 0
+    if (typeof tokens === 'number') return tokens
+    return Object.values(tokens).reduce((acc, v) => acc + v, 0)
+  }
+
   // Calculate total tokens if usage available
   const totalTokens = message.usage
-    ? (message.usage.input_tokens || 0) +
-      (message.usage.output_tokens || 0) +
-      (message.usage.cache_creation_input_tokens || 0) +
-      (message.usage.cache_read_input_tokens || 0)
+    ? sumTokens(message.usage.input_tokens) +
+    sumTokens(message.usage.output_tokens) +
+    sumTokens(message.usage.cache_creation_input_tokens) +
+    sumTokens(message.usage.cache_read_input_tokens)
     : null
 
   return (
     <Card
-      className={`p-4 ${
-        isUser
+      className={`p-4 ${isUser
           ? 'border-blue-500/50 bg-blue-50/10'
           : 'border-gray-500/50 bg-gray-50/10'
-      }`}
+        }`}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
@@ -60,16 +66,16 @@ export function Message({ message }: Props) {
       {message.usage && (
         <div className="mt-3 pt-3 border-t text-xs text-muted-foreground flex gap-4">
           {message.usage.input_tokens && (
-            <span>Input: {message.usage.input_tokens}</span>
+            <span>Input: {sumTokens(message.usage.input_tokens)}</span>
           )}
           {message.usage.output_tokens && (
-            <span>Output: {message.usage.output_tokens}</span>
+            <span>Output: {sumTokens(message.usage.output_tokens)}</span>
           )}
           {message.usage.cache_creation_input_tokens && (
-            <span>Cache Create: {message.usage.cache_creation_input_tokens}</span>
+            <span>Cache Create: {sumTokens(message.usage.cache_creation_input_tokens)}</span>
           )}
           {message.usage.cache_read_input_tokens && (
-            <span>Cache Read: {message.usage.cache_read_input_tokens}</span>
+            <span>Cache Read: {sumTokens(message.usage.cache_read_input_tokens)}</span>
           )}
         </div>
       )}

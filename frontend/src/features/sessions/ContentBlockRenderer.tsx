@@ -30,7 +30,7 @@ export function ContentBlockRenderer({ block }: Props) {
       return (
         <ToolResultBlock
           tool_use_id={block.id || ''}
-          content={block.content}
+          content={block.content || []}
           is_error={block.is_error || false}
         />
       )

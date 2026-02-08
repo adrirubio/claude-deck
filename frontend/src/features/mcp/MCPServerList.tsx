@@ -83,6 +83,7 @@ export function MCPServerList({
                 onDelete={onDelete}
                 onTestComplete={onTestComplete}
                 onViewDetail={onViewDetail}
+                onToggle={onToggle}
                 approvalOverride={approvalOverrides?.[server.name]}
               />
             ))}
@@ -102,6 +103,7 @@ export function MCPServerList({
                 onDelete={onDelete}
                 onTestComplete={onTestComplete}
                 onViewDetail={onViewDetail}
+                onToggle={onToggle}
                 approvalOverride={approvalOverrides?.[server.name]}
               />
             ))}
@@ -124,6 +126,7 @@ export function MCPServerList({
                 onDelete={onDelete}
                 onTestComplete={onTestComplete}
                 onViewDetail={onViewDetail}
+                onToggle={onToggle}
                 readOnly
                 approvalOverride={approvalOverrides?.[server.name]}
               />

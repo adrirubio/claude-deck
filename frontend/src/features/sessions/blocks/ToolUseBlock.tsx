@@ -18,7 +18,7 @@ export function ToolUseBlock({ name, id, input }: Props) {
           <span className="text-xs text-muted-foreground">{id}</span>
         </div>
         <SyntaxHighlighter language="bash" style={oneDark} PreTag="div">
-          {input.command || ''}
+          {(input.command as string) || ''}
         </SyntaxHighlighter>
       </div>
     )
@@ -29,12 +29,11 @@ export function ToolUseBlock({ name, id, input }: Props) {
       <div className="border border-blue-500/50 rounded-lg p-3 bg-blue-50/10">
         <div className="flex items-center gap-2 mb-2">
           <Badge variant="outline" className="text-blue-700">{name}</Badge>
-          <span className="text-xs text-muted-foreground">{input.file_path || ''}</span>
+          <span className="text-xs text-muted-foreground">{(input.file_path as string) || ''}</span>
         </div>
-        {input.content && (
+        {typeof input.content === 'string' && (
           <SyntaxHighlighter language="typescript" style={oneDark} PreTag="div">
-            {input.content.substring(0, 500)}
-            {input.content.length > 500 && '\n... (truncated)'}
+            {input.content.substring(0, 500) + (input.content.length > 500 ? '\n... (truncated)' : '')}
           </SyntaxHighlighter>
         )}
       </div>

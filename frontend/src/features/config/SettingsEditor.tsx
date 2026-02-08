@@ -300,7 +300,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <div className="grid gap-2">
               <Label htmlFor="model">Model</Label>
               <Select
-                value={getSetting('model', '')}
+                value={getSetting('model', '') as string}
                 onValueChange={(v) => updateSetting('model', v)}
               >
                 <SelectTrigger id="model">
@@ -320,7 +320,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               <Label htmlFor="language">Language</Label>
               <Input
                 id="language"
-                value={getSetting('language', '')}
+                value={getSetting('language', '') as string}
                 onChange={(e) => updateSetting('language', e.target.value)}
                 placeholder="e.g., en, es, de"
               />
@@ -329,7 +329,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <div className="grid gap-2">
               <Label htmlFor="autoUpdatesChannel">Auto Updates Channel</Label>
               <Select
-                value={getSetting('autoUpdatesChannel', 'stable')}
+                value={getSetting('autoUpdatesChannel', 'stable') as string}
                 onValueChange={(v) => updateSetting('autoUpdatesChannel', v)}
               >
                 <SelectTrigger id="autoUpdatesChannel">
@@ -362,7 +362,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('sandbox.enabled', false)}
+                checked={getSetting('sandbox.enabled', false) as boolean}
                 onCheckedChange={(v) => updateSetting('sandbox.enabled', v)}
               />
             </div>
@@ -375,7 +375,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('sandbox.autoAllowBashIfSandboxed', false)}
+                checked={getSetting('sandbox.autoAllowBashIfSandboxed', false) as boolean}
                 onCheckedChange={(v) => updateSetting('sandbox.autoAllowBashIfSandboxed', v)}
               />
             </div>
@@ -386,7 +386,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 Commands that bypass sandbox isolation
               </p>
               <ListEditor
-                value={getSetting('sandbox.excludedCommands', [])}
+                value={getSetting('sandbox.excludedCommands', []) as string[]}
                 onChange={(v) => updateSetting('sandbox.excludedCommands', v)}
                 placeholder="Add command..."
               />
@@ -398,7 +398,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 Network domains accessible from sandbox
               </p>
               <ListEditor
-                value={getSetting('sandbox.network.allowedDomains', [])}
+                value={getSetting('sandbox.network.allowedDomains', []) as string[]}
                 onChange={(v) => updateSetting('sandbox.network.allowedDomains', v)}
                 placeholder="Add domain..."
               />
@@ -416,7 +416,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <div className="grid gap-2">
               <Label htmlFor="permissionsMode">Default Permission Mode</Label>
               <Select
-                value={getSetting('permissions.defaultMode', 'default')}
+                value={getSetting('permissions.defaultMode', 'default') as string}
                 onValueChange={(v) => updateSetting('permissions.defaultMode', v)}
               >
                 <SelectTrigger id="permissionsMode">
@@ -449,7 +449,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('alwaysThinkingEnabled', false)}
+                checked={getSetting('alwaysThinkingEnabled', false) as boolean}
                 onCheckedChange={(v) => updateSetting('alwaysThinkingEnabled', v)}
               />
             </div>
@@ -462,7 +462,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('showTurnDuration', false)}
+                checked={getSetting('showTurnDuration', false) as boolean}
                 onCheckedChange={(v) => updateSetting('showTurnDuration', v)}
               />
             </div>
@@ -477,7 +477,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
           </CardHeader>
           <CardContent>
             <KeyValueEditor
-              value={getSetting('env', {})}
+              value={getSetting('env', {}) as Record<string, string>}
               onChange={(v) => updateSetting('env', v)}
             />
           </CardContent>
@@ -495,9 +495,9 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               <Input
                 id="contextWindow"
                 type="number"
-                value={getSetting('contextWindow', '')}
+                value={getSetting('contextWindow', '') as string | number}
                 onChange={(e) =>
-                  updateSetting('contextWindow', e.target.value ? parseInt(e.target.value) : undefined)
+                  updateSetting('contextWindow', e.target.value ? parseInt(e.target.value) : null)
                 }
                 placeholder="Default context window size"
               />
@@ -508,9 +508,9 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               <Input
                 id="maxTokens"
                 type="number"
-                value={getSetting('maxTokens', '')}
+                value={getSetting('maxTokens', '') as string | number}
                 onChange={(e) =>
-                  updateSetting('maxTokens', e.target.value ? parseInt(e.target.value) : undefined)
+                  updateSetting('maxTokens', e.target.value ? parseInt(e.target.value) : null)
                 }
                 placeholder="Maximum tokens per response"
               />
