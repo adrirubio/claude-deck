@@ -4,7 +4,7 @@ export function Footer() {
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>Claude Deck v{APP_VERSION}</span>
         <a
-          href="https://github.com/juanrubio/claude-deck"
+          href="https://github.com/adrirubio/claude-deck"
           target="_blank"
           rel="noopener noreferrer"
           className="hover:text-foreground transition-colors"

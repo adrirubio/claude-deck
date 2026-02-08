@@ -28,5 +28,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RESTful API at `/api/v1/`
 - CORS configured for local development
 
-[Unreleased]: https://github.com/juanrubio/claude-deck/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/juanrubio/claude-deck/releases/tag/v1.0.0
+[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/adrirubio/claude-deck/releases/tag/v1.0.0

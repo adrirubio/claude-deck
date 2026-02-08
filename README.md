@@ -23,6 +23,16 @@ A self-hosted web application for visualizing and managing Claude Code configura
 - **Backup & Restore** — Create and manage configuration backups with selective restore
 - **Projects** — Discover and manage project directories
 
+## Screenshots
+
+| Dashboard | MCP Servers |
+|-----------|-------------|
+| ![Dashboard](screenshots/dashboard.png) | ![MCP Servers](screenshots/mcp-servers.png) |
+
+| Usage Tracking | Session Transcripts |
+|----------------|---------------------|
+| ![Usage Tracking](screenshots/usage-tracking.png) | ![Session Transcripts](screenshots/sessions.png) |
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -44,7 +54,7 @@ A self-hosted web application for visualizing and managing Claude Code configura
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/adrirubio/claude-deck.git
 cd claude-deck
 ```
 
@@ -220,6 +230,10 @@ The MCP management feature supports:
 - **OAuth authentication** — OAuth 2.0 flow for HTTP/SSE servers requiring auth
 - **Enable/disable** — Toggle servers without removing configuration
 - **Approval settings** — Configure per-server tool approval modes
+
+## Built By
+
+[Adrian](https://github.com/adrirubio) (13) and [Joni](https://github.com/juanrubio) during the 2025 Christmas break as a learning project — to explore open source, Claude Code, and full-stack development together.
 
 ## Acknowledgments
 

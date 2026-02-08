@@ -37,9 +37,8 @@ frontend/dist/
 logs/
 *.log
 
-# Screenshots (keep directory but ignore contents)
-screenshots/*
-!screenshots/.gitkeep
+# Screenshots
+# Tracked PNGs in screenshots/ are committed for README
 
 # OS
 .DS_Store
