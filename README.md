@@ -233,7 +233,7 @@ The MCP management feature supports:
 
 ## Built By
 
-[Adrian](https://github.com/adrirubio) (13) and [Joni](https://github.com/juanrubio) during the 2025 Christmas break as a learning project — to explore open source, Claude Code, and full-stack development together.
+[Adrian](https://github.com/adrirubio) (13) and [Juan](https://github.com/juanrubio) during the 2025 Christmas break as a learning project — to explore open source, Claude Code, and full-stack development together.
 
 ## Acknowledgments
 
