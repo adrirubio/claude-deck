@@ -210,6 +210,23 @@ export function MCPServersPage() {
     }
   };
 
+  const handleToggle = async (server: MCPServer, enabled: boolean) => {
+    try {
+      await apiClient(
+        `mcp/servers/${encodeURIComponent(server.name)}/toggle`,
+        {
+          method: "POST",
+          body: JSON.stringify({ disabled: !enabled }),
+        }
+      );
+      toast.success(`Server "${server.name}" ${enabled ? "enabled" : "disabled"}`);
+      await fetchServers();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to toggle server";
+      toast.error(message);
+    }
+  };
+
   const handleViewDetail = (server: MCPServer) => {
     setDetailServer(server);
     setShowDetail(true);
@@ -301,6 +318,7 @@ export function MCPServersPage() {
               onDelete={() => {}}
               onTestComplete={fetchServers}
               onViewDetail={handleViewDetail}
+              onToggle={handleToggle}
               readOnly
               approvalOverrides={approvalOverrides}
             />
@@ -365,6 +383,7 @@ export function MCPServersPage() {
         onDelete={handleDeleteServer}
         onTestComplete={fetchServers}
         onViewDetail={handleViewDetail}
+        onToggle={handleToggle}
         approvalOverrides={approvalOverrides}
       />
 

@@ -322,6 +322,7 @@ class MCPService:
             List of MCPServer objects with cached data merged
         """
         servers = []
+        disabled_servers = self.get_disabled_servers()
 
         # Read managed servers (admin-enforced, read-only)
         managed_servers = self._read_managed_mcp_config()
@@ -348,6 +349,10 @@ class MCPService:
             )
             server.source = plugin_server.get("plugin_name")
             servers.append(server)
+
+        # Merge disabled state from settings
+        for server in servers:
+            server.disabled = server.name in disabled_servers
 
         # Merge cached data if database session is provided
         if db:
@@ -1088,3 +1093,35 @@ class MCPService:
         await write_json_file(settings_path, config)
 
         return settings
+
+    def get_disabled_servers(self) -> set:
+        """Get the set of disabled MCP server names from settings."""
+        settings_path = get_claude_user_settings_file()
+        config = read_json_file(settings_path)
+        if not config:
+            return set()
+        return set(config.get("disabledMcpServers", []))
+
+    async def toggle_server(self, name: str, disabled: bool) -> bool:
+        """
+        Toggle an MCP server's disabled state in settings.
+
+        Args:
+            name: Server name
+            disabled: Whether to disable the server
+
+        Returns:
+            True if successful
+        """
+        settings_path = get_claude_user_settings_file()
+        config = read_json_file(settings_path) or {}
+
+        disabled_list = set(config.get("disabledMcpServers", []))
+
+        if disabled:
+            disabled_list.add(name)
+        else:
+            disabled_list.discard(name)
+
+        config["disabledMcpServers"] = sorted(disabled_list)
+        return await write_json_file(settings_path, config)

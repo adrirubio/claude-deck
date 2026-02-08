@@ -8,6 +8,7 @@ interface MCPServerListProps {
   onDelete: (name: string, scope: string) => void;
   onTestComplete: () => void;
   onViewDetail: (server: MCPServer) => void;
+  onToggle: (server: MCPServer, enabled: boolean) => void;
   readOnly?: boolean;
   approvalOverrides?: Record<string, string>;
 }
@@ -19,6 +20,7 @@ export function MCPServerList({
   onDelete,
   onTestComplete,
   onViewDetail,
+  onToggle,
   readOnly = false,
   approvalOverrides,
 }: MCPServerListProps) {
@@ -53,6 +55,7 @@ export function MCPServerList({
             onDelete={onDelete}
             onTestComplete={onTestComplete}
             onViewDetail={onViewDetail}
+            onToggle={onToggle}
             readOnly
             approvalOverride={approvalOverrides?.[server.name]}
           />

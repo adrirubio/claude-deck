@@ -11,6 +11,8 @@ from app.models.schemas import (
     MCPServerCreate,
     MCPServerListResponse,
     MCPServerUpdate,
+    MCPServerToggleRequest,
+    MCPServerToggleResponse,
     MCPTestConnectionRequest,
     MCPTestConnectionResponse,
     MCPTestAllResult,
@@ -119,6 +121,28 @@ async def delete_mcp_server(
     success = await mcp_service.remove_server(name, scope, project_path)
     if not success:
         raise HTTPException(status_code=404, detail=f"Server '{name}' not found in '{scope}' scope")
+
+
+@router.post("/servers/{name}/toggle", response_model=MCPServerToggleResponse)
+async def toggle_mcp_server(
+    name: str,
+    request: MCPServerToggleRequest,
+):
+    """Toggle an MCP server's disabled state."""
+    try:
+        success = await mcp_service.toggle_server(name, request.disabled)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to write settings file")
+        return MCPServerToggleResponse(
+            success=True,
+            message=f"Server '{name}' {'disabled' if request.disabled else 'enabled'} successfully",
+            server_name=name,
+            disabled=request.disabled,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to toggle server: {str(e)}")
 
 
 @router.post("/servers/{name}/test", response_model=MCPTestConnectionResponse)

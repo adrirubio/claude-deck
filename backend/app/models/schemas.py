@@ -124,6 +124,7 @@ class MCPServer(BaseModel):
     type: str  # "stdio", "http", or "sse"
     scope: str  # "user", "project", "plugin", or "managed"
     source: Optional[str] = None  # Original source for display (e.g., plugin name)
+    disabled: Optional[bool] = None  # Whether server is disabled
     command: Optional[str] = None  # For stdio type
     args: Optional[List[str]] = None  # For stdio type
     url: Optional[str] = None  # For http/sse type
@@ -190,6 +191,21 @@ class MCPServerApprovalSettingsUpdate(BaseModel):
 
     default_mode: Optional[str] = None
     server_overrides: Optional[List[MCPServerApprovalMode]] = None
+
+
+class MCPServerToggleRequest(BaseModel):
+    """Schema for toggling an MCP server's disabled state."""
+
+    disabled: bool
+
+
+class MCPServerToggleResponse(BaseModel):
+    """Response from toggling an MCP server."""
+
+    success: bool
+    message: str
+    server_name: str
+    disabled: bool
 
 
 class MCPServerListResponse(BaseModel):

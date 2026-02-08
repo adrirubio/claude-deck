@@ -19,6 +19,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
 import type { MCPServer, MCPTestConnectionResponse } from "@/types/mcp";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api";
@@ -31,6 +32,7 @@ interface MCPServerCardProps {
   onDelete: (name: string, scope: string) => void;
   onTestComplete: () => void;
   onViewDetail: (server: MCPServer) => void;
+  onToggle: (server: MCPServer, enabled: boolean) => void;
   readOnly?: boolean;
   approvalOverride?: string | null;
 }
@@ -86,6 +88,7 @@ export function MCPServerCard({
   onDelete,
   onTestComplete,
   onViewDetail,
+  onToggle,
   readOnly = false,
   approvalOverride,
 }: MCPServerCardProps) {
@@ -160,7 +163,7 @@ export function MCPServerCard({
 
   return (
     <Card
-      className={CLICKABLE_CARD}
+      className={`${CLICKABLE_CARD}${server.disabled ? " opacity-50" : ""}`}
       tabIndex={0}
       onClick={() => onViewDetail(server)}
       onKeyDown={handleKeyDown}
@@ -172,7 +175,7 @@ export function MCPServerCard({
           <CardTitle className="text-lg truncate flex-1 min-w-0">
             {server.name}
           </CardTitle>
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
             {approvalOverride && (
               <Badge variant="outline" className="text-xs gap-1">
                 <Shield className="h-3 w-3" />
@@ -183,6 +186,11 @@ export function MCPServerCard({
             <Badge variant={getScopeBadgeVariant(server.scope)}>
               {getScopeLabel(server.scope, server.source)}
             </Badge>
+            <Switch
+              checked={!server.disabled}
+              onCheckedChange={(checked) => onToggle(server, checked)}
+              aria-label={`${server.disabled ? "Enable" : "Disable"} ${server.name}`}
+            />
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap mt-1">

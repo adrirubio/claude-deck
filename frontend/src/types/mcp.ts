@@ -8,6 +8,7 @@ export interface MCPServer {
   type: "stdio" | "http" | "sse";
   scope: "user" | "project" | "plugin" | "managed";
   source?: string; // Original source (e.g., plugin name, "enterprise")
+  disabled?: boolean;
   command?: string;
   args?: string[];
   url?: string;
