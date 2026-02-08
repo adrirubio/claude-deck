@@ -103,7 +103,7 @@ export function PluginsPage() {
       } else {
         toast.success("All plugins are up to date");
       }
-    } catch (err) {
+    } catch {
       toast.error("Failed to check for updates");
     } finally {
       setCheckingUpdates(false);
@@ -128,7 +128,7 @@ export function PluginsPage() {
       } else {
         toast.error(data.message);
       }
-    } catch (err) {
+    } catch {
       toast.error(`Failed to update plugin "${name}"`);
     }
   }, [fetchPlugins]);
@@ -152,7 +152,7 @@ export function PluginsPage() {
       // Refresh plugins and clear update info
       fetchPlugins();
       setUpdateInfo(new Map());
-    } catch (err) {
+    } catch {
       toast.error("Failed to update plugins");
     }
   }, [fetchPlugins]);

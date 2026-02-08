@@ -1,5 +1,5 @@
 interface JsonViewerProps {
-  data: string | Record<string, any>
+  data: string | Record<string, unknown>
   className?: string
 }
 

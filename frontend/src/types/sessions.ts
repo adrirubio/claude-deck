@@ -8,8 +8,8 @@ export interface ContentBlock {
   thinking?: string
   name?: string
   id?: string
-  input?: Record<string, any>
-  content?: any
+  input?: Record<string, unknown>
+  content?: string | Record<string, unknown> | unknown[]
   is_error?: boolean
   source?: Record<string, string>
 }
@@ -19,7 +19,7 @@ export interface SessionMessage {
   timestamp: string
   content: ContentBlock[]
   model?: string
-  usage?: Record<string, any>  // Flexible structure for token usage with potential nested fields
+  usage?: Record<string, number | Record<string, number>>
 }
 
 export interface SessionConversation {

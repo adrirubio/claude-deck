@@ -52,7 +52,7 @@ export function OutputStyleEditor({
         content,
       });
       onOpenChange(false);
-    } catch (error) {
+    } catch {
       // Error handled by parent
     } finally {
       setSaving(false);

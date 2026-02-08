@@ -101,7 +101,7 @@ export function BackupPage() {
       link.click();
       document.body.removeChild(link);
       toast.success("Download started");
-    } catch (err) {
+    } catch {
       toast.error("Failed to download backup");
     }
   };

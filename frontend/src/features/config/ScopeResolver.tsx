@@ -8,7 +8,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
-import type { ResolvedConfigResponse, ResolvedSettingValue } from '@/types/config'
+import type { ConfigValue, ResolvedConfigResponse, ResolvedSettingValue } from '@/types/config'
 
 const SCOPE_ICONS = {
   managed: Shield,
@@ -54,7 +54,7 @@ function ScopeBadge({ scope, isSource }: ScopeBadgeProps) {
 interface ResolvedSettingRowProps {
   settingKey: string
   value: ResolvedSettingValue
-  onOverride?: (key: string, value: any) => void
+  onOverride?: (key: string, value: ConfigValue) => void
 }
 
 function ResolvedSettingRow({ settingKey, value, onOverride }: ResolvedSettingRowProps) {
@@ -62,7 +62,7 @@ function ResolvedSettingRow({ settingKey, value, onOverride }: ResolvedSettingRo
   const hasMultipleValues = Object.keys(value.values_by_scope).length > 1
   const isManaged = value.source_scope === 'managed'
 
-  const formatValue = (val: any) => {
+  const formatValue = (val: ConfigValue) => {
     if (val === null) return 'null'
     if (val === undefined) return 'undefined'
     if (typeof val === 'boolean') return val ? 'true' : 'false'
@@ -207,7 +207,7 @@ function ScopeTabContent({ scope, data }: ScopeTabContentProps) {
 }
 
 interface ScopeResolverProps {
-  onOverride?: (key: string, value: any) => void
+  onOverride?: (key: string, value: ConfigValue) => void
 }
 
 export function ScopeResolver({ onOverride }: ScopeResolverProps) {

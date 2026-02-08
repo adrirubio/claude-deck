@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Save, X, FileText, AlertTriangle, Trash2 } from "lucide-react";
 import {
   Dialog,
@@ -43,7 +43,6 @@ export function MemoryEditor({
   open,
   onClose,
   file,
-  projectPath: _projectPath,
   onSaveSuccess,
 }: MemoryEditorProps) {
   const [content, setContent] = useState("");
@@ -55,18 +54,11 @@ export function MemoryEditor({
 
   const hasChanges = content !== originalContent;
 
-  useEffect(() => {
-    if (open && file) {
-      loadFile();
-    }
-  }, [open, file]);
-
-  const loadFile = async () => {
+  const loadFile = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     if (!file.exists) {
-      // New file - start with template
       const template = getTemplate(file.scope);
       setContent(template);
       setOriginalContent("");
@@ -95,7 +87,13 @@ export function MemoryEditor({
     } finally {
       setLoading(false);
     }
-  };
+  }, [file]);
+
+  useEffect(() => {
+    if (open && file) {
+      loadFile();
+    }
+  }, [open, file, loadFile]);
 
   const handleSave = async () => {
     if (file.readonly) {

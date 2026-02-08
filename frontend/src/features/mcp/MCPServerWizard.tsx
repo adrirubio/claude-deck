@@ -257,7 +257,7 @@ export function MCPServerWizard({ onSave, onCancel }: MCPServerWizardProps) {
           </div>
 
           <div className="space-y-2">
-            {formData.env && Object.entries(formData.env).map(([key, _value]) => (
+            {formData.env && Object.entries(formData.env).map(([key]) => (
               <div key={key} className="flex items-center gap-2">
                 <div className="flex-1 flex gap-2">
                   <span className="text-sm font-mono flex-1">{key}:</span>

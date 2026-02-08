@@ -5,7 +5,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 interface Props {
   name: string
   id: string
-  input: Record<string, any>
+  input: Record<string, unknown>
 }
 
 export function ToolUseBlock({ name, id, input }: Props) {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -88,21 +88,7 @@ export function RestoreWizard({
   const [skipSkills, setSkipSkills] = useState(false);
   const [dryRun, setDryRun] = useState(false);
 
-  useEffect(() => {
-    if (open && backup) {
-      fetchRestorePlan();
-    }
-  }, [open, backup]);
-
-  useEffect(() => {
-    // Initialize selected files when plan loads
-    if (plan) {
-      setSelectedFiles(new Set(plan.files_to_restore));
-      setSelectAll(true);
-    }
-  }, [plan]);
-
-  const fetchRestorePlan = async () => {
+  const fetchRestorePlan = useCallback(async () => {
     if (!backup) return;
 
     setLoadingPlan(true);
@@ -113,12 +99,26 @@ export function RestoreWizard({
         : `/api/v1/backup/${backup.id}/plan`;
       const response = await apiClient<RestorePlan>(url);
       setPlan(response);
-    } catch (err) {
+    } catch {
       setError("Failed to load restore plan");
     } finally {
       setLoadingPlan(false);
     }
-  };
+  }, [backup, projectPath]);
+
+  useEffect(() => {
+    if (open && backup) {
+      fetchRestorePlan();
+    }
+  }, [open, backup, fetchRestorePlan]);
+
+  useEffect(() => {
+    // Initialize selected files when plan loads
+    if (plan) {
+      setSelectedFiles(new Set(plan.files_to_restore));
+      setSelectAll(true);
+    }
+  }, [plan]);
 
   const resetForm = () => {
     setStep(0);

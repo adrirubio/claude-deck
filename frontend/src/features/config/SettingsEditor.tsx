@@ -16,7 +16,7 @@ import {
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
-import type { SettingsScope, ScopedSettingsResponse } from '@/types/config'
+import type { ConfigValue, SettingsScope, ScopedSettingsResponse } from '@/types/config'
 
 interface SettingsEditorProps {
   onSave?: () => void
@@ -46,7 +46,7 @@ const UPDATE_CHANNEL_OPTIONS = [
 export function SettingsEditor({ onSave }: SettingsEditorProps) {
   const { activeProject } = useProjectContext()
   const [scope, setScope] = useState<SettingsScope>('user')
-  const [settings, setSettings] = useState<Record<string, any>>({})
+  const [settings, setSettings] = useState<Record<string, ConfigValue>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
@@ -72,18 +72,19 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     fetchSettings()
   }, [fetchSettings])
 
-  const updateSetting = (path: string, value: any) => {
+  const updateSetting = (path: string, value: ConfigValue) => {
     const keys = path.split('.')
     setSettings((prev) => {
       const updated = { ...prev }
-      let current: any = updated
+      let current: Record<string, ConfigValue> = updated
       for (let i = 0; i < keys.length - 1; i++) {
-        if (!current[keys[i]] || typeof current[keys[i]] !== 'object') {
+        const existing = current[keys[i]]
+        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
           current[keys[i]] = {}
         } else {
-          current[keys[i]] = { ...current[keys[i]] }
+          current[keys[i]] = { ...existing }
         }
-        current = current[keys[i]]
+        current = current[keys[i]] as Record<string, ConfigValue>
       }
       current[keys[keys.length - 1]] = value
       return updated
@@ -91,12 +92,12 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     setHasChanges(true)
   }
 
-  const getSetting = (path: string, defaultValue: any = undefined): any => {
+  const getSetting = (path: string, defaultValue: ConfigValue = null): ConfigValue => {
     const keys = path.split('.')
-    let current: any = settings
+    let current: ConfigValue = settings
     for (const key of keys) {
-      if (current === undefined || current === null) return defaultValue
-      current = current[key]
+      if (current === undefined || current === null || typeof current !== 'object' || Array.isArray(current)) return defaultValue
+      current = (current as Record<string, ConfigValue>)[key]
     }
     return current ?? defaultValue
   }

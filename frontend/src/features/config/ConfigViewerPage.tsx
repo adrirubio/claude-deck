@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Settings, Eye, Edit, Shield } from 'lucide-react'
-import type { ConfigFileListResponse } from '@/types/config'
+import type { ConfigFileListResponse, ConfigValue } from '@/types/config'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
@@ -40,14 +40,14 @@ export function ConfigViewerPage() {
     fetchData()
   }, [fetchData])
 
-  const handleOverrideInLocal = async (key: string, value: any) => {
-    // Convert dot notation key to nested object
+  const handleOverrideInLocal = async (key: string, value: ConfigValue) => {
     const parts = key.split('.')
-    let settings: Record<string, any> = {}
-    let current = settings
+    const settings: Record<string, ConfigValue> = {}
+    let current: Record<string, ConfigValue> = settings
     for (let i = 0; i < parts.length - 1; i++) {
-      current[parts[i]] = {}
-      current = current[parts[i]]
+      const nested: Record<string, ConfigValue> = {}
+      current[parts[i]] = nested
+      current = nested
     }
     current[parts[parts.length - 1]] = value
 
@@ -62,7 +62,7 @@ export function ConfigViewerPage() {
       })
       toast.success(`Setting "${key}" copied to local scope`)
       fetchData()
-    } catch (err) {
+    } catch {
       toast.error('Failed to copy setting to local scope')
     }
   }

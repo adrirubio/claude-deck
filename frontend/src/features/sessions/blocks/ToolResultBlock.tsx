@@ -5,7 +5,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 
 interface Props {
   tool_use_id: string
-  content: any
+  content: string | Record<string, unknown> | unknown[]
   is_error: boolean
 }
 

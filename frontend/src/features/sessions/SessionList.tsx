@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
 import { SessionCard } from './SessionCard'
 import type { SessionSummary } from '@/types/sessions'
@@ -12,11 +12,7 @@ export function SessionList({ projectFolder }: Props) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    loadSessions()
-  }, [projectFolder])
-
-  const loadSessions = async () => {
+  const loadSessions = useCallback(async () => {
     setLoading(true)
     try {
       const data = await listSessions({
@@ -31,7 +27,11 @@ export function SessionList({ projectFolder }: Props) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [listSessions, projectFolder])
+
+  useEffect(() => {
+    loadSessions()
+  }, [loadSessions])
 
   if (loading) {
     return <div className="text-center py-8">Loading sessions...</div>

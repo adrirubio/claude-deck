@@ -140,7 +140,7 @@ export function RulesManager({ projectPath, onRefresh }: RulesManagerProps) {
       );
       setEditContent(response.content || "");
       setEditingRule(rule);
-    } catch (err) {
+    } catch {
       toast.error("Failed to load rule content");
     }
   };

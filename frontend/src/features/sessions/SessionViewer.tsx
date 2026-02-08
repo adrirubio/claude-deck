@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -29,13 +29,7 @@ export function SessionViewer({ sessionId, projectFolder, open, onClose }: Props
   const [totalPages, setTotalPages] = useState(1)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    if (open) {
-      loadSession(1)
-    }
-  }, [sessionId, projectFolder, open])
-
-  const loadSession = async (page: number) => {
+  const loadSession = useCallback(async (page: number) => {
     setLoading(true)
     try {
       const data = await getSessionDetail(projectFolder, sessionId, page)
@@ -47,7 +41,13 @@ export function SessionViewer({ sessionId, projectFolder, open, onClose }: Props
     } finally {
       setLoading(false)
     }
-  }
+  }, [getSessionDetail, projectFolder, sessionId])
+
+  useEffect(() => {
+    if (open) {
+      loadSession(1)
+    }
+  }, [sessionId, projectFolder, open, loadSession])
 
   const handlePageChange = (newPage: number) => {
     loadSession(newPage)

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { MessageSquare } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,11 +20,7 @@ export function SessionsPage() {
   )
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    loadProjects()
-  }, [])
-
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async () => {
     setLoading(true)
     try {
       const data = await listProjects()
@@ -34,7 +30,11 @@ export function SessionsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [listProjects])
+
+  useEffect(() => {
+    loadProjects()
+  }, [loadProjects])
 
   const handleProjectChange = (value: string) => {
     const folder = value === 'all' ? null : value

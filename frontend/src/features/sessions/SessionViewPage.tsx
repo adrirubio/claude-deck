@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -20,13 +20,7 @@ export function SessionViewPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    const page = parseInt(searchParams.get('page') || '1', 10)
-    setCurrentPage(page)
-    loadSession(page)
-  }, [sessionId, projectFolder, searchParams])
-
-  const loadSession = async (page: number) => {
+  const loadSession = useCallback(async (page: number) => {
     if (!projectFolder || !sessionId) return
 
     setLoading(true)
@@ -42,7 +36,13 @@ export function SessionViewPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [getSessionDetail, projectFolder, sessionId])
+
+  useEffect(() => {
+    const page = parseInt(searchParams.get('page') || '1', 10)
+    setCurrentPage(page)
+    loadSession(page)
+  }, [sessionId, projectFolder, searchParams, loadSession])
 
   const handlePageChange = (newPage: number) => {
     setSearchParams({ page: newPage.toString() })

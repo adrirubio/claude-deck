@@ -23,6 +23,7 @@ const sizeClasses = {
   icon: 'h-9 w-9',
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function buttonVariants({ variant = 'default', size = 'default', className = '' }: {
   variant?: keyof typeof variantClasses
   size?: keyof typeof sizeClasses

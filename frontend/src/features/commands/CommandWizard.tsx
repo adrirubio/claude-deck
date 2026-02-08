@@ -64,7 +64,7 @@ export function CommandWizard({ onComplete, onCancel }: CommandWizardProps) {
       });
       toast.success('Command created successfully');
       onComplete();
-    } catch (err: any) {
+    } catch {
       toast.error('Failed to create command');
     } finally {
       setCreating(false);

@@ -146,7 +146,7 @@ export function AgentEditor({
         memory: memory || undefined,
       });
       onOpenChange(false);
-    } catch (error) {
+    } catch {
       // Error handled by parent
     } finally {
       setSaving(false);

@@ -1,8 +1,10 @@
+export type ConfigValue = string | number | boolean | null | ConfigValue[] | { [key: string]: ConfigValue }
+
 export interface ConfigFile {
   path: string
   scope: 'user' | 'project' | 'managed'
   exists: boolean
-  content?: Record<string, any>
+  content?: Record<string, ConfigValue>
 }
 
 export interface ConfigFileListResponse {
@@ -10,9 +12,9 @@ export interface ConfigFileListResponse {
 }
 
 export interface MergedConfig {
-  settings: Record<string, any>
-  mcp_servers: Record<string, any>
-  hooks: Record<string, any[]>
+  settings: Record<string, ConfigValue>
+  mcp_servers: Record<string, Record<string, ConfigValue>>
+  hooks: Record<string, Record<string, ConfigValue>[]>
   permissions: {
     allow: string[]
     deny: string[]
@@ -38,7 +40,7 @@ export type SettingsScope = 'user' | 'user_local' | 'project' | 'local' | 'manag
 
 export interface SettingsUpdateRequest {
   scope: SettingsScope
-  settings: Record<string, any>
+  settings: Record<string, ConfigValue>
   project_path?: string
 }
 
@@ -49,19 +51,19 @@ export interface SettingsUpdateResponse {
 }
 
 export interface ScopedSettingsResponse {
-  settings: Record<string, any>
+  settings: Record<string, ConfigValue>
   scope: SettingsScope
 }
 
 // Resolved config types for scope management
 export interface ResolvedSettingValue {
-  effective_value: any
+  effective_value: ConfigValue
   source_scope: 'managed' | 'local' | 'project' | 'user'
-  values_by_scope: Record<string, any>
+  values_by_scope: Record<string, ConfigValue>
 }
 
 export interface ScopeInfo {
-  settings: Record<string, any>
+  settings: Record<string, ConfigValue>
   path: string | null
   exists: boolean
   readonly: boolean
@@ -79,9 +81,9 @@ export interface ResolvedConfigResponse {
 
 export interface AllScopedSettingsResponse {
   scopes: {
-    managed: Record<string, any>
-    user: Record<string, any>
-    project: Record<string, any>
-    local: Record<string, any>
+    managed: Record<string, ConfigValue>
+    user: Record<string, ConfigValue>
+    project: Record<string, ConfigValue>
+    local: Record<string, ConfigValue>
   }
 }

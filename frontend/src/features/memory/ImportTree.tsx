@@ -103,7 +103,7 @@ function TreeNode({ node, depth }: TreeNodeProps) {
   );
 }
 
-export function ImportTree({ files, projectPath: _projectPath }: ImportTreeProps) {
+export function ImportTree({ files }: ImportTreeProps) {
   const [selectedFile, setSelectedFile] = useState<string>("");
   const [tree, setTree] = useState<ImportTreeNode | null>(null);
   const [loading, setLoading] = useState(false);

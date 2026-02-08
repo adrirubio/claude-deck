@@ -86,7 +86,7 @@ export function SkillDetailDialog({
     } finally {
       setLoading(false);
     }
-  }, [skill?.name, skill?.location, projectPath]);
+  }, [skill, projectPath]);
 
   useEffect(() => {
     if (open && skill) {
@@ -97,7 +97,7 @@ export function SkillDetailDialog({
       setInstallResult(null);
       setLogsOpen(false);
     }
-  }, [open, fetchSkillDetails]);
+  }, [open, skill, fetchSkillDetails]);
 
   const handleInstall = async () => {
     if (!skill) return;
