@@ -241,6 +241,10 @@ The session transcript viewer feature was inspired by and includes code adapted 
 
 The usage tracking feature ports algorithms from [ccusage](https://github.com/ryoppippi/ccusage) by [ryoppippi](https://github.com/ryoppippi), including the 5-hour session block identification, tiered pricing calculations, and burn rate projections.
 
+## Disclaimer
+
+Claude Deck is a community project and is not affiliated with or endorsed by Anthropic.
+
 ## License
 
 MIT License
