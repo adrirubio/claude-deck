@@ -17,9 +17,13 @@ from app.models.schemas import (
     MCPServerCreate,
     MCPServerUpdate,
     MCPTool,
+    MCPResource,
+    MCPPrompt,
+    MCPPromptArgument,
     MCPServerApprovalSettings,
     MCPServerApprovalMode,
 )
+from app.services.credentials_service import CredentialsService
 from app.utils.file_utils import read_json_file, write_json_file
 from app.utils.path_utils import (
     get_claude_user_config_file,
@@ -244,6 +248,9 @@ class MCPService:
         )
         return result.scalar_one_or_none()
 
+    # Max items to cache per list (tools, resources, prompts)
+    MAX_CACHED_ITEMS = 200
+
     async def update_server_cache(
         self,
         name: str,
@@ -256,6 +263,8 @@ class MCPService:
         cache_entry = await self.get_cached_server_info(name, scope, db)
 
         tools_list = test_result.get("tools") or []
+        resources_list = test_result.get("resources") or []
+        prompts_list = test_result.get("prompts") or []
         is_success = test_result.get("success", False)
         now = datetime.utcnow()
 
@@ -266,8 +275,13 @@ class MCPService:
             "last_error": None if is_success else test_result.get("message"),
             "mcp_server_name": test_result.get("server_name"),
             "mcp_server_version": test_result.get("server_version"),
-            "tools": tools_list,
-            "tool_count": len(tools_list),
+            "tools": tools_list[:self.MAX_CACHED_ITEMS],
+            "tool_count": test_result.get("tool_count", len(tools_list)),
+            "resources": resources_list[:self.MAX_CACHED_ITEMS],
+            "prompts": prompts_list[:self.MAX_CACHED_ITEMS],
+            "resource_count": test_result.get("resource_count", len(resources_list)),
+            "prompt_count": test_result.get("prompt_count", len(prompts_list)),
+            "capabilities": test_result.get("capabilities"),
             "cached_at": now,
             "config_hash": config_hash,
         }
@@ -346,9 +360,16 @@ class MCPService:
                     server.mcp_server_name = cache_entry.mcp_server_name
                     server.mcp_server_version = cache_entry.mcp_server_version
                     server.tool_count = cache_entry.tool_count
+                    server.resource_count = cache_entry.resource_count
+                    server.prompt_count = cache_entry.prompt_count
+                    server.capabilities = cache_entry.capabilities
                     # Convert tools from JSON to MCPTool objects
                     if cache_entry.tools:
                         server.tools = [MCPTool(**tool) for tool in cache_entry.tools]
+                    if cache_entry.resources:
+                        server.resources = [MCPResource(**r) for r in cache_entry.resources]
+                    if cache_entry.prompts:
+                        server.prompts = [MCPPrompt(**p) for p in cache_entry.prompts]
 
         return servers
 
@@ -631,44 +652,96 @@ class MCPService:
                         server_info = response.get("result", {}).get("serverInfo", {})
                         server_name = server_info.get("name", "unknown")
                         server_version = server_info.get("version")
+                        capabilities = response.get("result", {}).get("capabilities", {})
 
-                        # Now fetch tools list
-                        tools = []
-                        try:
-                            tools_request = {
+                        # Helper to send a JSON-RPC request and read response
+                        async def _send_jsonrpc(method: str, req_id: int, timeout_s: float = 10.0):
+                            request = {
                                 "jsonrpc": "2.0",
-                                "id": 2,
-                                "method": "tools/list",
+                                "id": req_id,
+                                "method": method,
                                 "params": {},
                             }
-                            tools_msg = json.dumps(tools_request) + "\n"
-                            process.stdin.write(tools_msg.encode())
+                            msg = json.dumps(request) + "\n"
+                            process.stdin.write(msg.encode())
                             await process.stdin.drain()
 
-                            # Read tools response
-                            tools_response_line = await asyncio.wait_for(
-                                process.stdout.readline(), timeout=10.0
+                            resp_line = await asyncio.wait_for(
+                                process.stdout.readline(), timeout=timeout_s
                             )
-                            if tools_response_line:
-                                tools_str = tools_response_line.decode().strip()
-                                if tools_str.startswith("Content-Length:"):
-                                    content_length = int(tools_str.split(":")[1].strip())
-                                    await process.stdout.readline()  # blank line
-                                    tools_data = await process.stdout.readexactly(content_length)
-                                    tools_response = json.loads(tools_data.decode())
-                                else:
-                                    tools_response = json.loads(tools_str)
+                            if not resp_line:
+                                return None
+                            resp_str = resp_line.decode().strip()
+                            if resp_str.startswith("Content-Length:"):
+                                cl = int(resp_str.split(":")[1].strip())
+                                await process.stdout.readline()  # blank line
+                                json_data = await process.stdout.readexactly(cl)
+                                return json.loads(json_data.decode())
+                            return json.loads(resp_str)
 
-                                if "result" in tools_response:
-                                    tools_list = tools_response["result"].get("tools", [])
-                                    for tool in tools_list:
-                                        tools.append({
-                                            "name": tool.get("name", "unknown"),
-                                            "description": tool.get("description"),
-                                            "inputSchema": tool.get("inputSchema"),
-                                        })
+                        # Fetch tools list
+                        tools = []
+                        tool_count = 0
+                        try:
+                            tools_response = await _send_jsonrpc("tools/list", 2, 10.0)
+                            if tools_response and "result" in tools_response:
+                                tools_list = tools_response["result"].get("tools", [])
+                                tool_count = len(tools_list)
+                                for tool in tools_list[:self.MAX_CACHED_ITEMS]:
+                                    tools.append({
+                                        "name": tool.get("name", "unknown"),
+                                        "description": tool.get("description"),
+                                        "inputSchema": tool.get("inputSchema"),
+                                    })
                         except Exception:
                             pass  # Tools fetch failed, but init succeeded
+
+                        # Fetch resources list (only if server advertises support)
+                        resources = []
+                        resource_count = 0
+                        if capabilities.get("resources"):
+                            try:
+                                res_response = await _send_jsonrpc("resources/list", 3, 5.0)
+                                if res_response and "result" in res_response:
+                                    res_list = res_response["result"].get("resources", [])
+                                    resource_count = len(res_list)
+                                    for r in res_list[:self.MAX_CACHED_ITEMS]:
+                                        resources.append({
+                                            "uri": r.get("uri", ""),
+                                            "name": r.get("name", ""),
+                                            "description": r.get("description"),
+                                            "mimeType": r.get("mimeType"),
+                                        })
+                            except Exception:
+                                pass  # Resources fetch failed
+
+                        # Fetch prompts list (only if server advertises support)
+                        prompts = []
+                        prompt_count = 0
+                        if capabilities.get("prompts"):
+                            try:
+                                prompts_response = await _send_jsonrpc("prompts/list", 4, 5.0)
+                                if prompts_response and "result" in prompts_response:
+                                    prompts_list = prompts_response["result"].get("prompts", [])
+                                    prompt_count = len(prompts_list)
+                                    for p in prompts_list[:self.MAX_CACHED_ITEMS]:
+                                        arguments = None
+                                        if p.get("arguments"):
+                                            arguments = [
+                                                {
+                                                    "name": a.get("name", ""),
+                                                    "description": a.get("description"),
+                                                    "required": a.get("required"),
+                                                }
+                                                for a in p["arguments"]
+                                            ]
+                                        prompts.append({
+                                            "name": p.get("name", ""),
+                                            "description": p.get("description"),
+                                            "arguments": arguments,
+                                        })
+                            except Exception:
+                                pass  # Prompts fetch failed
 
                         result = {
                             "success": True,
@@ -676,6 +749,12 @@ class MCPService:
                             "server_name": server_name,
                             "server_version": server_version,
                             "tools": tools if tools else None,
+                            "tool_count": tool_count,
+                            "resources": resources if resources else None,
+                            "resource_count": resource_count,
+                            "prompts": prompts if prompts else None,
+                            "prompt_count": prompt_count,
+                            "capabilities": capabilities if capabilities else None,
                         }
 
                         # Cache the result if database session is provided
@@ -738,27 +817,162 @@ class MCPService:
                         process.kill()
 
         elif server.type == "http":
-            # Make HEAD request to URL
+            # MCP Streamable HTTP: POST JSON-RPC to the server URL
             if not server.url:
                 return {"success": False, "message": "No URL specified for http server"}
 
             try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    response = await client.head(
-                        server.url,
-                        headers=server.headers or {},
-                        follow_redirects=True,
+                # Include stored OAuth token if available
+                headers = {
+                    **(server.headers or {}),
+                    "Accept": "application/json, text/event-stream",
+                }
+                creds_svc = CredentialsService()
+                token = creds_svc.get_mcp_token(server.name, server.url)
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    # Send MCP initialize
+                    init_request = {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "claude-deck-test", "version": "1.0.0"},
+                        },
+                    }
+                    response = await client.post(
+                        server.url, json=init_request, headers=headers,
+                        follow_redirects=True, timeout=10.0,
                     )
-                    if response.status_code < 400:
-                        return {
-                            "success": True,
-                            "message": f"HTTP server responded with status {response.status_code}",
-                        }
-                    else:
+
+                    # Capture session ID for subsequent requests
+                    session_id = response.headers.get("mcp-session-id")
+                    if session_id:
+                        headers["mcp-session-id"] = session_id
+
+                    if response.status_code >= 400:
                         return {
                             "success": False,
                             "message": f"HTTP server returned error status {response.status_code}",
                         }
+
+                    resp_data = response.json()
+                    if "error" in resp_data:
+                        error_msg = resp_data["error"].get("message", "Unknown error")
+                        return {"success": False, "message": f"MCP error: {error_msg}"}
+
+                    if "result" not in resp_data:
+                        return {
+                            "success": True,
+                            "message": f"Server responded (status {response.status_code})",
+                        }
+
+                    server_info = resp_data["result"].get("serverInfo", {})
+                    server_name_val = server_info.get("name", "unknown")
+                    server_version = server_info.get("version")
+                    capabilities = resp_data["result"].get("capabilities", {})
+
+                    # Helper to send JSON-RPC over HTTP
+                    async def _http_jsonrpc(method: str, req_id: int, timeout_s: float = 10.0):
+                        req = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": {}}
+                        r = await client.post(
+                            server.url, json=req, headers=headers,
+                            follow_redirects=True, timeout=timeout_s,
+                        )
+                        if r.status_code < 400:
+                            return r.json()
+                        return None
+
+                    # Fetch tools
+                    tools = []
+                    tool_count = 0
+                    try:
+                        tools_resp = await _http_jsonrpc("tools/list", 2, 10.0)
+                        if tools_resp and "result" in tools_resp:
+                            tools_list = tools_resp["result"].get("tools", [])
+                            tool_count = len(tools_list)
+                            for t in tools_list[:self.MAX_CACHED_ITEMS]:
+                                tools.append({
+                                    "name": t.get("name", "unknown"),
+                                    "description": t.get("description"),
+                                    "inputSchema": t.get("inputSchema"),
+                                })
+                    except Exception:
+                        pass
+
+                    # Fetch resources
+                    resources = []
+                    resource_count = 0
+                    if capabilities.get("resources"):
+                        try:
+                            res_resp = await _http_jsonrpc("resources/list", 3, 5.0)
+                            if res_resp and "result" in res_resp:
+                                res_list = res_resp["result"].get("resources", [])
+                                resource_count = len(res_list)
+                                for r in res_list[:self.MAX_CACHED_ITEMS]:
+                                    resources.append({
+                                        "uri": r.get("uri", ""),
+                                        "name": r.get("name", ""),
+                                        "description": r.get("description"),
+                                        "mimeType": r.get("mimeType"),
+                                    })
+                        except Exception:
+                            pass
+
+                    # Fetch prompts
+                    prompts = []
+                    prompt_count = 0
+                    if capabilities.get("prompts"):
+                        try:
+                            prompts_resp = await _http_jsonrpc("prompts/list", 4, 5.0)
+                            if prompts_resp and "result" in prompts_resp:
+                                prompts_list = prompts_resp["result"].get("prompts", [])
+                                prompt_count = len(prompts_list)
+                                for p in prompts_list[:self.MAX_CACHED_ITEMS]:
+                                    arguments = None
+                                    if p.get("arguments"):
+                                        arguments = [
+                                            {
+                                                "name": a.get("name", ""),
+                                                "description": a.get("description"),
+                                                "required": a.get("required"),
+                                            }
+                                            for a in p["arguments"]
+                                        ]
+                                    prompts.append({
+                                        "name": p.get("name", ""),
+                                        "description": p.get("description"),
+                                        "arguments": arguments,
+                                    })
+                        except Exception:
+                            pass
+
+                    result = {
+                        "success": True,
+                        "message": f"MCP server '{server_name_val}' initialized successfully",
+                        "server_name": server_name_val,
+                        "server_version": server_version,
+                        "tools": tools if tools else None,
+                        "tool_count": tool_count,
+                        "resources": resources if resources else None,
+                        "resource_count": resource_count,
+                        "prompts": prompts if prompts else None,
+                        "prompt_count": prompt_count,
+                        "capabilities": capabilities if capabilities else None,
+                    }
+
+                    # Cache the result
+                    if db:
+                        config_dict = {"type": server.type, "url": server.url}
+                        config_hash = self._compute_config_hash(config_dict)
+                        await self.update_server_cache(name, scope, result, config_hash, db)
+
+                    return result
+
             except httpx.TimeoutException:
                 return {"success": False, "message": "Connection timeout"}
             except httpx.RequestError as e:
@@ -772,10 +986,16 @@ class MCPService:
                 return {"success": False, "message": "No URL specified for SSE server"}
 
             try:
+                # Include stored OAuth token if available
+                creds_svc = CredentialsService()
+                token = creds_svc.get_mcp_token(server.name, server.url)
+
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     # SSE servers should respond to GET with text/event-stream
                     # First try a HEAD request to check availability
                     headers = {**(server.headers or {}), "Accept": "text/event-stream"}
+                    if token:
+                        headers["Authorization"] = f"Bearer {token}"
                     response = await client.get(
                         server.url,
                         headers=headers,

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Plus, Server, Shield, Info } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { Plus, Server, Shield, Info, PlayCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -26,8 +36,16 @@ import {
 import { MCPServerList } from "./MCPServerList";
 import { MCPServerWizard } from "./MCPServerWizard";
 import { MCPServerForm } from "./MCPServerForm";
+import { MCPServerDetailDialog } from "./MCPServerDetailDialog";
 import { RefreshButton } from "@/components/shared/RefreshButton";
-import type { MCPServer, MCPServerCreate, MCPServerUpdate, MCPServerListResponse, MCPServerApprovalSettings } from "@/types/mcp";
+import type {
+  MCPServer,
+  MCPServerCreate,
+  MCPServerUpdate,
+  MCPServerListResponse,
+  MCPServerApprovalSettings,
+  MCPTestAllResponse,
+} from "@/types/mcp";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
@@ -42,9 +60,27 @@ export function MCPServersPage() {
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
   const [approvalSettings, setApprovalSettings] = useState<MCPServerApprovalSettings | null>(null);
 
+  // Detail dialog state
+  const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+
+  // Test All state
+  const [testingAll, setTestingAll] = useState(false);
+  const [showTestAllConfirm, setShowTestAllConfirm] = useState(false);
+
   // Separate managed servers from editable ones
   const managedServers = servers.filter(s => s.scope === "managed");
   const editableServers = servers.filter(s => s.scope !== "managed");
+
+  // Build approval overrides lookup map
+  const approvalOverrides = useMemo(() => {
+    if (!approvalSettings?.server_overrides) return {};
+    const map: Record<string, string> = {};
+    for (const override of approvalSettings.server_overrides) {
+      map[override.server_name] = override.mode;
+    }
+    return map;
+  }, [approvalSettings]);
 
   const fetchServers = useCallback(async () => {
     setLoading(true);
@@ -92,6 +128,31 @@ export function MCPServersPage() {
     }
   };
 
+  const handleServerApprovalChange = async (serverName: string, mode: string | null) => {
+    if (!approvalSettings) return;
+    try {
+      // Build new overrides: remove existing entry for this server, add new one if mode is not null
+      const newOverrides = approvalSettings.server_overrides.filter(
+        o => o.server_name !== serverName
+      );
+      if (mode) {
+        newOverrides.push({ server_name: serverName, mode: mode as MCPServerApprovalSettings["default_mode"] });
+      }
+
+      const updated = await apiClient<MCPServerApprovalSettings>("mcp/approval-settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          default_mode: approvalSettings.default_mode,
+          server_overrides: newOverrides,
+        }),
+      });
+      setApprovalSettings(updated);
+      toast.success("Server approval override updated");
+    } catch {
+      toast.error("Failed to update server approval");
+    }
+  };
+
   const handleAddServer = async (server: MCPServerCreate) => {
     try {
       const endpoint = buildEndpoint("mcp/servers", { project_path: activeProject?.path });
@@ -106,7 +167,7 @@ export function MCPServersPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to add server";
       toast.error(message);
-      throw err; // Re-throw to let the wizard handle the error state
+      throw err;
     }
   };
 
@@ -149,6 +210,32 @@ export function MCPServersPage() {
     }
   };
 
+  const handleViewDetail = (server: MCPServer) => {
+    setDetailServer(server);
+    setShowDetail(true);
+  };
+
+  const handleTestAll = async () => {
+    setShowTestAllConfirm(false);
+    setTestingAll(true);
+    try {
+      const endpoint = buildEndpoint("mcp/servers/test-all", { project_path: activeProject?.path });
+      const response = await apiClient<MCPTestAllResponse>(endpoint, { method: "POST" });
+      const connected = response.results.filter(r => r.success).length;
+      const failed = response.results.filter(r => !r.success).length;
+      toast.success(`${connected} connected, ${failed} failed`);
+      await fetchServers();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to test servers";
+      toast.error(message);
+    } finally {
+      setTestingAll(false);
+    }
+  };
+
+  const serverCount = servers.length;
+  const estimatedTime = serverCount * 10; // rough estimate: 10s per server
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -163,6 +250,16 @@ export function MCPServersPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {serverCount > 0 && (
+            <Button
+              variant="outline"
+              onClick={() => setShowTestAllConfirm(true)}
+              disabled={testingAll || loading}
+            >
+              <PlayCircle className="h-4 w-4 mr-2" />
+              {testingAll ? "Testing..." : "Test All"}
+            </Button>
+          )}
           <RefreshButton onClick={fetchServers} loading={loading} />
           <Button onClick={() => setShowWizard(true)}>
             <Plus className="h-4 w-4 mr-2" />
@@ -203,7 +300,9 @@ export function MCPServersPage() {
               onEdit={() => {}}
               onDelete={() => {}}
               onTestComplete={fetchServers}
+              onViewDetail={handleViewDetail}
               readOnly
+              approvalOverrides={approvalOverrides}
             />
           </CardContent>
         </Card>
@@ -249,6 +348,7 @@ export function MCPServersPage() {
                   </Select>
                   <p className="text-xs text-muted-foreground mt-2">
                     This controls whether Claude Code asks for permission before using MCP tools.
+                    Per-server overrides can be set in each server's detail view.
                   </p>
                 </div>
               </div>
@@ -264,7 +364,51 @@ export function MCPServersPage() {
         onEdit={setEditingServer}
         onDelete={handleDeleteServer}
         onTestComplete={fetchServers}
+        onViewDetail={handleViewDetail}
+        approvalOverrides={approvalOverrides}
       />
+
+      {/* Server Detail Dialog */}
+      <MCPServerDetailDialog
+        server={detailServer}
+        open={showDetail}
+        onOpenChange={(open) => {
+          setShowDetail(open);
+          if (!open) setDetailServer(null);
+        }}
+        onEdit={(server) => {
+          setShowDetail(false);
+          setEditingServer(server);
+        }}
+        onDelete={(name, scope) => {
+          handleDeleteServer(name, scope);
+          setShowDetail(false);
+          setDetailServer(null);
+        }}
+        onTestComplete={fetchServers}
+        approvalSettings={approvalSettings}
+        onApprovalChange={handleServerApprovalChange}
+        readOnly={detailServer?.scope === "plugin" || detailServer?.scope === "managed"}
+      />
+
+      {/* Test All Confirmation Dialog */}
+      <AlertDialog open={showTestAllConfirm} onOpenChange={setShowTestAllConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Test All Servers?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will test {serverCount} {serverCount === 1 ? "server" : "servers"} sequentially.
+              Estimated time: ~{estimatedTime}s. Each test spawns a subprocess and may take up to 30s for npx-based servers.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleTestAll}>
+              Test All
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Add Server Wizard Dialog */}
       <Dialog open={showWizard} onOpenChange={setShowWizard}>

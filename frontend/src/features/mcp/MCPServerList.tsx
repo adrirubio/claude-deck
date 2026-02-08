@@ -7,10 +7,21 @@ interface MCPServerListProps {
   onEdit: (server: MCPServer) => void;
   onDelete: (name: string, scope: string) => void;
   onTestComplete: () => void;
+  onViewDetail: (server: MCPServer) => void;
   readOnly?: boolean;
+  approvalOverrides?: Record<string, string>;
 }
 
-export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComplete, readOnly = false }: MCPServerListProps) {
+export function MCPServerList({
+  servers,
+  loading,
+  onEdit,
+  onDelete,
+  onTestComplete,
+  onViewDetail,
+  readOnly = false,
+  approvalOverrides,
+}: MCPServerListProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -41,7 +52,9 @@ export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComple
             onEdit={onEdit}
             onDelete={onDelete}
             onTestComplete={onTestComplete}
+            onViewDetail={onViewDetail}
             readOnly
+            approvalOverride={approvalOverrides?.[server.name]}
           />
         ))}
       </div>
@@ -66,6 +79,8 @@ export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComple
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onTestComplete={onTestComplete}
+                onViewDetail={onViewDetail}
+                approvalOverride={approvalOverrides?.[server.name]}
               />
             ))}
           </div>
@@ -83,6 +98,8 @@ export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComple
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onTestComplete={onTestComplete}
+                onViewDetail={onViewDetail}
+                approvalOverride={approvalOverrides?.[server.name]}
               />
             ))}
           </div>
@@ -103,7 +120,9 @@ export function MCPServerList({ servers, loading, onEdit, onDelete, onTestComple
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onTestComplete={onTestComplete}
+                onViewDetail={onViewDetail}
                 readOnly
+                approvalOverride={approvalOverrides?.[server.name]}
               />
             ))}
           </div>

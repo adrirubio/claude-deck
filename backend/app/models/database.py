@@ -107,6 +107,11 @@ class MCPServerCache(Base):
     mcp_server_version: Mapped[str | None] = mapped_column(String, nullable=True)
     tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
     tool_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    resources: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    prompts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    resource_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prompt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    capabilities: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     cached_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     config_hash: Mapped[str | None] = mapped_column(String, nullable=True)
 

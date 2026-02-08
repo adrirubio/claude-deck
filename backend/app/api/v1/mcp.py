@@ -1,7 +1,8 @@
 """MCP server management endpoints."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -12,13 +13,21 @@ from app.models.schemas import (
     MCPServerUpdate,
     MCPTestConnectionRequest,
     MCPTestConnectionResponse,
+    MCPTestAllResult,
+    MCPTestAllResponse,
     MCPServerApprovalSettings,
     MCPServerApprovalSettingsUpdate,
+    MCPAuthStatus,
+    MCPAuthStartResponse,
 )
 from app.services.mcp_service import MCPService
+from app.services.credentials_service import CredentialsService
+from app.services.oauth_service import MCPOAuthService
 
 router = APIRouter()
 mcp_service = MCPService()
+credentials_service = CredentialsService()
+oauth_service = MCPOAuthService()
 
 
 @router.get("/servers", response_model=MCPServerListResponse)
@@ -131,7 +140,136 @@ async def test_mcp_server_connection(
         server_name=result.get("server_name"),
         server_version=result.get("server_version"),
         tools=result.get("tools"),
+        resources=result.get("resources"),
+        prompts=result.get("prompts"),
+        resource_count=result.get("resource_count"),
+        prompt_count=result.get("prompt_count"),
+        capabilities=result.get("capabilities"),
     )
+
+
+@router.post("/servers/test-all", response_model=MCPTestAllResponse)
+async def test_all_servers(
+    project_path: Optional[str] = Query(None, description="Optional project path"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Test all MCP servers sequentially and return summary results."""
+    servers = await mcp_service.list_servers(project_path, db)
+    results = []
+
+    for server in servers:
+        test_result = await mcp_service.test_connection(
+            server.name, server.scope, project_path, db
+        )
+        results.append(MCPTestAllResult(
+            server_name=server.name,
+            scope=server.scope,
+            success=test_result["success"],
+            message=test_result["message"],
+            tool_count=test_result.get("tool_count"),
+            resource_count=test_result.get("resource_count"),
+            prompt_count=test_result.get("prompt_count"),
+        ))
+
+    return MCPTestAllResponse(results=results)
+
+
+@router.get("/servers/{name}/auth-status", response_model=MCPAuthStatus)
+async def get_auth_status(
+    name: str,
+    scope: str = Query("user", description="Server scope"),
+):
+    """Check if server has stored OAuth token and its validity."""
+    return MCPAuthStatus(**credentials_service.get_auth_status(name))
+
+
+@router.post("/servers/{name}/auth/start", response_model=MCPAuthStartResponse)
+async def start_auth(
+    name: str,
+    request: Request,
+    scope: str = Query("user", description="Server scope"),
+):
+    """Start OAuth flow. Returns {auth_url, state} for frontend to open."""
+    server = await mcp_service.get_server(name, scope)
+    if not server:
+        raise HTTPException(status_code=404, detail=f"Server '{name}' not found in '{scope}' scope")
+
+    if not server.url:
+        raise HTTPException(status_code=400, detail="OAuth authentication is only supported for HTTP/SSE servers with a URL")
+
+    # Derive callback base URL from the incoming request
+    callback_base_url = f"{request.url.scheme}://{request.url.netloc}"
+
+    try:
+        result = await oauth_service.start_auth(server.url, name, callback_base_url)
+        return MCPAuthStartResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start OAuth flow: {str(e)}")
+
+
+@router.get("/auth/callback", response_class=HTMLResponse)
+async def auth_callback(
+    code: str = Query(..., description="Authorization code"),
+    state: str = Query(..., description="OAuth state parameter"),
+):
+    """OAuth callback. Exchanges code for token, returns HTML success page."""
+    try:
+        result = await oauth_service.handle_callback(code, state)
+        server_name = result.get("server_name", "unknown")
+        return HTMLResponse(content=f"""<!DOCTYPE html>
+<html>
+<head><title>Authentication Successful</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; margin: 0;
+         background: #f8fafc; color: #1e293b; }}
+  .card {{ text-align: center; padding: 2rem; border-radius: 12px;
+           background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 400px; }}
+  .check {{ font-size: 3rem; margin-bottom: 1rem; }}
+  h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
+  p {{ color: #64748b; margin: 0; font-size: 0.875rem; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">&#10003;</div>
+    <h1>Authenticated!</h1>
+    <p>Server <strong>{server_name}</strong> has been authenticated.<br>You can close this tab.</p>
+  </div>
+  <script>
+    // Notify opener and auto-close after a short delay
+    if (window.opener) {{
+      window.opener.postMessage({{ type: 'mcp-oauth-complete', serverName: '{server_name}' }}, '*');
+    }}
+    setTimeout(() => window.close(), 3000);
+  </script>
+</body>
+</html>""")
+    except ValueError as e:
+        return HTMLResponse(status_code=400, content=f"""<!DOCTYPE html>
+<html>
+<head><title>Authentication Failed</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; margin: 0;
+         background: #fef2f2; color: #991b1b; }}
+  .card {{ text-align: center; padding: 2rem; border-radius: 12px;
+           background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1); max-width: 400px; }}
+  .x {{ font-size: 3rem; margin-bottom: 1rem; }}
+  h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
+  p {{ color: #64748b; margin: 0; font-size: 0.875rem; }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="x">&#10007;</div>
+    <h1>Authentication Failed</h1>
+    <p>{str(e)}</p>
+  </div>
+</body>
+</html>""")
 
 
 @router.get("/approval-settings", response_model=MCPServerApprovalSettings)

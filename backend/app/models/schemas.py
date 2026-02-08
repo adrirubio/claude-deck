@@ -137,6 +137,11 @@ class MCPServer(BaseModel):
     mcp_server_version: Optional[str] = None
     tools: Optional[List["MCPTool"]] = None
     tool_count: Optional[int] = None
+    resources: Optional[List["MCPResource"]] = None
+    prompts: Optional[List["MCPPrompt"]] = None
+    resource_count: Optional[int] = None
+    prompt_count: Optional[int] = None
+    capabilities: Optional[Dict[str, Any]] = None
 
 
 class MCPServerCreate(BaseModel):
@@ -208,6 +213,47 @@ class MCPTool(BaseModel):
     inputSchema: Optional[Dict[str, Any]] = None
 
 
+class MCPResource(BaseModel):
+    """MCP resource information."""
+
+    uri: str
+    name: str
+    description: Optional[str] = None
+    mimeType: Optional[str] = None
+
+
+class MCPPromptArgument(BaseModel):
+    """MCP prompt argument."""
+
+    name: str
+    description: Optional[str] = None
+    required: Optional[bool] = None
+
+
+class MCPPrompt(BaseModel):
+    """MCP prompt information."""
+
+    name: str
+    description: Optional[str] = None
+    arguments: Optional[List[MCPPromptArgument]] = None
+
+
+class MCPAuthStatus(BaseModel):
+    """OAuth authentication status for an MCP server."""
+
+    has_token: bool
+    expired: bool
+    server_url: Optional[str] = None
+    has_client_registration: Optional[bool] = None
+
+
+class MCPAuthStartResponse(BaseModel):
+    """Response from starting an OAuth flow."""
+
+    auth_url: str
+    state: str
+
+
 class MCPTestConnectionResponse(BaseModel):
     """Response from testing MCP server connection."""
 
@@ -216,6 +262,29 @@ class MCPTestConnectionResponse(BaseModel):
     server_name: Optional[str] = None
     server_version: Optional[str] = None
     tools: Optional[List[MCPTool]] = None
+    resources: Optional[List[MCPResource]] = None
+    prompts: Optional[List[MCPPrompt]] = None
+    resource_count: Optional[int] = None
+    prompt_count: Optional[int] = None
+    capabilities: Optional[Dict[str, Any]] = None
+
+
+class MCPTestAllResult(BaseModel):
+    """Result for a single server from test-all."""
+
+    server_name: str
+    scope: str
+    success: bool
+    message: str
+    tool_count: Optional[int] = None
+    resource_count: Optional[int] = None
+    prompt_count: Optional[int] = None
+
+
+class MCPTestAllResponse(BaseModel):
+    """Response from testing all MCP servers."""
+
+    results: List[MCPTestAllResult]
 
 
 # Slash Command Schemas
