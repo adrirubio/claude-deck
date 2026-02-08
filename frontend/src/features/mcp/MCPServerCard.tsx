@@ -39,12 +39,13 @@ function pluralize(count: number, singular: string, plural?: string): string {
   return count === 1 ? singular : (plural ?? singular + 's');
 }
 
-function getServerTypeLabel(type: string): string {
-  switch (type) {
-    case "stdio": return "Standard I/O";
-    case "sse": return "Server-Sent Events";
-    default: return "HTTP";
+function getTransportSummary(server: MCPServer): string {
+  if (server.type === "stdio") {
+    const cmd = server.command || "";
+    const args = server.args?.join(" ") || "";
+    return `stdio · ${cmd}${args ? " " + args : ""}`;
   }
+  return `${server.type} · ${server.url || ""}`;
 }
 
 function getScopeBadgeVariant(scope: string): "default" | "secondary" | "outline" | "destructive" {
@@ -166,46 +167,12 @@ export function MCPServerCard({
       role="button"
       aria-label={`View details for ${server.name}`}
     >
-      <CardHeader>
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <CardTitle className="text-lg">{server.name}</CardTitle>
-              <span className="inline-flex items-center gap-1">
-                {STATUS_ICONS[status.status]}
-                <span className={`text-xs font-medium ${STATUS_COLORS[status.status]}`}>
-                  {status.label}
-                </span>
-              </span>
-              {toolCount > 0 && (
-                <Badge variant="secondary" className="text-xs gap-1">
-                  <Wrench className="h-3 w-3" />
-                  {toolCount}
-                </Badge>
-              )}
-              {resourceCount > 0 && (
-                <Badge variant="secondary" className="text-xs gap-1">
-                  <FileText className="h-3 w-3" />
-                  {resourceCount}
-                </Badge>
-              )}
-              {promptCount > 0 && (
-                <Badge variant="secondary" className="text-xs gap-1">
-                  <MessageSquare className="h-3 w-3" />
-                  {promptCount}
-                </Badge>
-              )}
-            </div>
-            <CardDescription className="mt-1">
-              Type: {getServerTypeLabel(server.type)}
-              {server.last_tested_at && (
-                <span className="ml-2 text-xs">
-                  Tested {new Date(server.last_tested_at).toLocaleString()}
-                </span>
-              )}
-            </CardDescription>
-          </div>
-          <div className="flex items-center gap-1.5">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="text-lg truncate flex-1 min-w-0">
+            {server.name}
+          </CardTitle>
+          <div className="flex items-center gap-1.5 shrink-0">
             {approvalOverride && (
               <Badge variant="outline" className="text-xs gap-1">
                 <Shield className="h-3 w-3" />
@@ -218,42 +185,56 @@ export function MCPServerCard({
             </Badge>
           </div>
         </div>
+        <div className="flex items-center gap-2 flex-wrap mt-1">
+          <span className="inline-flex items-center gap-1">
+            {STATUS_ICONS[status.status]}
+            <span className={`text-xs font-medium ${STATUS_COLORS[status.status]}`}>
+              {status.label}
+            </span>
+          </span>
+          {toolCount > 0 && (
+            <Badge variant="secondary" className="text-xs gap-1">
+              <Wrench className="h-3 w-3" />
+              {toolCount}
+            </Badge>
+          )}
+          {resourceCount > 0 && (
+            <Badge variant="secondary" className="text-xs gap-1">
+              <FileText className="h-3 w-3" />
+              {resourceCount}
+            </Badge>
+          )}
+          {promptCount > 0 && (
+            <Badge variant="secondary" className="text-xs gap-1">
+              <MessageSquare className="h-3 w-3" />
+              {promptCount}
+            </Badge>
+          )}
+        </div>
+        <CardDescription className="truncate mt-1">
+          {getTransportSummary(server)}
+        </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pt-0">
         <div className="space-y-3">
-          {/* Server Details */}
-          <div className="text-sm space-y-1">
-            {server.type === "stdio" && (
-              <>
+          {/* Supplementary details */}
+          {(server.mcp_server_version || (server.env && Object.keys(server.env).length > 0) || server.last_tested_at) && (
+            <div className="text-sm text-muted-foreground space-y-1">
+              {server.mcp_server_version && (
+                <div>Version {server.mcp_server_version}</div>
+              )}
+              {server.env && Object.keys(server.env).length > 0 && (
                 <div>
-                  <span className="font-medium">Command:</span>{" "}
-                  <span className="text-muted-foreground font-mono">{server.command}</span>
+                  {Object.keys(server.env).length} env {pluralize(Object.keys(server.env).length, 'variable')}
                 </div>
-                {server.args && server.args.length > 0 && (
-                  <div>
-                    <span className="font-medium">Args:</span>{" "}
-                    <span className="text-muted-foreground font-mono">
-                      {server.args.join(" ")}
-                    </span>
-                  </div>
-                )}
-              </>
-            )}
-            {(server.type === "http" || server.type === "sse") && (
-              <div>
-                <span className="font-medium">URL:</span>{" "}
-                <span className="text-muted-foreground font-mono break-all">{server.url}</span>
-              </div>
-            )}
-            {server.env && Object.keys(server.env).length > 0 && (
-              <div>
-                <span className="font-medium">Environment:</span>{" "}
-                <span className="text-muted-foreground">
-                  {Object.keys(server.env).length} {pluralize(Object.keys(server.env).length, 'variable')}
-                </span>
-              </div>
-            )}
-          </div>
+              )}
+              {server.last_tested_at && (
+                <div>
+                  Tested {new Date(server.last_tested_at).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex gap-2 pt-2">

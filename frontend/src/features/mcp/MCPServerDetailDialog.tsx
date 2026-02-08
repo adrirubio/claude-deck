@@ -408,7 +408,7 @@ function OverviewTab({
   const status = getServerStatus(server, testResult);
 
   return (
-    <ScrollArea className="h-[50vh]">
+    <ScrollArea className="h-[60vh]">
       <div className="space-y-4 pr-4">
         {/* Config display */}
         <div className="space-y-2">
@@ -623,7 +623,7 @@ function ToolsTab({
 
   if (tools.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div className="h-[60vh] flex flex-col items-center justify-center text-center">
         <Wrench className="h-8 w-8 text-muted-foreground mb-2" />
         <p className="text-muted-foreground">
           {server.last_tested_at
@@ -635,9 +635,9 @@ function ToolsTab({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="h-[60vh] flex flex-col gap-3">
       {tools.length > 5 && (
-        <div className="relative">
+        <div className="relative shrink-0">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Filter tools..."
@@ -648,11 +648,11 @@ function ToolsTab({
         </div>
       )}
       {isTruncated && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground shrink-0">
           Showing {tools.length} of {totalCount} tools
         </p>
       )}
-      <ScrollArea className="h-[45vh]">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-2 pr-4">
           {filteredTools.map((tool) => (
             <div key={tool.name}>
@@ -712,7 +712,7 @@ function ResourcesTab({
     }
 
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div className="h-[60vh] flex flex-col items-center justify-center text-center">
         <FileText className="h-8 w-8 text-muted-foreground mb-2" />
         <p className="text-muted-foreground">{message}</p>
       </div>
@@ -720,13 +720,13 @@ function ResourcesTab({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="h-[60vh] flex flex-col gap-3">
       {isTruncated && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground shrink-0">
           Showing {resources.length} of {resourceCount} resources
         </p>
       )}
-      <ScrollArea className="h-[45vh]">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-2 pr-4">
           {resources.map((resource, i) => (
             <div
@@ -785,7 +785,7 @@ function PromptsTab({
     }
 
     return (
-      <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div className="h-[60vh] flex flex-col items-center justify-center text-center">
         <MessageSquare className="h-8 w-8 text-muted-foreground mb-2" />
         <p className="text-muted-foreground">{message}</p>
       </div>
@@ -793,13 +793,13 @@ function PromptsTab({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="h-[60vh] flex flex-col gap-3">
       {isTruncated && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground shrink-0">
           Showing {prompts.length} of {promptCount} prompts
         </p>
       )}
-      <ScrollArea className="h-[45vh]">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="space-y-2 pr-4">
           {prompts.map((prompt, i) => (
             <div
@@ -940,7 +940,7 @@ export function MCPServerDetailDialog({
         onOpenChange(o);
       }}
     >
-      <DialogContent className={`${MODAL_SIZES.MD} flex flex-col`}>
+      <DialogContent className={`${MODAL_SIZES.LG} flex flex-col`}>
         <DialogHeader>
           <div className="flex items-center gap-3">
             {STATUS_ICONS_LG[status.status]}
