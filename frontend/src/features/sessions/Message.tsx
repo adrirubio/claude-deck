@@ -13,11 +13,12 @@ export function Message({ message }: Props) {
   const timeAgo = formatDistanceToNow(new Date(message.timestamp), { addSuffix: true })
 
   // Calculate total tokens if usage available
+  const getNum = (v: unknown): number => (typeof v === 'number' ? v : 0)
   const totalTokens = message.usage
-    ? (message.usage.input_tokens || 0) +
-      (message.usage.output_tokens || 0) +
-      (message.usage.cache_creation_input_tokens || 0) +
-      (message.usage.cache_read_input_tokens || 0)
+    ? getNum(message.usage.input_tokens) +
+      getNum(message.usage.output_tokens) +
+      getNum(message.usage.cache_creation_input_tokens) +
+      getNum(message.usage.cache_read_input_tokens)
     : null
 
   return (
@@ -59,17 +60,17 @@ export function Message({ message }: Props) {
       {/* Token Usage Detail (if available) */}
       {message.usage && (
         <div className="mt-3 pt-3 border-t text-xs text-muted-foreground flex gap-4">
-          {message.usage.input_tokens && (
-            <span>Input: {message.usage.input_tokens}</span>
+          {getNum(message.usage.input_tokens) > 0 && (
+            <span>Input: {getNum(message.usage.input_tokens).toLocaleString()}</span>
           )}
-          {message.usage.output_tokens && (
-            <span>Output: {message.usage.output_tokens}</span>
+          {getNum(message.usage.output_tokens) > 0 && (
+            <span>Output: {getNum(message.usage.output_tokens).toLocaleString()}</span>
           )}
-          {message.usage.cache_creation_input_tokens && (
-            <span>Cache Create: {message.usage.cache_creation_input_tokens}</span>
+          {getNum(message.usage.cache_creation_input_tokens) > 0 && (
+            <span>Cache Create: {getNum(message.usage.cache_creation_input_tokens).toLocaleString()}</span>
           )}
-          {message.usage.cache_read_input_tokens && (
-            <span>Cache Read: {message.usage.cache_read_input_tokens}</span>
+          {getNum(message.usage.cache_read_input_tokens) > 0 && (
+            <span>Cache Read: {getNum(message.usage.cache_read_input_tokens).toLocaleString()}</span>
           )}
         </div>
       )}

@@ -18,6 +18,7 @@ import {
   BarChart3,
   FolderOpen,
   Archive,
+  Gauge,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -43,6 +44,7 @@ const navigation: { name: string; href: string; icon: LucideIcon }[] = [
 
   // Tier 4: Monitoring & Tools
   { name: 'Sessions', href: '/sessions', icon: MessageSquare },
+  { name: 'Context', href: '/context', icon: Gauge },
   { name: 'Usage', href: '/usage', icon: BarChart3 },
   { name: 'Backup', href: '/backup', icon: Archive },
 ]
