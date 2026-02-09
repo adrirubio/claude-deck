@@ -216,10 +216,13 @@ class ContextService:
         model: str,
         current_context_tokens: int,
         db: Optional[AsyncSession] = None,
+        message_chars: int = 0,
     ) -> Optional[ContextComposition]:
         """Estimate context composition breakdown like /context CLI.
 
         Uses local estimation (chars // 4) from existing services.
+        Messages are estimated from actual JSONL content; System & Tools
+        is derived as the residual.
         """
         from app.services.mcp_service import MCPService
         from app.services.agent_service import AgentService
@@ -235,9 +238,6 @@ class ContextService:
             # Remaining dashes are path separators
             project_path = "/" + project_folder[1:].replace("-", "/")
 
-        # Constants
-        system_prompt_tokens = 3_500
-        system_tools_tokens = 15_000
         autocompact_buffer = int(context_limit * 0.165)
 
         # --- MCP Tools ---
@@ -316,16 +316,14 @@ class ContextService:
         except Exception:
             pass
 
-        # --- Messages (derived) ---
-        static_overhead = (
-            system_prompt_tokens
-            + system_tools_tokens
-            + mcp_total
-            + agent_total
-            + memory_total
-            + skill_total
+        # --- Messages (estimated from JSONL content) ---
+        messages_tokens = message_chars // CHARS_PER_TOKEN_ESTIMATE
+
+        # --- System & Tools (derived as residual) ---
+        system_and_tools_tokens = max(
+            0,
+            current_context_tokens - messages_tokens - mcp_total - agent_total - memory_total - skill_total,
         )
-        messages_tokens = max(0, current_context_tokens - static_overhead)
 
         # --- Free Space ---
         free_space = max(0, context_limit - current_context_tokens - autocompact_buffer)
@@ -344,8 +342,7 @@ class ContextService:
                     items=items if items else None,
                 ))
 
-        _add("System Prompt", system_prompt_tokens, "#888888")
-        _add("System Tools", system_tools_tokens, "#999999")
+        _add("System & Tools", system_and_tools_tokens, "#888888")
         _add("MCP Tools", mcp_total, "#0891b2", mcp_items)
         _add("Custom Agents", agent_total, "#b1b9f9", agent_items)
         _add("Memory Files", memory_total, "#d77757", memory_items)
@@ -594,6 +591,8 @@ class ContextService:
                 estimated_turns_remaining = max(0, remaining_tokens // avg_tokens_per_turn)
 
         # Get context composition breakdown
+        # Exclude thinking_chars — thinking is output, not carried in input context
+        conversation_chars = user_chars + assistant_chars + tool_result_chars + tool_call_chars
         composition = None
         try:
             composition = await self.get_context_composition(
@@ -602,6 +601,7 @@ class ContextService:
                 model=model,
                 current_context_tokens=current_context,
                 db=db,
+                message_chars=conversation_chars,
             )
         except Exception:
             pass  # Composition is best-effort
