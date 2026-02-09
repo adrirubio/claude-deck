@@ -35,6 +35,26 @@ export interface CacheEfficiency {
   hit_ratio: number
 }
 
+export interface ContextCategoryItem {
+  name: string
+  estimated_tokens: number
+}
+
+export interface ContextCompositionCategory {
+  category: string
+  estimated_tokens: number
+  percentage: number
+  color: string
+  items?: ContextCategoryItem[]
+}
+
+export interface ContextComposition {
+  categories: ContextCompositionCategory[]
+  total_tokens: number
+  context_limit: number
+  model: string
+}
+
 export interface ContextAnalysis {
   session_id: string
   project_folder: string
@@ -51,6 +71,7 @@ export interface ContextAnalysis {
   estimated_turns_remaining: number
   context_zone: string
   total_turns: number
+  composition?: ContextComposition
 }
 
 export interface ContextAnalysisResponse {

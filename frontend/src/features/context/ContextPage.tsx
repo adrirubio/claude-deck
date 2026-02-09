@@ -5,7 +5,7 @@ import { useContextApi } from '@/hooks/useContextApi'
 import { ActiveSessionsList } from './ActiveSessionsList'
 import { ContextGauge } from './ContextGauge'
 import { ContextTimelineChart } from './ContextTimelineChart'
-import { ContentBreakdownChart } from './ContentBreakdownChart'
+import { ContextCompositionChart } from './ContextCompositionChart'
 import { FileConsumptionTable } from './FileConsumptionTable'
 import { CacheEfficiencyCard } from './CacheEfficiencyCard'
 import { ProjectionsCard } from './ProjectionsCard'
@@ -139,7 +139,7 @@ export function ContextPage() {
           />
 
           <div className="grid gap-4 md:grid-cols-2">
-            <ContentBreakdownChart categories={analysis.content_categories} />
+            <ContextCompositionChart composition={analysis.composition} />
             <FileConsumptionTable files={analysis.file_consumptions} />
           </div>
         </div>

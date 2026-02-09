@@ -38,7 +38,8 @@ export function ContextGauge({ percentage, currentTokens, maxTokens, model }: Co
   const arcEndX = cx + r * Math.cos(sweepAngle)
   const arcEndY = cy - r * Math.sin(sweepAngle)
 
-  const largeArc = clampedPct > 50 ? 1 : 0
+  // Semicircular gauge: filled arc is at most 180°, so large-arc is always 0
+  const largeArc = 0
 
   return (
     <div className="flex flex-col items-center">

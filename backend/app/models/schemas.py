@@ -1520,6 +1520,32 @@ class CacheEfficiency(BaseModel):
     hit_ratio: float  # 0-1
 
 
+class ContextCategoryItem(BaseModel):
+    """Single item within a category (e.g., one MCP tool, one memory file)."""
+
+    name: str
+    estimated_tokens: int
+
+
+class ContextCompositionCategory(BaseModel):
+    """One category in the context composition breakdown."""
+
+    category: str  # "System Prompt", "MCP Tools", etc.
+    estimated_tokens: int
+    percentage: float
+    color: str  # Hex color for chart
+    items: Optional[List[ContextCategoryItem]] = None
+
+
+class ContextComposition(BaseModel):
+    """Full context composition matching /context CLI output."""
+
+    categories: List[ContextCompositionCategory]
+    total_tokens: int
+    context_limit: int
+    model: str
+
+
 class ContextAnalysis(BaseModel):
     """Full context analysis for a session."""
 
@@ -1538,6 +1564,7 @@ class ContextAnalysis(BaseModel):
     estimated_turns_remaining: int
     context_zone: str  # "green", "yellow", "orange", "red"
     total_turns: int
+    composition: Optional[ContextComposition] = None
 
 
 class ContextAnalysisResponse(BaseModel):
