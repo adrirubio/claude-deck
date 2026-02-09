@@ -158,8 +158,7 @@ export function ContextCompositionChart({ composition, showHelp }: ContextCompos
               <Info className="h-3.5 w-3.5" />
               Category Glossary
             </p>
-            <p><span className="font-medium">System Prompt</span> — Claude's base instructions and personality.</p>
-            <p><span className="font-medium">System Tools</span> — built-in tool definitions (Read, Write, Bash, etc.).</p>
+            <p><span className="font-medium">System & Tools</span> — Claude's base instructions, personality, and built-in tool definitions (Read, Write, Bash, etc.). Derived as the residual after subtracting measurable categories.</p>
             <p><span className="font-medium">MCP Tools</span> — tools from connected MCP servers.</p>
             <p><span className="font-medium">Agents</span> — custom agent definitions loaded for this project.</p>
             <p><span className="font-medium">Memory</span> — CLAUDE.md files and project memory loaded at startup.</p>
