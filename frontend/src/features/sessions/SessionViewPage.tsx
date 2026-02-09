@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ArrowLeft, HelpCircle } from 'lucide-react'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
 import { useContextApi } from '@/hooks/useContextApi'
 import { ConversationList } from './ConversationList'
@@ -33,6 +33,7 @@ export function SessionViewPage() {
   const [contextAnalysis, setContextAnalysis] = useState<ContextAnalysis | null>(null)
   const [contextLoading, setContextLoading] = useState(false)
   const [contextLoaded, setContextLoaded] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
 
   const loadSession = useCallback(async (page: number) => {
     if (!projectFolder || !sessionId) return
@@ -213,6 +214,17 @@ export function SessionViewPage() {
             </TabsContent>
 
             <TabsContent value="context" className="space-y-4">
+              <div className="flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowHelp(!showHelp)}
+                  className={showHelp ? 'text-primary' : ''}
+                >
+                  <HelpCircle className="h-4 w-4 mr-1.5" />
+                  Help
+                </Button>
+              </div>
               {contextLoading && (
                 <div className="py-8 text-center">
                   <p className="text-muted-foreground">Analyzing context...</p>
@@ -236,6 +248,7 @@ export function SessionViewPage() {
                         currentTokens={contextAnalysis.current_context_tokens}
                         maxTokens={contextAnalysis.max_context_tokens}
                         model={contextAnalysis.model}
+                        showHelp={showHelp}
                       />
                     </div>
                     <ProjectionsCard
@@ -243,18 +256,20 @@ export function SessionViewPage() {
                       estimatedTurnsRemaining={contextAnalysis.estimated_turns_remaining}
                       contextZone={contextAnalysis.context_zone}
                       totalTurns={contextAnalysis.total_turns}
+                      showHelp={showHelp}
                     />
-                    <CacheEfficiencyCard cache={contextAnalysis.cache_efficiency} />
+                    <CacheEfficiencyCard cache={contextAnalysis.cache_efficiency} showHelp={showHelp} />
                   </div>
 
                   <ContextTimelineChart
                     snapshots={contextAnalysis.snapshots}
                     maxTokens={contextAnalysis.max_context_tokens}
+                    showHelp={showHelp}
                   />
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <ContextCompositionChart composition={contextAnalysis.composition} />
-                    <FileConsumptionTable files={contextAnalysis.file_consumptions} />
+                    <ContextCompositionChart composition={contextAnalysis.composition} showHelp={showHelp} />
+                    <FileConsumptionTable files={contextAnalysis.file_consumptions} showHelp={showHelp} />
                   </div>
                 </div>
               )}

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Gauge } from 'lucide-react'
+import { Gauge, HelpCircle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { useContextApi } from '@/hooks/useContextApi'
 import { ActiveSessionsList } from './ActiveSessionsList'
@@ -18,6 +19,7 @@ export function ContextPage() {
   const [analysis, setAnalysis] = useState<ContextAnalysis | null>(null)
   const [loading, setLoading] = useState(true)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const fetchSessions = useCallback(async () => {
@@ -94,7 +96,18 @@ export function ContextPage() {
             Analyze context window usage across active sessions
           </p>
         </div>
-        <RefreshButton onClick={handleRefresh} loading={loading} />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowHelp(!showHelp)}
+            className={showHelp ? 'text-primary' : ''}
+          >
+            <HelpCircle className="h-4 w-4 mr-1.5" />
+            Help
+          </Button>
+          <RefreshButton onClick={handleRefresh} loading={loading} />
+        </div>
       </div>
 
       {/* Active Sessions */}
@@ -121,6 +134,7 @@ export function ContextPage() {
                 currentTokens={analysis.current_context_tokens}
                 maxTokens={analysis.max_context_tokens}
                 model={analysis.model}
+                showHelp={showHelp}
               />
             </div>
             <ProjectionsCard
@@ -128,19 +142,21 @@ export function ContextPage() {
               estimatedTurnsRemaining={analysis.estimated_turns_remaining}
               contextZone={analysis.context_zone}
               totalTurns={analysis.total_turns}
+              showHelp={showHelp}
             />
-            <CacheEfficiencyCard cache={analysis.cache_efficiency} />
+            <CacheEfficiencyCard cache={analysis.cache_efficiency} showHelp={showHelp} />
           </div>
 
           {/* Charts */}
           <ContextTimelineChart
             snapshots={analysis.snapshots}
             maxTokens={analysis.max_context_tokens}
+            showHelp={showHelp}
           />
 
           <div className="grid gap-4 md:grid-cols-2">
-            <ContextCompositionChart composition={analysis.composition} />
-            <FileConsumptionTable files={analysis.file_consumptions} />
+            <ContextCompositionChart composition={analysis.composition} showHelp={showHelp} />
+            <FileConsumptionTable files={analysis.file_consumptions} showHelp={showHelp} />
           </div>
         </div>
       )}

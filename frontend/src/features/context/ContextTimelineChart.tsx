@@ -6,18 +6,20 @@ import {
   ReferenceLine,
   CartesianGrid,
 } from 'recharts'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import {
   ChartContainer,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
+import { Info } from 'lucide-react'
 import type { ContextSnapshot } from '@/types/context'
 
 interface ContextTimelineChartProps {
   snapshots: ContextSnapshot[]
   maxTokens: number
+  showHelp?: boolean
 }
 
 const chartConfig = {
@@ -41,7 +43,7 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-export function ContextTimelineChart({ snapshots, maxTokens }: ContextTimelineChartProps) {
+export function ContextTimelineChart({ snapshots, maxTokens, showHelp }: ContextTimelineChartProps) {
   if (snapshots.length === 0) {
     return null
   }
@@ -50,6 +52,11 @@ export function ContextTimelineChart({ snapshots, maxTokens }: ContextTimelineCh
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Context Window Over Time</CardTitle>
+        {showHelp && (
+          <CardDescription>
+            Tracks how the context window fills over the conversation. Each layer represents a different type of token usage.
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent>
         <ChartContainer config={chartConfig} className="aspect-[2/1] w-full">
@@ -104,6 +111,18 @@ export function ContextTimelineChart({ snapshots, maxTokens }: ContextTimelineCh
             />
           </AreaChart>
         </ChartContainer>
+        {showHelp && (
+          <div className="bg-muted p-3 rounded text-xs space-y-1 mt-3">
+            <p className="font-medium flex items-center gap-1.5">
+              <Info className="h-3.5 w-3.5" />
+              Reading the Chart
+            </p>
+            <p><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1" style={{ backgroundColor: 'hsl(142, 71%, 45%)' }} /><span className="font-medium">Cache Read</span> — previously cached content being reused.</p>
+            <p><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1" style={{ backgroundColor: 'hsl(47, 100%, 50%)' }} /><span className="font-medium">Cache Creation</span> — new content being cached for future turns.</p>
+            <p><span className="inline-block w-2.5 h-2.5 rounded-sm mr-1" style={{ backgroundColor: 'hsl(217, 91%, 60%)' }} /><span className="font-medium">Input Tokens</span> — new content not yet cached.</p>
+            <p>The dashed red line marks the model's maximum context limit.</p>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

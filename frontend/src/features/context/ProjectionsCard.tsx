@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 
 interface ProjectionsCardProps {
@@ -6,6 +6,7 @@ interface ProjectionsCardProps {
   estimatedTurnsRemaining: number
   contextZone: string
   totalTurns: number
+  showHelp?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -25,7 +26,7 @@ function getZoneBadge(zone: string) {
   return <Badge variant="outline" className={v.className}>{v.label}</Badge>
 }
 
-export function ProjectionsCard({ avgTokensPerTurn, estimatedTurnsRemaining, contextZone, totalTurns }: ProjectionsCardProps) {
+export function ProjectionsCard({ avgTokensPerTurn, estimatedTurnsRemaining, contextZone, totalTurns, showHelp }: ProjectionsCardProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -33,6 +34,11 @@ export function ProjectionsCard({ avgTokensPerTurn, estimatedTurnsRemaining, con
           <CardTitle className="text-base">Projections</CardTitle>
           {getZoneBadge(contextZone)}
         </div>
+        {showHelp && (
+          <CardDescription>
+            Estimates how many more conversation turns remain before the context window fills up, based on average token growth per turn.
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-3 gap-4 text-center">
