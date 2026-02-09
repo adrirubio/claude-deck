@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 import aiofiles
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schemas import (
     ActiveSessionContext,
@@ -14,6 +15,9 @@ from app.models.schemas import (
     ContentCategory,
     ContextAnalysis,
     ContextAnalysisResponse,
+    ContextCategoryItem,
+    ContextComposition,
+    ContextCompositionCategory,
     ContextSnapshot,
     FileConsumption,
 )
@@ -205,8 +209,162 @@ class ContextService:
             pass
         return None
 
+    async def get_context_composition(
+        self,
+        project_folder: str,
+        session_id: str,
+        model: str,
+        current_context_tokens: int,
+        db: Optional[AsyncSession] = None,
+    ) -> Optional[ContextComposition]:
+        """Estimate context composition breakdown like /context CLI.
+
+        Uses local estimation (chars // 4) from existing services.
+        """
+        from app.services.mcp_service import MCPService
+        from app.services.agent_service import AgentService
+        from app.services.memory_service import MemoryService
+
+        context_limit = get_context_limit(model)
+
+        # Derive project_path from folder name
+        # Folder names are like '-home-user-project' → '/home/user/project'
+        project_path: Optional[str] = None
+        if project_folder and project_folder.startswith("-"):
+            project_path = project_folder.replace("-", "/", 1)
+            # Remaining dashes are path separators
+            project_path = "/" + project_folder[1:].replace("-", "/")
+
+        # Constants
+        system_prompt_tokens = 3_500
+        system_tools_tokens = 15_000
+        autocompact_buffer = int(context_limit * 0.165)
+
+        # --- MCP Tools ---
+        mcp_items: List[ContextCategoryItem] = []
+        mcp_total = 0
+        try:
+            mcp_service = MCPService()
+            servers = await mcp_service.list_servers(project_path, db)
+            for server in servers:
+                if server.disabled:
+                    continue
+                if server.tools:
+                    for tool in server.tools:
+                        tool_json = json.dumps({
+                            "name": tool.name,
+                            "description": tool.description or "",
+                            "inputSchema": tool.inputSchema or {},
+                        })
+                        tokens = len(tool_json) // CHARS_PER_TOKEN_ESTIMATE
+                        mcp_items.append(ContextCategoryItem(name=f"{server.name}:{tool.name}", estimated_tokens=tokens))
+                        mcp_total += tokens
+                elif server.tool_count and server.tool_count > 0:
+                    # No cached tool details but we know count — rough estimate
+                    est = server.tool_count * 150  # ~150 tokens per tool
+                    mcp_items.append(ContextCategoryItem(name=server.name, estimated_tokens=est))
+                    mcp_total += est
+        except Exception:
+            pass
+
+        # --- Custom Agents ---
+        agent_items: List[ContextCategoryItem] = []
+        agent_total = 0
+        try:
+            agents = AgentService.list_agents(project_path)
+            for agent in agents:
+                tokens = len(agent.prompt) // CHARS_PER_TOKEN_ESTIMATE
+                agent_items.append(ContextCategoryItem(name=agent.name, estimated_tokens=tokens))
+                agent_total += tokens
+        except Exception:
+            pass
+
+        # --- Memory Files ---
+        memory_items: List[ContextCategoryItem] = []
+        memory_total = 0
+        try:
+            hierarchy = MemoryService.get_memory_hierarchy(project_path)
+            for mem_file in hierarchy:
+                if not mem_file.get("exists"):
+                    continue
+                file_data = MemoryService.get_memory_file(mem_file["path"])
+                content = file_data.get("content")
+                if content:
+                    tokens = len(content) // CHARS_PER_TOKEN_ESTIMATE
+                    # Use a short display name
+                    display = mem_file.get("scope", "file")
+                    if mem_file.get("type") == "rule":
+                        display = f"rule:{mem_file.get('name', 'unknown')}"
+                    else:
+                        display = f"{mem_file['scope']}:CLAUDE.md"
+                    memory_items.append(ContextCategoryItem(name=display, estimated_tokens=tokens))
+                    memory_total += tokens
+        except Exception:
+            pass
+
+        # --- Skills ---
+        skill_items: List[ContextCategoryItem] = []
+        skill_total = 0
+        try:
+            skills = AgentService.list_skills(project_path)
+            for skill in skills:
+                detail = AgentService.get_skill(skill.name, skill.location, project_path)
+                if detail and detail.content:
+                    tokens = len(detail.content) // CHARS_PER_TOKEN_ESTIMATE
+                    skill_items.append(ContextCategoryItem(name=skill.name, estimated_tokens=tokens))
+                    skill_total += tokens
+        except Exception:
+            pass
+
+        # --- Messages (derived) ---
+        static_overhead = (
+            system_prompt_tokens
+            + system_tools_tokens
+            + mcp_total
+            + agent_total
+            + memory_total
+            + skill_total
+        )
+        messages_tokens = max(0, current_context_tokens - static_overhead)
+
+        # --- Free Space ---
+        free_space = max(0, context_limit - current_context_tokens - autocompact_buffer)
+
+        # Build categories
+        categories: List[ContextCompositionCategory] = []
+
+        def _add(name: str, tokens: int, color: str, items: Optional[List[ContextCategoryItem]] = None):
+            pct = (tokens / context_limit * 100) if context_limit > 0 else 0
+            if tokens > 0 or name in ("Free Space",):
+                categories.append(ContextCompositionCategory(
+                    category=name,
+                    estimated_tokens=tokens,
+                    percentage=round(pct, 1),
+                    color=color,
+                    items=items if items else None,
+                ))
+
+        _add("System Prompt", system_prompt_tokens, "#888888")
+        _add("System Tools", system_tools_tokens, "#999999")
+        _add("MCP Tools", mcp_total, "#0891b2", mcp_items)
+        _add("Custom Agents", agent_total, "#b1b9f9", agent_items)
+        _add("Memory Files", memory_total, "#d77757", memory_items)
+        _add("Skills", skill_total, "#ffc107", skill_items)
+        _add("Messages", messages_tokens, "#9333ea")
+        _add("Autocompact Buffer", autocompact_buffer, "#555555")
+        _add("Free Space", free_space, "#333333")
+
+        total_tokens = sum(c.estimated_tokens for c in categories)
+
+        return ContextComposition(
+            categories=categories,
+            total_tokens=total_tokens,
+            context_limit=context_limit,
+            model=model,
+        )
+
     async def analyze_session(
-        self, project_folder: str, session_id: str
+        self, project_folder: str, session_id: str, db: Optional[AsyncSession] = None
     ) -> ContextAnalysisResponse:
         """Full context analysis for a session."""
         filepath = self.projects_dir / project_folder / f"{session_id}.jsonl"
@@ -435,6 +593,19 @@ class ContextService:
             if avg_tokens_per_turn > 0:
                 estimated_turns_remaining = max(0, remaining_tokens // avg_tokens_per_turn)
 
+        # Get context composition breakdown
+        composition = None
+        try:
+            composition = await self.get_context_composition(
+                project_folder=project_folder,
+                session_id=session_id,
+                model=model,
+                current_context_tokens=current_context,
+                db=db,
+            )
+        except Exception:
+            pass  # Composition is best-effort
+
         analysis = ContextAnalysis(
             session_id=session_id,
             project_folder=project_folder,
@@ -451,6 +622,7 @@ class ContextService:
             estimated_turns_remaining=estimated_turns_remaining,
             context_zone=get_context_zone(context_percentage),
             total_turns=turn_number,
+            composition=composition,
         )
 
         return ContextAnalysisResponse(analysis=analysis)

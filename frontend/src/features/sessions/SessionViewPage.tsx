@@ -10,7 +10,7 @@ import { useContextApi } from '@/hooks/useContextApi'
 import { ConversationList } from './ConversationList'
 import { ContextGauge } from '@/features/context/ContextGauge'
 import { ContextTimelineChart } from '@/features/context/ContextTimelineChart'
-import { ContentBreakdownChart } from '@/features/context/ContentBreakdownChart'
+import { ContextCompositionChart } from '@/features/context/ContextCompositionChart'
 import { CacheEfficiencyCard } from '@/features/context/CacheEfficiencyCard'
 import { ProjectionsCard } from '@/features/context/ProjectionsCard'
 import { FileConsumptionTable } from '@/features/context/FileConsumptionTable'
@@ -253,7 +253,7 @@ export function SessionViewPage() {
                   />
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <ContentBreakdownChart categories={contextAnalysis.content_categories} />
+                    <ContextCompositionChart composition={contextAnalysis.composition} />
                     <FileConsumptionTable files={contextAnalysis.file_consumptions} />
                   </div>
                 </div>
