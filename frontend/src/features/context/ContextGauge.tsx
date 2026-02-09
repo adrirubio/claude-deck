@@ -3,6 +3,7 @@ interface ContextGaugeProps {
   currentTokens: number
   maxTokens: number
   model: string
+  showHelp?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -18,7 +19,7 @@ function getColor(pct: number): string {
   return '#22c55e'  // green
 }
 
-export function ContextGauge({ percentage, currentTokens, maxTokens, model }: ContextGaugeProps) {
+export function ContextGauge({ percentage, currentTokens, maxTokens, model, showHelp }: ContextGaugeProps) {
   const clampedPct = Math.min(100, Math.max(0, percentage))
   const color = getColor(clampedPct)
 
@@ -72,6 +73,11 @@ export function ContextGauge({ percentage, currentTokens, maxTokens, model }: Co
         </text>
       </svg>
       <span className="text-xs text-muted-foreground mt-1">{model}</span>
+      {showHelp && (
+        <p className="text-xs text-muted-foreground mt-2 text-center max-w-[240px]">
+          How much of the model's memory is used. Green is healthy; red means the session may need to compact or reset soon.
+        </p>
+      )}
     </div>
   )
 }

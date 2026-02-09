@@ -1,9 +1,10 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import type { FileConsumption } from '@/types/context'
 
 interface FileConsumptionTableProps {
   files: FileConsumption[]
+  showHelp?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -18,7 +19,7 @@ function shortenPath(path: string): string {
   return '.../' + parts.slice(-3).join('/')
 }
 
-export function FileConsumptionTable({ files }: FileConsumptionTableProps) {
+export function FileConsumptionTable({ files, showHelp }: FileConsumptionTableProps) {
   if (files.length === 0) {
     return null
   }
@@ -27,6 +28,11 @@ export function FileConsumptionTable({ files }: FileConsumptionTableProps) {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Top File Reads</CardTitle>
+        {showHelp && (
+          <CardDescription>
+            Files read during this session. Repeated reads of the same file consume extra tokens each time, which can fill the context window faster.
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">

@@ -1,9 +1,11 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
+import { Info } from 'lucide-react'
 import type { CacheEfficiency } from '@/types/context'
 
 interface CacheEfficiencyCardProps {
   cache: CacheEfficiency
+  showHelp?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -12,13 +14,18 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-export function CacheEfficiencyCard({ cache }: CacheEfficiencyCardProps) {
+export function CacheEfficiencyCard({ cache, showHelp }: CacheEfficiencyCardProps) {
   const hitPct = Math.round(cache.hit_ratio * 100)
 
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Cache Efficiency</CardTitle>
+        {showHelp && (
+          <CardDescription>
+            Shows how effectively Claude reuses cached content instead of re-processing it each turn.
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
         <div>
@@ -42,6 +49,18 @@ export function CacheEfficiencyCard({ cache }: CacheEfficiencyCardProps) {
             <div className="text-muted-foreground">Uncached</div>
           </div>
         </div>
+        {showHelp && (
+          <div className="bg-muted p-3 rounded text-xs space-y-1 mt-3">
+            <p className="font-medium flex items-center gap-1.5">
+              <Info className="h-3.5 w-3.5" />
+              Cache Terminology
+            </p>
+            <p><span className="font-medium">Cache Read</span> — tokens served from cache (fast, cheap).</p>
+            <p><span className="font-medium">Cache Write</span> — tokens written to cache for future reuse.</p>
+            <p><span className="font-medium">Uncached</span> — tokens processed from scratch each turn.</p>
+            <p>A higher hit ratio means lower latency and cost.</p>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

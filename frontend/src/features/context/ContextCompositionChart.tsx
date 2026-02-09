@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { ChevronDown, ChevronRight, Info } from 'lucide-react'
 import type { ContextComposition, ContextCompositionCategory } from '@/types/context'
 
 interface ContextCompositionChartProps {
   composition?: ContextComposition
+  showHelp?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -100,7 +101,7 @@ function CategoryRow({
   )
 }
 
-export function ContextCompositionChart({ composition }: ContextCompositionChartProps) {
+export function ContextCompositionChart({ composition, showHelp }: ContextCompositionChartProps) {
   if (!composition || composition.categories.length === 0) {
     return null
   }
@@ -114,6 +115,11 @@ export function ContextCompositionChart({ composition }: ContextCompositionChart
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Context Composition</CardTitle>
+        {showHelp && (
+          <CardDescription>
+            Breaks down what is consuming space in the context window. Expand any category to see individual items.
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Stacked horizontal bar */}
@@ -146,6 +152,23 @@ export function ContextCompositionChart({ composition }: ContextCompositionChart
             ))}
           </tbody>
         </table>
+        {showHelp && (
+          <div className="bg-muted p-3 rounded text-xs space-y-1 mt-3">
+            <p className="font-medium flex items-center gap-1.5">
+              <Info className="h-3.5 w-3.5" />
+              Category Glossary
+            </p>
+            <p><span className="font-medium">System Prompt</span> — Claude's base instructions and personality.</p>
+            <p><span className="font-medium">System Tools</span> — built-in tool definitions (Read, Write, Bash, etc.).</p>
+            <p><span className="font-medium">MCP Tools</span> — tools from connected MCP servers.</p>
+            <p><span className="font-medium">Agents</span> — custom agent definitions loaded for this project.</p>
+            <p><span className="font-medium">Memory</span> — CLAUDE.md files and project memory loaded at startup.</p>
+            <p><span className="font-medium">Skills</span> — skill definitions available in this session.</p>
+            <p><span className="font-medium">Messages</span> — the actual conversation (prompts, responses, tool results).</p>
+            <p><span className="font-medium">Autocompact Buffer</span> — space reserved for auto-compaction.</p>
+            <p><span className="font-medium">Free Space</span> — remaining capacity for more conversation.</p>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
