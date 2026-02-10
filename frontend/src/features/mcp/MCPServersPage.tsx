@@ -33,10 +33,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MCPServerList } from "./MCPServerList";
 import { MCPServerWizard } from "./MCPServerWizard";
 import { MCPServerForm } from "./MCPServerForm";
 import { MCPServerDetailDialog } from "./MCPServerDetailDialog";
+import { MCPRegistryBrowser } from "./MCPRegistryBrowser";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import type {
   MCPServer,
@@ -63,6 +65,9 @@ export function MCPServersPage() {
   // Detail dialog state
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
   const [showDetail, setShowDetail] = useState(false);
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState("my-servers");
 
   // Test All state
   const [testingAll, setTestingAll] = useState(false);
@@ -250,6 +255,11 @@ export function MCPServersPage() {
     }
   };
 
+  const handleInstallComplete = () => {
+    setActiveTab("my-servers");
+    fetchServers();
+  };
+
   const serverCount = servers.length;
   const estimatedTime = serverCount * 10; // rough estimate: 10s per server
 
@@ -267,7 +277,7 @@ export function MCPServersPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {serverCount > 0 && (
+          {activeTab === "my-servers" && serverCount > 0 && (
             <Button
               variant="outline"
               onClick={() => setShowTestAllConfirm(true)}
@@ -277,115 +287,132 @@ export function MCPServersPage() {
               {testingAll ? "Testing..." : "Test All"}
             </Button>
           )}
-          <RefreshButton onClick={fetchServers} loading={loading} />
-          <Button onClick={() => setShowWizard(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Server
-          </Button>
+          {activeTab === "my-servers" && (
+            <>
+              <RefreshButton onClick={fetchServers} loading={loading} />
+              <Button onClick={() => setShowWizard(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Server
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Error Display */}
-      {error && (
-        <Card className="border-destructive">
-          <CardHeader>
-            <CardTitle className="text-destructive">Error</CardTitle>
-            <CardDescription>{error}</CardDescription>
-          </CardHeader>
-        </Card>
-      )}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="my-servers">My Servers</TabsTrigger>
+          <TabsTrigger value="registry">Registry</TabsTrigger>
+        </TabsList>
 
-      {/* Managed Servers Section */}
-      {managedServers.length > 0 && (
-        <Card className="border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20">
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <Shield className="h-5 w-5 text-amber-600" />
-              <CardTitle className="text-lg">Managed Servers</CardTitle>
-              <Badge variant="outline" className="text-amber-600 border-amber-600">
-                Enterprise
-              </Badge>
-            </div>
-            <CardDescription>
-              These servers are configured by your organization and cannot be modified.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <MCPServerList
-              servers={managedServers}
-              loading={false}
-              onEdit={() => {}}
-              onDelete={() => {}}
-              onTestComplete={fetchServers}
-              onViewDetail={handleViewDetail}
-              onToggle={handleToggle}
-              readOnly
-              approvalOverrides={approvalOverrides}
-            />
-          </CardContent>
-        </Card>
-      )}
+        <TabsContent value="my-servers" className="space-y-6 mt-4">
+          {/* Error Display */}
+          {error && (
+            <Card className="border-destructive">
+              <CardHeader>
+                <CardTitle className="text-destructive">Error</CardTitle>
+                <CardDescription>{error}</CardDescription>
+              </CardHeader>
+            </Card>
+          )}
 
-      {/* Approval Settings Panel */}
-      <Collapsible open={approvalSettingsOpen} onOpenChange={setApprovalSettingsOpen}>
-        <Card>
-          <CollapsibleTrigger asChild>
-            <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
-              <div className="flex items-center justify-between">
+          {/* Managed Servers Section */}
+          {managedServers.length > 0 && (
+            <Card className="border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20">
+              <CardHeader className="pb-3">
                 <div className="flex items-center gap-2">
-                  <Info className="h-5 w-5" />
-                  <CardTitle className="text-lg">Server Approval Settings</CardTitle>
+                  <Shield className="h-5 w-5 text-amber-600" />
+                  <CardTitle className="text-lg">Managed Servers</CardTitle>
+                  <Badge variant="outline" className="text-amber-600 border-amber-600">
+                    Enterprise
+                  </Badge>
                 </div>
-                <Badge variant="outline">
-                  {approvalSettings?.default_mode === "always-allow" ? "Auto-approve" :
-                   approvalSettings?.default_mode === "always-deny" ? "Always deny" : "Ask each time"}
-                </Badge>
-              </div>
-              <CardDescription>
-                Control how MCP tool calls are approved
-              </CardDescription>
-            </CardHeader>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <CardContent className="pt-0">
-              <div className="space-y-4">
-                <div>
-                  <Label htmlFor="default-approval">Default Approval Mode</Label>
-                  <Select
-                    value={approvalSettings?.default_mode || "ask-every-time"}
-                    onValueChange={handleApprovalSettingsChange}
-                  >
-                    <SelectTrigger id="default-approval" className="mt-2">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ask-every-time">Ask every time</SelectItem>
-                      <SelectItem value="always-allow">Always allow (trust all servers)</SelectItem>
-                      <SelectItem value="always-deny">Always deny</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    This controls whether Claude Code asks for permission before using MCP tools.
-                    Per-server overrides can be set in each server's detail view.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </CollapsibleContent>
-        </Card>
-      </Collapsible>
+                <CardDescription>
+                  These servers are configured by your organization and cannot be modified.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <MCPServerList
+                  servers={managedServers}
+                  loading={false}
+                  onEdit={() => {}}
+                  onDelete={() => {}}
+                  onTestComplete={fetchServers}
+                  onViewDetail={handleViewDetail}
+                  onToggle={handleToggle}
+                  readOnly
+                  approvalOverrides={approvalOverrides}
+                />
+              </CardContent>
+            </Card>
+          )}
 
-      {/* Server List */}
-      <MCPServerList
-        servers={editableServers}
-        loading={loading}
-        onEdit={setEditingServer}
-        onDelete={handleDeleteServer}
-        onTestComplete={fetchServers}
-        onViewDetail={handleViewDetail}
-        onToggle={handleToggle}
-        approvalOverrides={approvalOverrides}
-      />
+          {/* Approval Settings Panel */}
+          <Collapsible open={approvalSettingsOpen} onOpenChange={setApprovalSettingsOpen}>
+            <Card>
+              <CollapsibleTrigger asChild>
+                <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Info className="h-5 w-5" />
+                      <CardTitle className="text-lg">Server Approval Settings</CardTitle>
+                    </div>
+                    <Badge variant="outline">
+                      {approvalSettings?.default_mode === "always-allow" ? "Auto-approve" :
+                       approvalSettings?.default_mode === "always-deny" ? "Always deny" : "Ask each time"}
+                    </Badge>
+                  </div>
+                  <CardDescription>
+                    Control how MCP tool calls are approved
+                  </CardDescription>
+                </CardHeader>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent className="pt-0">
+                  <div className="space-y-4">
+                    <div>
+                      <Label htmlFor="default-approval">Default Approval Mode</Label>
+                      <Select
+                        value={approvalSettings?.default_mode || "ask-every-time"}
+                        onValueChange={handleApprovalSettingsChange}
+                      >
+                        <SelectTrigger id="default-approval" className="mt-2">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="ask-every-time">Ask every time</SelectItem>
+                          <SelectItem value="always-allow">Always allow (trust all servers)</SelectItem>
+                          <SelectItem value="always-deny">Always deny</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        This controls whether Claude Code asks for permission before using MCP tools.
+                        Per-server overrides can be set in each server's detail view.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
+
+          {/* Server List */}
+          <MCPServerList
+            servers={editableServers}
+            loading={loading}
+            onEdit={setEditingServer}
+            onDelete={handleDeleteServer}
+            onTestComplete={fetchServers}
+            onViewDetail={handleViewDetail}
+            onToggle={handleToggle}
+            approvalOverrides={approvalOverrides}
+          />
+        </TabsContent>
+
+        <TabsContent value="registry" className="mt-4">
+          <MCPRegistryBrowser onInstallComplete={handleInstallComplete} />
+        </TabsContent>
+      </Tabs>
 
       {/* Server Detail Dialog */}
       <MCPServerDetailDialog

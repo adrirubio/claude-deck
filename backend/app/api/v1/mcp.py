@@ -21,8 +21,11 @@ from app.models.schemas import (
     MCPServerApprovalSettingsUpdate,
     MCPAuthStatus,
     MCPAuthStartResponse,
+    MCPRegistryInstallRequest,
+    MCPRegistryInstallResponse,
 )
 from app.services.mcp_service import MCPService
+from app.services.mcp_registry_service import MCPRegistryService
 from app.services.credentials_service import CredentialsService
 from app.services.oauth_service import MCPOAuthService
 
@@ -314,3 +317,91 @@ async def update_approval_settings(settings: MCPServerApprovalSettingsUpdate):
     )
     
     return await mcp_service.update_approval_settings(updated)
+
+
+# --- MCP Registry endpoints ---
+
+registry_service = MCPRegistryService()
+
+
+@router.get("/registry/search")
+async def search_registry(
+    q: Optional[str] = Query(None, description="Search query"),
+    limit: int = Query(20, ge=1, le=100, description="Results per page"),
+    cursor: Optional[str] = Query(None, description="Pagination cursor"),
+):
+    """Search the MCP registry for servers."""
+    try:
+        return await registry_service.search_servers(q, limit, cursor)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry API error: {str(e)}")
+
+
+@router.get("/registry/servers/{server_name:path}/versions/{version}")
+async def get_registry_server_detail(
+    server_name: str,
+    version: str = "latest",
+):
+    """Get detail for a specific registry server version."""
+    try:
+        return await registry_service.get_server_detail(server_name, version)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry API error: {str(e)}")
+
+
+@router.get("/registry/servers/{server_name:path}/versions")
+async def get_registry_server_versions(
+    server_name: str,
+):
+    """Get all versions for a registry server."""
+    try:
+        return await registry_service.get_server_versions(server_name)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry API error: {str(e)}")
+
+
+@router.post("/registry/install", response_model=MCPRegistryInstallResponse)
+async def install_registry_server(
+    request: MCPRegistryInstallRequest,
+    project_path: Optional[str] = Query(None, description="Project path for project scope"),
+):
+    """Install an MCP server from the registry into local config."""
+    if request.scope not in ("user", "project"):
+        raise HTTPException(status_code=400, detail="Scope must be 'user' or 'project'")
+
+    try:
+        config = registry_service.generate_install_config(
+            package_registry_type=request.package_registry_type,
+            package_identifier=request.package_identifier,
+            package_version=request.package_version,
+            package_runtime_hint=request.package_runtime_hint,
+            package_arguments=request.package_arguments,
+            remote_type=request.remote_type,
+            remote_url=request.remote_url,
+            remote_headers=request.remote_headers,
+            env_values=request.env_values,
+        )
+
+        if not config:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either package or remote transport info",
+            )
+
+        await registry_service.install_server(
+            server_name=request.server_name,
+            scope=request.scope,
+            config=config,
+            project_path=project_path,
+        )
+
+        return MCPRegistryInstallResponse(
+            success=True,
+            server_name=request.server_name,
+            config=config,
+            scope=request.scope,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to install server: {str(e)}")

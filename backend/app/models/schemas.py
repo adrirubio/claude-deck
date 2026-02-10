@@ -1671,3 +1671,34 @@ class PlanStatsResponse(BaseModel):
     oldest_date: Optional[str] = None
     newest_date: Optional[str] = None
     total_size_bytes: int
+
+
+# MCP Registry Schemas
+
+
+class MCPRegistryInstallRequest(BaseModel):
+    """Request to install an MCP server from the registry."""
+
+    server_name: str  # User-chosen config name (e.g., "github")
+    scope: str  # "user" or "project"
+    # Package install fields (mutually exclusive with remote_*)
+    package_registry_type: Optional[str] = None  # "npm", "pypi", "oci"
+    package_identifier: Optional[str] = None
+    package_version: Optional[str] = None
+    package_runtime_hint: Optional[str] = None
+    package_arguments: Optional[Dict[str, str]] = None
+    # Remote install fields
+    remote_type: Optional[str] = None  # "streamable-http", "sse"
+    remote_url: Optional[str] = None
+    remote_headers: Optional[Dict[str, str]] = None
+    # Shared
+    env_values: Optional[Dict[str, str]] = None
+
+
+class MCPRegistryInstallResponse(BaseModel):
+    """Response from MCP registry install."""
+
+    success: bool
+    server_name: str
+    config: Dict[str, Any]
+    scope: str
