@@ -92,14 +92,14 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     setHasChanges(true)
   }
 
-  const getSetting = (path: string, defaultValue: ConfigValue = null): ConfigValue => {
+  const getSetting = <T extends ConfigValue = ConfigValue>(path: string, defaultValue: T): T => {
     const keys = path.split('.')
     let current: ConfigValue = settings
     for (const key of keys) {
       if (current === undefined || current === null || typeof current !== 'object' || Array.isArray(current)) return defaultValue
       current = (current as Record<string, ConfigValue>)[key]
     }
-    return current ?? defaultValue
+    return (current ?? defaultValue) as T
   }
 
   const saveSettings = async () => {
@@ -300,7 +300,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <div className="grid gap-2">
               <Label htmlFor="model">Model</Label>
               <Select
-                value={getSetting('model', '') as string}
+                value={getSetting<string>('model', '')}
                 onValueChange={(v) => updateSetting('model', v)}
               >
                 <SelectTrigger id="model">
@@ -320,7 +320,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               <Label htmlFor="language">Language</Label>
               <Input
                 id="language"
-                value={getSetting('language', '') as string}
+                value={getSetting<string>('language', '')}
                 onChange={(e) => updateSetting('language', e.target.value)}
                 placeholder="e.g., en, es, de"
               />
@@ -329,7 +329,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <div className="grid gap-2">
               <Label htmlFor="autoUpdatesChannel">Auto Updates Channel</Label>
               <Select
-                value={getSetting('autoUpdatesChannel', 'stable') as string}
+                value={getSetting<string>('autoUpdatesChannel', 'stable')}
                 onValueChange={(v) => updateSetting('autoUpdatesChannel', v)}
               >
                 <SelectTrigger id="autoUpdatesChannel">
@@ -362,7 +362,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('sandbox.enabled', false) as boolean}
+                checked={getSetting<boolean>('sandbox.enabled', false)}
                 onCheckedChange={(v) => updateSetting('sandbox.enabled', v)}
               />
             </div>
@@ -375,7 +375,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('sandbox.autoAllowBashIfSandboxed', false) as boolean}
+                checked={getSetting<boolean>('sandbox.autoAllowBashIfSandboxed', false)}
                 onCheckedChange={(v) => updateSetting('sandbox.autoAllowBashIfSandboxed', v)}
               />
             </div>
@@ -386,7 +386,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 Commands that bypass sandbox isolation
               </p>
               <ListEditor
-                value={getSetting('sandbox.excludedCommands', []) as string[]}
+                value={getSetting<string[]>('sandbox.excludedCommands', [])}
                 onChange={(v) => updateSetting('sandbox.excludedCommands', v)}
                 placeholder="Add command..."
               />
@@ -398,7 +398,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 Network domains accessible from sandbox
               </p>
               <ListEditor
-                value={getSetting('sandbox.network.allowedDomains', []) as string[]}
+                value={getSetting<string[]>('sandbox.network.allowedDomains', [])}
                 onChange={(v) => updateSetting('sandbox.network.allowedDomains', v)}
                 placeholder="Add domain..."
               />
@@ -416,7 +416,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <div className="grid gap-2">
               <Label htmlFor="permissionsMode">Default Permission Mode</Label>
               <Select
-                value={getSetting('permissions.defaultMode', 'default') as string}
+                value={getSetting<string>('permissions.defaultMode', 'default')}
                 onValueChange={(v) => updateSetting('permissions.defaultMode', v)}
               >
                 <SelectTrigger id="permissionsMode">
@@ -449,7 +449,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('alwaysThinkingEnabled', false) as boolean}
+                checked={getSetting<boolean>('alwaysThinkingEnabled', false)}
                 onCheckedChange={(v) => updateSetting('alwaysThinkingEnabled', v)}
               />
             </div>
@@ -462,7 +462,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 </p>
               </div>
               <Switch
-                checked={getSetting('showTurnDuration', false) as boolean}
+                checked={getSetting<boolean>('showTurnDuration', false)}
                 onCheckedChange={(v) => updateSetting('showTurnDuration', v)}
               />
             </div>
@@ -477,7 +477,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
           </CardHeader>
           <CardContent>
             <KeyValueEditor
-              value={getSetting('env', {}) as Record<string, string>}
+              value={getSetting<Record<string, string>>('env', {})}
               onChange={(v) => updateSetting('env', v)}
             />
           </CardContent>
@@ -495,7 +495,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               <Input
                 id="contextWindow"
                 type="number"
-                value={getSetting('contextWindow', '') as string | number}
+                value={getSetting<string | number>('contextWindow', '')}
                 onChange={(e) =>
                   updateSetting('contextWindow', e.target.value ? parseInt(e.target.value) : null)
                 }
@@ -508,7 +508,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               <Input
                 id="maxTokens"
                 type="number"
-                value={getSetting('maxTokens', '') as string | number}
+                value={getSetting<string | number>('maxTokens', '')}
                 onChange={(e) =>
                   updateSetting('maxTokens', e.target.value ? parseInt(e.target.value) : null)
                 }

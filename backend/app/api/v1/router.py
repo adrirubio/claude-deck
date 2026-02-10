@@ -15,6 +15,7 @@ from .statusline import router as statusline_router
 from .sessions import router as sessions_router
 from .usage import router as usage_router
 from .memory import router as memory_router
+from .context import router as context_router
 
 router = APIRouter()
 
@@ -46,3 +47,4 @@ router.include_router(statusline_router, tags=["Status Line"])
 router.include_router(sessions_router, tags=["Sessions"])
 router.include_router(usage_router, tags=["Usage"])
 router.include_router(memory_router, tags=["Memory"])
+router.include_router(context_router, tags=["Context"])

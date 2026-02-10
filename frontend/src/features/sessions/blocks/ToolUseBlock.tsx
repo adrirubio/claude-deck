@@ -9,6 +9,8 @@ interface Props {
 }
 
 export function ToolUseBlock({ name, id, input }: Props) {
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+
   // Specialized renderers for common tools
   if (name === 'Bash') {
     return (
@@ -18,22 +20,23 @@ export function ToolUseBlock({ name, id, input }: Props) {
           <span className="text-xs text-muted-foreground">{id}</span>
         </div>
         <SyntaxHighlighter language="bash" style={oneDark} PreTag="div">
-          {(input.command as string) || ''}
+          {[str(input.command)]}
         </SyntaxHighlighter>
       </div>
     )
   }
 
   if (name === 'Write' || name === 'Edit') {
+    const content = str(input.content)
     return (
       <div className="border border-blue-500/50 rounded-lg p-3 bg-blue-50/10">
         <div className="flex items-center gap-2 mb-2">
           <Badge variant="outline" className="text-blue-700">{name}</Badge>
-          <span className="text-xs text-muted-foreground">{(input.file_path as string) || ''}</span>
+          <span className="text-xs text-muted-foreground">{str(input.file_path)}</span>
         </div>
-        {typeof input.content === 'string' && (
+        {content && (
           <SyntaxHighlighter language="typescript" style={oneDark} PreTag="div">
-            {input.content.substring(0, 500) + (input.content.length > 500 ? '\n... (truncated)' : '')}
+            {[content.substring(0, 500) + (content.length > 500 ? '\n... (truncated)' : '')]}
           </SyntaxHighlighter>
         )}
       </div>

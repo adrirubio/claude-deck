@@ -10,6 +10,8 @@ import type { MergedConfig } from '@/types/config'
 import type { AgentListResponse, SkillListResponse } from '@/types/agents'
 import type { OutputStyleListResponse } from '@/types/output-styles'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
+import { useContextApi } from '@/hooks/useContextApi'
+import { Progress } from '@/components/ui/progress'
 
 interface PluginListResponse {
   plugins: unknown[];
@@ -34,6 +36,7 @@ interface CommandListResponse {
 export function DashboardPage() {
   const { projects, activeProject } = useProjectContext()
   const { getDashboardStats } = useSessionsApi()
+  const { getActiveSessions } = useContextApi()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +58,9 @@ export function DashboardPage() {
     sessionsThisWeek: number;
     mostActiveProject?: string;
     totalMessages: number;
+    contextHighestPct: number;
+    contextHighestProject?: string;
+    contextActiveCount: number;
   } | null>(null)
 
   const fetchStats = useCallback(async () => {
@@ -75,6 +81,7 @@ export function DashboardPage() {
         commandsData,
         outputStylesData,
         sessionStatsData,
+        contextData,
       ] = await Promise.all([
         apiClient<MergedConfig>(buildEndpoint('config', params)),
         apiClient<MCPServerListResponse>(buildEndpoint('mcp/servers', params)),
@@ -86,10 +93,16 @@ export function DashboardPage() {
         apiClient<CommandListResponse>(buildEndpoint('commands', params)),
         apiClient<OutputStyleListResponse>(buildEndpoint('output-styles', params)),
         getDashboardStats(),
+        getActiveSessions().catch(() => ({ sessions: [] })),
       ])
 
       const allowRules = permissionsData.rules.filter(r => r.type === 'allow').length
       const denyRules = permissionsData.rules.filter(r => r.type === 'deny').length
+
+      const activeSessions = contextData.sessions.filter(s => s.is_active)
+      const highestCtx = contextData.sessions.length > 0
+        ? contextData.sessions.reduce((max, s) => s.context_percentage > max.context_percentage ? s : max, contextData.sessions[0])
+        : null
 
       setStats({
         mcpServerCount: mcpData.servers.length,
@@ -109,13 +122,16 @@ export function DashboardPage() {
         sessionsThisWeek: sessionStatsData.sessions_this_week,
         mostActiveProject: sessionStatsData.most_active_project,
         totalMessages: sessionStatsData.total_messages,
+        contextHighestPct: highestCtx?.context_percentage ?? 0,
+        contextHighestProject: highestCtx?.project_name,
+        contextActiveCount: activeSessions.length,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard data')
     } finally {
       setLoading(false)
     }
-  }, [activeProject?.path, projects.length, getDashboardStats])
+  }, [activeProject?.path, projects.length, getDashboardStats, getActiveSessions])
 
   useEffect(() => {
     fetchStats()
@@ -297,6 +313,43 @@ export function DashboardPage() {
                 onClick={() => navigate('/sessions')}
               >
                 View all sessions →
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Context Window</CardDescription>
+              <CardTitle className="text-3xl">
+                {stats.contextActiveCount > 0 ? `${stats.contextHighestPct.toFixed(0)}%` : '--'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {stats.contextActiveCount > 0 ? (
+                <div className="space-y-2">
+                  <Progress
+                    value={stats.contextHighestPct}
+                    className={`h-2 ${
+                      stats.contextHighestPct >= 95 ? '[&>div]:bg-red-500' :
+                      stats.contextHighestPct >= 80 ? '[&>div]:bg-orange-500' :
+                      stats.contextHighestPct >= 50 ? '[&>div]:bg-yellow-500' :
+                      '[&>div]:bg-green-500'
+                    }`}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {stats.contextActiveCount} active session{stats.contextActiveCount !== 1 ? 's' : ''}
+                    {stats.contextHighestProject && ` - ${stats.contextHighestProject}`}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No active sessions</p>
+              )}
+              <Button
+                variant="link"
+                className="p-0 h-auto mt-2"
+                onClick={() => navigate('/context')}
+              >
+                View context →
               </Button>
             </CardContent>
           </Card>

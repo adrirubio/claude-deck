@@ -30,8 +30,8 @@ export function Message({ message }: Props) {
   return (
     <Card
       className={`p-4 ${isUser
-          ? 'border-blue-500/50 bg-blue-50/10'
-          : 'border-gray-500/50 bg-gray-50/10'
+        ? 'border-blue-500/50 bg-blue-50/10'
+        : 'border-gray-500/50 bg-gray-50/10'
         }`}
     >
       {/* Header */}

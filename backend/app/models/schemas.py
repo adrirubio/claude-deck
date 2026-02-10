@@ -1474,3 +1474,120 @@ class DependencyInstallResult(BaseModel):
     installed: List[DependencyInstallStatus] = []
     failed: List[DependencyInstallStatus] = []
     logs: str = ""
+
+
+# Context Window Analysis Schemas
+
+
+class ContextSnapshot(BaseModel):
+    """One turn's context window state."""
+
+    turn_number: int
+    timestamp: str
+    total_context_tokens: int
+    input_tokens: int
+    cache_creation_tokens: int
+    cache_read_tokens: int
+    output_tokens: int
+    model: str
+    context_percentage: float  # 0-100
+
+
+class ContentCategory(BaseModel):
+    """Content type breakdown."""
+
+    category: str  # "user_messages", "assistant_messages", "tool_results", "tool_calls", "thinking"
+    estimated_chars: int
+    estimated_tokens: int
+    percentage: float
+
+
+class FileConsumption(BaseModel):
+    """File read consumption data."""
+
+    file_path: str
+    read_count: int
+    total_chars: int
+    estimated_tokens: int
+
+
+class CacheEfficiency(BaseModel):
+    """Cache hit/miss breakdown."""
+
+    total_cache_read: int
+    total_cache_creation: int
+    total_uncached: int
+    hit_ratio: float  # 0-1
+
+
+class ContextCategoryItem(BaseModel):
+    """Single item within a category (e.g., one MCP tool, one memory file)."""
+
+    name: str
+    estimated_tokens: int
+
+
+class ContextCompositionCategory(BaseModel):
+    """One category in the context composition breakdown."""
+
+    category: str  # "System Prompt", "MCP Tools", etc.
+    estimated_tokens: int
+    percentage: float
+    color: str  # Hex color for chart
+    items: Optional[List[ContextCategoryItem]] = None
+
+
+class ContextComposition(BaseModel):
+    """Full context composition matching /context CLI output."""
+
+    categories: List[ContextCompositionCategory]
+    total_tokens: int
+    context_limit: int
+    model: str
+
+
+class ContextAnalysis(BaseModel):
+    """Full context analysis for a session."""
+
+    session_id: str
+    project_folder: str
+    project_name: str
+    model: str
+    current_context_tokens: int
+    max_context_tokens: int
+    context_percentage: float
+    snapshots: List[ContextSnapshot]
+    content_categories: List[ContentCategory]
+    file_consumptions: List[FileConsumption]
+    cache_efficiency: CacheEfficiency
+    avg_tokens_per_turn: int
+    estimated_turns_remaining: int
+    context_zone: str  # "green", "yellow", "orange", "red"
+    total_turns: int
+    composition: Optional[ContextComposition] = None
+
+
+class ContextAnalysisResponse(BaseModel):
+    """Response wrapper for context analysis."""
+
+    analysis: ContextAnalysis
+
+
+class ActiveSessionContext(BaseModel):
+    """Lightweight context info for an active/recent session."""
+
+    session_id: str
+    project_folder: str
+    project_name: str
+    model: str
+    context_percentage: float
+    current_context_tokens: int
+    max_context_tokens: int
+    is_active: bool
+    last_activity: str
+
+
+class ActiveSessionsResponse(BaseModel):
+    """List of active sessions with context info."""
+
+    sessions: List[ActiveSessionContext]
