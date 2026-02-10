@@ -1,0 +1,17 @@
+services:
+  claude-deck:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      # Note: This assumes the container runs as root to access mounted host files.
+      # If running as a non-root user, ensure permissions are set correctly on the host.
+      - ~/.claude:/root/.claude
+      - ~/.claude.json:/root/.claude.json
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/claude_registry.db
+    restart: unless-stopped
+
+volumes:
+  data:

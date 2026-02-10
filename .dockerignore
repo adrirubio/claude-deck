@@ -1,0 +1,18 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+backend/venv
+**/__pycache__
+
+# Local development
+data/
+*.db
+.env
+.DS_Store
+
+# IDEs
+.vscode
+.idea
