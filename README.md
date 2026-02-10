@@ -85,7 +85,7 @@ This will:
 - Expose the application at http://localhost:8000
 
 > [!NOTE]
-> The Docker setup mounts your home directory's Claude Code configuration files. Ensure these files exist or adjust the `docker-compose.yml` if necessary.
+> The Docker setup mounts your home directory's Claude Code configuration files. Ensure these files exist or adjust the `docker-compose.yml` if necessary. The container runs as root to access these files; if you run as a non-root user, you may need to adjust permissions.
 
 To run in detached mode:
 ```bash

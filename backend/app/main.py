@@ -59,7 +59,7 @@ if os.path.exists(frontend_path):
     async def not_found_exception_handler(request, exc):
         """Standard 404 handler to serve index.html for SPA routing."""
         if not request.url.path.startswith(settings.api_v1_prefix):
-            return FileResponse(os.path.join(frontend_path, "index.html"))
+            return FileResponse(os.path.join(frontend_path, "index.html"), status_code=200)
         return {"detail": "Not Found"}
 else:
     @app.get("/")
