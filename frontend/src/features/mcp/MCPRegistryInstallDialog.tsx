@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Download } from 'lucide-react'
 import {
   Dialog,
@@ -55,29 +55,20 @@ export function MCPRegistryInstallDialog({
 
   const selectedTransport: TransportOption | undefined = transportOptions[selectedTransportIdx]
 
-  // Reset state when server changes
-  const resetState = () => {
-    setStep(1)
-    setSelectedTransportIdx(0)
-    setEnvValues({})
-    setArgValues({})
-    setHeaderValues({})
-    setInstalling(false)
-    if (server) {
-      // Derive default name from title or last segment
+  // Reset state when dialog opens with a new server
+  useEffect(() => {
+    if (open && server) {
+      setStep(1)
+      setSelectedTransportIdx(0)
+      setEnvValues({})
+      setArgValues({})
+      setHeaderValues({})
+      setInstalling(false)
       const parts = server.name.split('/')
       const defaultName = server.title || parts[parts.length - 1]
       setServerName(defaultName.toLowerCase().replace(/\s+/g, '-'))
     }
-  }
-
-  // Reset when dialog opens with a new server
-  const handleOpenChange = (isOpen: boolean) => {
-    if (isOpen && server) {
-      resetState()
-    }
-    onOpenChange(isOpen)
-  }
+  }, [open, server])
 
   // Get env vars and args for selected transport
   const getSelectedEnvVars = () => {
@@ -264,7 +255,7 @@ export function MCPRegistryInstallDialog({
   const displayName = getDisplayName(server)
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={MODAL_SIZES.MD}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
