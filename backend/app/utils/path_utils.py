@@ -237,6 +237,11 @@ def get_project_display_name(folder_name: str) -> str:
     return folder_name
 
 
+def get_claude_plans_dir() -> Path:
+    """Get default Claude plans directory (~/.claude/plans/)."""
+    return get_claude_user_config_dir() / "plans"
+
+
 def convert_path_to_folder_name(absolute_path: str) -> str:
     """Convert absolute path to Claude's hyphenated folder format.
 

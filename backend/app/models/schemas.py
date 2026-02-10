@@ -1591,3 +1591,83 @@ class ActiveSessionsResponse(BaseModel):
     """List of active sessions with context info."""
 
     sessions: List[ActiveSessionContext]
+
+
+# Plan History Browser Schemas
+
+
+class PlanSummary(BaseModel):
+    """Summary of a plan file for list view."""
+
+    filename: str
+    slug: str
+    title: str
+    excerpt: str
+    modified_at: str
+    size_bytes: int
+
+
+class PlanLinkedSession(BaseModel):
+    """Session linked to a plan via slug."""
+
+    session_id: str
+    project_folder: str
+    project_name: str
+    git_branch: Optional[str] = None
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
+
+
+class PlanDetail(BaseModel):
+    """Full plan detail including content and linked sessions."""
+
+    filename: str
+    slug: str
+    title: str
+    content: str
+    modified_at: str
+    size_bytes: int
+    headings: List[str]
+    code_block_count: int
+    table_count: int
+    linked_sessions: List[PlanLinkedSession]
+
+
+class PlanSearchResult(BaseModel):
+    """Plan matching a search query."""
+
+    filename: str
+    slug: str
+    title: str
+    matches: List[str]
+    modified_at: str
+
+
+class PlanListResponse(BaseModel):
+    """List of plan summaries."""
+
+    plans: List[PlanSummary]
+    total: int
+
+
+class PlanDetailResponse(BaseModel):
+    """Single plan detail response."""
+
+    plan: PlanDetail
+
+
+class PlanSearchResponse(BaseModel):
+    """Plan search results."""
+
+    results: List[PlanSearchResult]
+    query: str
+    total: int
+
+
+class PlanStatsResponse(BaseModel):
+    """Plan statistics for dashboard."""
+
+    total_plans: int
+    oldest_date: Optional[str] = None
+    newest_date: Optional[str] = None
+    total_size_bytes: int
