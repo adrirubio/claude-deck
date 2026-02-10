@@ -20,6 +20,8 @@ import { SessionViewPage } from './features/sessions/SessionViewPage'
 import { UsagePage } from './features/usage/UsagePage'
 import { MemoryPage } from './features/memory/MemoryPage'
 import { ContextPage } from './features/context/ContextPage'
+import { PlansPage } from './features/plans/PlansPage'
+import { PlanDetailPage } from './features/plans/PlanDetailPage'
 
 function App() {
   return (
@@ -44,6 +46,8 @@ function App() {
             <Route path="statusline" element={<StatusLinePage />} />
             <Route path="sessions/:projectFolder/:sessionId" element={<SessionViewPage />} />
             <Route path="sessions" element={<SessionsPage />} />
+            <Route path="plans/:filename" element={<PlanDetailPage />} />
+            <Route path="plans" element={<PlansPage />} />
             <Route path="context" element={<ContextPage />} />
             <Route path="usage" element={<UsagePage />} />
           </Route>
