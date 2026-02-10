@@ -2,7 +2,7 @@
 
 export type PermissionType = "allow" | "deny" | "ask";
 export type PermissionScope = "user" | "project";
-export type PermissionMode = "default" | "acceptEdits" | "dontAsk" | "plan";
+export type PermissionMode = "default" | "acceptEdits" | "dontAsk" | "plan" | "bypassPermissions" | "delegate";
 
 export interface PermissionRule {
   id: string;
@@ -72,12 +72,12 @@ export const PERMISSION_TOOLS: PermissionTool[] = [
 
 // Pattern examples for UI help - expanded with new syntax
 export const PATTERN_EXAMPLES = [
-  { pattern: "Bash(npm:*)", description: "Allow npm commands" },
-  { pattern: "Bash(git:*)", description: "Allow git commands" },
+  { pattern: "Bash(npm run *)", description: "Allow npm run commands" },
+  { pattern: "Bash(git *)", description: "Allow git commands" },
   { pattern: "Read(~/.zshrc)", description: "Read specific file" },
   { pattern: "Write(*.py)", description: "Write Python files" },
   { pattern: "Edit(/etc/*)", description: "Edit files in /etc" },
-  { pattern: "Bash(rm:*)", description: "Remove commands (dangerous)" },
+  { pattern: "Bash(rm *)", description: "Remove commands (dangerous)" },
   { pattern: "WebFetch(*)", description: "All web requests" },
   { pattern: "WebFetch(domain:github.com)", description: "Fetch from GitHub" },
   { pattern: "WebFetch(domain:*.anthropic.com)", description: "Fetch from Anthropic domains" },
@@ -111,6 +111,16 @@ export const PERMISSION_MODES: { value: PermissionMode; label: string; descripti
     label: "Plan Mode",
     description: "Claude will propose changes without executing",
   },
+  {
+    value: "bypassPermissions",
+    label: "Bypass Permissions",
+    description: "Auto-approve all operations including dangerous ones",
+  },
+  {
+    value: "delegate",
+    label: "Delegate",
+    description: "Run as a sub-agent with limited permissions",
+  },
 ];
 
 // Pattern syntax help
@@ -120,7 +130,7 @@ export const PATTERN_SYNTAX_HELP = `
 - \`Tool\` - Match any use of the tool
 - \`Tool(pattern)\` - Match tool with argument pattern
 - \`Tool:subcommand\` - Match specific subcommand (for Bash)
-- \`Tool(prefix:*)\` - Prefix matching with colon
+- \`Tool(prefix *)\` - Match tool with prefix and wildcard
 
 **Extended Patterns:**
 
@@ -134,10 +144,9 @@ export const PATTERN_SYNTAX_HELP = `
 
 **Wildcards:**
 - \`*\` - Match any characters
-- Use \`:*\` for prefix matching in Bash commands
 
 **Examples:**
-- \`Bash(npm:*)\` - Any npm command
+- \`Bash(npm run *)\` - Any npm run command
 - \`Read(*.env)\` - Read .env files
 - \`Write(/tmp/*)\` - Write to /tmp directory
 `;

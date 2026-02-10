@@ -215,7 +215,7 @@ export function RuleBuilder({
             <Input
               value={argument}
               onChange={(e) => setArgument(e.target.value)}
-              placeholder={selectedTool?.hint || "e.g., npm:*, *.py, /etc/*"}
+              placeholder={selectedTool?.hint || "e.g., npm run *, *.py, /etc/*"}
             />
             <div className="flex items-start gap-2 text-xs text-muted-foreground">
               <Lightbulb className="h-3 w-3 mt-0.5 flex-shrink-0" />
@@ -287,18 +287,18 @@ export function RuleBuilder({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setArgument("npm:*")}
+                      onClick={() => setArgument("npm run *")}
                       className="h-7 text-xs"
                     >
-                      npm:*
+                      npm run *
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setArgument("git:*")}
+                      onClick={() => setArgument("git *")}
                       className="h-7 text-xs"
                     >
-                      git:*
+                      git *
                     </Button>
                   </>
                 )}

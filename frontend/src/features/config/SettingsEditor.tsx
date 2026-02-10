@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -17,6 +18,7 @@ import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
 import type { ConfigValue, SettingsScope, ScopedSettingsResponse } from '@/types/config'
+import { PermissionRulesEditor } from './PermissionRulesEditor'
 
 interface SettingsEditorProps {
   onSave?: () => void
@@ -24,11 +26,12 @@ interface SettingsEditorProps {
 
 // Common model options for Claude
 const MODEL_OPTIONS = [
-  { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-  { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+  { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
+  { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
   { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
   { value: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
-  { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
 ]
 
 const PERMISSION_MODE_OPTIONS = [
@@ -36,12 +39,254 @@ const PERMISSION_MODE_OPTIONS = [
   { value: 'acceptEdits', label: 'Accept Edits' },
   { value: 'dontAsk', label: "Don't Ask" },
   { value: 'plan', label: 'Plan Mode' },
+  { value: 'bypassPermissions', label: 'Bypass Permissions' },
+  { value: 'delegate', label: 'Delegate' },
 ]
 
 const UPDATE_CHANNEL_OPTIONS = [
   { value: 'stable', label: 'Stable' },
   { value: 'latest', label: 'Latest' },
 ]
+
+const TEAMMATE_MODE_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'in-process', label: 'In-Process' },
+  { value: 'tmux', label: 'Tmux' },
+]
+
+// Reusable setting field components to reduce repetition in the form
+
+function SwitchSetting({ label, description, checked, onCheckedChange }: {
+  label: string
+  description: string
+  checked: boolean
+  onCheckedChange: (value: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between">
+      <div className="space-y-0.5">
+        <Label>{label}</Label>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
+  )
+}
+
+function NumberSetting({ id, label, description, value, onChange, placeholder }: {
+  id: string
+  label: string
+  description?: string
+  value: string | number
+  onChange: (value: number | null) => void
+  placeholder?: string
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value ? parseInt(e.target.value) : null)}
+        placeholder={placeholder}
+      />
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      )}
+    </div>
+  )
+}
+
+function SelectSetting({ id, label, description, value, onValueChange, placeholder, options }: {
+  id: string
+  label: string
+  description?: string
+  value: string
+  onValueChange: (value: string) => void
+  placeholder?: string
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Select value={value} onValueChange={onValueChange}>
+        <SelectTrigger id={id}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((opt) => (
+            <SelectItem key={opt.value} value={opt.value}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      )}
+    </div>
+  )
+}
+
+function TextSetting({ id, label, description, value, onChange, placeholder }: {
+  id: string
+  label: string
+  description?: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      )}
+    </div>
+  )
+}
+
+function TextareaSetting({ id, label, description, value, onChange, placeholder, rows }: {
+  id: string
+  label: string
+  description?: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  rows?: number
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Textarea
+        id={id}
+        className="font-mono text-sm"
+        rows={rows}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      )}
+    </div>
+  )
+}
+
+function ListEditor({ value, onChange, placeholder }: {
+  value: string[]
+  onChange: (value: string[]) => void
+  placeholder?: string
+}) {
+  const [newItem, setNewItem] = useState('')
+
+  function addItem() {
+    if (newItem.trim() && !value.includes(newItem.trim())) {
+      onChange([...value, newItem.trim()])
+      setNewItem('')
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <Input
+          value={newItem}
+          onChange={(e) => setNewItem(e.target.value)}
+          placeholder={placeholder}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addItem())}
+        />
+        <Button type="button" size="icon" variant="outline" onClick={addItem}>
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {value.map((item, index) => (
+          <div
+            key={index}
+            className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-sm"
+          >
+            <span>{item}</span>
+            <button
+              type="button"
+              onClick={() => onChange(value.filter((_, i) => i !== index))}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function KeyValueEditor({ value, onChange }: {
+  value: Record<string, string>
+  onChange: (value: Record<string, string>) => void
+}) {
+  const [newKey, setNewKey] = useState('')
+  const [newValue, setNewValue] = useState('')
+
+  function addItem() {
+    if (newKey.trim()) {
+      onChange({ ...value, [newKey.trim()]: newValue })
+      setNewKey('')
+      setNewValue('')
+    }
+  }
+
+  function removeItem(key: string) {
+    const updated = { ...value }
+    delete updated[key]
+    onChange(updated)
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <Input
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          placeholder="Key"
+          className="flex-1"
+        />
+        <Input
+          value={newValue}
+          onChange={(e) => setNewValue(e.target.value)}
+          placeholder="Value"
+          className="flex-1"
+        />
+        <Button type="button" size="icon" variant="outline" onClick={addItem}>
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="space-y-1">
+        {Object.entries(value).map(([k, v]) => (
+          <div key={k} className="flex items-center gap-2 bg-muted px-2 py-1 rounded text-sm">
+            <span className="font-mono">{k}</span>
+            <span className="text-muted-foreground">=</span>
+            <span className="font-mono flex-1 truncate">{v}</span>
+            <button
+              type="button"
+              onClick={() => removeItem(k)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export function SettingsEditor({ onSave }: SettingsEditorProps) {
   const { activeProject } = useProjectContext()
@@ -124,127 +369,6 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     }
   }
 
-  // List editors for array values
-  const ListEditor = ({
-    value,
-    onChange,
-    placeholder,
-  }: {
-    value: string[]
-    onChange: (value: string[]) => void
-    placeholder?: string
-  }) => {
-    const [newItem, setNewItem] = useState('')
-
-    const addItem = () => {
-      if (newItem.trim() && !value.includes(newItem.trim())) {
-        onChange([...value, newItem.trim()])
-        setNewItem('')
-      }
-    }
-
-    const removeItem = (index: number) => {
-      onChange(value.filter((_, i) => i !== index))
-    }
-
-    return (
-      <div className="space-y-2">
-        <div className="flex gap-2">
-          <Input
-            value={newItem}
-            onChange={(e) => setNewItem(e.target.value)}
-            placeholder={placeholder}
-            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addItem())}
-          />
-          <Button type="button" size="icon" variant="outline" onClick={addItem}>
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {value.map((item, index) => (
-            <div
-              key={index}
-              className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-sm"
-            >
-              <span>{item}</span>
-              <button
-                type="button"
-                onClick={() => removeItem(index)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  // Key-value editor for env variables
-  const KeyValueEditor = ({
-    value,
-    onChange,
-  }: {
-    value: Record<string, string>
-    onChange: (value: Record<string, string>) => void
-  }) => {
-    const [newKey, setNewKey] = useState('')
-    const [newValue, setNewValue] = useState('')
-
-    const addItem = () => {
-      if (newKey.trim()) {
-        onChange({ ...value, [newKey.trim()]: newValue })
-        setNewKey('')
-        setNewValue('')
-      }
-    }
-
-    const removeItem = (key: string) => {
-      const updated = { ...value }
-      delete updated[key]
-      onChange(updated)
-    }
-
-    return (
-      <div className="space-y-2">
-        <div className="flex gap-2">
-          <Input
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            placeholder="Key"
-            className="flex-1"
-          />
-          <Input
-            value={newValue}
-            onChange={(e) => setNewValue(e.target.value)}
-            placeholder="Value"
-            className="flex-1"
-          />
-          <Button type="button" size="icon" variant="outline" onClick={addItem}>
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-        <div className="space-y-1">
-          {Object.entries(value).map(([k, v]) => (
-            <div key={k} className="flex items-center gap-2 bg-muted px-2 py-1 rounded text-sm">
-              <span className="font-mono">{k}</span>
-              <span className="text-muted-foreground">=</span>
-              <span className="font-mono flex-1 truncate">{v}</span>
-              <button
-                type="button"
-                onClick={() => removeItem(k)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
   // Determine if project scopes should be available
   const hasProject = !!activeProject?.path
 
@@ -297,53 +421,30 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <CardDescription>Basic configuration options</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-2">
-              <Label htmlFor="model">Model</Label>
-              <Select
-                value={getSetting<string>('model', '')}
-                onValueChange={(v) => updateSetting('model', v)}
-              >
-                <SelectTrigger id="model">
-                  <SelectValue placeholder="Select a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {MODEL_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <SelectSetting
+              id="model"
+              label="Model"
+              value={getSetting<string>('model', '')}
+              onValueChange={(v) => updateSetting('model', v)}
+              placeholder="Select a model"
+              options={MODEL_OPTIONS}
+            />
 
-            <div className="grid gap-2">
-              <Label htmlFor="language">Language</Label>
-              <Input
-                id="language"
-                value={getSetting<string>('language', '')}
-                onChange={(e) => updateSetting('language', e.target.value)}
-                placeholder="e.g., en, es, de"
-              />
-            </div>
+            <TextSetting
+              id="language"
+              label="Language"
+              value={getSetting<string>('language', '')}
+              onChange={(v) => updateSetting('language', v)}
+              placeholder="e.g., en, es, de"
+            />
 
-            <div className="grid gap-2">
-              <Label htmlFor="autoUpdatesChannel">Auto Updates Channel</Label>
-              <Select
-                value={getSetting<string>('autoUpdatesChannel', 'stable')}
-                onValueChange={(v) => updateSetting('autoUpdatesChannel', v)}
-              >
-                <SelectTrigger id="autoUpdatesChannel">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {UPDATE_CHANNEL_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <SelectSetting
+              id="autoUpdatesChannel"
+              label="Auto Updates Channel"
+              value={getSetting<string>('autoUpdatesChannel', 'stable')}
+              onValueChange={(v) => updateSetting('autoUpdatesChannel', v)}
+              options={UPDATE_CHANNEL_OPTIONS}
+            />
           </CardContent>
         </Card>
 
@@ -354,31 +455,33 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <CardDescription>Sandbox and security settings</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Enable Sandbox</Label>
-                <p className="text-sm text-muted-foreground">
-                  Run commands in an isolated environment
-                </p>
-              </div>
-              <Switch
-                checked={getSetting<boolean>('sandbox.enabled', false)}
-                onCheckedChange={(v) => updateSetting('sandbox.enabled', v)}
-              />
-            </div>
+            <SwitchSetting
+              label="Enable Sandbox"
+              description="Run commands in an isolated environment"
+              checked={getSetting<boolean>('sandbox.enabled', false)}
+              onCheckedChange={(v) => updateSetting('sandbox.enabled', v)}
+            />
 
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Auto-Allow Bash if Sandboxed</Label>
-                <p className="text-sm text-muted-foreground">
-                  Automatically allow bash commands when sandbox is enabled
-                </p>
-              </div>
-              <Switch
-                checked={getSetting<boolean>('sandbox.autoAllowBashIfSandboxed', false)}
-                onCheckedChange={(v) => updateSetting('sandbox.autoAllowBashIfSandboxed', v)}
-              />
-            </div>
+            <SwitchSetting
+              label="Auto-Allow Bash if Sandboxed"
+              description="Automatically allow bash commands when sandbox is enabled"
+              checked={getSetting<boolean>('sandbox.autoAllowBashIfSandboxed', false)}
+              onCheckedChange={(v) => updateSetting('sandbox.autoAllowBashIfSandboxed', v)}
+            />
+
+            <SwitchSetting
+              label="Allow Unsandboxed Commands"
+              description="Allow the dangerouslyDisableSandbox escape hatch"
+              checked={getSetting<boolean>('sandbox.allowUnsandboxedCommands', true)}
+              onCheckedChange={(v) => updateSetting('sandbox.allowUnsandboxedCommands', v)}
+            />
+
+            <SwitchSetting
+              label="Weaker Nested Sandbox"
+              description="Use weaker sandbox for unprivileged Docker containers"
+              checked={getSetting<boolean>('sandbox.enableWeakerNestedSandbox', false)}
+              onCheckedChange={(v) => updateSetting('sandbox.enableWeakerNestedSandbox', v)}
+            />
 
             <div className="grid gap-2">
               <Label>Excluded Commands</Label>
@@ -403,6 +506,49 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
                 placeholder="Add domain..."
               />
             </div>
+
+            <div className="grid gap-2">
+              <Label>Allowed Unix Sockets</Label>
+              <p className="text-sm text-muted-foreground">
+                Unix socket paths accessible in sandbox
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('sandbox.network.allowUnixSockets', [])}
+                onChange={(v) => updateSetting('sandbox.network.allowUnixSockets', v)}
+                placeholder="e.g., ~/.ssh/agent-socket"
+              />
+            </div>
+
+            <SwitchSetting
+              label="Allow All Unix Sockets"
+              description="Allow all Unix socket connections in sandbox"
+              checked={getSetting<boolean>('sandbox.network.allowAllUnixSockets', false)}
+              onCheckedChange={(v) => updateSetting('sandbox.network.allowAllUnixSockets', v)}
+            />
+
+            <SwitchSetting
+              label="Allow Local Binding"
+              description="Allow localhost binding in sandbox (macOS only)"
+              checked={getSetting<boolean>('sandbox.network.allowLocalBinding', false)}
+              onCheckedChange={(v) => updateSetting('sandbox.network.allowLocalBinding', v)}
+            />
+
+            <div className="grid grid-cols-2 gap-4">
+              <NumberSetting
+                id="httpProxyPort"
+                label="HTTP Proxy Port"
+                value={getSetting<string | number>('sandbox.network.httpProxyPort', '')}
+                onChange={(v) => updateSetting('sandbox.network.httpProxyPort', v)}
+                placeholder="8080"
+              />
+              <NumberSetting
+                id="socksProxyPort"
+                label="SOCKS5 Proxy Port"
+                value={getSetting<string | number>('sandbox.network.socksProxyPort', '')}
+                onChange={(v) => updateSetting('sandbox.network.socksProxyPort', v)}
+                placeholder="8081"
+              />
+            </div>
           </CardContent>
         </Card>
 
@@ -413,24 +559,70 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <CardDescription>Control permission prompts and defaults</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <SelectSetting
+              id="permissionsMode"
+              label="Default Permission Mode"
+              value={getSetting<string>('permissions.defaultMode', 'default')}
+              onValueChange={(v) => updateSetting('permissions.defaultMode', v)}
+              options={PERMISSION_MODE_OPTIONS}
+            />
+
+            <SwitchSetting
+              label="Disable Bypass Permissions Mode"
+              description="Prevent users from enabling bypassPermissions mode"
+              checked={getSetting<string>('permissions.disableBypassPermissionsMode', '') === 'disable'}
+              onCheckedChange={(v) => updateSetting('permissions.disableBypassPermissionsMode', v ? 'disable' : '')}
+            />
+
             <div className="grid gap-2">
-              <Label htmlFor="permissionsMode">Default Permission Mode</Label>
-              <Select
-                value={getSetting<string>('permissions.defaultMode', 'default')}
-                onValueChange={(v) => updateSetting('permissions.defaultMode', v)}
-              >
-                <SelectTrigger id="permissionsMode">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PERMISSION_MODE_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label>Additional Directories</Label>
+              <p className="text-sm text-muted-foreground">
+                Extra working directories Claude can access
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('permissions.additionalDirectories', [])}
+                onChange={(v) => updateSetting('permissions.additionalDirectories', v)}
+                placeholder="e.g., ../docs/"
+              />
             </div>
+
+            <PermissionRulesEditor
+              allowRules={getSetting<string[]>('permissions.allow', [])}
+              denyRules={getSetting<string[]>('permissions.deny', [])}
+              askRules={getSetting<string[]>('permissions.ask', [])}
+              onAllowChange={(rules) => updateSetting('permissions.allow', rules)}
+              onDenyChange={(rules) => updateSetting('permissions.deny', rules)}
+              onAskChange={(rules) => updateSetting('permissions.ask', rules)}
+            />
+          </CardContent>
+        </Card>
+
+        {/* Attribution Settings */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Attribution</CardTitle>
+            <CardDescription>Configure commit and PR attribution text</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <TextareaSetting
+              id="attributionCommit"
+              label="Commit Attribution"
+              description="Text appended to commit messages"
+              value={getSetting<string>('attribution.commit', '')}
+              onChange={(v) => updateSetting('attribution.commit', v)}
+              placeholder="Co-Authored-By: Claude <noreply@anthropic.com>"
+              rows={3}
+            />
+
+            <TextareaSetting
+              id="attributionPr"
+              label="PR Attribution"
+              description="Text appended to pull request descriptions"
+              value={getSetting<string>('attribution.pr', '')}
+              onChange={(v) => updateSetting('attribution.pr', v)}
+              placeholder="Generated by Claude"
+              rows={2}
+            />
           </CardContent>
         </Card>
 
@@ -441,31 +633,47 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <CardDescription>User interface preferences</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Always Thinking Enabled</Label>
-                <p className="text-sm text-muted-foreground">
-                  Always show thinking process in responses
-                </p>
-              </div>
-              <Switch
-                checked={getSetting<boolean>('alwaysThinkingEnabled', false)}
-                onCheckedChange={(v) => updateSetting('alwaysThinkingEnabled', v)}
-              />
-            </div>
+            <SwitchSetting
+              label="Always Thinking Enabled"
+              description="Always show thinking process in responses"
+              checked={getSetting<boolean>('alwaysThinkingEnabled', false)}
+              onCheckedChange={(v) => updateSetting('alwaysThinkingEnabled', v)}
+            />
 
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label>Show Turn Duration</Label>
-                <p className="text-sm text-muted-foreground">
-                  Display how long each turn took
-                </p>
-              </div>
-              <Switch
-                checked={getSetting<boolean>('showTurnDuration', false)}
-                onCheckedChange={(v) => updateSetting('showTurnDuration', v)}
-              />
-            </div>
+            <SwitchSetting
+              label="Show Turn Duration"
+              description="Display how long each turn took"
+              checked={getSetting<boolean>('showTurnDuration', false)}
+              onCheckedChange={(v) => updateSetting('showTurnDuration', v)}
+            />
+
+            <SwitchSetting
+              label="Respect .gitignore"
+              description="Respect .gitignore in the @ file picker"
+              checked={getSetting<boolean>('respectGitignore', true)}
+              onCheckedChange={(v) => updateSetting('respectGitignore', v)}
+            />
+
+            <SwitchSetting
+              label="Spinner Tips"
+              description="Show tips in the loading spinner"
+              checked={getSetting<boolean>('spinnerTipsEnabled', true)}
+              onCheckedChange={(v) => updateSetting('spinnerTipsEnabled', v)}
+            />
+
+            <SwitchSetting
+              label="Terminal Progress Bar"
+              description="Show progress bar in the terminal"
+              checked={getSetting<boolean>('terminalProgressBarEnabled', true)}
+              onCheckedChange={(v) => updateSetting('terminalProgressBarEnabled', v)}
+            />
+
+            <SwitchSetting
+              label="Reduced Motion"
+              description="Reduce UI animations for accessibility"
+              checked={getSetting<boolean>('prefersReducedMotion', false)}
+              onCheckedChange={(v) => updateSetting('prefersReducedMotion', v)}
+            />
           </CardContent>
         </Card>
 
@@ -490,31 +698,49 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <CardDescription>Advanced configuration options</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-2">
-              <Label htmlFor="contextWindow">Context Window</Label>
-              <Input
-                id="contextWindow"
-                type="number"
-                value={getSetting<string | number>('contextWindow', '')}
-                onChange={(e) =>
-                  updateSetting('contextWindow', e.target.value ? parseInt(e.target.value) : null)
-                }
-                placeholder="Default context window size"
-              />
-            </div>
+            <TextSetting
+              id="outputStyle"
+              label="Output Style"
+              description="Controls the style of Claude's responses"
+              value={getSetting<string>('outputStyle', '')}
+              onChange={(v) => updateSetting('outputStyle', v)}
+              placeholder="e.g., Explanatory, Concise"
+            />
 
-            <div className="grid gap-2">
-              <Label htmlFor="maxTokens">Max Tokens</Label>
-              <Input
-                id="maxTokens"
-                type="number"
-                value={getSetting<string | number>('maxTokens', '')}
-                onChange={(e) =>
-                  updateSetting('maxTokens', e.target.value ? parseInt(e.target.value) : null)
-                }
-                placeholder="Maximum tokens per response"
-              />
-            </div>
+            <TextSetting
+              id="plansDirectory"
+              label="Plans Directory"
+              description="Where plan files are stored (relative to project root)"
+              value={getSetting<string>('plansDirectory', '')}
+              onChange={(v) => updateSetting('plansDirectory', v)}
+              placeholder="~/.claude/plans"
+            />
+
+            <SelectSetting
+              id="teammateMode"
+              label="Teammate Mode"
+              description="How agent teammates are displayed"
+              value={getSetting<string>('teammateMode', '')}
+              onValueChange={(v) => updateSetting('teammateMode', v)}
+              placeholder="Select mode"
+              options={TEAMMATE_MODE_OPTIONS}
+            />
+
+            <SwitchSetting
+              label="Disable All Hooks"
+              description="Disable all hooks and custom status line"
+              checked={getSetting<boolean>('disableAllHooks', false)}
+              onCheckedChange={(v) => updateSetting('disableAllHooks', v)}
+            />
+
+            <NumberSetting
+              id="cleanupPeriodDays"
+              label="Cleanup Period (days)"
+              description="Number of days before old sessions are cleaned up"
+              value={getSetting<string | number>('cleanupPeriodDays', '')}
+              onChange={(v) => updateSetting('cleanupPeriodDays', v)}
+              placeholder="30"
+            />
           </CardContent>
         </Card>
       </div>

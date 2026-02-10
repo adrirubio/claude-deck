@@ -508,7 +508,7 @@ export function PermissionsPage() {
                 <li><code className="bg-muted px-1 rounded">Tool</code> - Match any use of the tool</li>
                 <li><code className="bg-muted px-1 rounded">Tool(pattern)</code> - Match with argument pattern</li>
                 <li><code className="bg-muted px-1 rounded">Tool:subcommand</code> - Match specific subcommand</li>
-                <li><code className="bg-muted px-1 rounded">prefix:*</code> - Prefix matching (for Bash)</li>
+                <li><code className="bg-muted px-1 rounded">Tool(prefix *)</code> - Match with prefix and wildcard</li>
               </ul>
             </div>
             <div>
@@ -523,7 +523,7 @@ export function PermissionsPage() {
             <div>
               <h4 className="font-medium mb-2">Examples</h4>
               <ul className="space-y-1 text-muted-foreground">
-                <li><code className="bg-muted px-1 rounded">Bash(npm:*)</code> - Any npm command</li>
+                <li><code className="bg-muted px-1 rounded">Bash(npm run *)</code> - Any npm run command</li>
                 <li><code className="bg-muted px-1 rounded">Read(*.env)</code> - Read .env files</li>
                 <li><code className="bg-muted px-1 rounded">Write(/tmp/*)</code> - Write to /tmp</li>
                 <li><code className="bg-muted px-1 rounded">MCP(postgres:*)</code> - All postgres MCP</li>
