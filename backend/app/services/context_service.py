@@ -234,8 +234,6 @@ class ContextService:
         # Folder names are like '-home-user-project' → '/home/user/project'
         project_path: Optional[str] = None
         if project_folder and project_folder.startswith("-"):
-            project_path = project_folder.replace("-", "/", 1)
-            # Remaining dashes are path separators
             project_path = "/" + project_folder[1:].replace("-", "/")
 
         autocompact_buffer = int(context_limit * 0.165)
