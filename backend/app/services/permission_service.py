@@ -373,12 +373,14 @@ class PermissionService:
         Validate permission pattern format.
 
         Pattern format examples:
-        - Tool(pattern): Bash(npm*), Read(~/.zshrc), Write(*.py)
-        - Tool:subcommand: Task:explore, Grep:regex
+        - Tool(pattern): Bash(npm run *), Read(~/.zshrc), Write(*.py)
+        - Tool:subcommand: Task:explore
+        - Tool:*: Bash:* (prefix matching at tool level)
         - WebFetch(domain:example.com)
         - MCP(server:tool) or MCP(server:*)
         - Task(*) or Task(explore)
         - Skill(skill-name)
+        - mcp__server__tool (MCP tool names)
 
         Args:
             pattern: Pattern to validate
@@ -386,26 +388,9 @@ class PermissionService:
         Returns:
             True if valid, False otherwise
         """
-        # Pattern must be non-empty
-        if not pattern or not pattern.strip():
-            return False
-
-        # Check for Tool(pattern) format - includes WebFetch(domain:...), MCP(server:tool), etc.
-        tool_pattern_regex = r"^[A-Za-z_][A-Za-z0-9_]*\(.*\)$"
-        if re.match(tool_pattern_regex, pattern):
-            return True
-
-        # Check for Tool:subcommand format
-        tool_subcommand_regex = r"^[A-Za-z_][A-Za-z0-9_]*:[A-Za-z0-9_\-\*]+$"
-        if re.match(tool_subcommand_regex, pattern):
-            return True
-
-        # Check for simple tool name
-        tool_name_regex = r"^[A-Za-z_][A-Za-z0-9_]*$"
-        if re.match(tool_name_regex, pattern):
-            return True
-
-        return False
+        from app.utils.pattern_utils import validate_permission_pattern
+        is_valid, _ = validate_permission_pattern(pattern)
+        return is_valid
 
     @staticmethod
     def evaluate_permission(
