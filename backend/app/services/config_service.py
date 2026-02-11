@@ -369,8 +369,16 @@ class ConfigService:
         result = base.copy()
 
         for key, value in override.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = self._deep_merge(result[key], value)
+            if value is None:
+                # None means "remove this key" (revert to default)
+                result.pop(key, None)
+            elif key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                merged = self._deep_merge(result[key], value)
+                # Remove parent dict if all children were removed
+                if merged:
+                    result[key] = merged
+                else:
+                    result.pop(key, None)
             else:
                 result[key] = value
 

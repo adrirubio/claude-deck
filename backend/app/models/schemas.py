@@ -24,7 +24,7 @@ class MergedConfig(BaseModel):
     settings: Dict[str, Any]
     mcp_servers: Dict[str, Any]
     hooks: Dict[str, List[Any]]
-    permissions: Dict[str, List[str]]
+    permissions: Dict[str, Any]
     commands: List[str]
     agents: List[str]
 
