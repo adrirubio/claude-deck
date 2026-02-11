@@ -12,6 +12,7 @@ from ..utils.path_utils import (
     ensure_directory_exists,
 )
 from ..utils.file_utils import read_json_file
+from ..utils.pattern_utils import sanitize_permission_rules
 
 
 # Settings scope priority (highest to lowest)
@@ -323,15 +324,29 @@ class ConfigService:
         # Deep merge settings (new settings override existing)
         merged_settings = self._deep_merge(existing_settings, settings)
 
+        # Sanitize permission patterns before writing
+        sanitize_result = sanitize_permission_rules(merged_settings)
+        merged_settings = sanitize_result["sanitized_settings"]
+
         # Write the merged settings
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(merged_settings, f, indent=2)
 
+            message = "Settings updated successfully"
+            if sanitize_result["migrated"]:
+                count = len(sanitize_result["migrated"])
+                message += f" ({count} pattern(s) auto-migrated)"
+            if sanitize_result["removed"]:
+                count = len(sanitize_result["removed"])
+                message += f" ({count} invalid pattern(s) removed)"
+
             return {
                 "success": True,
-                "message": f"Settings updated successfully",
-                "path": str(file_path)
+                "message": message,
+                "path": str(file_path),
+                "migrated_patterns": sanitize_result["migrated"],
+                "removed_patterns": sanitize_result["removed"],
             }
         except Exception as e:
             return {

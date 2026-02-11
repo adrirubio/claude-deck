@@ -1310,6 +1310,30 @@ class SettingsUpdateResponse(BaseModel):
     success: bool
     message: str
     path: str  # File path that was updated
+    migrated_patterns: Optional[List[Dict[str, str]]] = None
+    removed_patterns: Optional[List[Dict[str, str]]] = None
+
+
+class SettingsValidationRequest(BaseModel):
+    """Schema for validating settings without saving."""
+
+    settings: Dict[str, Any]
+
+
+class PatternIssue(BaseModel):
+    """A single pattern validation issue."""
+
+    pattern: str
+    category: str
+    error: str
+    suggestion: Optional[str] = None
+
+
+class SettingsValidationResponse(BaseModel):
+    """Response from settings validation."""
+
+    valid: bool
+    issues: List[PatternIssue] = []
 
 
 # Backup Manifest & Dependency Schemas

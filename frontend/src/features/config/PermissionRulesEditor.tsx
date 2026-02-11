@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Plus, X, ChevronDown } from 'lucide-react'
+import { Plus, X, ChevronDown, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,6 +25,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { PERMISSION_TOOLS, PATTERN_EXAMPLES } from '@/types/permissions'
+import { validatePermissionPattern } from '@/lib/pattern-utils'
 
 interface PermissionRulesEditorProps {
   allowRules: string[]
@@ -121,15 +122,24 @@ export function PermissionRulesEditor({
     setDialogCategory(category)
     setTool('')
     setArgument('')
+    setAddError('')
     setDialogOpen(true)
   }
 
+  const [addError, setAddError] = useState('')
+
   const addRule = () => {
     if (!pattern) return
+    const validation = validatePermissionPattern(pattern)
+    if (!validation.valid) {
+      setAddError(validation.error || 'Invalid pattern')
+      return
+    }
     const { rules, onChange } = rulesMap[dialogCategory]
     if (!rules.includes(pattern)) {
       onChange([...rules, pattern])
     }
+    setAddError('')
     setDialogOpen(false)
   }
 
@@ -187,21 +197,32 @@ export function PermissionRulesEditor({
               <CollapsibleContent>
                 {rules.length > 0 ? (
                   <div className="flex flex-wrap gap-2 mt-3">
-                    {rules.map((rule, index) => (
-                      <div
-                        key={index}
-                        className="flex items-center gap-1 bg-background border rounded-md px-2 py-1 text-sm font-mono"
-                      >
-                        <span>{rule}</span>
-                        <button
-                          type="button"
-                          onClick={() => removeRule(category, index)}
-                          className="text-muted-foreground hover:text-foreground ml-1"
+                    {rules.map((rule, index) => {
+                      const validation = validatePermissionPattern(rule)
+                      return (
+                        <div
+                          key={index}
+                          className={`flex items-center gap-1 bg-background border rounded-md px-2 py-1 text-sm font-mono ${
+                            !validation.valid ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/20' : ''
+                          }`}
+                          title={validation.valid ? undefined : validation.error}
                         >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))}
+                          {!validation.valid && (
+                            <AlertTriangle className="h-3 w-3 text-amber-500 flex-shrink-0" />
+                          )}
+                          <span className={!validation.valid ? 'text-amber-700 dark:text-amber-400' : ''}>
+                            {rule.length > 80 ? rule.slice(0, 80) + '...' : rule}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeRule(category, index)}
+                            className="text-muted-foreground hover:text-foreground ml-1"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : (
                   <p className="text-xs text-muted-foreground mt-2">No rules configured</p>
@@ -232,7 +253,7 @@ export function PermissionRulesEditor({
             {/* Tool Selection */}
             <div className="space-y-2">
               <Label>Tool</Label>
-              <Select value={tool} onValueChange={(v) => { setTool(v); setArgument('') }}>
+              <Select value={tool} onValueChange={(v) => { setTool(v); setArgument(''); setAddError('') }}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a tool..." />
                 </SelectTrigger>
@@ -254,7 +275,7 @@ export function PermissionRulesEditor({
               <Label>Pattern (optional)</Label>
               <Input
                 value={argument}
-                onChange={(e) => setArgument(e.target.value)}
+                onChange={(e) => { setArgument(e.target.value); setAddError('') }}
                 placeholder={selectedTool?.hint || 'e.g., npm run *, *.py, /etc/*'}
                 onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addRule())}
               />
@@ -295,6 +316,12 @@ export function PermissionRulesEditor({
                   </Badge>
                   {pattern}
                 </div>
+                {addError && (
+                  <p className="text-xs text-red-600 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" />
+                    {addError}
+                  </p>
+                )}
               </div>
             )}
 

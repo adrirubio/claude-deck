@@ -9,7 +9,11 @@ from ...models.schemas import (
     ConfigFile,
     SettingsUpdateRequest,
     SettingsUpdateResponse,
+    SettingsValidationRequest,
+    SettingsValidationResponse,
+    PatternIssue,
 )
+from ...utils.pattern_utils import validate_permission_pattern, migrate_deprecated_pattern
 
 router = APIRouter(prefix="/config", tags=["config"])
 config_service = ConfigService()
@@ -98,6 +102,47 @@ async def update_settings(request: SettingsUpdateRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/validate-settings", response_model=SettingsValidationResponse)
+async def validate_settings(request: SettingsValidationRequest):
+    """
+    Validate permission patterns in settings without saving.
+
+    Checks permissions.allow, permissions.ask, and permissions.deny arrays
+    for patterns that Claude Code would reject.
+    """
+    issues: list[PatternIssue] = []
+    permissions = request.settings.get("permissions", {})
+    if not isinstance(permissions, dict):
+        return SettingsValidationResponse(valid=True, issues=[])
+
+    for category in ("allow", "ask", "deny"):
+        rules = permissions.get(category)
+        if not isinstance(rules, list):
+            continue
+        for pattern in rules:
+            if not isinstance(pattern, str):
+                issues.append(PatternIssue(
+                    pattern=str(pattern),
+                    category=category,
+                    error="Pattern is not a string",
+                ))
+                continue
+            is_valid, error = validate_permission_pattern(pattern)
+            if not is_valid:
+                suggestion = migrate_deprecated_pattern(pattern)
+                issues.append(PatternIssue(
+                    pattern=pattern,
+                    category=category,
+                    error=error or "Invalid pattern",
+                    suggestion=suggestion,
+                ))
+
+    return SettingsValidationResponse(
+        valid=len(issues) == 0,
+        issues=issues,
+    )
 
 
 @router.get("/settings/{scope}")

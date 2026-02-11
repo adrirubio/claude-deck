@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, Plus, X, Loader2 } from 'lucide-react'
+import { Save, Plus, X, Loader2, AlertTriangle } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,11 +14,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { toast } from 'sonner'
 import type { ConfigValue, SettingsScope, ScopedSettingsResponse } from '@/types/config'
 import { PermissionRulesEditor } from './PermissionRulesEditor'
+import { findPatternIssues, applyPatternFixes, type PatternIssue } from '@/lib/pattern-utils'
 
 interface SettingsEditorProps {
   onSave?: () => void
@@ -295,6 +306,8 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
+  const [patternIssues, setPatternIssues] = useState<PatternIssue[]>([])
+  const [showFixDialog, setShowFixDialog] = useState(false)
 
   const fetchSettings = useCallback(async () => {
     setLoading(true)
@@ -347,19 +360,30 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     return (current ?? defaultValue) as T
   }
 
-  const saveSettings = async () => {
+  const doSave = async (settingsToSave: Record<string, ConfigValue>) => {
     setSaving(true)
     try {
-      await apiClient('config/settings', {
+      const result = await apiClient<{
+        success: boolean
+        message: string
+        migrated_patterns?: { original: string; migrated: string; category: string }[]
+        removed_patterns?: { pattern: string; category: string; reason: string }[]
+      }>('config/settings', {
         method: 'PUT',
         body: JSON.stringify({
           scope,
-          settings,
+          settings: settingsToSave,
           project_path: activeProject?.path,
         }),
       })
-      toast.success('Settings saved successfully')
-      setHasChanges(false)
+      if (result.migrated_patterns?.length || result.removed_patterns?.length) {
+        toast.success(result.message)
+        // Reload settings to reflect sanitized state
+        fetchSettings()
+      } else {
+        toast.success('Settings saved successfully')
+        setHasChanges(false)
+      }
       onSave?.()
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings'
@@ -367,6 +391,24 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     } finally {
       setSaving(false)
     }
+  }
+
+  const saveSettings = async () => {
+    // Check for invalid permission patterns before saving
+    const issues = findPatternIssues(settings as Record<string, unknown>)
+    if (issues.length > 0) {
+      setPatternIssues(issues)
+      setShowFixDialog(true)
+      return
+    }
+    await doSave(settings)
+  }
+
+  const handleFixAndSave = async () => {
+    setShowFixDialog(false)
+    const fixed = applyPatternFixes(settings as Record<string, unknown>) as Record<string, ConfigValue>
+    setSettings(fixed)
+    await doSave(fixed)
   }
 
   // Determine if project scopes should be available
@@ -744,6 +786,54 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
           </CardContent>
         </Card>
       </div>
+
+      {/* Pattern Fix Confirmation Dialog */}
+      <AlertDialog open={showFixDialog} onOpenChange={setShowFixDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Invalid Permission Patterns Found
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p>
+                  {patternIssues.length} pattern{patternIssues.length !== 1 ? 's' : ''} would
+                  be rejected by Claude Code. Fix them before saving?
+                </p>
+                <div className="max-h-48 overflow-y-auto space-y-2 text-sm">
+                  {patternIssues.map((issue, i) => (
+                    <div key={i} className="rounded border p-2 bg-muted">
+                      <code className="text-xs break-all block">
+                        {issue.pattern.length > 100
+                          ? issue.pattern.slice(0, 100) + '...'
+                          : issue.pattern}
+                      </code>
+                      <p className="text-xs text-muted-foreground mt-1">{issue.error}</p>
+                      {issue.suggestion && (
+                        <p className="text-xs text-green-600 mt-1">
+                          Fix: {issue.suggestion}
+                        </p>
+                      )}
+                      {!issue.suggestion && (
+                        <p className="text-xs text-red-600 mt-1">
+                          Will be removed (cannot auto-fix)
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleFixAndSave}>
+              Fix & Save
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
