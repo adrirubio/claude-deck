@@ -47,9 +47,11 @@ def validate_permission_pattern(pattern: str) -> Tuple[bool, Optional[str]]:
     # Check Tool(argument) format
     match = TOOL_ARG_RE.match(pattern)
     if match:
+        tool = match.group(1)
         arg = match.group(2)
-        # Check for deprecated :* inside parentheses
-        if DEPRECATED_COLON_STAR_RE.search(arg):
+        # Check for deprecated :* inside parentheses (but not for MCP patterns
+        # where server:* is the standard syntax for "all tools from server")
+        if tool != "MCP" and DEPRECATED_COLON_STAR_RE.search(arg):
             return False, (
                 "The :* pattern inside Tool(...) is deprecated. "
                 "Use space-wildcard instead: e.g., Bash(command *) not Bash(command:*)"
@@ -90,7 +92,8 @@ def migrate_deprecated_pattern(pattern: str) -> Optional[str]:
     if match:
         tool = match.group(1)
         arg = match.group(2)
-        if DEPRECATED_COLON_STAR_RE.search(arg):
+        # Don't migrate MCP patterns — server:* is valid MCP syntax
+        if tool != "MCP" and DEPRECATED_COLON_STAR_RE.search(arg):
             migrated_arg = DEPRECATED_COLON_STAR_RE.sub(" *", arg)
             return f"{tool}({migrated_arg})"
 

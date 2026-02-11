@@ -43,8 +43,10 @@ export function validatePermissionPattern(pattern: string): PatternValidation {
   // Check Tool(argument) format
   const match = pattern.match(TOOL_ARG_RE)
   if (match) {
+    const tool = match[1]
     const arg = match[2]
-    if (DEPRECATED_COLON_STAR_RE.test(arg)) {
+    // Don't flag MCP patterns — server:* is valid MCP syntax for "all tools from server"
+    if (tool !== 'MCP' && DEPRECATED_COLON_STAR_RE.test(arg)) {
       return {
         valid: false,
         error: 'The :* pattern inside Tool(...) is deprecated. Use space-wildcard instead: e.g., Bash(command *) not Bash(command:*)',
@@ -78,7 +80,8 @@ export function migrateDeprecatedPattern(pattern: string): string | null {
   if (match) {
     const tool = match[1]
     const arg = match[2]
-    if (DEPRECATED_COLON_STAR_RE.test(arg)) {
+    // Don't migrate MCP patterns — server:* is valid MCP syntax
+    if (tool !== 'MCP' && DEPRECATED_COLON_STAR_RE.test(arg)) {
       const migratedArg = arg.replace(DEPRECATED_COLON_STAR_RE, ' *')
       return `${tool}(${migratedArg})`
     }
