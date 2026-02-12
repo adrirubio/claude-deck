@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
+  Brain,
   FileText,
   FolderTree,
   RefreshCw,
@@ -22,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import { MemoryEditor } from "./MemoryEditor";
 import { RulesManager } from "./RulesManager";
+import { AutoMemoryManager } from "./AutoMemoryManager";
 import { ImportTree } from "./ImportTree";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { CLICKABLE_CARD } from "@/lib/constants";
@@ -29,7 +31,7 @@ import { useProjectContext } from "@/contexts/ProjectContext";
 import { toast } from "sonner";
 import type { MemoryHierarchyItem, MemoryHierarchyResponse } from "@/types/memory";
 
-type MemoryTab = "hierarchy" | "rules" | "imports";
+type MemoryTab = "hierarchy" | "rules" | "auto-memory" | "imports";
 
 const SCOPE_ICONS: Record<string, React.ReactNode> = {
   managed: <Shield className="h-4 w-4" />,
@@ -37,6 +39,7 @@ const SCOPE_ICONS: Record<string, React.ReactNode> = {
   project: <FolderOpen className="h-4 w-4" />,
   local: <Lock className="h-4 w-4" />,
   rules: <BookOpen className="h-4 w-4" />,
+  auto: <Brain className="h-4 w-4" />,
 };
 
 const SCOPE_COLORS: Record<string, string> = {
@@ -45,6 +48,7 @@ const SCOPE_COLORS: Record<string, string> = {
   project: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
   local: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
   rules: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  auto: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
 };
 
 export function MemoryPage() {
@@ -164,6 +168,10 @@ export function MemoryPage() {
                 {ruleFiles.length}
               </Badge>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="auto-memory" className="gap-2">
+            <Brain className="h-4 w-4" />
+            Auto Memory
           </TabsTrigger>
           <TabsTrigger value="imports" className="gap-2">
             <RefreshCw className="h-4 w-4" />
@@ -295,6 +303,13 @@ export function MemoryPage() {
 
         <TabsContent value="rules">
           <RulesManager
+            projectPath={activeProject?.path}
+            onRefresh={fetchHierarchy}
+          />
+        </TabsContent>
+
+        <TabsContent value="auto-memory">
+          <AutoMemoryManager
             projectPath={activeProject?.path}
             onRefresh={fetchHierarchy}
           />
