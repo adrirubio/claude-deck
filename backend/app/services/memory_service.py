@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from app.utils.path_utils import (
+    convert_path_to_folder_name,
+    get_claude_projects_dir,
     get_claude_user_config_dir,
     get_project_claude_dir,
 )
@@ -411,6 +413,40 @@ class MemoryService:
             full_content = content
 
         return cls.save_memory_file(str(rule_path), full_content)
+
+    @classmethod
+    def list_auto_memory(cls, project_path: str) -> Dict[str, Any]:
+        """List auto-memory files for a project.
+
+        Args:
+            project_path: Absolute path to the project directory
+
+        Returns:
+            Dict with memory_dir and list of file info dicts
+        """
+        folder_name = convert_path_to_folder_name(project_path)
+        memory_dir = get_claude_projects_dir() / folder_name / "memory"
+
+        result: Dict[str, Any] = {
+            "memory_dir": str(memory_dir),
+            "files": [],
+        }
+
+        if not memory_dir.exists():
+            return result
+
+        for md_file in sorted(memory_dir.glob("*.md")):
+            stat = md_file.stat()
+            result["files"].append(
+                {
+                    "name": md_file.name,
+                    "path": str(md_file),
+                    "size": stat.st_size,
+                    "modified_at": stat.st_mtime,
+                }
+            )
+
+        return result
 
     @classmethod
     def resolve_imports(
