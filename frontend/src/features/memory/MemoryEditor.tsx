@@ -187,7 +187,11 @@ Personal preferences for this project (not committed to git).
 
 ## Notes
 
-- 
+-
+`;
+      case "auto":
+        return `# Memory Notes
+
 `;
       default:
         return "";
@@ -200,7 +204,9 @@ Personal preferences for this project (not committed to git).
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
-            {file.scope.charAt(0).toUpperCase() + file.scope.slice(1)} CLAUDE.md
+            {file.scope === "auto"
+              ? `Auto Memory: ${file.name || file.path.split("/").pop()}`
+              : `${file.scope.charAt(0).toUpperCase() + file.scope.slice(1)} CLAUDE.md`}
             {file.readonly && (
               <Badge variant="outline" className="ml-2">
                 Read-only
@@ -217,7 +223,7 @@ Personal preferences for this project (not committed to git).
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 space-y-3">
+        <div className="flex-1 min-h-0 space-y-3 overflow-auto">
           {/* Imports indicator */}
           {imports.length > 0 && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 rounded-md p-2">

@@ -82,6 +82,22 @@ class CreateRuleRequest(BaseModel):
     description: Optional[str] = None
 
 
+class AutoMemoryFileInfo(BaseModel):
+    """Info about an auto-memory file."""
+
+    name: str
+    path: str
+    size: int
+    modified_at: float
+
+
+class AutoMemoryListResponse(BaseModel):
+    """Response for auto-memory file listing."""
+
+    memory_dir: str
+    files: List[AutoMemoryFileInfo]
+
+
 class ImportTreeNode(BaseModel):
     """Node in the import tree."""
 
@@ -206,6 +222,19 @@ async def create_rule(
         )
 
     return SaveMemoryResponse(**result)
+
+
+@router.get("/auto-memory", response_model=AutoMemoryListResponse)
+async def list_auto_memory(
+    project_path: str = Query(..., description="Absolute project path"),
+):
+    """
+    List auto-memory files for a project.
+
+    Returns .md files from ~/.claude/projects/<encoded-path>/memory/.
+    """
+    result = MemoryService.list_auto_memory(project_path)
+    return AutoMemoryListResponse(**result)
 
 
 @router.get("/imports", response_model=ImportTreeResponse)
