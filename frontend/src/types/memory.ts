@@ -4,8 +4,8 @@
 
 export interface MemoryHierarchyItem {
   path: string;
-  scope: "managed" | "user" | "project" | "local" | "rules";
-  type: "claude_md" | "rule";
+  scope: "managed" | "user" | "project" | "local" | "rules" | "auto";
+  type: "claude_md" | "rule" | "auto_memory";
   exists: boolean;
   readonly: boolean;
   description: string;
@@ -45,6 +45,18 @@ export interface SaveMemoryResponse {
   success: boolean;
   path: string;
   error?: string;
+}
+
+export interface AutoMemoryFileInfo {
+  name: string;
+  path: string;
+  size: number;
+  modified_at: number;
+}
+
+export interface AutoMemoryListResponse {
+  memory_dir: string;
+  files: AutoMemoryFileInfo[];
 }
 
 export interface ImportTreeNode {
