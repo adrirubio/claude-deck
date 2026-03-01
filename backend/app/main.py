@@ -17,7 +17,9 @@ async def lifespan(app: FastAPI):
     # Startup: Initialize database
     await init_db()
     yield
-    # Shutdown: Cleanup if needed
+    # Shutdown: Cleanup
+    from app.services.cc_bridge.pty_relay import close_all_relays
+    await close_all_relays()
 
 
 # Create FastAPI application
