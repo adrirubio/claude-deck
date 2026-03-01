@@ -19,6 +19,9 @@ export function useTerminal(
 
   useEffect(() => {
     readOnlyRef.current = readOnly
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'mode', readOnly }))
+    }
   }, [readOnly])
 
   const initTerminal = useCallback(() => {

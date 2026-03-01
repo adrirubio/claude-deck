@@ -132,6 +132,8 @@ class PtyRelay:
                     if ctrl:
                         if ctrl["type"] == "resize":
                             resize_pty(master_fd, ctrl.get("rows", 24), ctrl.get("cols", 80))
+                        elif ctrl["type"] == "mode":
+                            self.read_only = ctrl.get("readOnly", True)
                     elif not self.read_only:
                         os.write(master_fd, text.encode())
 
