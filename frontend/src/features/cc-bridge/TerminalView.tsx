@@ -9,8 +9,9 @@ interface TerminalViewProps {
 }
 
 export function TerminalView({ target }: TerminalViewProps) {
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef)
+  const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef)
   const prevTargetRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -26,7 +27,7 @@ export function TerminalView({ target }: TerminalViewProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 relative">
+      <div ref={wrapperRef} className="flex-1 relative overflow-hidden">
         {!target && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground bg-background">
             <Monitor className="h-12 w-12 mb-3" />
@@ -36,7 +37,7 @@ export function TerminalView({ target }: TerminalViewProps) {
         <div
           ref={containerRef}
           className={cn(
-            'h-full w-full',
+            'absolute inset-0',
             !target && 'invisible'
           )}
         />

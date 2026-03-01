@@ -6,7 +6,10 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { fetchTerminalToken, buildTerminalWsUrl } from './api'
 
-export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>) {
+export function useTerminal(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  wrapperRef: React.RefObject<HTMLDivElement | null>,
+) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -71,10 +74,14 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
 
     ws.onopen = () => {
       setConnected(true)
-      const dims = fitAddonRef.current?.proposeDimensions()
-      if (dims) {
-        ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
-      }
+      // Fit after a frame so the container has its final dimensions
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit()
+        const dims = fitAddonRef.current?.proposeDimensions()
+        if (dims) {
+          ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
+        }
+      })
     }
 
     ws.onmessage = (event) => {
@@ -128,16 +135,24 @@ export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>
     termRef.current?.writeln('\x1b[90mDetached.\x1b[0m')
   }, [])
 
+  // Observe the stable wrapper element (not the xterm container) to avoid feedback loops
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
 
+    let rafId: number | null = null
     const observer = new ResizeObserver(() => {
-      fitAddonRef.current?.fit()
+      if (rafId) cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(() => {
+        fitAddonRef.current?.fit()
+      })
     })
-    observer.observe(container)
-    return () => observer.disconnect()
-  }, [containerRef])
+    observer.observe(wrapper)
+    return () => {
+      observer.disconnect()
+      if (rafId) cancelAnimationFrame(rafId)
+    }
+  }, [wrapperRef])
 
   useEffect(() => {
     return () => {

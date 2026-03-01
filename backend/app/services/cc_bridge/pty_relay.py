@@ -60,12 +60,15 @@ class PtyRelay:
         self.master_fd = master_fd
 
         try:
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
             self.process = subprocess.Popen(
                 ["tmux", "attach-session", "-t", self.target],
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
                 preexec_fn=os.setsid,
+                env=env,
             )
         except Exception as e:
             os.close(master_fd)

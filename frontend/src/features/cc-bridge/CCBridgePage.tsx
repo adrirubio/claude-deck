@@ -9,19 +9,19 @@ export function CCBridgePage() {
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null)
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)]">
-      <div className="flex items-center gap-2 px-6 py-4 border-b shrink-0">
+    <div className="flex flex-col h-[calc(100vh-8.5rem)] border rounded-lg overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b shrink-0 bg-muted/30">
         <MonitorPlay className="h-5 w-5" />
         <div>
-          <h1 className="text-lg font-semibold">CC Bridge</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="text-base font-semibold">CC Bridge</h1>
+          <p className="text-xs text-muted-foreground">
             Live Claude Code sessions
           </p>
         </div>
       </div>
 
       <div className="flex flex-1 min-h-0">
-        <div className="w-56 border-r shrink-0">
+        <div className="w-52 border-r shrink-0">
           <SessionList
             sessions={sessions}
             loading={loading}
