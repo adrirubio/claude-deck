@@ -77,9 +77,15 @@ export function TerminalView({ target }: TerminalViewProps) {
               {connected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
-          <Button variant="outline" size="sm" onClick={detach}>
-            Detach
-          </Button>
+          {connected ? (
+            <Button variant="outline" size="sm" onClick={detach}>
+              Detach
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => attach(target)}>
+              Attach
+            </Button>
+          )}
         </div>
       )}
     </div>
