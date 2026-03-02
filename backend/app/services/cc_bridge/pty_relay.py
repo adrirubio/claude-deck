@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import pty
+import signal
 import struct
 import subprocess
 import termios
@@ -33,13 +34,26 @@ def parse_control_message(text: str) -> Optional[dict]:
     return None
 
 
-def resize_pty(fd: int, rows: int, cols: int) -> None:
-    """Send TIOCSWINSZ to resize the pty."""
+def resize_pty(
+    fd: int,
+    rows: int,
+    cols: int,
+    process: Optional[subprocess.Popen] = None,
+) -> None:
+    """Resize the pty and signal the tmux attach process."""
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except (OSError, ValueError) as e:
         logger.warning(f"Failed to resize pty: {e}")
+        return
+
+    # Send SIGWINCH so the tmux client notices the terminal size change
+    if process and process.poll() is None:
+        try:
+            os.kill(process.pid, signal.SIGWINCH)
+        except OSError:
+            pass
 
 
 class PtyRelay:
@@ -131,7 +145,7 @@ class PtyRelay:
                     ctrl = parse_control_message(text)
                     if ctrl:
                         if ctrl["type"] == "resize":
-                            resize_pty(master_fd, ctrl.get("rows", 24), ctrl.get("cols", 80))
+                            resize_pty(master_fd, ctrl.get("rows", 24), ctrl.get("cols", 80), self.process)
                         elif ctrl["type"] == "mode":
                             self.read_only = ctrl.get("readOnly", True)
                     elif not self.read_only:
