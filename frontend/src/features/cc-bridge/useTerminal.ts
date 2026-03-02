@@ -77,7 +77,6 @@ export function useTerminal(
 
     ws.onopen = () => {
       setConnected(true)
-      // Fit after a frame so the container has its final dimensions
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()
         const dims = fitAddonRef.current?.proposeDimensions()
@@ -147,7 +146,13 @@ export function useTerminal(
     const observer = new ResizeObserver(() => {
       if (rafId) cancelAnimationFrame(rafId)
       rafId = requestAnimationFrame(() => {
-        fitAddonRef.current?.fit()
+        if (!fitAddonRef.current) return
+        fitAddonRef.current.fit()
+        // Sync new dimensions to backend
+        const dims = fitAddonRef.current.proposeDimensions()
+        if (dims && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }))
+        }
       })
     })
     observer.observe(wrapper)

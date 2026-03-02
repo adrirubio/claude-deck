@@ -1,9 +1,18 @@
 """Discover Claude Code sessions running in tmux."""
 import logging
 import subprocess
-from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_PANE_FORMAT = (
+    "#{session_name}:#{window_index}.#{pane_index}"
+    "|#{session_name}"
+    "|#{window_name}"
+    "|#{pane_id}"
+    "|#{pane_current_path}"
+    "|#{pane_pid}"
+    "|#{pane_current_command}"
+)
 
 
 def _is_claude_code(command: str) -> bool:
@@ -11,39 +20,41 @@ def _is_claude_code(command: str) -> bool:
     return command.strip().lower() == "claude"
 
 
-def _build_session_info(pane: Any, window: Any, session: Any) -> dict:
-    """Build a session info dict from libtmux objects."""
-    return {
-        "tmux_target": f"{session.session_name}:{window.window_index}.{pane.pane_index}",
-        "session_name": session.session_name,
-        "window_name": window.window_name,
-        "pane_id": pane.pane_id,
-        "cwd": pane.pane_current_path,
-        "pid": pane.pane_pid,
-        "status": "active",
-    }
-
-
 def discover_cc_sessions() -> list[dict]:
     """Find all tmux panes running Claude Code."""
     try:
-        import libtmux
-        server = libtmux.Server()
-    except Exception:
-        logger.debug("Could not connect to tmux server")
+        result = subprocess.run(
+            ["tmux", "list-panes", "-a", "-F", _PANE_FORMAT],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            logger.debug("tmux list-panes failed: %s", result.stderr.strip())
+            return []
+    except FileNotFoundError:
+        logger.debug("tmux not found")
+        return []
+    except subprocess.TimeoutExpired:
+        logger.warning("tmux list-panes timed out")
         return []
 
     results = []
-    try:
-        for session in server.sessions:
-            for window in session.windows:
-                for pane in window.panes:
-                    cmd = pane.pane_current_command or ""
-                    if _is_claude_code(cmd):
-                        results.append(_build_session_info(pane, window, session))
-    except Exception as e:
-        logger.warning(f"Error discovering tmux sessions: {e}")
-
+    for line in result.stdout.strip().splitlines():
+        parts = line.split("|", 6)
+        if len(parts) != 7:
+            continue
+        target, session_name, window_name, pane_id, cwd, pid, command = parts
+        if _is_claude_code(command):
+            results.append({
+                "tmux_target": target,
+                "session_name": session_name,
+                "window_name": window_name,
+                "pane_id": pane_id,
+                "cwd": cwd,
+                "pid": pid,
+                "status": "active",
+            })
     return results
 
 
