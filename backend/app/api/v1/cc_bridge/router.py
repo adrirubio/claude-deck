@@ -2,8 +2,10 @@
 import logging
 import secrets
 import time
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, HTTPException
+from pydantic import BaseModel
 
 from app.services.cc_bridge.discovery import discover_cc_sessions, capture_pane_preview
 from app.services.cc_bridge.pty_relay import PtyRelay
@@ -14,6 +16,15 @@ router = APIRouter()
 
 _tokens: dict[str, float] = {}
 _TOKEN_TTL = 30
+
+
+class SpawnRequest(BaseModel):
+    directory: str
+    mode: str  # "plain", "worktree", "resume"
+    worktree_name: Optional[str] = None
+    session_id: Optional[str] = None
+    project_folder: Optional[str] = None
+    skip_permissions: bool = False
 
 
 @router.get("/sessions")
@@ -74,3 +85,28 @@ async def session_terminal(
     read_only = mode != "interactive"
     relay = PtyRelay(target=target, read_only=read_only)
     await relay.run(websocket)
+
+
+@router.post("/sessions")
+async def spawn_session_endpoint(request: SpawnRequest):
+    """Spawn a new Claude Code session in tmux."""
+    from app.services.cc_bridge.spawn import spawn_session as do_spawn
+    try:
+        result = do_spawn(
+            directory=request.directory,
+            mode=request.mode,
+            worktree_name=request.worktree_name,
+            session_id=request.session_id,
+            project_folder=request.project_folder,
+            skip_permissions=request.skip_permissions,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/sessions/{target}")
+async def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
+    """Kill a tmux session and optionally clean up its worktree."""
+    from app.services.cc_bridge.spawn import kill_session
+    return kill_session(session_name=target, cleanup_worktree=cleanup_worktree)

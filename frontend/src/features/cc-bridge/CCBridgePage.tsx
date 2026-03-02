@@ -3,10 +3,28 @@ import { MonitorPlay } from 'lucide-react'
 import { useCCSessions } from './useCCSessions'
 import { SessionList } from './SessionList'
 import { TerminalView } from './TerminalView'
+import { NewSessionDialog } from './NewSessionDialog'
+import { KillSessionDialog } from './KillSessionDialog'
+import type { CCSession } from './types'
 
 export function CCBridgePage() {
   const { sessions, loading, error, refresh } = useCCSessions()
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null)
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  const [killSession, setKillSession] = useState<CCSession | null>(null)
+
+  const handleSpawned = (tmuxTarget: string) => {
+    refresh()
+    setSelectedTarget(tmuxTarget)
+  }
+
+  const handleKilled = () => {
+    if (killSession && selectedTarget === killSession.tmux_target) {
+      setSelectedTarget(null)
+    }
+    setKillSession(null)
+    refresh()
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-8.5rem)] border rounded-lg overflow-hidden">
@@ -29,6 +47,8 @@ export function CCBridgePage() {
             selectedTarget={selectedTarget}
             onSelect={setSelectedTarget}
             onRefresh={refresh}
+            onNewSession={() => setNewSessionOpen(true)}
+            onKillSession={setKillSession}
           />
         </div>
 
@@ -36,6 +56,20 @@ export function CCBridgePage() {
           <TerminalView target={selectedTarget} />
         </div>
       </div>
+
+      <NewSessionDialog
+        open={newSessionOpen}
+        onOpenChange={setNewSessionOpen}
+        onSpawned={handleSpawned}
+      />
+
+      <KillSessionDialog
+        open={killSession !== null}
+        onOpenChange={(open) => { if (!open) setKillSession(null) }}
+        session={killSession}
+        isWorktreeSession={killSession?.session_name.startsWith('deck-') ?? false}
+        onKilled={handleKilled}
+      />
     </div>
   )
 }

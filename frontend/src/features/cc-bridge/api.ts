@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/api'
-import type { CCSessionsResponse, CCPreviewResponse, CCTokenResponse } from './types'
+import type { CCSessionsResponse, CCPreviewResponse, CCTokenResponse, SpawnSessionRequest, SpawnSessionResponse, KillSessionResponse } from './types'
 
 const BASE = 'cc-bridge'
 
@@ -15,8 +15,22 @@ export async function fetchTerminalToken(): Promise<CCTokenResponse> {
   return apiClient<CCTokenResponse>(BASE + '/token')
 }
 
-export function buildTerminalWsUrl(target: string, token: string, mode: string = 'readonly'): string {
+export function buildTerminalWsUrl(target: string, token: string, mode: 'readonly' | 'interactive' = 'readonly'): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   return `${protocol}//${host}/api/v1/${BASE}/sessions/${encodeURIComponent(target)}/terminal?token=${token}&mode=${mode}`
+}
+
+export async function spawnSession(request: SpawnSessionRequest): Promise<SpawnSessionResponse> {
+  return apiClient<SpawnSessionResponse>(BASE + '/sessions', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function killSession(target: string, cleanupWorktree: boolean = false): Promise<KillSessionResponse> {
+  const params = cleanupWorktree ? '?cleanup_worktree=true' : ''
+  return apiClient<KillSessionResponse>(`${BASE}/sessions/${encodeURIComponent(target)}${params}`, {
+    method: 'DELETE',
+  })
 }

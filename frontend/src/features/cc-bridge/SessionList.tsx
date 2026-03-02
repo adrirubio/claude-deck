@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, MonitorX } from 'lucide-react'
+import { Loader2, RefreshCw, MonitorX, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { SessionCard } from './SessionCard'
@@ -11,6 +11,8 @@ interface SessionListProps {
   selectedTarget: string | null
   onSelect: (target: string) => void
   onRefresh: () => void
+  onNewSession: () => void
+  onKillSession: (session: CCSession) => void
 }
 
 export function SessionList({
@@ -20,6 +22,8 @@ export function SessionList({
   selectedTarget,
   onSelect,
   onRefresh,
+  onNewSession,
+  onKillSession,
 }: SessionListProps) {
   return (
     <div className="flex flex-col h-full">
@@ -27,9 +31,14 @@ export function SessionList({
         <span className="text-sm font-medium">
           Sessions ({sessions.length})
         </span>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onRefresh}>
-          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onNewSession} title="New session">
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onRefresh} title="Refresh">
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+          </Button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -57,6 +66,7 @@ export function SessionList({
             session={session}
             isSelected={selectedTarget === session.tmux_target}
             onClick={() => onSelect(session.tmux_target)}
+            onKill={onKillSession}
           />
         ))}
       </div>
