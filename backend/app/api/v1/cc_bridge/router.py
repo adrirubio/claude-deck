@@ -28,14 +28,14 @@ class SpawnRequest(BaseModel):
 
 
 @router.get("/sessions")
-async def list_sessions():
+def list_sessions():
     """List all discovered Claude Code sessions in tmux."""
     sessions = discover_cc_sessions()
     return {"sessions": sessions, "count": len(sessions)}
 
 
 @router.get("/sessions/{target:path}/preview")
-async def get_session_preview(target: str):
+def get_session_preview(target: str):
     """Get a capture-pane text snapshot of a tmux session."""
     content = capture_pane_preview(target)
     if not content:
@@ -88,7 +88,7 @@ async def session_terminal(
 
 
 @router.post("/sessions")
-async def spawn_session_endpoint(request: SpawnRequest):
+def spawn_session_endpoint(request: SpawnRequest):
     """Spawn a new Claude Code session in tmux."""
     from app.services.cc_bridge.spawn import spawn_session as do_spawn
     try:
@@ -106,7 +106,7 @@ async def spawn_session_endpoint(request: SpawnRequest):
 
 
 @router.delete("/sessions/{target}")
-async def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
+def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
     """Kill a tmux session and optionally clean up its worktree."""
     from app.services.cc_bridge.spawn import kill_session
     return kill_session(session_name=target, cleanup_worktree=cleanup_worktree)

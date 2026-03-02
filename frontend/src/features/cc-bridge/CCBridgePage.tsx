@@ -67,7 +67,7 @@ export function CCBridgePage() {
         open={killSession !== null}
         onOpenChange={(open) => { if (!open) setKillSession(null) }}
         session={killSession}
-        isWorktreeSession={killSession?.session_name.startsWith('deck-') ?? false}
+        isWorktreeSession={false}
         onKilled={handleKilled}
       />
     </div>

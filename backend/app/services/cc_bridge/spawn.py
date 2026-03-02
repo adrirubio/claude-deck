@@ -62,8 +62,12 @@ def spawn_session(
     if not dir_path.is_dir():
         raise ValueError(f"Directory does not exist: {directory}")
 
-    # Generate tmux session name
-    name = f"deck-{uuid.uuid4().hex[:4]}"
+    # Generate tmux session name including project directory basename
+    import re
+    dir_basename = dir_path.name or "project"
+    # Sanitize: tmux disallows dots and colons in session names
+    safe_basename = re.sub(r"[^a-zA-Z0-9_-]", "-", dir_basename)[:20]
+    name = f"{safe_basename}-{uuid.uuid4().hex[:4]}"
 
     # Build command
     command = ["claude"]
