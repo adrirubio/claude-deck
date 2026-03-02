@@ -1,14 +1,16 @@
 import { useRef, useEffect } from 'react'
-import { Monitor } from 'lucide-react'
+import { Monitor, Maximize2, Minimize2 } from 'lucide-react'
 import { useTerminal } from './useTerminal'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 interface TerminalViewProps {
   target: string | null
+  fullscreen?: boolean
+  onToggleFullscreen?: () => void
 }
 
-export function TerminalView({ target }: TerminalViewProps) {
+export function TerminalView({ target, fullscreen, onToggleFullscreen }: TerminalViewProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef)
@@ -77,15 +79,22 @@ export function TerminalView({ target }: TerminalViewProps) {
               {connected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
-          {connected ? (
-            <Button variant="outline" size="sm" onClick={detach}>
-              Detach
-            </Button>
-          ) : (
-            <Button variant="outline" size="sm" onClick={() => attach(target)}>
-              Attach
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {onToggleFullscreen && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+                {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              </Button>
+            )}
+            {connected ? (
+              <Button variant="outline" size="sm" onClick={detach}>
+                Detach
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => attach(target)}>
+                Attach
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </div>
