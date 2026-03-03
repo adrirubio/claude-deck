@@ -1,0 +1,105 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+/* Force dark mode — no light mode toggle */
+:root {
+  color-scheme: dark;
+}
+
+.dark {
+  /* Backgrounds — match claudedeck.org */
+  --vp-c-bg: #0c0c0c;
+  --vp-c-bg-alt: #161616;
+  --vp-c-bg-soft: #1c1c1c;
+  --vp-c-bg-elv: #242424;
+
+  /* Text */
+  --vp-c-text-1: #f0f0f0;
+  --vp-c-text-2: #a0a0a0;
+  --vp-c-text-3: #707070;
+
+  /* Brand (green accent) */
+  --vp-c-brand-1: #4ade80;
+  --vp-c-brand-2: #22c55e;
+  --vp-c-brand-3: #16a34a;
+  --vp-c-brand-soft: rgba(74, 222, 128, 0.14);
+
+  /* Borders */
+  --vp-c-divider: #2a2a2a;
+  --vp-c-gutter: #2a2a2a;
+  --vp-c-border: #2a2a2a;
+
+  /* Code blocks */
+  --vp-code-block-bg: #161616;
+  --vp-code-tab-divider: #2a2a2a;
+  --vp-code-copy-code-border-color: #2a2a2a;
+  --vp-code-copy-code-bg: #242424;
+  --vp-code-copy-code-hover-border-color: #404040;
+  --vp-code-copy-code-hover-bg: #2a2a2a;
+
+  /* Buttons */
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: #0c0c0c;
+  --vp-button-brand-bg: #4ade80;
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: #0c0c0c;
+  --vp-button-brand-hover-bg: #22c55e;
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: #0c0c0c;
+  --vp-button-brand-active-bg: #16a34a;
+
+  --vp-button-alt-border: #2a2a2a;
+  --vp-button-alt-text: #f0f0f0;
+  --vp-button-alt-bg: #1c1c1c;
+  --vp-button-alt-hover-border: #404040;
+  --vp-button-alt-hover-text: #f0f0f0;
+  --vp-button-alt-hover-bg: #242424;
+
+  /* Home hero */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(135deg, #4ade80, #22d3ee);
+  --vp-home-hero-image-background-image: radial-gradient(circle, rgba(74, 222, 128, 0.15) 0%, transparent 70%);
+  --vp-home-hero-image-filter: blur(44px);
+
+  /* Sidebar */
+  --vp-sidebar-bg-color: #0c0c0c;
+}
+
+/* Typography */
+:root {
+  --vp-font-family-base: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Selection highlight — green tint */
+::selection {
+  background: rgba(74, 222, 128, 0.3);
+}
+
+/* Scrollbar — dark style */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #161616;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}
+
+/* Sidebar active item — green left border */
+.VPSidebarItem.is-active > .item > .indicator {
+  background-color: #4ade80;
+}
+
+/* Hide light/dark mode toggle — we're dark-only */
+.VPSwitchAppearance {
+  display: none !important;
+}
