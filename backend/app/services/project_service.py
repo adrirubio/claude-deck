@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import Project
 from app.models.schemas import ProjectBase, ProjectCreate, ProjectResponse
 from app.services.config_service import ConfigService
-from app.utils.path_utils import get_project_claude_dir, get_project_mcp_config_file
+from app.utils.path_utils import (
+    get_project_claude_dir,
+    get_project_mcp_config_file,
+    get_claude_projects_dir,
+    convert_path_to_folder_name,
+)
 
 
 class ProjectService:
@@ -101,10 +106,12 @@ class ProjectService:
         Scan a directory for Claude Code projects.
 
         A project is identified by the presence of:
-        - .claude/ directory
-        - .mcp.json file
+        - .claude/ directory (source="configured")
+        - .mcp.json file (source="configured")
+        - A matching entry in ~/.claude/projects/ (source="session_history")
         """
         discovered = []
+        discovered_paths: set[str] = set()
         base_dir = Path(base_path).expanduser().resolve()
 
         if not base_dir.exists() or not base_dir.is_dir():
@@ -121,9 +128,9 @@ class ProjectService:
         except PermissionError:
             pass
 
+        # Phase 1: Check for .claude/ directory or .mcp.json file
         for directory in dirs_to_check:
             try:
-                # Check for .claude/ directory or .mcp.json file
                 claude_dir = get_project_claude_dir(str(directory))
                 mcp_file = get_project_mcp_config_file(str(directory))
 
@@ -133,10 +140,39 @@ class ProjectService:
                         ProjectBase(
                             name=project_name,
                             path=str(directory),
+                            source="configured",
                         )
                     )
+                    discovered_paths.add(str(directory))
             except (PermissionError, OSError):
                 continue
+
+        # Phase 2: Check ~/.claude/projects/ for session history
+        try:
+            global_projects_dir = get_claude_projects_dir()
+            if global_projects_dir.exists():
+                global_entries = {
+                    entry.name
+                    for entry in global_projects_dir.iterdir()
+                    if entry.is_dir()
+                }
+
+                for directory in dirs_to_check:
+                    dir_str = str(directory)
+                    if dir_str in discovered_paths:
+                        continue
+
+                    encoded = convert_path_to_folder_name(dir_str)
+                    if encoded in global_entries:
+                        discovered.append(
+                            ProjectBase(
+                                name=directory.name,
+                                path=dir_str,
+                                source="session_history",
+                            )
+                        )
+        except (PermissionError, OSError):
+            pass
 
         return discovered
 
