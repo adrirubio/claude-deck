@@ -13,7 +13,10 @@ export function Header() {
             alt="Claude Deck"
             className="h-10 w-10"
           />
-          <h1 className="text-2xl font-bold text-primary">Claude Deck</h1>
+          <div>
+            <h1 className="text-2xl font-bold text-primary leading-tight">Claude Deck</h1>
+            <p className="text-xs text-muted-foreground">Your Claude Code command centre</p>
+          </div>
         </div>
         <ThemeToggle />
       </div>

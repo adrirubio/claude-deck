@@ -54,11 +54,11 @@ frontend/                 # React 19 + Vite + TypeScript + shadcn/ui
 
 ### Features
 
-Config, MCP Servers, Commands, Plugins, Hooks, Permissions, Agents, Skills, Memory, Projects, Backup, Output Styles, Status Line, Sessions, Usage, Dashboard
+Config, MCP Servers, Commands, Plugins, Hooks, Permissions, Agents, Skills, Memory, Projects, Backup, Output Styles, Status Line, Sessions, CC Bridge, Usage, Dashboard
 
 ### API Routes
 
-All under `/api/v1/`: health, config, projects, cli, mcp, commands, plugins, hooks, permissions, agents, backup, output-styles, statusline, sessions, usage, memory
+All under `/api/v1/`: health, config, projects, cli, mcp, commands, plugins, hooks, permissions, agents, backup, output-styles, statusline, sessions, cc-bridge, usage, memory
 
 ## Key Decisions
 

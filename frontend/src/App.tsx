@@ -22,6 +22,7 @@ import { MemoryPage } from './features/memory/MemoryPage'
 import { ContextPage } from './features/context/ContextPage'
 import { PlansPage } from './features/plans/PlansPage'
 import { PlanDetailPage } from './features/plans/PlanDetailPage'
+import { CCBridgePage } from './features/cc-bridge/CCBridgePage'
 
 function App() {
   return (
@@ -46,6 +47,7 @@ function App() {
             <Route path="statusline" element={<StatusLinePage />} />
             <Route path="sessions/:projectFolder/:sessionId" element={<SessionViewPage />} />
             <Route path="sessions" element={<SessionsPage />} />
+            <Route path="cc-bridge" element={<CCBridgePage />} />
             <Route path="plans/:filename" element={<PlanDetailPage />} />
             <Route path="plans" element={<PlansPage />} />
             <Route path="context" element={<ContextPage />} />

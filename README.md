@@ -18,6 +18,7 @@ A self-hosted web application for visualizing and managing Claude Code configura
 - **Memory** — View and edit Claude Code memory files
 - **Output Styles** — Configure response output formats
 - **Status Line** — Customize Claude Code status line display
+- **CC Bridge** — Discover and monitor Claude Code sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage worktrees directly from the UI
 - **Session Transcripts** — View conversation history with full message details and tool use
 - **Usage Tracking** — Monitor token usage, costs, and billing blocks with daily/monthly charts
 - **Plan History** — Browse and review Claude Code implementation plans
