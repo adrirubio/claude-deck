@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { ProjectProvider } from './contexts/ProjectContext'
+import { DashboardProvider } from './contexts/DashboardContext'
 import { MainLayout } from './components/layout/MainLayout'
 import { DashboardPage } from './features/dashboard/DashboardPage'
 import { ConfigViewerPage } from './features/config/ConfigViewerPage'
@@ -27,34 +28,36 @@ import { CCBridgePage } from './features/cc-bridge/CCBridgePage'
 function App() {
   return (
     <ProjectProvider>
-      <BrowserRouter>
-        <Toaster richColors position="top-right" />
-        <Routes>
-          <Route path="/" element={<MainLayout />}>
-            <Route index element={<DashboardPage />} />
-            <Route path="config" element={<ConfigViewerPage />} />
-            <Route path="mcp" element={<MCPServersPage />} />
-            <Route path="commands" element={<CommandsPage />} />
-            <Route path="plugins" element={<PluginsPage />} />
-            <Route path="hooks" element={<HooksPage />} />
-            <Route path="permissions" element={<PermissionsPage />} />
-            <Route path="agents" element={<AgentsPage />} />
-            <Route path="skills" element={<SkillsPage />} />
-            <Route path="memory" element={<MemoryPage />} />
-            <Route path="projects" element={<ProjectsPage />} />
-            <Route path="backup" element={<BackupPage />} />
-            <Route path="output-styles" element={<OutputStylesPage />} />
-            <Route path="statusline" element={<StatusLinePage />} />
-            <Route path="sessions/:projectFolder/:sessionId" element={<SessionViewPage />} />
-            <Route path="sessions" element={<SessionsPage />} />
-            <Route path="cc-bridge" element={<CCBridgePage />} />
-            <Route path="plans/:filename" element={<PlanDetailPage />} />
-            <Route path="plans" element={<PlansPage />} />
-            <Route path="context" element={<ContextPage />} />
-            <Route path="usage" element={<UsagePage />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <DashboardProvider>
+        <BrowserRouter>
+          <Toaster richColors position="top-right" />
+          <Routes>
+            <Route path="/" element={<MainLayout />}>
+              <Route index element={<DashboardPage />} />
+              <Route path="config" element={<ConfigViewerPage />} />
+              <Route path="mcp" element={<MCPServersPage />} />
+              <Route path="commands" element={<CommandsPage />} />
+              <Route path="plugins" element={<PluginsPage />} />
+              <Route path="hooks" element={<HooksPage />} />
+              <Route path="permissions" element={<PermissionsPage />} />
+              <Route path="agents" element={<AgentsPage />} />
+              <Route path="skills" element={<SkillsPage />} />
+              <Route path="memory" element={<MemoryPage />} />
+              <Route path="projects" element={<ProjectsPage />} />
+              <Route path="backup" element={<BackupPage />} />
+              <Route path="output-styles" element={<OutputStylesPage />} />
+              <Route path="statusline" element={<StatusLinePage />} />
+              <Route path="sessions/:projectFolder/:sessionId" element={<SessionViewPage />} />
+              <Route path="sessions" element={<SessionsPage />} />
+              <Route path="cc-bridge" element={<CCBridgePage />} />
+              <Route path="plans/:filename" element={<PlanDetailPage />} />
+              <Route path="plans" element={<PlansPage />} />
+              <Route path="context" element={<ContextPage />} />
+              <Route path="usage" element={<UsagePage />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </DashboardProvider>
     </ProjectProvider>
   )
 }
