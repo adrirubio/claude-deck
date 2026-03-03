@@ -5,6 +5,7 @@
 export interface ProjectBase {
   name: string;
   path: string;
+  source?: "configured" | "session_history";
 }
 
 export interface ProjectResponse extends ProjectBase {
