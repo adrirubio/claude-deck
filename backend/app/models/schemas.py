@@ -45,6 +45,7 @@ class ProjectBase(BaseModel):
 
     name: str
     path: str
+    source: Optional[str] = None
 
 
 class ProjectCreate(ProjectBase):

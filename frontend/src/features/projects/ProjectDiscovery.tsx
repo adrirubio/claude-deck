@@ -120,7 +120,13 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <p className="font-medium">{project.name}</p>
-                          <Badge variant="outline">Discovered</Badge>
+                          {project.source === "configured" ? (
+                            <Badge variant="outline" className="border-green-500 text-green-600">Configured</Badge>
+                          ) : project.source === "session_history" ? (
+                            <Badge variant="outline" className="border-blue-500 text-blue-600">Session History</Badge>
+                          ) : (
+                            <Badge variant="outline">Discovered</Badge>
+                          )}
                         </div>
                         <p className="text-sm text-muted-foreground mt-1">
                           {project.path}

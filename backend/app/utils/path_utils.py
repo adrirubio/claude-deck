@@ -245,6 +245,10 @@ def get_claude_plans_dir() -> Path:
 def convert_path_to_folder_name(absolute_path: str) -> str:
     """Convert absolute path to Claude's hyphenated folder format.
 
-    Example: '/home/juan/projects/foo' -> '-home-juan-projects-foo'
+    Replaces '/' and '.' with '-' to match Claude Code's encoding scheme.
+
+    Examples:
+        '/home/juan/projects/foo' -> '-home-juan-projects-foo'
+        '/home/juan/.ssh' -> '-home-juan--ssh'
     """
-    return absolute_path.rstrip('/').replace('/', '-')
+    return absolute_path.rstrip('/').replace('/', '-').replace('.', '-')
