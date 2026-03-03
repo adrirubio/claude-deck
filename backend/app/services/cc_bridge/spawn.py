@@ -18,8 +18,12 @@ def _resolve_project_directory(project_folder: str) -> str:
     for the common case.
     """
     decoded = "/" + project_folder.lstrip("-").replace("-", "/")
-    if Path(decoded).is_dir():
-        return decoded
+    resolved = Path(decoded).resolve()
+    # Guard against path traversal — must be an existing absolute directory
+    if not resolved.is_absolute() or ".." in Path(decoded).parts:
+        raise ValueError(f"Invalid project folder: '{project_folder}'")
+    if resolved.is_dir():
+        return str(resolved)
 
     raise ValueError(
         f"Could not resolve project directory for '{project_folder}'. "
@@ -55,12 +59,16 @@ def spawn_session(
     if mode == "resume" and (not directory or not directory.strip()) and project_folder:
         directory = _resolve_project_directory(project_folder)
 
-    # Validate directory
-    dir_path = Path(directory)
+    # Validate directory — resolve to canonical path to prevent traversal attacks
+    dir_path = Path(directory).resolve()
     if not dir_path.is_absolute():
         raise ValueError(f"Directory must be an absolute path: {directory}")
+    if ".." in Path(directory).parts:
+        raise ValueError(f"Directory must not contain path traversal: {directory}")
     if not dir_path.is_dir():
         raise ValueError(f"Directory does not exist: {directory}")
+    # Use the resolved canonical path from here on
+    directory = str(dir_path)
 
     # Generate tmux session name including project directory basename
     import re
