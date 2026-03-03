@@ -1,6 +1,7 @@
 {
   "name": "claude-deck-docs",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "vitepress dev",
     "build": "vitepress build",
