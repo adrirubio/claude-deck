@@ -75,7 +75,7 @@ export function ContextTimelineChart({ snapshots, maxTokens, showHelp }: Context
             <ChartTooltip
               content={
                 <ChartTooltipContent
-                  labelFormatter={(value) => `Turn ${value}`}
+                  labelFormatter={(value: any) => `Turn ${value}`}
                 />
               }
             />

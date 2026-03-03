@@ -101,7 +101,7 @@ export function DailyUsageChart({ data, loading }: DailyUsageChartProps) {
             <ChartTooltip
               content={
                 <ChartTooltipContent
-                  labelFormatter={(label, payload) => {
+                  labelFormatter={(label: string, payload: any[]) => {
                     const item = payload?.[0]?.payload
                     return (
                       <div>

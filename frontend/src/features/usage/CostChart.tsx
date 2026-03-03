@@ -99,11 +99,11 @@ export function CostChart({ data, loading }: CostChartProps) {
             <ChartTooltip
               content={
                 <ChartTooltipContent
-                  labelFormatter={(label, payload) => {
+                  labelFormatter={(label: string, payload: any[]) => {
                     const item = payload?.[0]?.payload
                     return item?.fullDate || label
                   }}
-                  formatter={(value) => formatCost(value as number)}
+                  formatter={(value: any) => formatCost(value as number)}
                 />
               }
             />

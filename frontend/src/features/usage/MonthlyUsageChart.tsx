@@ -102,7 +102,7 @@ export function MonthlyUsageChart({ data, loading }: MonthlyUsageChartProps) {
             <ChartTooltip
               content={
                 <ChartTooltipContent
-                  labelFormatter={(label, payload) => {
+                  labelFormatter={(label: string, payload: any[]) => {
                     const item = payload?.[0]?.payload
                     return (
                       <div>
@@ -113,7 +113,7 @@ export function MonthlyUsageChart({ data, loading }: MonthlyUsageChartProps) {
                       </div>
                     )
                   }}
-                  formatter={(value) => formatCost(value as number)}
+                  formatter={(value: any) => formatCost(value as number)}
                 />
               }
             />
