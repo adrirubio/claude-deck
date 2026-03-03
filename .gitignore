@@ -56,3 +56,6 @@ htmlcov/
 
 # Claude Deck specific
 ~/.claude-registry/
+
+# Git worktrees
+.worktrees/
