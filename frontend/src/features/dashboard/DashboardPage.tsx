@@ -1,147 +1,17 @@
-import { useEffect, useState, useCallback } from 'react'
 import { LayoutDashboard } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { RefreshButton } from '@/components/shared/RefreshButton'
-import { useProjectContext } from '@/contexts/ProjectContext'
 import { useNavigate } from 'react-router-dom'
-import { apiClient, buildEndpoint } from '@/lib/api'
-import type { MergedConfig } from '@/types/config'
-import type { AgentListResponse, SkillListResponse } from '@/types/agents'
-import type { OutputStyleListResponse } from '@/types/output-styles'
-import { useSessionsApi } from '@/hooks/useSessionsApi'
-import { useContextApi } from '@/hooks/useContextApi'
-import { usePlansApi } from '@/hooks/usePlansApi'
 import { Progress } from '@/components/ui/progress'
-
-interface PluginListResponse {
-  plugins: unknown[];
-}
-
-interface MCPServerListResponse {
-  servers: unknown[];
-}
-
-interface HookListResponse {
-  hooks: unknown[];
-}
-
-interface PermissionListResponse {
-  rules: { type: string }[];
-}
-
-interface CommandListResponse {
-  commands: unknown[];
-}
+import { useDashboard } from '@/contexts/DashboardContext'
+import { useProjectContext } from '@/contexts/ProjectContext'
+import { getRelativeTime } from '@/features/usage/utils'
 
 export function DashboardPage() {
-  const { projects, activeProject } = useProjectContext()
-  const { getDashboardStats } = useSessionsApi()
-  const { getActiveSessions } = useContextApi()
-  const { getStats: getPlanStats } = usePlansApi()
+  const { stats, loading, error, lastFetched, refreshDashboard } = useDashboard({ autoFetch: true })
+  const { projects } = useProjectContext()
   const navigate = useNavigate()
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [stats, setStats] = useState<{
-    mcpServerCount: number;
-    commandCount: number;
-    agentCount: number;
-    skillCount: number;
-    hookCount: number;
-    pluginCount: number;
-    permissionCount: number;
-    projectCount: number;
-    outputStyleCount: number;
-    allowRules: number;
-    denyRules: number;
-    settingsKeys: number;
-    sessionCount: number;
-    sessionsToday: number;
-    sessionsThisWeek: number;
-    mostActiveProject?: string;
-    totalMessages: number;
-    contextHighestPct: number;
-    contextHighestProject?: string;
-    contextActiveCount: number;
-    planCount: number;
-  } | null>(null)
-
-  const fetchStats = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const params = { project_path: activeProject?.path }
-
-      // Fetch all data in parallel using dedicated endpoints for accurate counts
-      const [
-        configData,
-        mcpData,
-        agentsData,
-        skillsData,
-        pluginsData,
-        hooksData,
-        permissionsData,
-        commandsData,
-        outputStylesData,
-        sessionStatsData,
-        contextData,
-        planStatsData,
-      ] = await Promise.all([
-        apiClient<MergedConfig>(buildEndpoint('config', params)),
-        apiClient<MCPServerListResponse>(buildEndpoint('mcp/servers', params)),
-        apiClient<AgentListResponse>(buildEndpoint('agents', params)),
-        apiClient<SkillListResponse>(buildEndpoint('agents/skills', params)),
-        apiClient<PluginListResponse>(buildEndpoint('plugins', params)),
-        apiClient<HookListResponse>(buildEndpoint('hooks', params)),
-        apiClient<PermissionListResponse>(buildEndpoint('permissions', params)),
-        apiClient<CommandListResponse>(buildEndpoint('commands', params)),
-        apiClient<OutputStyleListResponse>(buildEndpoint('output-styles', params)),
-        getDashboardStats(),
-        getActiveSessions().catch(() => ({ sessions: [] })),
-        getPlanStats().catch(() => ({ total_plans: 0 })),
-      ])
-
-      const allowRules = permissionsData.rules.filter(r => r.type === 'allow').length
-      const denyRules = permissionsData.rules.filter(r => r.type === 'deny').length
-
-      const activeSessions = contextData.sessions.filter(s => s.is_active)
-      const highestCtx = contextData.sessions.length > 0
-        ? contextData.sessions.reduce((max, s) => s.context_percentage > max.context_percentage ? s : max, contextData.sessions[0])
-        : null
-
-      setStats({
-        mcpServerCount: mcpData.servers.length,
-        commandCount: commandsData.commands.length,
-        agentCount: agentsData.agents.length,
-        skillCount: skillsData.skills.length,
-        hookCount: hooksData.hooks.length,
-        pluginCount: pluginsData.plugins.length,
-        permissionCount: allowRules + denyRules,
-        projectCount: projects.length,
-        outputStyleCount: outputStylesData?.output_styles?.length || 0,
-        allowRules,
-        denyRules,
-        settingsKeys: Object.keys(configData.settings || {}).length,
-        sessionCount: sessionStatsData.total_sessions,
-        sessionsToday: sessionStatsData.sessions_today,
-        sessionsThisWeek: sessionStatsData.sessions_this_week,
-        mostActiveProject: sessionStatsData.most_active_project,
-        totalMessages: sessionStatsData.total_messages,
-        contextHighestPct: highestCtx?.context_percentage ?? 0,
-        contextHighestProject: highestCtx?.project_name,
-        contextActiveCount: activeSessions.length,
-        planCount: planStatsData.total_plans,
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard data')
-    } finally {
-      setLoading(false)
-    }
-  }, [activeProject?.path, projects.length, getDashboardStats, getActiveSessions, getPlanStats])
-
-  useEffect(() => {
-    fetchStats()
-  }, [fetchStats])
 
   return (
     <div className="space-y-6">
@@ -155,7 +25,14 @@ export function DashboardPage() {
             Overview of your Claude Code configuration
           </p>
         </div>
-        <RefreshButton onClick={fetchStats} loading={loading} />
+        <div className="flex items-center gap-3">
+          {lastFetched && (
+            <span className="text-xs text-muted-foreground">
+              Updated {getRelativeTime(lastFetched.toISOString())}
+            </span>
+          )}
+          <RefreshButton onClick={refreshDashboard} loading={loading} />
+        </div>
       </div>
 
       {error && (
@@ -187,12 +64,12 @@ export function DashboardPage() {
       {stats && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {/* Order matches sidebar navigation */}
-          
+
           {/* Tier 1: Overview & Setup */}
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Projects</CardDescription>
-              <CardTitle className="text-3xl">{stats.projectCount}</CardTitle>
+              <CardTitle className="text-3xl">{projects.length}</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
