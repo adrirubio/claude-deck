@@ -35,6 +35,10 @@ A self-hosted web application for visualizing and managing Claude Code configura
 |----------------|---------------------|
 | ![Usage Tracking](screenshots/usage-tracking.png) | ![Session Transcripts](screenshots/sessions.png) |
 
+| CC Bridge | Skills |
+|-----------|--------|
+| ![CC Bridge](screenshots/cc-bridge.png) | ![Skills](screenshots/skills.png) |
+
 ## Tech Stack
 
 | Layer | Technology |
