@@ -8,8 +8,8 @@ interface SessionListProps {
   sessions: CCSession[]
   loading: boolean
   error: string | null
-  selectedTarget: string | null
-  onSelect: (target: string) => void
+  activeTargets: string[]
+  onToggleTarget: (target: string) => void
   onRefresh: () => void
   onNewSession: () => void
   onKillSession: (session: CCSession) => void
@@ -19,8 +19,8 @@ export function SessionList({
   sessions,
   loading,
   error,
-  selectedTarget,
-  onSelect,
+  activeTargets,
+  onToggleTarget,
   onRefresh,
   onNewSession,
   onKillSession,
@@ -60,15 +60,18 @@ export function SessionList({
           </div>
         )}
 
-        {sessions.map((session) => (
-          <SessionCard
-            key={session.pane_id}
-            session={session}
-            isSelected={selectedTarget === session.tmux_target}
-            onClick={() => onSelect(session.tmux_target)}
-            onKill={onKillSession}
-          />
-        ))}
+        {sessions.map((session) => {
+          const pos = activeTargets.indexOf(session.tmux_target)
+          return (
+            <SessionCard
+              key={session.pane_id}
+              session={session}
+              gridPosition={pos === -1 ? null : pos}
+              onClick={() => onToggleTarget(session.tmux_target)}
+              onKill={onKillSession}
+            />
+          )
+        })}
       </div>
     </div>
   )

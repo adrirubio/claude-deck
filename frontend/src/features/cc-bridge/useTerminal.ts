@@ -68,6 +68,11 @@ export function useTerminal(
     term.clear()
 
     const { token } = await fetchTerminalToken()
+
+    // Guard against StrictMode race: if the terminal was disposed and replaced
+    // during the async token fetch, this attach call is stale — bail out.
+    if (termRef.current !== term) return
+
     const mode = readOnlyRef.current ? 'readonly' : 'interactive'
     const url = buildTerminalWsUrl(target, token, mode)
 
@@ -165,7 +170,10 @@ export function useTerminal(
   useEffect(() => {
     return () => {
       wsRef.current?.close()
+      wsRef.current = null
       termRef.current?.dispose()
+      termRef.current = null
+      fitAddonRef.current = null
     }
   }, [])
 

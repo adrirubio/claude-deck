@@ -1,5 +1,6 @@
 """Pty relay — bridges a tmux pane to a WebSocket via pseudo-terminal."""
 import asyncio
+import ctypes
 import fcntl
 import json
 import logging
@@ -17,6 +18,20 @@ from starlette.websockets import WebSocketState
 logger = logging.getLogger(__name__)
 
 _active_relays: dict[str, "PtyRelay"] = {}
+
+# Linux PR_SET_PDEATHSIG: auto-SIGTERM the child when its parent dies.
+# This prevents orphaned tmux attach-session processes on server reload/crash.
+_PR_SET_PDEATHSIG = 1
+
+
+def _child_preexec() -> None:
+    """Set up the child process: new session + death signal."""
+    os.setsid()
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM)
+    except OSError:
+        pass
 
 
 def parse_control_message(text: str) -> Optional[dict]:
@@ -81,7 +96,7 @@ class PtyRelay:
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
-                preexec_fn=os.setsid,
+                preexec_fn=_child_preexec,
                 env=env,
             )
         except Exception as e:
@@ -193,3 +208,28 @@ async def close_all_relays() -> None:
     for relay in list(_active_relays.values()):
         relay.close()
     _active_relays.clear()
+
+
+def cleanup_orphaned_relays() -> None:
+    """Kill orphaned tmux attach-session processes from previous runs.
+
+    Called on startup as a safety net — PR_SET_PDEATHSIG handles the normal
+    case, but processes can survive if the parent was SIGKILL'd.
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "tmux attach-session"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = result.stdout.strip().splitlines()
+        if not pids:
+            return
+        for pid_str in pids:
+            try:
+                os.kill(int(pid_str), signal.SIGTERM)
+            except (OSError, ValueError):
+                pass
+        if pids:
+            logger.info("Cleaned up %d orphaned tmux attach-session process(es)", len(pids))
+    except Exception:
+        pass

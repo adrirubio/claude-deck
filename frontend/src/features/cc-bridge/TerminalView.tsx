@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react'
-import { Monitor, Maximize2, Minimize2 } from 'lucide-react'
+import { Monitor, Maximize2, Minimize2, X } from 'lucide-react'
 import { useTerminal } from './useTerminal'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -8,22 +8,19 @@ interface TerminalViewProps {
   target: string | null
   fullscreen?: boolean
   onToggleFullscreen?: () => void
+  onClose?: () => void
 }
 
-export function TerminalView({ target, fullscreen, onToggleFullscreen }: TerminalViewProps) {
+export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose }: TerminalViewProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef)
-  const prevTargetRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (target !== prevTargetRef.current) {
-      prevTargetRef.current = target
-      if (target) {
-        attach(target)
-      } else {
-        detach()
-      }
+    if (target) {
+      attach(target)
+    } else {
+      detach()
     }
   }, [target, attach, detach])
 
@@ -83,6 +80,11 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen }: Termina
             {onToggleFullscreen && (
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
                 {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              </Button>
+            )}
+            {onClose && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} title="Close pane">
+                <X className="h-3.5 w-3.5" />
               </Button>
             )}
             {connected ? (

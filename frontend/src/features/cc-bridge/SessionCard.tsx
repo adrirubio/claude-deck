@@ -6,19 +6,20 @@ import type { CCSession } from './types'
 
 interface SessionCardProps {
   session: CCSession
-  isSelected: boolean
+  gridPosition: number | null
   onClick: () => void
   onKill: (session: CCSession) => void
 }
 
-export function SessionCard({ session, isSelected, onClick, onKill }: SessionCardProps) {
+export function SessionCard({ session, gridPosition, onClick, onKill }: SessionCardProps) {
   const projectName = session.cwd.split('/').pop() || session.cwd
+  const isActive = gridPosition !== null
 
   return (
     <Card
       className={cn(
         CLICKABLE_CARD,
-        isSelected && 'border-primary bg-primary/5'
+        isActive && 'border-primary bg-primary/5'
       )}
       onClick={onClick}
       onKeyDown={(e) => {
@@ -42,7 +43,13 @@ export function SessionCard({ session, isSelected, onClick, onKill }: SessionCar
             >
               <Trash2 className="h-3 w-3" />
             </button>
-            <span className="h-2 w-2 rounded-full bg-green-500" />
+            {isActive ? (
+              <span className="h-5 w-5 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+                {gridPosition + 1}
+              </span>
+            ) : (
+              <span className="h-2 w-2 rounded-full bg-green-500" />
+            )}
           </div>
         </div>
         <p className="text-xs text-muted-foreground truncate mt-1" title={session.cwd}>

@@ -27,7 +27,7 @@ def discover_cc_sessions() -> list[dict]:
             ["tmux", "list-panes", "-a", "-F", _PANE_FORMAT],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=10,
         )
         if result.returncode != 0:
             logger.debug("tmux list-panes failed: %s", result.stderr.strip())
