@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CC Bridge**: Live terminal bridge to Claude Code sessions running in tmux
+  - Multi-terminal grid layout supporting up to 4 simultaneous panes (auto-layout: 1, 2-column, or 2x2 grid)
+  - Per-pane read-only/interactive mode toggle, fullscreen, attach/detach, and close controls
+  - Session discovery via `tmux list-panes` with auto-refresh polling
+  - Spawn new Claude Code sessions (plain, worktree, or resume mode) from the UI
+  - Kill sessions with optional worktree cleanup
+  - WebSocket-based PTY relay with xterm.js (WebGL rendering, web links)
+
+### Fixed
+- **CC Bridge**: Prevent orphaned `tmux attach-session` processes from accumulating on server reload/crash via `PR_SET_PDEATHSIG` and startup cleanup
+- **CC Bridge**: Fix terminal not rendering in React StrictMode due to race condition in async attach flow
+
 ## [1.0.0] - 2026-01-22
 
 ### Added
