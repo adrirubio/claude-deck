@@ -20,6 +20,7 @@ export function CCBridgePage() {
   const { sessions, loading, error, refresh } = useCCSessions()
   const [activeTargets, setActiveTargets] = useState<string[]>([])
   const [fullscreenTarget, setFullscreenTarget] = useState<string | null>(null)
+  const [focusedTarget, setFocusedTarget] = useState<string | null>(null)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [killSession, setKillSession] = useState<CCSession | null>(null)
 
@@ -111,13 +112,22 @@ export function CCBridgePage() {
                 const isThisFullscreen = fullscreenTarget === target
                 const hidden = isFullscreen && !isThisFullscreen
                 return (
-                  <div key={target} className={cn(
-                    hidden
-                      ? 'hidden'
-                      : 'relative min-h-0 min-w-0 overflow-hidden',
-                    !isFullscreen && !hidden && 'border-b border-r last:border-r-0'
-                  )}>
-                    <div className="absolute inset-0">
+                  <div
+                    key={target}
+                    className={cn(
+                      hidden
+                        ? 'hidden'
+                        : 'relative min-h-0 min-w-0 overflow-hidden',
+                      !isFullscreen && !hidden && 'border-b border-r last:border-r-0',
+                      !hidden && (focusedTarget === target ? 'bg-primary/60' : 'bg-border/30'),
+                    )}
+                    onMouseDown={() => setFocusedTarget(target)}
+                    onFocusCapture={() => setFocusedTarget(target)}
+                  >
+                    <div className={cn(
+                      'absolute inset-[2px] rounded-sm',
+                      hidden && 'inset-0 rounded-none',
+                    )}>
                       <TerminalView
                         target={target}
                         fullscreen={isThisFullscreen}
