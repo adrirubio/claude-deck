@@ -33,6 +33,9 @@ class HookService:
             statusMessage=hook_data.get("statusMessage"),
             once=hook_data.get("once"),
             timeout=hook_data.get("timeout"),
+            url=hook_data.get("url"),
+            headers=hook_data.get("headers"),
+            allowedEnvVars=hook_data.get("allowedEnvVars"),
             scope=scope
         )
 
@@ -171,6 +174,12 @@ class HookService:
             hook_data["once"] = hook.once
         if hook.timeout:
             hook_data["timeout"] = hook.timeout
+        if hook.url:
+            hook_data["url"] = hook.url
+        if hook.headers:
+            hook_data["headers"] = hook.headers
+        if hook.allowedEnvVars:
+            hook_data["allowedEnvVars"] = hook.allowedEnvVars
 
         # Add hook to settings
         settings["hooks"][hook.event].append(hook_data)
@@ -191,6 +200,9 @@ class HookService:
             statusMessage=hook.statusMessage,
             once=hook.once,
             timeout=hook.timeout,
+            url=hook.url,
+            headers=hook.headers,
+            allowedEnvVars=hook.allowedEnvVars,
             scope=hook.scope
         )
 
@@ -271,6 +283,12 @@ class HookService:
                             hook_data["once"] = hook_update.once
                         if hook_update.timeout is not None:
                             hook_data["timeout"] = hook_update.timeout
+                        if hook_update.url is not None:
+                            hook_data["url"] = hook_update.url
+                        if hook_update.headers is not None:
+                            hook_data["headers"] = hook_update.headers
+                        if hook_update.allowedEnvVars is not None:
+                            hook_data["allowedEnvVars"] = hook_update.allowedEnvVars
 
                         updated_hook = Hook(
                             id=hook_id,
@@ -284,6 +302,9 @@ class HookService:
                             statusMessage=hook_data.get("statusMessage"),
                             once=hook_data.get("once"),
                             timeout=hook_data.get("timeout"),
+                            url=hook_data.get("url"),
+                            headers=hook_data.get("headers"),
+                            allowedEnvVars=hook_data.get("allowedEnvVars"),
                             scope=scope
                         )
                         break

@@ -63,10 +63,10 @@ async def create_hook(
         Created hook
     """
     # Validate hook type
-    if hook.type not in ["command", "prompt"]:
+    if hook.type not in ["command", "prompt", "agent", "http"]:
         raise HTTPException(
             status_code=400,
-            detail="Hook type must be 'command' or 'prompt'"
+            detail="Hook type must be 'command', 'prompt', 'agent', or 'http'"
         )
 
     # Validate scope
@@ -88,6 +88,18 @@ async def create_hook(
             status_code=400,
             detail="Prompt is required for prompt-type hooks"
         )
+
+    if hook.type == "http":
+        if not hook.url:
+            raise HTTPException(
+                status_code=400,
+                detail="URL is required for http-type hooks"
+            )
+        if hook.command or hook.prompt:
+            raise HTTPException(
+                status_code=400,
+                detail="HTTP hooks should not have command or prompt fields"
+            )
 
     try:
         service = HookService()
@@ -127,10 +139,10 @@ async def update_hook(
         )
 
     # Validate hook type if provided
-    if hook_update.type and hook_update.type not in ["command", "prompt"]:
+    if hook_update.type and hook_update.type not in ["command", "prompt", "agent", "http"]:
         raise HTTPException(
             status_code=400,
-            detail="Hook type must be 'command' or 'prompt'"
+            detail="Hook type must be 'command', 'prompt', 'agent', or 'http'"
         )
 
     try:

@@ -17,6 +17,7 @@ from .usage import router as usage_router
 from .memory import router as memory_router
 from .context import router as context_router
 from .plans import router as plans_router
+from .presence import router as presence_router
 from .cc_bridge.router import router as cc_bridge_router
 
 router = APIRouter()
@@ -51,4 +52,5 @@ router.include_router(usage_router, tags=["Usage"])
 router.include_router(memory_router, tags=["Memory"])
 router.include_router(context_router, tags=["Context"])
 router.include_router(plans_router, tags=["Plans"])
+router.include_router(presence_router, prefix="/presence", tags=["Presence"])
 router.include_router(cc_bridge_router, prefix="/cc-bridge", tags=["CC Bridge"])

@@ -22,6 +22,7 @@ import {
   Gauge,
   ClipboardList,
   MonitorPlay,
+  Radio,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -49,6 +50,7 @@ const navigation: { name: string; href: string; icon: LucideIcon }[] = [
 
   // Tier 4: Monitoring & Tools
   { name: 'Sessions', href: '/sessions', icon: MessageSquare },
+  { name: 'Presence', href: '/presence', icon: Radio },
   { name: 'CC Bridge', href: '/cc-bridge', icon: MonitorPlay },
   { name: 'Plans', href: '/plans', icon: ClipboardList },
   { name: 'Context', href: '/context', icon: Gauge },
