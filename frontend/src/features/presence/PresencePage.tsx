@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Radio, Plug, Trash2 } from 'lucide-react'
+import { Radio, Plug, Unplug, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { PresenceCard } from './PresenceCard'
 import { ConnectDialog } from './ConnectDialog'
-import { fetchPresenceSessions, removeSession, clearAllSessions } from './api'
+import { fetchPresenceSessions, removeSession, clearAllSessions, fetchPresenceHooks } from './api'
 import { usePresenceWebSocket } from '@/hooks/usePresenceWebSocket'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import type { PresenceSession } from '@/types/presence'
@@ -26,7 +26,17 @@ export function PresencePage() {
   const [sessions, setSessions] = useState<Map<string, PresenceSession>>(new Map())
   const [loading, setLoading] = useState(true)
   const [connectOpen, setConnectOpen] = useState(false)
+  const [hooksConnected, setHooksConnected] = useState(false)
   const { activeProject } = useProjectContext()
+
+  const checkHooksStatus = useCallback(async () => {
+    try {
+      const hooks = await fetchPresenceHooks()
+      setHooksConnected(hooks.length > 0)
+    } catch {
+      // Ignore
+    }
+  }, [])
 
   const loadSessions = useCallback(async () => {
     setLoading(true)
@@ -45,7 +55,8 @@ export function PresencePage() {
 
   useEffect(() => {
     loadSessions()
-  }, [loadSessions])
+    checkHooksStatus()
+  }, [loadSessions, checkHooksStatus])
 
   const onSessionUpdate = useCallback((session: PresenceSession) => {
     setSessions((prev) => {
@@ -135,9 +146,22 @@ export function PresencePage() {
             </span>
           </div>
           <RefreshButton onClick={loadSessions} loading={loading} />
-          <Button variant="outline" size="sm" onClick={() => setConnectOpen(true)}>
-            <Plug className="h-4 w-4 mr-1" />
-            Connect to Deck
+          <Button
+            variant={hooksConnected ? 'outline' : 'default'}
+            size="sm"
+            onClick={() => setConnectOpen(true)}
+          >
+            {hooksConnected ? (
+              <>
+                <Unplug className="h-4 w-4 mr-1" />
+                Connected
+              </>
+            ) : (
+              <>
+                <Plug className="h-4 w-4 mr-1" />
+                Connect to Deck
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -217,7 +241,10 @@ export function PresencePage() {
       {/* Connect Dialog */}
       <ConnectDialog
         open={connectOpen}
-        onOpenChange={setConnectOpen}
+        onOpenChange={(open) => {
+          setConnectOpen(open)
+          if (!open) checkHooksStatus()
+        }}
         projectPath={activeProject?.path}
       />
     </div>

@@ -91,7 +91,7 @@ export function PresenceCard({ session, onRemove }: PresenceCardProps) {
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge variant="outline" className="text-xs font-normal">
+            <Badge variant="outline" className="text-xs font-normal" title="Duration since session start">
               {duration}
             </Badge>
             <Button

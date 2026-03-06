@@ -1,5 +1,6 @@
 """Service for Presence Dashboard — event processing and session aggregation."""
 import os
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
@@ -90,7 +91,8 @@ class PresenceService:
         if cwd and not session.project_path:
             session.project_path = cwd
         if cwd and not session.label:
-            session.label = self._derive_label(cwd)
+            base_label = self._derive_label(cwd)
+            session.label = await self._assign_unique_label(base_label, session_id, db)
 
         # Update based on event type
         if event_type == "Notification":
@@ -241,6 +243,21 @@ class PresenceService:
     def _derive_label(self, cwd: str) -> str:
         return os.path.basename(cwd.rstrip("/"))
 
+    async def _assign_unique_label(self, base_label: str, session_id: str, db: AsyncSession) -> str:
+        """Append a short session_id suffix if another session already uses this label."""
+        result = await db.execute(
+            select(PresenceSession).where(
+                PresenceSession.label == base_label,
+                PresenceSession.session_id != session_id,
+            )
+        )
+        existing = result.scalars().all()
+        if existing:
+            for s in existing:
+                s.label = f"{base_label} ({s.session_id[:6]})"
+            return f"{base_label} ({session_id[:6]})"
+        return base_label
+
     def _extract_exit_code(self, tool_result: dict) -> Optional[int]:
         # tool_result may have various structures
         if not tool_result:
@@ -251,8 +268,6 @@ class PresenceService:
         # Check content string for exit code pattern
         content = tool_result.get("content", "")
         if isinstance(content, str) and "exit code" in content.lower():
-            # Try to parse "exit code N" from the string
-            import re
             match = re.search(r'exit code[:\s]+(\d+)', content, re.IGNORECASE)
             if match:
                 return int(match.group(1))

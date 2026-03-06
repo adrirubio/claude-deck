@@ -1,7 +1,21 @@
 import { apiClient } from '@/lib/api'
 import type { PresenceSessionList, PresenceSession, PresenceConfigSnippet } from '@/types/presence'
+import type { Hook } from '@/types/hooks'
 
 const BASE = 'presence'
+
+export function buildPresenceEventsUrl(): string {
+  return `${window.location.origin}/api/v1/${BASE}/events`
+}
+
+export async function fetchPresenceHooks(projectPath?: string): Promise<Hook[]> {
+  const params = projectPath ? `?project_path=${encodeURIComponent(projectPath)}` : ''
+  const res = await apiClient<{ hooks: Hook[] }>(`hooks${params}`)
+  const eventsUrl = buildPresenceEventsUrl()
+  return res.hooks.filter(
+    (h) => h.type === 'http' && h.url === eventsUrl
+  )
+}
 
 export async function fetchPresenceSessions(): Promise<PresenceSessionList> {
   return apiClient<PresenceSessionList>(`${BASE}/sessions`)

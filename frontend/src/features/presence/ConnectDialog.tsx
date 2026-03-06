@@ -10,19 +10,17 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { MODAL_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
-import { fetchConfigSnippet } from './api'
+import { fetchConfigSnippet, fetchPresenceHooks, buildPresenceEventsUrl } from './api'
 import { apiClient } from '@/lib/api'
 import type { PresenceConfigSnippet } from '@/types/presence'
 import type { Hook, HookEvent } from '@/types/hooks'
-import { Copy, Check, Plug, Unplug, Loader2, FileCode } from 'lucide-react'
+import { Copy, Check, Plug, Unplug, Loader2, FileCode, AlertTriangle, ArrowRight } from 'lucide-react'
 
 interface ConnectDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   projectPath?: string
 }
-
-const PRESENCE_URL = 'http://localhost:8000/api/v1/presence/events'
 
 const PRESENCE_EVENTS: { event: HookEvent; label: string }[] = [
   { event: 'Notification', label: 'Notifications (narrative text)' },
@@ -50,12 +48,7 @@ export function ConnectDialog({ open, onOpenChange, projectPath }: ConnectDialog
   const fetchExisting = useCallback(async () => {
     setLoading(true)
     try {
-      const params = projectPath ? `?project_path=${encodeURIComponent(projectPath)}` : ''
-      const res = await apiClient<{ hooks: Hook[] }>(`hooks${params}`)
-      const presenceHooks = res.hooks.filter(
-        (h) => h.type === 'http' && h.url === PRESENCE_URL
-      )
-      setExistingHooks(presenceHooks)
+      setExistingHooks(await fetchPresenceHooks(projectPath))
     } catch {
       setExistingHooks([])
     }
@@ -99,7 +92,7 @@ export function ConnectDialog({ open, onOpenChange, projectPath }: ConnectDialog
           body: JSON.stringify({
             event,
             type: 'http',
-            url: PRESENCE_URL,
+            url: buildPresenceEventsUrl(),
             scope,
           }),
         })
@@ -189,9 +182,33 @@ export function ConnectDialog({ open, onOpenChange, projectPath }: ConnectDialog
           </div>
         ) : tab === 'auto' ? (
           <div className="space-y-4">
-            {/* Already connected — show disconnect */}
+            {/* Already connected — show status + restart warning */}
             {isConnected && (
               <div className="space-y-3">
+                {results.some((r) => r.ok) && (
+                  <>
+                    <div className="rounded-md border border-yellow-500/50 bg-yellow-500/10 p-3 space-y-2">
+                      <div className="flex items-center gap-2 text-sm font-medium text-yellow-600 dark:text-yellow-400">
+                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                        Restart running sessions
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Hooks only take effect for <strong>new</strong> Claude Code sessions. Any currently running sessions won&apos;t send events until restarted.
+                      </p>
+                    </div>
+                    <div className="rounded-md border bg-muted/50 p-3 space-y-1.5">
+                      <span className="text-xs font-medium">What&apos;s next</span>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <ArrowRight className="h-3 w-3 shrink-0" />
+                        Start (or restart) a Claude Code session
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <ArrowRight className="h-3 w-3 shrink-0" />
+                        Come back to this page — cards will appear in real-time
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="space-y-1">
                   {existingHooks.map((h) => (
                     <div key={h.id} className="flex items-center gap-2 text-sm">
@@ -241,7 +258,7 @@ export function ConnectDialog({ open, onOpenChange, projectPath }: ConnectDialog
                       size="sm"
                       onClick={() => setScope('user')}
                     >
-                      User (all projects)
+                      All projects
                     </Button>
                     <Button
                       variant={scope === 'project' ? 'default' : 'outline'}
@@ -249,9 +266,16 @@ export function ConnectDialog({ open, onOpenChange, projectPath }: ConnectDialog
                       onClick={() => setScope('project')}
                       disabled={!projectPath}
                     >
-                      Project only
+                      This project only
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    {scope === 'user'
+                      ? 'Hooks apply to all Claude Code sessions regardless of project.'
+                      : projectPath
+                        ? `Hooks apply only to sessions in ${projectPath.replace(/\/+$/, '').split('/').pop() || projectPath}.`
+                        : 'Select a project in the sidebar to enable project-scoped hooks.'}
+                  </p>
                 </div>
 
                 {/* Results */}
