@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Deck — Files</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid #21262d;
+    background: #161b22;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
+  .logo-icon { width: 28px; height: 28px; background: linear-gradient(135deg, #58a6ff, #bc8cff); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .nav-tabs { display: flex; gap: 4px; }
+  .nav-tab { padding: 6px 14px; border-radius: 6px; color: #8b949e; cursor: pointer; font-size: 12px; }
+  .nav-tab.active { background: #21262d; color: #e6edf3; }
+  .header-right { display: flex; align-items: center; gap: 12px; color: #8b949e; font-size: 12px; }
+  .pulse-dot { width: 7px; height: 7px; background: #3fb950; border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 24px;
+    background: #0d1117;
+    border-bottom: 1px solid #21262d;
+  }
+  .toolbar-btn { padding: 4px 10px; border-radius: 5px; background: #21262d; color: #8b949e; font-size: 11px; cursor: pointer; border: 1px solid #30363d; }
+  .toolbar-btn.active { background: #1f3a5c; color: #58a6ff; border-color: #1f6feb; }
+  .toolbar-spacer { flex: 1; }
+  .search-box { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 4px 10px; color: #8b949e; font-size: 11px; font-family: inherit; width: 200px; }
+  .search-box::placeholder { color: #484f58; }
+
+  main { flex: 1; display: flex; overflow: hidden; }
+
+  /* Left: file list */
+  .file-list-panel {
+    width: 420px;
+    border-right: 1px solid #21262d;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .panel-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid #21262d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #161b22;
+  }
+
+  .section-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.8px; }
+
+  .sort-select { font-size: 10px; color: #8b949e; background: transparent; border: none; font-family: inherit; cursor: pointer; }
+
+  .file-list { overflow-y: auto; flex: 1; }
+
+  .file-group-header {
+    padding: 8px 16px 4px;
+    font-size: 10px;
+    color: #484f58;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    border-bottom: 1px solid #161b22;
+    background: #0d1117;
+    position: sticky;
+    top: 0;
+  }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    gap: 10px;
+    cursor: pointer;
+    border-bottom: 1px solid #161b22;
+    transition: background 0.1s;
+  }
+  .file-item:hover { background: #161b22; }
+  .file-item.selected { background: #1c2a3a; border-left: 2px solid #58a6ff; }
+
+  .change-badge {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .change-badge.modified { background: #ffa657; }
+  .change-badge.created { background: #3fb950; }
+  .change-badge.deleted { background: #f85149; }
+
+  .file-info { flex: 1; overflow: hidden; }
+  .file-path { font-size: 12px; color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-path .dir { color: #484f58; }
+  .file-meta { font-size: 10px; color: #484f58; margin-top: 2px; }
+
+  .file-session-tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .tag-snazzy { background: #0c2d6b; color: #58a6ff; }
+  .tag-linode { background: #0c3320; color: #3fb950; }
+  .tag-tizonia { background: #3d0f0f; color: #f85149; }
+  .tag-deck { background: #2c1a4a; color: #d2a8ff; }
+
+  .change-type {
+    font-size: 10px;
+    width: 52px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .change-type.modified { color: #ffa657; }
+  .change-type.created { color: #3fb950; }
+  .change-type.deleted { color: #f85149; }
+
+  /* Right: diff preview */
+  .diff-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .diff-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid #21262d;
+    background: #161b22;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .diff-filename { font-size: 13px; color: #e6edf3; font-weight: 600; }
+  .diff-filepath { font-size: 11px; color: #484f58; }
+
+  .diff-stats { display: flex; gap: 12px; font-size: 11px; }
+  .diff-adds { color: #3fb950; }
+  .diff-dels { color: #f85149; }
+
+  .diff-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+    background: #0d1117;
+  }
+
+  .diff-line {
+    display: flex;
+    font-size: 12px;
+    line-height: 1.6;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+
+  .diff-line-num {
+    width: 48px;
+    padding: 0 8px;
+    text-align: right;
+    color: #484f58;
+    background: #161b22;
+    border-right: 1px solid #21262d;
+    user-select: none;
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+
+  .diff-line-content { padding: 0 12px; flex: 1; white-space: pre; }
+
+  .diff-line.add { background: #0a290a; }
+  .diff-line.add .diff-line-num { background: #0a290a; color: #3fb950; }
+  .diff-line.add .diff-line-content { color: #3fb950; }
+  .diff-line.add .diff-line-content::before { content: '+ '; color: #3fb950; }
+
+  .diff-line.del { background: #290a0a; }
+  .diff-line.del .diff-line-num { background: #290a0a; color: #f85149; }
+  .diff-line.del .diff-line-content { color: #f85149; }
+  .diff-line.del .diff-line-content::before { content: '- '; color: #f85149; }
+
+  .diff-line.ctx .diff-line-content { color: #8b949e; }
+  .diff-line.ctx .diff-line-content::before { content: '  '; }
+
+  .diff-hunk {
+    background: #0c2242;
+    color: #58a6ff;
+    font-size: 11px;
+    padding: 2px 12px;
+  }
+
+  footer {
+    border-top: 1px solid #21262d;
+    background: #161b22;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    flex-shrink: 0;
+  }
+  .stat { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8b949e; }
+  .stat-value { color: #e6edf3; font-weight: 600; font-size: 13px; }
+  .stat-sep { color: #21262d; }
+  .footer-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 11px; color: #8b949e; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-icon">⬡</div>Claude Deck</div>
+  <nav class="nav-tabs">
+    <div class="nav-tab">Presence</div>
+    <div class="nav-tab">Timeline</div>
+    <div class="nav-tab active">Files</div>
+    <div class="nav-tab">Cost</div>
+  </nav>
+  <div class="header-right"><div class="pulse-dot"></div><span>4 sessions live</span></div>
+</header>
+
+<div class="toolbar">
+  <button class="toolbar-btn active">All sessions</button>
+  <button class="toolbar-btn">snazzyemail</button>
+  <button class="toolbar-btn">linode-migration</button>
+  <button class="toolbar-btn">tizonia</button>
+  <button class="toolbar-btn">claude-deck</button>
+  <span class="toolbar-spacer"></span>
+  <input class="search-box" placeholder="Search files..." />
+</div>
+
+<main>
+
+  <!-- File list -->
+  <div class="file-list-panel">
+    <div class="panel-header">
+      <div class="section-label">14 files touched</div>
+      <select class="sort-select"><option>Sort: Recent</option><option>Sort: Session</option><option>Sort: Type</option></select>
+    </div>
+
+    <div class="file-list">
+
+      <div class="file-group-header">Last 15 min</div>
+
+      <div class="file-item selected">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">lib/</span>parser.ts</div>
+          <div class="file-meta">20:57 · +14 -6 lines</div>
+        </div>
+        <div class="file-session-tag tag-snazzy">snazzyemail</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">lib/</span>parser.test.ts</div>
+          <div class="file-meta">20:57 · +8 -2 lines</div>
+        </div>
+        <div class="file-session-tag tag-snazzy">snazzyemail</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">/etc/nginx/sites-available/</span>app</div>
+          <div class="file-meta">20:55 · +32 -0 lines</div>
+        </div>
+        <div class="file-session-tag tag-linode">linode-migration</div>
+        <div class="change-type created">created</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">/etc/systemd/system/</span>app.service</div>
+          <div class="file-meta">20:54 · +18 -0 lines</div>
+        </div>
+        <div class="file-session-tag tag-linode">linode-migration</div>
+        <div class="change-type created">created</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">/</span>CMakeLists.txt</div>
+          <div class="file-meta">20:53 · +3 -1 lines</div>
+        </div>
+        <div class="file-session-tag tag-tizonia">tizonia</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+      <div class="file-group-header">Last 30 min</div>
+
+      <div class="file-item">
+        <div class="change-badge created"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">src/components/</span>Presence.tsx</div>
+          <div class="file-meta">20:43 · +187 -0 lines</div>
+        </div>
+        <div class="file-session-tag tag-deck">claude-deck</div>
+        <div class="change-type created">created</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">src/hooks/</span>useSocket.ts</div>
+          <div class="file-meta">20:43 · +54 -12 lines</div>
+        </div>
+        <div class="file-session-tag tag-deck">claude-deck</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">app/api/email/</span>route.ts</div>
+          <div class="file-meta">20:40 · +22 -8 lines</div>
+        </div>
+        <div class="file-session-tag tag-snazzy">snazzyemail</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+      <div class="file-group-header">Earlier</div>
+
+      <div class="file-item">
+        <div class="change-badge created"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">deploy/</span>setup.sh</div>
+          <div class="file-meta">20:22 · +91 -0 lines</div>
+        </div>
+        <div class="file-session-tag tag-linode">linode-migration</div>
+        <div class="change-type created">created</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">deploy/</span>README.md</div>
+          <div class="file-meta">20:22 · +40 -0 lines</div>
+        </div>
+        <div class="file-session-tag tag-linode">linode-migration</div>
+        <div class="change-type created">created</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">/</span>configure.ac</div>
+          <div class="file-meta">20:51 · +2 -1 lines</div>
+        </div>
+        <div class="file-session-tag tag-tizonia">tizonia</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+      <div class="file-item">
+        <div class="change-badge modified"></div>
+        <div class="file-info">
+          <div class="file-path"><span class="dir">/</span>README.md</div>
+          <div class="file-meta">20:45 · +28 -4 lines</div>
+        </div>
+        <div class="file-session-tag tag-deck">claude-deck</div>
+        <div class="change-type modified">modified</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Diff panel -->
+  <div class="diff-panel">
+    <div class="diff-header">
+      <div>
+        <div class="diff-filename">parser.ts</div>
+        <div class="diff-filepath">snazzyemail › lib/parser.ts · modified 20:57</div>
+      </div>
+      <div class="diff-stats">
+        <span class="diff-adds">+14 additions</span>
+        <span class="diff-dels">−6 deletions</span>
+      </div>
+    </div>
+
+    <div class="diff-content">
+
+      <div class="diff-hunk">@@ -38,12 +38,20 @@ export function parseEmailHeaders(raw: string) {</div>
+
+      <div class="diff-line ctx"><div class="diff-line-num">38</div><div class="diff-line-content">  const headers: Record&lt;string, string&gt; = {}</div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">39</div><div class="diff-line-content">  const lines = raw.split('\n')</div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">40</div><div class="diff-line-content"> </div></div>
+      <div class="diff-line del"><div class="diff-line-num">41</div><div class="diff-line-content">  const SENDER_RE = /From:\s+(.+)\s+&lt;(.+)&gt;/</div></div>
+      <div class="diff-line del"><div class="diff-line-num">42</div><div class="diff-line-content">  const match = line.match(SENDER_RE)</div></div>
+      <div class="diff-line del"><div class="diff-line-num">43</div><div class="diff-line-content">  if (match) sender = match[1].trim()</div></div>
+      <div class="diff-line add"><div class="diff-line-num">41</div><div class="diff-line-content">  // Named capture groups handle Unicode display names correctly</div></div>
+      <div class="diff-line add"><div class="diff-line-num">42</div><div class="diff-line-content">  const SENDER_RE = /From:\s+(?&lt;name&gt;.+?)\s*&lt;(?&lt;addr&gt;[^&gt;]+)&gt;/u</div></div>
+      <div class="diff-line add"><div class="diff-line-num">43</div><div class="diff-line-content">  const match = line.match(SENDER_RE)</div></div>
+      <div class="diff-line add"><div class="diff-line-num">44</div><div class="diff-line-content">  if (match?.groups) {</div></div>
+      <div class="diff-line add"><div class="diff-line-num">45</div><div class="diff-line-content">    sender = match.groups.name.trim()</div></div>
+      <div class="diff-line add"><div class="diff-line-num">46</div><div class="diff-line-content">    senderAddr = match.groups.addr.trim()</div></div>
+      <div class="diff-line add"><div class="diff-line-num">47</div><div class="diff-line-content">  }</div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">48</div><div class="diff-line-content"> </div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">49</div><div class="diff-line-content">  return { sender, senderAddr, subject, date }</div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">50</div><div class="diff-line-content">}</div></div>
+
+      <div class="diff-hunk">@@ -67,8 +75,14 @@ export function sanitizeBody(body: string): string {</div>
+
+      <div class="diff-line ctx"><div class="diff-line-num">75</div><div class="diff-line-content">  let result = body</div></div>
+      <div class="diff-line del"><div class="diff-line-num">76</div><div class="diff-line-content">  result = result.replace(/[^\x00-\x7F]/g, '')</div></div>
+      <div class="diff-line add"><div class="diff-line-num">76</div><div class="diff-line-content">  // Preserve Unicode — only strip control chars and null bytes</div></div>
+      <div class="diff-line add"><div class="diff-line-num">77</div><div class="diff-line-content">  result = result.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')</div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">78</div><div class="diff-line-content">  return result.trim()</div></div>
+      <div class="diff-line ctx"><div class="diff-line-num">79</div><div class="diff-line-content">}</div></div>
+
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <div class="stat">Files touched <span class="stat-value">14</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Created <span class="stat-value" style="color:#3fb950">5</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Modified <span class="stat-value" style="color:#ffa657">8</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Deleted <span class="stat-value" style="color:#f85149">1</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Lines added <span class="stat-value" style="color:#3fb950">+501</span></div>
+  <div class="footer-right">
+    <span>Auto-refresh</span><span style="color:#3fb950">● ON</span><span style="color:#484f58">· every 2s</span>
+  </div>
+</footer>
+
+</body>
+</html>

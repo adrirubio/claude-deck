@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Deck — Cost</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; border-bottom: 1px solid #21262d; background: #161b22;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 700; }
+  .logo-icon { width: 28px; height: 28px; background: linear-gradient(135deg, #58a6ff, #bc8cff); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .nav-tabs { display: flex; gap: 4px; }
+  .nav-tab { padding: 6px 14px; border-radius: 6px; color: #8b949e; cursor: pointer; font-size: 12px; }
+  .nav-tab.active { background: #21262d; color: #e6edf3; }
+  .header-right { display: flex; align-items: center; gap: 12px; color: #8b949e; font-size: 12px; }
+  .pulse-dot { width: 7px; height: 7px; background: #3fb950; border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 24px; background: #0d1117; border-bottom: 1px solid #21262d;
+  }
+  .toolbar-btn { padding: 4px 10px; border-radius: 5px; background: #21262d; color: #8b949e; font-size: 11px; cursor: pointer; border: 1px solid #30363d; }
+  .toolbar-btn.active { background: #1f3a5c; color: #58a6ff; border-color: #1f6feb; }
+  .toolbar-spacer { flex: 1; }
+  .time-range-btn { padding: 3px 8px; border-radius: 4px; background: #21262d; color: #8b949e; font-size: 10px; cursor: pointer; border: 1px solid transparent; }
+  .time-range-btn.active { border-color: #30363d; color: #e6edf3; }
+
+  main { flex: 1; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+
+  .section-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px; }
+
+  /* Top stat cards */
+  .stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+  .stat-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+
+  .stat-card-label { font-size: 11px; color: #8b949e; margin-bottom: 8px; }
+  .stat-card-value { font-size: 26px; font-weight: 700; color: #e6edf3; letter-spacing: -0.5px; }
+  .stat-card-sub { font-size: 11px; color: #484f58; margin-top: 4px; }
+  .stat-card-sub .up { color: #f85149; }
+  .stat-card-sub .down { color: #3fb950; }
+
+  /* Burn rate chart */
+  .chart-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .chart-title { font-size: 13px; color: #c9d1d9; font-weight: 600; }
+  .chart-legend { display: flex; gap: 16px; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #8b949e; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* SVG chart */
+  .chart-area { width: 100%; height: 120px; position: relative; }
+
+  svg { width: 100%; height: 100%; }
+
+  /* Per-session breakdown */
+  .breakdown-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .session-cost-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .session-cost-header { display: flex; align-items: center; justify-content: space-between; }
+
+  .session-cost-name { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+  .session-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .session-cost-total { font-size: 20px; font-weight: 700; }
+
+  .token-bars { display: flex; flex-direction: column; gap: 6px; }
+
+  .token-row { display: flex; align-items: center; gap: 8px; }
+  .token-label { font-size: 10px; color: #8b949e; width: 50px; flex-shrink: 0; }
+  .token-bar-track { flex: 1; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }
+  .token-bar-fill { height: 100%; border-radius: 3px; }
+  .token-value { font-size: 10px; color: #484f58; width: 60px; text-align: right; flex-shrink: 0; }
+
+  .cost-breakdown { display: flex; gap: 16px; font-size: 11px; color: #8b949e; }
+  .cost-item { display: flex; flex-direction: column; gap: 2px; }
+  .cost-item-label { font-size: 10px; color: #484f58; }
+  .cost-item-value { color: #c9d1d9; font-weight: 600; }
+
+  /* Model usage */
+  .model-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+
+  .model-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid #21262d;
+  }
+  .model-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .model-name { font-size: 12px; color: #c9d1d9; flex: 1; }
+  .model-sessions { font-size: 11px; color: #484f58; width: 70px; }
+  .model-tokens { font-size: 11px; color: #484f58; width: 90px; text-align: right; }
+  .model-cost { font-size: 12px; color: #e6edf3; font-weight: 600; width: 60px; text-align: right; }
+
+  .model-bar-track { width: 100px; height: 4px; background: #21262d; border-radius: 2px; overflow: hidden; }
+  .model-bar-fill { height: 100%; border-radius: 2px; background: #58a6ff; }
+
+  /* Daily projection */
+  .projection-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .proj-item { display: flex; flex-direction: column; gap: 4px; }
+  .proj-label { font-size: 10px; color: #484f58; text-transform: uppercase; letter-spacing: 0.6px; }
+  .proj-value { font-size: 18px; font-weight: 700; color: #e6edf3; }
+  .proj-sub { font-size: 11px; color: #8b949e; }
+  .proj-divider { width: 1px; height: 40px; background: #21262d; }
+
+  footer {
+    border-top: 1px solid #21262d; background: #161b22;
+    padding: 12px 24px; display: flex; align-items: center; gap: 32px; flex-shrink: 0;
+  }
+  .stat { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8b949e; }
+  .stat-value { color: #e6edf3; font-weight: 600; font-size: 13px; }
+  .stat-sep { color: #21262d; }
+  .footer-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 11px; color: #8b949e; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><div class="logo-icon">⬡</div>Claude Deck</div>
+  <nav class="nav-tabs">
+    <div class="nav-tab">Presence</div>
+    <div class="nav-tab">Timeline</div>
+    <div class="nav-tab">Files</div>
+    <div class="nav-tab active">Cost</div>
+  </nav>
+  <div class="header-right"><div class="pulse-dot"></div><span>4 sessions live</span></div>
+</header>
+
+<div class="toolbar">
+  <div class="time-range-btn">Today</div>
+  <div class="time-range-btn active">This session</div>
+  <div class="time-range-btn">This week</div>
+  <div class="time-range-btn">This month</div>
+  <span class="toolbar-spacer"></span>
+  <span style="font-size:11px;color:#8b949e">Model: <span style="color:#e6edf3">claude-sonnet-4-5</span></span>
+</div>
+
+<main>
+
+  <!-- Top KPI cards -->
+  <div>
+    <div class="section-label">Session Overview</div>
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="stat-card-label">Total cost</div>
+        <div class="stat-card-value">$2.58</div>
+        <div class="stat-card-sub">4 sessions · 52 min</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Tokens used</div>
+        <div class="stat-card-value">847K</div>
+        <div class="stat-card-sub">612K input · 235K output</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Burn rate</div>
+        <div class="stat-card-value">$2.98<span style="font-size:14px;color:#8b949e">/hr</span></div>
+        <div class="stat-card-sub"><span class="up">↑ 18%</span> vs last session</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-label">Today projected</div>
+        <div class="stat-card-value">$14.20</div>
+        <div class="stat-card-sub">based on current rate</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Burn rate chart (SVG sparkline) -->
+  <div class="chart-card">
+    <div class="chart-header">
+      <div class="chart-title">Spend over time — last 60 min</div>
+      <div class="chart-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#58a6ff"></div>snazzyemail</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3fb950"></div>linode-migration</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f85149"></div>tizonia</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d2a8ff"></div>claude-deck</div>
+      </div>
+    </div>
+    <div class="chart-area">
+      <svg viewBox="0 0 800 120" preserveAspectRatio="none">
+        <!-- Grid lines -->
+        <line x1="0" y1="30" x2="800" y2="30" stroke="#21262d" stroke-width="1"/>
+        <line x1="0" y1="60" x2="800" y2="60" stroke="#21262d" stroke-width="1"/>
+        <line x1="0" y1="90" x2="800" y2="90" stroke="#21262d" stroke-width="1"/>
+        <!-- Y labels -->
+        <text x="4" y="28" fill="#484f58" font-size="9" font-family="monospace">$1.00</text>
+        <text x="4" y="58" fill="#484f58" font-size="9" font-family="monospace">$0.50</text>
+        <text x="4" y="88" fill="#484f58" font-size="9" font-family="monospace">$0.25</text>
+
+        <!-- snazzyemail cumulative line (started at ~60% through) -->
+        <polyline points="0,108 200,108 280,105 360,95 420,80 500,68 580,52 660,38 740,22 800,18"
+          fill="none" stroke="#58a6ff" stroke-width="2" opacity="0.8"/>
+
+        <!-- linode-migration (started from 0, steady climb) -->
+        <polyline points="0,110 80,100 160,88 240,76 320,64 400,54 480,44 560,35 640,26 720,18 800,12"
+          fill="none" stroke="#3fb950" stroke-width="2" opacity="0.8"/>
+
+        <!-- tizonia (started late, flat after error) -->
+        <polyline points="0,112 400,112 450,110 500,108 540,106 570,104 600,103 650,102 720,101 800,100"
+          fill="none" stroke="#f85149" stroke-width="2" opacity="0.8"/>
+
+        <!-- claude-deck (active first half, then done) -->
+        <polyline points="0,108 100,94 200,78 300,60 400,46 500,36 580,28 640,24 700,22 800,22"
+          fill="none" stroke="#d2a8ff" stroke-width="2" opacity="0.8"/>
+
+        <!-- Stacked area fills (subtle) -->
+        <polygon points="0,108 200,108 280,105 360,95 420,80 500,68 580,52 660,38 740,22 800,18 800,120 0,120"
+          fill="#58a6ff" opacity="0.05"/>
+      </svg>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#484f58;padding:0 4px;margin-top:4px;">
+      <span>20:00</span><span>20:10</span><span>20:20</span><span>20:30</span><span>20:40</span><span>20:50</span><span>now</span>
+    </div>
+  </div>
+
+  <!-- Per-session breakdown -->
+  <div>
+    <div class="section-label">Per-Session Breakdown</div>
+    <div class="breakdown-grid">
+
+      <!-- snazzyemail -->
+      <div class="session-cost-card">
+        <div class="session-cost-header">
+          <div class="session-cost-name">
+            <span class="session-dot" style="background:#58a6ff"></span>
+            snazzyemail
+          </div>
+          <div class="session-cost-total" style="color:#58a6ff">$0.42</div>
+        </div>
+        <div class="token-bars">
+          <div class="token-row">
+            <div class="token-label">Input</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:55%;background:#58a6ff;opacity:0.6"></div></div>
+            <div class="token-value">148K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Output</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:30%;background:#58a6ff"></div></div>
+            <div class="token-value">52K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Cache</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:70%;background:#1f6feb;opacity:0.4"></div></div>
+            <div class="token-value">89K tok</div>
+          </div>
+        </div>
+        <div class="cost-breakdown">
+          <div class="cost-item"><div class="cost-item-label">Input</div><div class="cost-item-value">$0.18</div></div>
+          <div class="cost-item"><div class="cost-item-label">Output</div><div class="cost-item-value">$0.16</div></div>
+          <div class="cost-item"><div class="cost-item-label">Cache read</div><div class="cost-item-value">$0.08</div></div>
+          <div class="cost-item"><div class="cost-item-label">Duration</div><div class="cost-item-value">14m</div></div>
+        </div>
+      </div>
+
+      <!-- linode-migration -->
+      <div class="session-cost-card">
+        <div class="session-cost-header">
+          <div class="session-cost-name">
+            <span class="session-dot" style="background:#3fb950"></span>
+            linode-migration
+          </div>
+          <div class="session-cost-total" style="color:#3fb950">$1.07</div>
+        </div>
+        <div class="token-bars">
+          <div class="token-row">
+            <div class="token-label">Input</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:85%;background:#3fb950;opacity:0.6"></div></div>
+            <div class="token-value">298K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Output</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:65%;background:#3fb950"></div></div>
+            <div class="token-value">98K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Cache</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:90%;background:#238636;opacity:0.4"></div></div>
+            <div class="token-value">201K tok</div>
+          </div>
+        </div>
+        <div class="cost-breakdown">
+          <div class="cost-item"><div class="cost-item-label">Input</div><div class="cost-item-value">$0.52</div></div>
+          <div class="cost-item"><div class="cost-item-label">Output</div><div class="cost-item-value">$0.38</div></div>
+          <div class="cost-item"><div class="cost-item-label">Cache read</div><div class="cost-item-value">$0.17</div></div>
+          <div class="cost-item"><div class="cost-item-label">Duration</div><div class="cost-item-value">38m</div></div>
+        </div>
+      </div>
+
+      <!-- tizonia -->
+      <div class="session-cost-card">
+        <div class="session-cost-header">
+          <div class="session-cost-name">
+            <span class="session-dot" style="background:#f85149"></span>
+            tizonia
+          </div>
+          <div class="session-cost-total" style="color:#f85149">$0.18</div>
+        </div>
+        <div class="token-bars">
+          <div class="token-row">
+            <div class="token-label">Input</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:25%;background:#f85149;opacity:0.6"></div></div>
+            <div class="token-value">52K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Output</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:14%;background:#f85149"></div></div>
+            <div class="token-value">21K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Cache</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:18%;background:#da3633;opacity:0.4"></div></div>
+            <div class="token-value">28K tok</div>
+          </div>
+        </div>
+        <div class="cost-breakdown">
+          <div class="cost-item"><div class="cost-item-label">Input</div><div class="cost-item-value">$0.08</div></div>
+          <div class="cost-item"><div class="cost-item-label">Output</div><div class="cost-item-value">$0.07</div></div>
+          <div class="cost-item"><div class="cost-item-label">Cache read</div><div class="cost-item-value">$0.03</div></div>
+          <div class="cost-item"><div class="cost-item-label">Duration</div><div class="cost-item-value">7m · errored</div></div>
+        </div>
+      </div>
+
+      <!-- claude-deck -->
+      <div class="session-cost-card">
+        <div class="session-cost-header">
+          <div class="session-cost-name">
+            <span class="session-dot" style="background:#d2a8ff"></span>
+            claude-deck
+          </div>
+          <div class="session-cost-total" style="color:#d2a8ff">$0.91</div>
+        </div>
+        <div class="token-bars">
+          <div class="token-row">
+            <div class="token-label">Input</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:72%;background:#d2a8ff;opacity:0.6"></div></div>
+            <div class="token-value">198K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Output</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:50%;background:#d2a8ff"></div></div>
+            <div class="token-value">64K tok</div>
+          </div>
+          <div class="token-row">
+            <div class="token-label">Cache</div>
+            <div class="token-bar-track"><div class="token-bar-fill" style="width:80%;background:#8957e5;opacity:0.4"></div></div>
+            <div class="token-value">154K tok</div>
+          </div>
+        </div>
+        <div class="cost-breakdown">
+          <div class="cost-item"><div class="cost-item-label">Input</div><div class="cost-item-value">$0.42</div></div>
+          <div class="cost-item"><div class="cost-item-label">Output</div><div class="cost-item-value">$0.36</div></div>
+          <div class="cost-item"><div class="cost-item-label">Cache read</div><div class="cost-item-value">$0.13</div></div>
+          <div class="cost-item"><div class="cost-item-label">Duration</div><div class="cost-item-value">52m · idle</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Projections -->
+  <div class="projection-card">
+    <div class="proj-item">
+      <div class="proj-label">Today so far</div>
+      <div class="proj-value">$2.58</div>
+      <div class="proj-sub">4 sessions</div>
+    </div>
+    <div class="proj-divider"></div>
+    <div class="proj-item">
+      <div class="proj-label">At this rate, today total</div>
+      <div class="proj-value" style="color:#ffa657">$14.20</div>
+      <div class="proj-sub">~$2.98/hr burn</div>
+    </div>
+    <div class="proj-divider"></div>
+    <div class="proj-item">
+      <div class="proj-label">This month so far</div>
+      <div class="proj-value">$38.40</div>
+      <div class="proj-sub">5 days in</div>
+    </div>
+    <div class="proj-divider"></div>
+    <div class="proj-item">
+      <div class="proj-label">Month projection</div>
+      <div class="proj-value" style="color:#f85149">$230</div>
+      <div class="proj-sub">MAX plan: $100/mo included</div>
+    </div>
+    <div class="proj-divider"></div>
+    <div class="proj-item">
+      <div class="proj-label">Cache savings</div>
+      <div class="proj-value" style="color:#3fb950">$0.41</div>
+      <div class="proj-sub">this session (37% hit rate)</div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <div class="stat">Session cost <span class="stat-value">$2.58</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Tokens <span class="stat-value">847K</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Burn rate <span class="stat-value">$2.98/hr</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Cache hit <span class="stat-value" style="color:#3fb950">37%</span></div>
+  <div class="footer-right">
+    <span>Auto-refresh</span><span style="color:#3fb950">● ON</span><span style="color:#484f58">· every 2s</span>
+  </div>
+</footer>
+
+</body>
+</html>

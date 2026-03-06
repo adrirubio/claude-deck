@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Deck — Presence</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid #21262d;
+    background: #161b22;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+
+  .logo-icon {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, #58a6ff, #bc8cff);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+
+  .nav-tabs {
+    display: flex;
+    gap: 4px;
+  }
+
+  .nav-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    color: #8b949e;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-size: 12px;
+  }
+
+  .nav-tab.active {
+    background: #21262d;
+    color: #e6edf3;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #8b949e;
+    font-size: 12px;
+  }
+
+  .pulse-dot {
+    width: 7px; height: 7px;
+    background: #3fb950;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Main layout */
+  main {
+    flex: 1;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .section-label {
+    font-size: 11px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 4px;
+  }
+
+  /* Session grid */
+  .sessions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 12px;
+  }
+
+  /* Session card */
+  .session-card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: border-color 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .session-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+
+  .session-card.active::before { background: #3fb950; }
+  .session-card.working::before { background: #58a6ff; }
+  .session-card.error::before { background: #f85149; }
+  .session-card.idle::before { background: #8b949e; }
+
+  .session-card:hover {
+    border-color: #30363d;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .session-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot.active { background: #3fb950; animation: pulse 2s infinite; }
+  .status-dot.working { background: #58a6ff; animation: pulse 1.2s infinite; }
+  .status-dot.error { background: #f85149; }
+  .status-dot.idle { background: #8b949e; }
+
+  .card-badges {
+    display: flex;
+    gap: 6px;
+  }
+
+  .badge {
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 10px;
+    font-weight: 500;
+  }
+
+  .badge-time {
+    background: #21262d;
+    color: #8b949e;
+  }
+
+  .badge-cost {
+    background: #1f2937;
+    color: #d1d5db;
+  }
+
+  /* Narrative */
+  .narrative {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+
+  .narrative-icon { color: #58a6ff; font-size: 11px; margin-top: 1px; flex-shrink: 0; }
+
+  .narrative-text {
+    color: #79c0ff;
+    font-style: italic;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  /* Files */
+  .files-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .files-label {
+    font-size: 10px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  .files-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .file-chip {
+    background: #21262d;
+    color: #d2a8ff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    border: 1px solid #30363d;
+  }
+
+  .file-chip.modified { color: #ffa657; }
+  .file-chip.created { color: #3fb950; }
+  .file-chip.deleted { color: #f85149; text-decoration: line-through; }
+
+  /* Last command */
+  .last-cmd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: #0d1117;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  .cmd-prefix { color: #8b949e; }
+  .cmd-text { color: #e6edf3; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmd-status-ok { color: #3fb950; font-size: 10px; }
+  .cmd-status-fail { color: #f85149; font-size: 10px; }
+  .cmd-status-run { color: #58a6ff; font-size: 10px; animation: pulse 1s infinite; }
+
+  /* Activity bar */
+  .activity-bar {
+    display: flex;
+    gap: 2px;
+    align-items: flex-end;
+    height: 20px;
+  }
+
+  .bar {
+    flex: 1;
+    background: #21262d;
+    border-radius: 2px;
+    min-height: 3px;
+    transition: height 0.3s;
+  }
+  .bar.lit { background: #58a6ff; }
+  .bar.dim { background: #1c3a5a; }
+
+  /* Stats footer */
+  footer {
+    border-top: 1px solid #21262d;
+    background: #161b22;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+  }
+
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #8b949e;
+  }
+
+  .stat-value {
+    color: #e6edf3;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .stat-sep { color: #21262d; }
+
+  .footer-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #8b949e;
+  }
+
+  /* Toolbar hint */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 24px;
+    background: #0d1117;
+    border-bottom: 1px solid #21262d;
+  }
+
+  .toolbar-btn {
+    padding: 4px 10px;
+    border-radius: 5px;
+    background: #21262d;
+    color: #8b949e;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid #30363d;
+  }
+
+  .toolbar-btn:hover { color: #e6edf3; background: #30363d; }
+  .toolbar-btn.danger:hover { color: #f85149; }
+
+  .toolbar-spacer { flex: 1; }
+
+  .search-box {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 4px 10px;
+    color: #8b949e;
+    font-size: 11px;
+    font-family: inherit;
+    width: 180px;
+  }
+
+  .search-box::placeholder { color: #484f58; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⬡</div>
+    Claude Deck
+  </div>
+  <nav class="nav-tabs">
+    <div class="nav-tab active">Presence</div>
+    <div class="nav-tab">Timeline</div>
+    <div class="nav-tab">Files</div>
+    <div class="nav-tab">Cost</div>
+  </nav>
+  <div class="header-right">
+    <div class="pulse-dot"></div>
+    <span>4 sessions live</span>
+  </div>
+</header>
+
+<div class="toolbar">
+  <button class="toolbar-btn">+ New session</button>
+  <button class="toolbar-btn">Kill all idle</button>
+  <span class="toolbar-spacer"></span>
+  <input class="search-box" placeholder="Filter sessions..." />
+</div>
+
+<main>
+  <div class="section-label">Active Sessions</div>
+
+  <div class="sessions-grid">
+
+    <!-- Session 1: snazzyemail — working -->
+    <div class="session-card working">
+      <div class="card-header">
+        <div class="session-name">
+          <span class="status-dot working"></span>
+          snazzyemail
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-time">⏱ 14m</span>
+          <span class="badge badge-cost">$0.42</span>
+        </div>
+      </div>
+
+      <div class="narrative">
+        <span class="narrative-icon">◈</span>
+        <span class="narrative-text">"Fixing broken test in email parser — the regex isn't handling Unicode edge cases correctly."</span>
+      </div>
+
+      <div class="files-section">
+        <div class="files-label">Modified files</div>
+        <div class="files-list">
+          <span class="file-chip modified">lib/parser.ts</span>
+          <span class="file-chip modified">lib/parser.test.ts</span>
+          <span class="file-chip modified">app/api/email/route.ts</span>
+        </div>
+      </div>
+
+      <div class="last-cmd">
+        <span class="cmd-prefix">$</span>
+        <span class="cmd-text">npm test -- --testPathPattern=parser</span>
+        <span class="cmd-status-fail">● fail</span>
+      </div>
+
+      <div class="activity-bar">
+        <div class="bar lit" style="height:8px"></div>
+        <div class="bar lit" style="height:14px"></div>
+        <div class="bar lit" style="height:10px"></div>
+        <div class="bar lit" style="height:18px"></div>
+        <div class="bar dim" style="height:6px"></div>
+        <div class="bar lit" style="height:20px"></div>
+        <div class="bar lit" style="height:12px"></div>
+        <div class="bar dim" style="height:4px"></div>
+        <div class="bar lit" style="height:16px"></div>
+        <div class="bar lit" style="height:20px"></div>
+      </div>
+    </div>
+
+    <!-- Session 2: linode-migration — active -->
+    <div class="session-card active">
+      <div class="card-header">
+        <div class="session-name">
+          <span class="status-dot active"></span>
+          linode-migration
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-time">⏱ 38m</span>
+          <span class="badge badge-cost">$1.07</span>
+        </div>
+      </div>
+
+      <div class="narrative">
+        <span class="narrative-icon">◈</span>
+        <span class="narrative-text">"Setting up Nginx reverse proxy config and updating systemd service files for the new VPS."</span>
+      </div>
+
+      <div class="files-section">
+        <div class="files-label">Modified files</div>
+        <div class="files-list">
+          <span class="file-chip created">/etc/nginx/sites-available/app</span>
+          <span class="file-chip modified">/etc/systemd/system/app.service</span>
+          <span class="file-chip created">deploy/setup.sh</span>
+        </div>
+      </div>
+
+      <div class="last-cmd">
+        <span class="cmd-prefix">$</span>
+        <span class="cmd-text">systemctl reload nginx</span>
+        <span class="cmd-status-ok">✓ ok</span>
+      </div>
+
+      <div class="activity-bar">
+        <div class="bar lit" style="height:12px"></div>
+        <div class="bar lit" style="height:20px"></div>
+        <div class="bar lit" style="height:18px"></div>
+        <div class="bar lit" style="height:16px"></div>
+        <div class="bar lit" style="height:20px"></div>
+        <div class="bar lit" style="height:14px"></div>
+        <div class="bar lit" style="height:20px"></div>
+        <div class="bar lit" style="height:16px"></div>
+        <div class="bar lit" style="height:18px"></div>
+        <div class="bar lit" style="height:20px"></div>
+      </div>
+    </div>
+
+    <!-- Session 3: tizonia — error -->
+    <div class="session-card error">
+      <div class="card-header">
+        <div class="session-name">
+          <span class="status-dot error"></span>
+          tizonia
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-time">⏱ 7m</span>
+          <span class="badge badge-cost">$0.18</span>
+        </div>
+      </div>
+
+      <div class="narrative">
+        <span class="narrative-icon">◈</span>
+        <span class="narrative-text">"Build failed — missing libpulse-dev dependency. Trying to resolve without root access."</span>
+      </div>
+
+      <div class="files-section">
+        <div class="files-label">Modified files</div>
+        <div class="files-list">
+          <span class="file-chip modified">CMakeLists.txt</span>
+          <span class="file-chip modified">configure.ac</span>
+        </div>
+      </div>
+
+      <div class="last-cmd">
+        <span class="cmd-prefix">$</span>
+        <span class="cmd-text">make -j4</span>
+        <span class="cmd-status-fail">● fail (exit 2)</span>
+      </div>
+
+      <div class="activity-bar">
+        <div class="bar lit" style="height:16px"></div>
+        <div class="bar lit" style="height:10px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+      </div>
+    </div>
+
+    <!-- Session 4: claude-deck — idle -->
+    <div class="session-card idle">
+      <div class="card-header">
+        <div class="session-name">
+          <span class="status-dot idle"></span>
+          claude-deck
+        </div>
+        <div class="card-badges">
+          <span class="badge badge-time">⏱ 52m</span>
+          <span class="badge badge-cost">$0.91</span>
+        </div>
+      </div>
+
+      <div class="narrative">
+        <span class="narrative-icon">◈</span>
+        <span class="narrative-text">"Done. Implemented the WebSocket event handler and updated the README with setup instructions."</span>
+      </div>
+
+      <div class="files-section">
+        <div class="files-label">Modified files</div>
+        <div class="files-list">
+          <span class="file-chip modified">src/hooks/useSocket.ts</span>
+          <span class="file-chip created">src/components/Presence.tsx</span>
+          <span class="file-chip modified">README.md</span>
+        </div>
+      </div>
+
+      <div class="last-cmd">
+        <span class="cmd-prefix">$</span>
+        <span class="cmd-text">git commit -m "feat: add presence dashboard"</span>
+        <span class="cmd-status-ok">✓ ok</span>
+      </div>
+
+      <div class="activity-bar">
+        <div class="bar lit" style="height:20px"></div>
+        <div class="bar lit" style="height:16px"></div>
+        <div class="bar lit" style="height:18px"></div>
+        <div class="bar lit" style="height:12px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+        <div class="bar dim" style="height:3px"></div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="stat">Sessions <span class="stat-value">4</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Active <span class="stat-value" style="color:#3fb950">2</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Errors <span class="stat-value" style="color:#f85149">1</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Idle <span class="stat-value" style="color:#8b949e">1</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Session cost <span class="stat-value">$2.58</span></div>
+  <div class="footer-right">
+    <span>Auto-refresh</span>
+    <span style="color:#3fb950">● ON</span>
+    <span style="color:#484f58">· every 2s</span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Deck — Timeline</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid #21262d;
+    background: #161b22;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+
+  .logo-icon {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, #58a6ff, #bc8cff);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+
+  .nav-tabs {
+    display: flex;
+    gap: 4px;
+  }
+
+  .nav-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    color: #8b949e;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .nav-tab.active {
+    background: #21262d;
+    color: #e6edf3;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #8b949e;
+    font-size: 12px;
+  }
+
+  .pulse-dot {
+    width: 7px; height: 7px;
+    background: #3fb950;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Toolbar */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 24px;
+    background: #0d1117;
+    border-bottom: 1px solid #21262d;
+  }
+
+  .toolbar-btn {
+    padding: 4px 10px;
+    border-radius: 5px;
+    background: #21262d;
+    color: #8b949e;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid #30363d;
+  }
+
+  .toolbar-btn.active {
+    background: #1f3a5c;
+    color: #58a6ff;
+    border-color: #1f6feb;
+  }
+
+  .toolbar-spacer { flex: 1; }
+
+  .time-range {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    font-size: 11px;
+    color: #8b949e;
+  }
+
+  .time-range-btn {
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: #21262d;
+    color: #8b949e;
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+
+  .time-range-btn.active {
+    border-color: #30363d;
+    color: #e6edf3;
+  }
+
+  /* Main layout */
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Gantt section */
+  .gantt-section {
+    padding: 20px 24px 0;
+    flex-shrink: 0;
+  }
+
+  .section-label {
+    font-size: 11px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 12px;
+  }
+
+  .gantt-container {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  /* Time ruler */
+  .time-ruler {
+    display: flex;
+    padding: 8px 0 8px 120px;
+    border-bottom: 1px solid #21262d;
+    background: #161b22;
+    position: relative;
+  }
+
+  .time-tick {
+    flex: 1;
+    text-align: center;
+    font-size: 10px;
+    color: #484f58;
+    position: relative;
+  }
+
+  .time-tick::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: 50%;
+    width: 1px;
+    height: 4px;
+    background: #21262d;
+  }
+
+  /* Gantt rows */
+  .gantt-row {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #21262d;
+    height: 44px;
+  }
+
+  .gantt-row:last-child { border-bottom: none; }
+
+  .gantt-label {
+    width: 120px;
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-shrink: 0;
+    border-right: 1px solid #21262d;
+    height: 100%;
+    background: #161b22;
+  }
+
+  .session-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .gantt-label-text {
+    font-size: 12px;
+    color: #c9d1d9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .gantt-track {
+    flex: 1;
+    position: relative;
+    height: 100%;
+    background: #0d1117;
+  }
+
+  /* Grid lines */
+  .gantt-track::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 16.6%; right: 0;
+    background: repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent calc(16.66% - 1px),
+      #161b22 calc(16.66% - 1px),
+      #161b22 16.66%
+    );
+    pointer-events: none;
+  }
+
+  /* Activity segments */
+  .segment {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 14px;
+    border-radius: 3px;
+    opacity: 0.85;
+  }
+
+  .segment.active { background: #238636; }
+  .segment.working { background: #1f6feb; }
+  .segment.error { background: #da3633; }
+  .segment.idle { background: #30363d; }
+  .segment.gap { background: transparent; }
+
+  /* Event markers on gantt */
+  .event-marker {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    border: 2px solid #0d1117;
+    z-index: 2;
+    cursor: pointer;
+  }
+
+  .event-marker.notify { background: #58a6ff; }
+  .event-marker.error { background: #f85149; }
+  .event-marker.commit { background: #3fb950; }
+  .event-marker.write { background: #d2a8ff; }
+
+  /* "Now" indicator */
+  .now-line {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: #58a6ff;
+    opacity: 0.6;
+    right: 0;
+    z-index: 3;
+  }
+
+  .now-label {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    font-size: 9px;
+    color: #58a6ff;
+    z-index: 3;
+  }
+
+  /* Divider */
+  .section-divider {
+    height: 1px;
+    background: #21262d;
+    margin: 20px 24px 0;
+  }
+
+  /* Event stream */
+  .stream-section {
+    padding: 16px 24px;
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .stream-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .filter-pills {
+    display: flex;
+    gap: 4px;
+  }
+
+  .pill {
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    background: transparent;
+  }
+
+  .pill.active {
+    background: #21262d;
+    color: #e6edf3;
+    border-color: #484f58;
+  }
+
+  .pill.notify.active { background: #0c2d6b; color: #58a6ff; border-color: #1f6feb; }
+  .pill.error.active { background: #3d0f0f; color: #f85149; border-color: #da3633; }
+  .pill.commit.active { background: #0c3320; color: #3fb950; border-color: #238636; }
+  .pill.write.active { background: #2c1a4a; color: #d2a8ff; border-color: #8957e5; }
+
+  /* Event rows */
+  .event-row {
+    display: flex;
+    align-items: flex-start;
+    padding: 8px 0;
+    border-bottom: 1px solid #161b22;
+    gap: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    padding-left: 4px;
+    transition: background 0.1s;
+  }
+
+  .event-row:hover { background: #161b22; }
+
+  .event-time {
+    font-size: 11px;
+    color: #484f58;
+    width: 44px;
+    flex-shrink: 0;
+    padding-top: 2px;
+  }
+
+  .event-session-tag {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    margin-top: 1px;
+    white-space: nowrap;
+  }
+
+  .tag-snazzy { background: #0c2d6b; color: #58a6ff; }
+  .tag-linode { background: #0c3320; color: #3fb950; }
+  .tag-tizonia { background: #3d0f0f; color: #f85149; }
+  .tag-deck { background: #2c1a4a; color: #d2a8ff; }
+
+  .event-icon {
+    font-size: 12px;
+    width: 16px;
+    flex-shrink: 0;
+    padding-top: 2px;
+    text-align: center;
+  }
+
+  .event-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .event-main {
+    font-size: 12px;
+    color: #c9d1d9;
+    line-height: 1.4;
+  }
+
+  .event-main em {
+    color: #79c0ff;
+    font-style: italic;
+  }
+
+  .event-detail {
+    font-size: 11px;
+    color: #484f58;
+    font-family: monospace;
+  }
+
+  .event-detail .ok { color: #3fb950; }
+  .event-detail .fail { color: #f85149; }
+  .event-detail .path { color: #d2a8ff; }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid #21262d;
+    background: #161b22;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    flex-shrink: 0;
+  }
+
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #8b949e;
+  }
+
+  .stat-value {
+    color: #e6edf3;
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .stat-sep { color: #21262d; }
+
+  .footer-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #8b949e;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⬡</div>
+    Claude Deck
+  </div>
+  <nav class="nav-tabs">
+    <div class="nav-tab">Presence</div>
+    <div class="nav-tab active">Timeline</div>
+    <div class="nav-tab">Files</div>
+    <div class="nav-tab">Cost</div>
+  </nav>
+  <div class="header-right">
+    <div class="pulse-dot"></div>
+    <span>4 sessions live</span>
+  </div>
+</header>
+
+<div class="toolbar">
+  <button class="toolbar-btn active">All sessions</button>
+  <button class="toolbar-btn">snazzyemail</button>
+  <button class="toolbar-btn">linode-migration</button>
+  <button class="toolbar-btn">tizonia</button>
+  <button class="toolbar-btn">claude-deck</button>
+  <span class="toolbar-spacer"></span>
+  <div class="time-range">
+    <span>Range:</span>
+    <div class="time-range-btn">15m</div>
+    <div class="time-range-btn">30m</div>
+    <div class="time-range-btn active">1h</div>
+    <div class="time-range-btn">3h</div>
+  </div>
+</div>
+
+<main>
+
+  <!-- Gantt -->
+  <div class="gantt-section">
+    <div class="section-label">Session Activity — Last 60 min</div>
+    <div class="gantt-container">
+
+      <div class="time-ruler">
+        <div class="time-tick">20:00</div>
+        <div class="time-tick">20:10</div>
+        <div class="time-tick">20:20</div>
+        <div class="time-tick">20:30</div>
+        <div class="time-tick">20:40</div>
+        <div class="time-tick">20:50</div>
+        <div class="time-tick" style="color:#58a6ff">now</div>
+      </div>
+
+      <!-- snazzyemail row -->
+      <div class="gantt-row">
+        <div class="gantt-label">
+          <span class="session-dot" style="background:#58a6ff"></span>
+          <span class="gantt-label-text">snazzyemail</span>
+        </div>
+        <div class="gantt-track">
+          <div class="now-line"></div>
+          <!-- idle gap at start -->
+          <div class="segment idle" style="left:0%;width:28%;"></div>
+          <!-- started working -->
+          <div class="segment working" style="left:28%;width:72%;"></div>
+          <!-- event markers -->
+          <div class="event-marker notify" style="left:35%" title="Notification"></div>
+          <div class="event-marker write" style="left:52%" title="Files written"></div>
+          <div class="event-marker error" style="left:68%" title="Test failed"></div>
+          <div class="event-marker notify" style="left:82%" title="Notification"></div>
+          <div class="event-marker write" style="left:91%" title="Files written"></div>
+        </div>
+      </div>
+
+      <!-- linode-migration row -->
+      <div class="gantt-row">
+        <div class="gantt-label">
+          <span class="session-dot" style="background:#3fb950"></span>
+          <span class="gantt-label-text">linode-migration</span>
+        </div>
+        <div class="gantt-track">
+          <div class="now-line"></div>
+          <div class="segment active" style="left:0%;width:100%;"></div>
+          <div class="event-marker notify" style="left:8%"></div>
+          <div class="event-marker write" style="left:22%"></div>
+          <div class="event-marker commit" style="left:38%"></div>
+          <div class="event-marker notify" style="left:55%"></div>
+          <div class="event-marker write" style="left:67%"></div>
+          <div class="event-marker commit" style="left:79%"></div>
+          <div class="event-marker notify" style="left:93%"></div>
+        </div>
+      </div>
+
+      <!-- tizonia row -->
+      <div class="gantt-row">
+        <div class="gantt-label">
+          <span class="session-dot" style="background:#f85149"></span>
+          <span class="gantt-label-text">tizonia</span>
+        </div>
+        <div class="gantt-track">
+          <div class="now-line"></div>
+          <div class="segment idle" style="left:0%;width:62%;"></div>
+          <div class="segment working" style="left:62%;width:20%;"></div>
+          <div class="segment error" style="left:82%;width:18%;"></div>
+          <div class="event-marker notify" style="left:64%"></div>
+          <div class="event-marker write" style="left:73%"></div>
+          <div class="event-marker error" style="left:83%"></div>
+          <div class="event-marker error" style="left:93%"></div>
+        </div>
+      </div>
+
+      <!-- claude-deck row -->
+      <div class="gantt-row">
+        <div class="gantt-label">
+          <span class="session-dot" style="background:#8b949e"></span>
+          <span class="gantt-label-text">claude-deck</span>
+        </div>
+        <div class="gantt-track">
+          <div class="now-line"></div>
+          <div class="segment active" style="left:0%;width:73%;"></div>
+          <div class="segment idle" style="left:73%;width:27%;"></div>
+          <div class="event-marker notify" style="left:5%"></div>
+          <div class="event-marker write" style="left:18%"></div>
+          <div class="event-marker write" style="left:33%"></div>
+          <div class="event-marker notify" style="left:48%"></div>
+          <div class="event-marker commit" style="left:62%"></div>
+          <div class="event-marker commit" style="left:72%"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Legend -->
+    <div style="display:flex;gap:16px;margin-top:8px;font-size:10px;color:#8b949e;align-items:center;">
+      <span>Markers:</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#58a6ff;margin-right:4px;vertical-align:middle;"></span>Notification</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;margin-right:4px;vertical-align:middle;"></span>Commit</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#d2a8ff;margin-right:4px;vertical-align:middle;"></span>File write</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f85149;margin-right:4px;vertical-align:middle;"></span>Error</span>
+    </div>
+  </div>
+
+  <div class="section-divider"></div>
+
+  <!-- Unified event stream -->
+  <div class="stream-section">
+    <div class="stream-header">
+      <div class="section-label" style="margin-bottom:0">Event Stream</div>
+      <div class="filter-pills">
+        <div class="pill active">All</div>
+        <div class="pill notify active">Notifications</div>
+        <div class="pill commit active">Commits</div>
+        <div class="pill write active">Writes</div>
+        <div class="pill error active">Errors</div>
+      </div>
+    </div>
+
+    <!-- Events — newest first -->
+    <div class="event-row">
+      <div class="event-time">20:58</div>
+      <div class="event-session-tag tag-snazzy">snazzyemail</div>
+      <div class="event-icon">◈</div>
+      <div class="event-body">
+        <div class="event-main"><em>"Trying a different regex approach — using named capture groups instead."</em></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:57</div>
+      <div class="event-session-tag tag-snazzy">snazzyemail</div>
+      <div class="event-icon" style="color:#d2a8ff">✦</div>
+      <div class="event-body">
+        <div class="event-main">Wrote 2 files</div>
+        <div class="event-detail"><span class="path">lib/parser.ts</span> · <span class="path">lib/parser.test.ts</span></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:55</div>
+      <div class="event-session-tag tag-linode">linode-migration</div>
+      <div class="event-icon">◈</div>
+      <div class="event-body">
+        <div class="event-main"><em>"Setting up Nginx reverse proxy — mapping ports 3000 and 5432."</em></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:54</div>
+      <div class="event-session-tag tag-tizonia">tizonia</div>
+      <div class="event-icon" style="color:#f85149">✗</div>
+      <div class="event-body">
+        <div class="event-main">Command failed</div>
+        <div class="event-detail">$ make -j4 → <span class="fail">exit 2</span> · fatal: libpulse-dev not found</div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:53</div>
+      <div class="event-session-tag tag-tizonia">tizonia</div>
+      <div class="event-icon" style="color:#f85149">✗</div>
+      <div class="event-body">
+        <div class="event-main">Command failed</div>
+        <div class="event-detail">$ ./configure → <span class="fail">exit 1</span> · missing dependency</div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:51</div>
+      <div class="event-session-tag tag-snazzy">snazzyemail</div>
+      <div class="event-icon" style="color:#f85149">✗</div>
+      <div class="event-body">
+        <div class="event-main">Tests failed</div>
+        <div class="event-detail">$ npm test → <span class="fail">3 failed</span> · parser.test.ts:44, :67, :89</div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:50</div>
+      <div class="event-session-tag tag-tizonia">tizonia</div>
+      <div class="event-icon">◈</div>
+      <div class="event-body">
+        <div class="event-main"><em>"Starting build — checking configure.ac for missing deps first."</em></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:48</div>
+      <div class="event-session-tag tag-linode">linode-migration</div>
+      <div class="event-icon" style="color:#3fb950">⬆</div>
+      <div class="event-body">
+        <div class="event-main">Committed</div>
+        <div class="event-detail"><span class="ok">git commit</span> "feat: add systemd service for app"</div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:45</div>
+      <div class="event-session-tag tag-deck">claude-deck</div>
+      <div class="event-icon" style="color:#3fb950">⬆</div>
+      <div class="event-body">
+        <div class="event-main">Committed</div>
+        <div class="event-detail"><span class="ok">git commit</span> "feat: add presence dashboard"</div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:43</div>
+      <div class="event-session-tag tag-deck">claude-deck</div>
+      <div class="event-icon">◈</div>
+      <div class="event-body">
+        <div class="event-main"><em>"Done. Implemented WebSocket handler and updated README with setup instructions."</em></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:38</div>
+      <div class="event-session-tag tag-snazzy">snazzyemail</div>
+      <div class="event-icon">◈</div>
+      <div class="event-body">
+        <div class="event-main"><em>"Found the issue — email parser fails on non-ASCII sender names. Fixing now."</em></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:35</div>
+      <div class="event-session-tag tag-deck">claude-deck</div>
+      <div class="event-icon" style="color:#d2a8ff">✦</div>
+      <div class="event-body">
+        <div class="event-main">Wrote 2 files</div>
+        <div class="event-detail"><span class="path">src/hooks/useSocket.ts</span> · <span class="path">src/components/Presence.tsx</span></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:30</div>
+      <div class="event-session-tag tag-linode">linode-migration</div>
+      <div class="event-icon" style="color:#3fb950">⬆</div>
+      <div class="event-body">
+        <div class="event-main">Committed</div>
+        <div class="event-detail"><span class="ok">git commit</span> "chore: configure ufw firewall rules"</div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:22</div>
+      <div class="event-session-tag tag-linode">linode-migration</div>
+      <div class="event-icon" style="color:#d2a8ff">✦</div>
+      <div class="event-body">
+        <div class="event-main">Wrote 3 files</div>
+        <div class="event-detail"><span class="path">/etc/nginx/sites-available/app</span> · <span class="path">deploy/setup.sh</span> · <span class="path">deploy/README.md</span></div>
+      </div>
+    </div>
+
+    <div class="event-row">
+      <div class="event-time">20:20</div>
+      <div class="event-session-tag tag-linode">linode-migration</div>
+      <div class="event-icon">◈</div>
+      <div class="event-body">
+        <div class="event-main"><em>"Starting migration — setting up Nginx first, then systemd, then DNS."</em></div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="stat">Sessions <span class="stat-value">4</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Events <span class="stat-value">47</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Errors <span class="stat-value" style="color:#f85149">3</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Commits <span class="stat-value" style="color:#3fb950">4</span></div>
+  <div class="stat-sep">|</div>
+  <div class="stat">Session cost <span class="stat-value">$2.58</span></div>
+  <div class="footer-right">
+    <span>Auto-refresh</span>
+    <span style="color:#3fb950">● ON</span>
+    <span style="color:#484f58">· every 2s</span>
+  </div>
+</footer>
+
+</body>
+</html>
