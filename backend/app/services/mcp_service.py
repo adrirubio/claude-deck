@@ -164,14 +164,30 @@ class MCPService:
             # Try .mcp.json first (legacy format)
             plugin_mcp_path = install_path / ".mcp.json"
             plugin_mcp_config = read_json_file(plugin_mcp_path)
-            if plugin_mcp_config:
-                mcp_servers.update(plugin_mcp_config)
+            if plugin_mcp_config and isinstance(plugin_mcp_config, dict):
+                # .mcp.json may have {"mcpServers": {...}} or be a flat dict of servers
+                if "mcpServers" in plugin_mcp_config and isinstance(plugin_mcp_config["mcpServers"], dict):
+                    mcp_servers.update(plugin_mcp_config["mcpServers"])
+                else:
+                    mcp_servers.update(plugin_mcp_config)
 
             # Also check .claude-plugin/plugin.json for mcpServers
             plugin_json_path = install_path / ".claude-plugin" / "plugin.json"
             plugin_json = read_json_file(plugin_json_path)
             if plugin_json and "mcpServers" in plugin_json:
-                mcp_servers.update(plugin_json["mcpServers"])
+                mcp_servers_value = plugin_json["mcpServers"]
+                if isinstance(mcp_servers_value, dict):
+                    mcp_servers.update(mcp_servers_value)
+                elif isinstance(mcp_servers_value, str):
+                    # String is a relative path to another JSON file (e.g. "./.mcp.json")
+                    ref_path = (plugin_json_path.parent / mcp_servers_value).resolve()
+                    # Ensure the resolved path stays within the plugin install directory
+                    if not str(ref_path).startswith(str(install_path.resolve()) + "/"):
+                        continue
+                    ref_data = read_json_file(ref_path)
+                    if ref_data and isinstance(ref_data, dict):
+                        if "mcpServers" in ref_data and isinstance(ref_data["mcpServers"], dict):
+                            mcp_servers.update(ref_data["mcpServers"])
 
             if not mcp_servers:
                 continue
