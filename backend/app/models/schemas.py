@@ -1795,3 +1795,10 @@ class PresenceConfigSnippet(BaseModel):
 
     snippet: Dict[str, Any]
     instructions: str
+
+
+class SystemStatusResponse(BaseModel):
+    """System status for header indicators."""
+
+    claude_code_version: Optional[str] = None
+    active_sessions: int = 0
