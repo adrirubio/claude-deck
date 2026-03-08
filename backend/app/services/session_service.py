@@ -48,7 +48,6 @@ class SessionService:
         result = await self.db.execute(
             select(SessionCache).where(
                 SessionCache.session_id == session_id,
-                SessionCache.project_folder == project_folder
             )
         )
         cache_entry = result.scalar_one_or_none()
@@ -87,16 +86,17 @@ class SessionService:
 
         file_hash = await self.get_file_hash(filepath)
 
-        # Upsert cache entry
+        # Upsert cache entry (session_id has a unique constraint)
         result = await self.db.execute(
             select(SessionCache).where(
                 SessionCache.session_id == summary.id,
-                SessionCache.project_folder == summary.project_folder
             )
         )
         cache_entry = result.scalar_one_or_none()
 
         if cache_entry:
+            cache_entry.project_folder = summary.project_folder
+            cache_entry.project_name = summary.project_name
             cache_entry.summary = summary.summary
             cache_entry.modified_at = datetime.fromisoformat(summary.modified_at)
             cache_entry.size_bytes = summary.size_bytes

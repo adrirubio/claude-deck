@@ -14,7 +14,7 @@ export type HookEvent =
   | "SubagentStop"
   | "PreCompact";
 
-export type HookType = "command" | "prompt" | "agent";
+export type HookType = "command" | "prompt" | "agent" | "http";
 
 export interface Hook {
   id: string;
@@ -28,6 +28,9 @@ export interface Hook {
   statusMessage?: string;  // Custom spinner message
   once?: boolean;  // Run only once per session
   timeout?: number;
+  url?: string;
+  headers?: Record<string, string>;
+  allowedEnvVars?: string[];
   scope: "user" | "project";
 }
 
@@ -42,6 +45,9 @@ export interface HookCreate {
   statusMessage?: string;
   once?: boolean;
   timeout?: number;
+  url?: string;
+  headers?: Record<string, string>;
+  allowedEnvVars?: string[];
   scope: "user" | "project";
 }
 
@@ -56,6 +62,9 @@ export interface HookUpdate {
   statusMessage?: string;
   once?: boolean;
   timeout?: number;
+  url?: string;
+  headers?: Record<string, string>;
+  allowedEnvVars?: string[];
 }
 
 export interface HookListResponse {
@@ -203,6 +212,7 @@ export interface HookTemplate {
   statusMessage?: string;
   once?: boolean;
   timeout?: number;
+  url?: string;
 }
 
 export const HOOK_TEMPLATES: HookTemplate[] = [
@@ -267,5 +277,12 @@ export const HOOK_TEMPLATES: HookTemplate[] = [
     prompt: "Summarize the key accomplishments and changes made during this session.",
     model: "haiku",
     once: true,
+  },
+  {
+    name: "Presence Dashboard Logger",
+    description: "Send events to Presence Dashboard via HTTP hook",
+    event: "PostToolUse",
+    type: "http",
+    url: "http://localhost:8000/api/v1/presence/events",
   },
 ];

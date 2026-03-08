@@ -33,12 +33,46 @@ class HookService:
             statusMessage=hook_data.get("statusMessage"),
             once=hook_data.get("once"),
             timeout=hook_data.get("timeout"),
+            url=hook_data.get("url"),
+            headers=hook_data.get("headers"),
+            allowedEnvVars=hook_data.get("allowedEnvVars"),
             scope=scope
         )
 
     def _validate_event(self, event: str) -> bool:
         """Validate that an event type is valid."""
         return event in VALID_HOOK_EVENTS
+
+    def _iter_hooks_from_settings(self, hooks_section: dict, scope: str):
+        """Yield Hook objects from a hooks section of settings.json.
+
+        Claude Code uses a nested format where each event maps to a list
+        of hook groups, each with an optional matcher and a ``hooks`` array::
+
+            "Notification": [{"matcher": "", "hooks": [{"type": "http", ...}]}]
+
+        For backwards compatibility, also handles flat format where each
+        event maps directly to a list of hook definitions::
+
+            "Notification": [{"type": "http", ...}]
+        """
+        for event, event_hooks in hooks_section.items():
+            if not isinstance(event_hooks, list):
+                continue
+            for entry in event_hooks:
+                if not isinstance(entry, dict):
+                    continue
+                if "hooks" in entry and isinstance(entry["hooks"], list):
+                    # Nested format: entry is a hook group
+                    group_matcher = entry.get("matcher", "")
+                    for hook_data in entry["hooks"]:
+                        if isinstance(hook_data, dict):
+                            if group_matcher and "matcher" not in hook_data:
+                                hook_data = {**hook_data, "matcher": group_matcher}
+                            yield self._parse_hook_from_data(hook_data, event, scope)
+                else:
+                    # Flat format: entry is a hook definition itself
+                    yield self._parse_hook_from_data(entry, event, scope)
 
     def list_hooks(self, project_path: Optional[str] = None) -> List[Hook]:
         """
@@ -58,13 +92,9 @@ class HookService:
             try:
                 with open(user_settings_file, "r") as f:
                     user_settings = json.load(f)
-                    user_hooks = user_settings.get("hooks", {})
-
-                    # Hooks are organized by event type in settings.json
-                    for event, event_hooks in user_hooks.items():
-                        if isinstance(event_hooks, list):
-                            for hook_data in event_hooks:
-                                hooks.append(self._parse_hook_from_data(hook_data, event, "user"))
+                    hooks.extend(self._iter_hooks_from_settings(
+                        user_settings.get("hooks", {}), "user"
+                    ))
             except (json.JSONDecodeError, IOError):
                 pass
 
@@ -75,12 +105,9 @@ class HookService:
                 try:
                     with open(project_settings_file, "r") as f:
                         project_settings = json.load(f)
-                        project_hooks = project_settings.get("hooks", {})
-
-                        for event, event_hooks in project_hooks.items():
-                            if isinstance(event_hooks, list):
-                                for hook_data in event_hooks:
-                                    hooks.append(self._parse_hook_from_data(hook_data, event, "project"))
+                        hooks.extend(self._iter_hooks_from_settings(
+                            project_settings.get("hooks", {}), "project"
+                        ))
                 except (json.JSONDecodeError, IOError):
                     pass
 
@@ -171,9 +198,30 @@ class HookService:
             hook_data["once"] = hook.once
         if hook.timeout:
             hook_data["timeout"] = hook.timeout
+        if hook.url:
+            hook_data["url"] = hook.url
+        if hook.headers:
+            hook_data["headers"] = hook.headers
+        if hook.allowedEnvVars:
+            hook_data["allowedEnvVars"] = hook.allowedEnvVars
 
-        # Add hook to settings
-        settings["hooks"][hook.event].append(hook_data)
+        # Add hook to settings using Claude Code's nested format
+        # Each event has a list of hook groups: [{"matcher": "", "hooks": [...]}]
+        event_groups = settings["hooks"][hook.event]
+        matcher = hook.matcher or ""
+
+        # Find an existing group with the same matcher, or create one
+        target_group = None
+        for group in event_groups:
+            if isinstance(group, dict) and "hooks" in group and group.get("matcher", "") == matcher:
+                target_group = group
+                break
+
+        if target_group is None:
+            target_group = {"matcher": matcher, "hooks": []}
+            event_groups.append(target_group)
+
+        target_group["hooks"].append(hook_data)
 
         # Write settings back
         with open(settings_file, "w") as f:
@@ -191,6 +239,9 @@ class HookService:
             statusMessage=hook.statusMessage,
             once=hook.once,
             timeout=hook.timeout,
+            url=hook.url,
+            headers=hook.headers,
+            allowedEnvVars=hook.allowedEnvVars,
             scope=hook.scope
         )
 
@@ -235,58 +286,64 @@ class HookService:
 
         hooks_section = settings.get("hooks", {})
 
-        # Find and update hook
+        # Find and update hook (handles both nested and flat formats)
         updated_hook = None
         for event, event_hooks in hooks_section.items():
-            if isinstance(event_hooks, list):
-                for i, hook_data in enumerate(event_hooks):
-                    if hook_data.get("id") == hook_id:
-                        # Update fields
-                        if hook_update.event:
-                            # Move to different event if needed
-                            if hook_update.event != event:
-                                # Remove from current event
-                                event_hooks.pop(i)
-                                # Add to new event
-                                if hook_update.event not in hooks_section:
-                                    hooks_section[hook_update.event] = []
-                                hooks_section[hook_update.event].append(hook_data)
-                                event = hook_update.event
+            if not isinstance(event_hooks, list):
+                continue
+            for gi, group in enumerate(event_hooks):
+                if not isinstance(group, dict):
+                    continue
+                is_nested = "hooks" in group and isinstance(group["hooks"], list)
+                inner_hooks = group["hooks"] if is_nested else [group]
 
-                        if hook_update.matcher is not None:
-                            hook_data["matcher"] = hook_update.matcher
-                        if hook_update.type is not None:
-                            hook_data["type"] = hook_update.type
-                        if hook_update.command is not None:
-                            hook_data["command"] = hook_update.command
-                        if hook_update.prompt is not None:
-                            hook_data["prompt"] = hook_update.prompt
-                        if hook_update.model is not None:
-                            hook_data["model"] = hook_update.model
-                        if hook_update.async_ is not None:
-                            hook_data["async"] = hook_update.async_
-                        if hook_update.statusMessage is not None:
-                            hook_data["statusMessage"] = hook_update.statusMessage
-                        if hook_update.once is not None:
-                            hook_data["once"] = hook_update.once
-                        if hook_update.timeout is not None:
-                            hook_data["timeout"] = hook_update.timeout
+                for i, hook_data in enumerate(inner_hooks):
+                    if hook_data.get("id") != hook_id:
+                        continue
 
-                        updated_hook = Hook(
-                            id=hook_id,
-                            event=event,
-                            matcher=hook_data.get("matcher"),
-                            type=hook_data.get("type", "command"),
-                            command=hook_data.get("command"),
-                            prompt=hook_data.get("prompt"),
-                            model=hook_data.get("model"),
-                            async_=hook_data.get("async"),
-                            statusMessage=hook_data.get("statusMessage"),
-                            once=hook_data.get("once"),
-                            timeout=hook_data.get("timeout"),
-                            scope=scope
+                    # Apply updates
+                    if hook_update.matcher is not None:
+                        hook_data["matcher"] = hook_update.matcher
+                    if hook_update.type is not None:
+                        hook_data["type"] = hook_update.type
+                    if hook_update.command is not None:
+                        hook_data["command"] = hook_update.command
+                    if hook_update.prompt is not None:
+                        hook_data["prompt"] = hook_update.prompt
+                    if hook_update.model is not None:
+                        hook_data["model"] = hook_update.model
+                    if hook_update.async_ is not None:
+                        hook_data["async"] = hook_update.async_
+                    if hook_update.statusMessage is not None:
+                        hook_data["statusMessage"] = hook_update.statusMessage
+                    if hook_update.once is not None:
+                        hook_data["once"] = hook_update.once
+                    if hook_update.timeout is not None:
+                        hook_data["timeout"] = hook_update.timeout
+                    if hook_update.url is not None:
+                        hook_data["url"] = hook_update.url
+                    if hook_update.headers is not None:
+                        hook_data["headers"] = hook_update.headers
+                    if hook_update.allowedEnvVars is not None:
+                        hook_data["allowedEnvVars"] = hook_update.allowedEnvVars
+
+                    # Handle event change
+                    if hook_update.event and hook_update.event != event:
+                        if is_nested:
+                            inner_hooks.pop(i)
+                            if not inner_hooks:
+                                event_hooks.pop(gi)
+                        else:
+                            event_hooks.pop(gi)
+                        if hook_update.event not in hooks_section:
+                            hooks_section[hook_update.event] = []
+                        hooks_section[hook_update.event].append(
+                            {"matcher": "", "hooks": [hook_data]}
                         )
-                        break
+                        event = hook_update.event
+
+                    updated_hook = self._parse_hook_from_data(hook_data, event, scope)
+                    break
             if updated_hook:
                 break
 
@@ -328,13 +385,28 @@ class HookService:
 
         hooks_section = settings.get("hooks", {})
 
-        # Find and remove hook
+        # Find and remove hook (handles both nested and flat formats)
         removed = False
         for event, event_hooks in hooks_section.items():
-            if isinstance(event_hooks, list):
-                for i, hook_data in enumerate(event_hooks):
-                    if hook_data.get("id") == hook_id:
-                        event_hooks.pop(i)
+            if not isinstance(event_hooks, list):
+                continue
+            for gi, group in enumerate(event_hooks):
+                if not isinstance(group, dict):
+                    continue
+                if "hooks" in group and isinstance(group["hooks"], list):
+                    # Nested format
+                    for i, hook_data in enumerate(group["hooks"]):
+                        if hook_data.get("id") == hook_id:
+                            group["hooks"].pop(i)
+                            # Remove empty group
+                            if not group["hooks"]:
+                                event_hooks.pop(gi)
+                            removed = True
+                            break
+                else:
+                    # Flat format
+                    if group.get("id") == hook_id:
+                        event_hooks.pop(gi)
                         removed = True
                         break
             if removed:

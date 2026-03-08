@@ -1,5 +1,5 @@
 """Pydantic schemas for API models."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel
 
 
@@ -568,7 +568,7 @@ class Hook(BaseModel):
     id: str
     event: str  # PreToolUse, PostToolUse, PostToolUseFailure, Stop, SessionStart, SessionEnd, UserPromptSubmit, PermissionRequest, Notification, SubagentStart, SubagentStop, PreCompact
     matcher: Optional[str] = None  # Tool matcher pattern (e.g., "Write(*.py)")
-    type: str = "command"  # "command", "prompt", or "agent"
+    type: str = "command"  # "command", "prompt", "agent", or "http"
     command: Optional[str] = None  # Shell command to execute (for command type)
     prompt: Optional[str] = None  # Prompt to append (for prompt/agent type)
     model: Optional[str] = None  # Model to use (for agent type, e.g., "haiku")
@@ -576,6 +576,9 @@ class Hook(BaseModel):
     statusMessage: Optional[str] = None  # Custom spinner message
     once: Optional[bool] = None  # Run only once per session
     timeout: Optional[int] = None  # Timeout in seconds
+    url: Optional[str] = None  # URL for http-type hooks
+    headers: Optional[Dict[str, str]] = None  # Headers for http-type hooks
+    allowedEnvVars: Optional[List[str]] = None  # Env vars for http-type hooks
     scope: str  # "user" or "project"
 
     class Config:
@@ -588,7 +591,7 @@ class HookCreate(BaseModel):
 
     event: str
     matcher: Optional[str] = None
-    type: str = "command"  # "command", "prompt", or "agent"
+    type: str = "command"  # "command", "prompt", "agent", or "http"
     command: Optional[str] = None
     prompt: Optional[str] = None
     model: Optional[str] = None  # For agent hooks
@@ -596,6 +599,9 @@ class HookCreate(BaseModel):
     statusMessage: Optional[str] = None  # Custom spinner message
     once: Optional[bool] = None  # Run only once per session
     timeout: Optional[int] = None
+    url: Optional[str] = None  # URL for http-type hooks
+    headers: Optional[Dict[str, str]] = None  # Headers for http-type hooks
+    allowedEnvVars: Optional[List[str]] = None  # Env vars for http-type hooks
     scope: str  # "user" or "project"
 
 
@@ -612,6 +618,9 @@ class HookUpdate(BaseModel):
     statusMessage: Optional[str] = None
     once: Optional[bool] = None
     timeout: Optional[int] = None
+    url: Optional[str] = None
+    headers: Optional[Dict[str, str]] = None
+    allowedEnvVars: Optional[List[str]] = None
 
 
 class HookListResponse(BaseModel):
@@ -1727,3 +1736,72 @@ class MCPRegistryInstallResponse(BaseModel):
     server_name: str
     config: Dict[str, Any]
     scope: str
+
+
+# Presence Dashboard Schemas
+
+
+class PresenceEventIn(BaseModel):
+    """Incoming webhook payload from Claude Code HTTP hooks."""
+
+    session_id: str
+    hook_event_name: str
+    tool_name: Optional[str] = None
+    tool_input: Optional[Dict[str, Any]] = None
+    tool_result: Optional[Dict[str, Any]] = None
+    message: Optional[str] = None
+    user_prompt: Optional[str] = None
+    cwd: Optional[str] = None
+    transcript_path: Optional[str] = None
+    permission_mode: Optional[str] = None
+
+
+class PresenceSessionResponse(BaseModel):
+    """Single session state for API/WebSocket."""
+
+    session_id: str
+    label: Optional[str] = None
+    project_path: Optional[str] = None
+    status: str = "active"
+    status_text: Optional[str] = None
+    last_narrative: Optional[str] = None
+    last_narrative_at: Optional[str] = None
+    modified_files: Optional[List[Union[str, dict]]] = None
+    last_user_prompt: Optional[str] = None
+    last_command: Optional[str] = None
+    last_command_exit: Optional[int] = None
+    activity_buckets: Optional[List[int]] = None
+    total_events: int = 0
+    error_count: int = 0
+    started_at: str
+    last_event_at: str
+    ended_at: Optional[str] = None
+
+
+class PresenceSessionListResponse(BaseModel):
+    """List of presence sessions with totals."""
+
+    sessions: List[PresenceSessionResponse]
+    total: int = 0
+    active: int = 0
+    error: int = 0
+
+
+class PresenceSessionUpdate(BaseModel):
+    """Label update request."""
+
+    label: str
+
+
+class PresenceConfigSnippet(BaseModel):
+    """Generated setup snippet."""
+
+    snippet: Dict[str, Any]
+    instructions: str
+
+
+class SystemStatusResponse(BaseModel):
+    """System status for header indicators."""
+
+    claude_code_version: Optional[str] = None
+    active_sessions: int = 0
