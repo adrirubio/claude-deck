@@ -1,5 +1,5 @@
 """Pydantic schemas for API models."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel
 
 
@@ -1765,7 +1765,8 @@ class PresenceSessionResponse(BaseModel):
     status_text: Optional[str] = None
     last_narrative: Optional[str] = None
     last_narrative_at: Optional[str] = None
-    modified_files: Optional[List[str]] = None
+    modified_files: Optional[List[Union[str, dict]]] = None
+    last_user_prompt: Optional[str] = None
     last_command: Optional[str] = None
     last_command_exit: Optional[int] = None
     activity_buckets: Optional[List[int]] = None

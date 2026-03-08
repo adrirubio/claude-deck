@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { CLICKABLE_CARD } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { ActivitySparkline } from './ActivitySparkline'
-import type { PresenceSession } from '@/types/presence'
+import type { PresenceSession, FileChange } from '@/types/presence'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -61,6 +61,16 @@ function getBasename(filePath: string): string {
   return filePath.split('/').pop() || filePath
 }
 
+function normalizeFile(f: string | FileChange): FileChange {
+  if (typeof f === 'string') return { path: f, op: 'modified' }
+  return { path: f.path, op: f.op ?? 'modified' }
+}
+
+const FILE_OP_COLORS: Record<string, string> = {
+  created: 'border-green-500/50 text-green-600 dark:text-green-400',
+  modified: '',
+}
+
 export function PresenceCard({ session, onRemove }: PresenceCardProps) {
   const [duration, setDuration] = useState(() => formatDuration(session.started_at))
   const [lastEventAgo, setLastEventAgo] = useState(() => formatRelativeTime(session.last_event_at))
@@ -90,7 +100,7 @@ export function PresenceCard({ session, onRemove }: PresenceCardProps) {
       role="article"
       aria-label={`Session ${session.label || session.session_id}`}
     >
-      <CardContent className="p-4 space-y-3">
+      <CardContent className="p-4 space-y-2">
         {/* Header: status dot + label + duration + remove button */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
@@ -131,27 +141,42 @@ export function PresenceCard({ session, onRemove }: PresenceCardProps) {
           <span className="shrink-0">{lastEventAgo}</span>
         </div>
 
+        {/* User prompt */}
+        {session.last_user_prompt && (
+          <div className="text-xs text-muted-foreground">
+            <span className="font-medium text-foreground/70">You:</span>{' '}
+            <span className="line-clamp-2">{session.last_user_prompt}</span>
+          </div>
+        )}
+
         {/* Narrative */}
         {session.last_narrative && (
-          <div className="rounded-md bg-muted/50 border px-3 py-2">
+          <div className="rounded-md bg-muted/50 border-l-2 border-l-primary/30 px-3 py-1.5">
             <p className="text-xs text-muted-foreground italic line-clamp-2">
               &ldquo;{session.last_narrative}&rdquo;
             </p>
           </div>
         )}
 
-        {/* Modified files */}
+        {/* Changed files */}
         {visibleFiles.length > 0 && (
           <div className="space-y-1">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              Modified files
+              Changed files
             </span>
             <div className="flex flex-wrap gap-1">
-              {visibleFiles.map((f) => (
-                <Badge key={f} variant="outline" className="text-[11px] font-mono px-1.5 py-0">
-                  {getBasename(f)}
-                </Badge>
-              ))}
+              {visibleFiles.map((raw) => {
+                const f = normalizeFile(raw)
+                return (
+                  <Badge
+                    key={f.path}
+                    variant="outline"
+                    className={cn("text-[11px] font-mono px-1.5 py-0", FILE_OP_COLORS[f.op] ?? '')}
+                  >
+                    {getBasename(f.path)}
+                  </Badge>
+                )
+              })}
               {extraCount > 0 && (
                 <Badge variant="secondary" className="text-[11px] px-1.5 py-0">
                   +{extraCount}

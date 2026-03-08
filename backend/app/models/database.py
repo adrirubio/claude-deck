@@ -169,3 +169,4 @@ class PresenceSession(Base):
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_user_prompt: Mapped[str | None] = mapped_column(String, nullable=True)

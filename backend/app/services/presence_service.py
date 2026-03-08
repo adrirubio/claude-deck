@@ -2,7 +2,7 @@
 import os
 import re
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from fastapi import WebSocket
 from sqlalchemy import select
@@ -111,10 +111,11 @@ class PresenceService:
             if tool_name in FILE_EDIT_TOOLS:
                 file_path = tool_input.get("file_path") or tool_input.get("path")
                 if file_path:
+                    # Write can also overwrite existing files, but we label it "created" for simplicity
+                    op = "created" if tool_name == "Write" else "modified"
                     files = list(session.modified_files or [])
-                    if file_path in files:
-                        files.remove(file_path)
-                    files.append(file_path)
+                    files = [f for f in files if self._get_file_path(f) != file_path]
+                    files.append({"path": file_path, "op": op})
                     session.modified_files = files[-10:]
                     basename = os.path.basename(file_path)
                     session.status_text = f"Edited {basename}"
@@ -137,6 +138,9 @@ class PresenceService:
             session.status_text = f"Running tool: {tool_name}..."
 
         elif event_type == "UserPromptSubmit":
+            msg = payload.get("message")
+            if msg:
+                session.last_user_prompt = msg.strip()[:500]
             session.status_text = "Processing user message..."
 
         elif event_type == "SubagentStart":
@@ -162,6 +166,7 @@ class PresenceService:
             session.error_count = 0
             session.modified_files = []
             session.last_narrative = None
+            session.last_user_prompt = None
             session.last_command = None
             session.last_command_exit = None
             session.activity_buckets = [0] * BUCKET_COUNT
@@ -284,6 +289,12 @@ class PresenceService:
             return f"{base_label} ({session_id[:6]})"
         return base_label
 
+    def _get_file_path(self, entry: Union[str, dict]) -> str:
+        """Extract path from either a string (legacy) or dict (new format)."""
+        if isinstance(entry, str):
+            return entry
+        return entry.get("path", "")
+
     def _extract_exit_code(self, tool_result: dict) -> Optional[int]:
         # tool_result may have various structures
         if not tool_result:
@@ -312,6 +323,7 @@ class PresenceService:
             last_narrative=session.last_narrative,
             last_narrative_at=session.last_narrative_at.isoformat() if session.last_narrative_at else None,
             modified_files=session.modified_files,
+            last_user_prompt=session.last_user_prompt,
             last_command=session.last_command,
             last_command_exit=session.last_command_exit,
             activity_buckets=session.activity_buckets,

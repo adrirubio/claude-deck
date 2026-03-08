@@ -1,3 +1,8 @@
+export interface FileChange {
+  path: string
+  op: 'created' | 'modified'
+}
+
 export interface PresenceSession {
   session_id: string
   label?: string
@@ -6,7 +11,8 @@ export interface PresenceSession {
   status_text?: string
   last_narrative?: string
   last_narrative_at?: string
-  modified_files?: string[]
+  modified_files?: (string | FileChange)[]
+  last_user_prompt?: string
   last_command?: string
   last_command_exit?: number | null
   activity_buckets?: number[]
