@@ -180,8 +180,8 @@ class PresenceService:
         session.last_event_at = now
         session.total_events = (session.total_events or 0) + 1
 
-        # Reactivate if we get an event for a stopped/idle session (except Stop/SessionEnd)
-        if event_type not in ("Stop", "SessionEnd") and session.status in (SessionStatus.IDLE, SessionStatus.STOPPED):
+        # Reactivate if we get an event for a stopped/idle session (except passive events)
+        if event_type not in ("Stop", "SessionEnd", "Notification", "SubagentStop") and session.status in (SessionStatus.IDLE, SessionStatus.STOPPED):
             session.status = SessionStatus.ACTIVE
             session.ended_at = None
 
