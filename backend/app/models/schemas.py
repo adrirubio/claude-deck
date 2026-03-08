@@ -1750,6 +1750,7 @@ class PresenceEventIn(BaseModel):
     tool_input: Optional[Dict[str, Any]] = None
     tool_result: Optional[Dict[str, Any]] = None
     message: Optional[str] = None
+    user_prompt: Optional[str] = None
     cwd: Optional[str] = None
     transcript_path: Optional[str] = None
     permission_mode: Optional[str] = None
