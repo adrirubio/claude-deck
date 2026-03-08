@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.constants import SessionStatus
 from app.models.schemas import SystemStatusResponse
 from app.services.presence_service import PresenceService
 
@@ -56,7 +57,7 @@ async def _get_claude_code_version() -> Optional[str]:
 async def _get_active_count(db: AsyncSession) -> int:
     service = PresenceService()
     sessions = await service.get_all_sessions(db)
-    return sum(1 for s in sessions if s.status == "active")
+    return sum(1 for s in sessions if s.status == SessionStatus.ACTIVE)
 
 
 @router.get("/status", response_model=SystemStatusResponse)

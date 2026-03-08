@@ -24,10 +24,14 @@ interface ConnectDialogProps {
 
 const PRESENCE_EVENTS: { event: HookEvent; label: string }[] = [
   { event: 'Notification', label: 'Notifications (narrative text)' },
+  { event: 'PreToolUse', label: 'Pre Tool Use (tool about to run)' },
   { event: 'PostToolUse', label: 'Post Tool Use (file edits, commands)' },
+  { event: 'UserPromptSubmit', label: 'User Prompt (user sent a message)' },
   { event: 'Stop', label: 'Stop (session paused)' },
   { event: 'SessionStart', label: 'Session Start' },
   { event: 'SessionEnd', label: 'Session End' },
+  { event: 'SubagentStart', label: 'Subagent Start' },
+  { event: 'SubagentStop', label: 'Subagent Stop' },
 ]
 
 type TabId = 'auto' | 'manual'

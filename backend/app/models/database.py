@@ -4,6 +4,7 @@ from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, JSON, Uni
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.models.constants import SessionStatus
 
 
 class Project(Base):
@@ -150,7 +151,8 @@ class PresenceSession(Base):
     session_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     project_path: Mapped[str | None] = mapped_column(String, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    status: Mapped[str] = mapped_column(String, default=SessionStatus.ACTIVE, nullable=False)
+    status_text: Mapped[str | None] = mapped_column(String, nullable=True)
     last_narrative: Mapped[str | None] = mapped_column(String, nullable=True)
     last_narrative_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     modified_files: Mapped[list | None] = mapped_column(JSON, nullable=True)

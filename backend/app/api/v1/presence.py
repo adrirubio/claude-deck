@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.constants import SessionStatus
 from app.models.schemas import (
     PresenceConfigSnippet,
     PresenceEventIn,
@@ -37,8 +38,8 @@ async def receive_event(
 async def list_sessions(db: AsyncSession = Depends(get_db)):
     """Return all presence sessions."""
     sessions = await service.get_all_sessions(db)
-    active = sum(1 for s in sessions if s.status == "active")
-    error = sum(1 for s in sessions if s.status == "error")
+    active = sum(1 for s in sessions if s.status == SessionStatus.ACTIVE)
+    error = sum(1 for s in sessions if s.status == SessionStatus.ERROR)
     return PresenceSessionListResponse(
         sessions=sessions, total=len(sessions), active=active, error=error
     )
@@ -89,7 +90,11 @@ async def clear_all_sessions(db: AsyncSession = Depends(get_db)):
 async def get_config_snippet():
     """Generate the settings.json snippet for hooking up Claude Code."""
     url = "http://localhost:8000/api/v1/presence/events"
-    events = ["Notification", "PostToolUse", "Stop", "SessionStart", "SessionEnd"]
+    events = [
+        "Notification", "PreToolUse", "PostToolUse", "Stop",
+        "SessionStart", "SessionEnd", "UserPromptSubmit",
+        "SubagentStart", "SubagentStop",
+    ]
     snippet = {
         "hooks": {
             event: [{"hooks": [{"type": "http", "url": url}]}]

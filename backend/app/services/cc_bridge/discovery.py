@@ -3,6 +3,8 @@ import logging
 import subprocess
 from pathlib import Path
 
+from app.models.constants import SessionStatus
+
 logger = logging.getLogger(__name__)
 
 _PANE_FORMAT = (
@@ -109,7 +111,7 @@ def discover_cc_sessions() -> list[dict]:
                 "pane_id": pane_id,
                 "cwd": cwd,
                 "pid": pid,
-                "status": "active",
+                "status": SessionStatus.ACTIVE,
             })
     return results
 

@@ -8,6 +8,7 @@ from fastapi import WebSocket
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.constants import SessionStatus
 from app.models.database import PresenceEvent, PresenceSession
 from app.models.schemas import PresenceSessionResponse
 
@@ -39,7 +40,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-IDLE_TIMEOUT_MINUTES = 5
+IDLE_TIMEOUT_MINUTES = 15
 BUCKET_COUNT = 30
 FILE_EDIT_TOOLS = {"Write", "Edit", "MultiEdit"}
 
@@ -75,7 +76,7 @@ class PresenceService:
         if session is None:
             session = PresenceSession(
                 session_id=session_id,
-                status="active",
+                status=SessionStatus.ACTIVE,
                 started_at=now,
                 last_event_at=now,
                 total_events=0,
@@ -100,6 +101,7 @@ class PresenceService:
             if msg:
                 session.last_narrative = msg
                 session.last_narrative_at = now
+                session.status_text = msg[:120]
 
         elif event_type == "PostToolUse":
             tool_name = payload.get("tool_name", "")
@@ -114,24 +116,46 @@ class PresenceService:
                         files.remove(file_path)
                     files.append(file_path)
                     session.modified_files = files[-10:]
-
-            if tool_name == "Bash":
+                    basename = os.path.basename(file_path)
+                    session.status_text = f"Edited {basename}"
+                else:
+                    session.status_text = f"Used tool: {tool_name}"
+            elif tool_name == "Bash":
                 cmd = tool_input.get("command", "")
                 session.last_command = cmd[:500] if cmd else None
-                # Extract exit code from tool_result
                 exit_code = self._extract_exit_code(tool_result)
                 session.last_command_exit = exit_code
                 if exit_code and exit_code != 0:
                     session.error_count = (session.error_count or 0) + 1
-                    session.status = "error"
+                    session.status = SessionStatus.ERROR
+                session.status_text = f"Ran: {cmd[:60]}" if cmd else "Ran command"
+            else:
+                session.status_text = f"Used tool: {tool_name}"
 
-        elif event_type in ("Stop", "SessionEnd"):
-            session.status = "stopped"
+        elif event_type == "PreToolUse":
+            tool_name = payload.get("tool_name", "unknown")
+            session.status_text = f"Running tool: {tool_name}..."
+
+        elif event_type == "UserPromptSubmit":
+            session.status_text = "Processing user message..."
+
+        elif event_type == "SubagentStart":
+            session.status_text = "Started subagent"
+
+        elif event_type == "SubagentStop":
+            session.status_text = "Subagent completed"
+
+        elif event_type == "Stop":
+            session.status = SessionStatus.STOPPED
+            session.status_text = "Waiting for input"
+
+        elif event_type == "SessionEnd":
+            session.status = SessionStatus.STOPPED
             session.ended_at = now
+            session.status_text = "Session ended"
 
         elif event_type == "SessionStart":
-            # Reset session if restarted
-            session.status = "active"
+            session.status = SessionStatus.ACTIVE
             session.ended_at = None
             session.started_at = now
             session.total_events = 0
@@ -142,14 +166,15 @@ class PresenceService:
             session.last_command_exit = None
             session.activity_buckets = [0] * BUCKET_COUNT
             session.bucket_start = now
+            session.status_text = "Session started"
 
         # Common updates for all events
         session.last_event_at = now
         session.total_events = (session.total_events or 0) + 1
 
         # Reactivate if we get an event for a stopped/idle session (except Stop/SessionEnd)
-        if event_type not in ("Stop", "SessionEnd") and session.status in ("idle", "stopped"):
-            session.status = "active"
+        if event_type not in ("Stop", "SessionEnd") and session.status in (SessionStatus.IDLE, SessionStatus.STOPPED):
+            session.status = SessionStatus.ACTIVE
             session.ended_at = None
 
         # Update activity buckets
@@ -207,12 +232,12 @@ class PresenceService:
         cutoff = now - timedelta(minutes=IDLE_TIMEOUT_MINUTES)
         result = await db.execute(
             select(PresenceSession).where(
-                PresenceSession.status == "active",
+                PresenceSession.status == SessionStatus.ACTIVE,
                 PresenceSession.last_event_at < cutoff,
             )
         )
         for session in result.scalars().all():
-            session.status = "idle"
+            session.status = SessionStatus.IDLE
 
     def _update_activity_buckets(self, session: PresenceSession, now: datetime):
         buckets = list(session.activity_buckets or [0] * BUCKET_COUNT)
@@ -282,6 +307,7 @@ class PresenceService:
             label=session.label,
             project_path=session.project_path,
             status=session.status,
+            status_text=session.status_text,
             last_narrative=session.last_narrative,
             last_narrative_at=session.last_narrative_at.isoformat() if session.last_narrative_at else None,
             modified_files=session.modified_files,

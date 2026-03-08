@@ -1762,6 +1762,7 @@ class PresenceSessionResponse(BaseModel):
     label: Optional[str] = None
     project_path: Optional[str] = None
     status: str = "active"
+    status_text: Optional[str] = None
     last_narrative: Optional[str] = None
     last_narrative_at: Optional[str] = None
     modified_files: Optional[List[str]] = None

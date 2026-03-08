@@ -44,20 +44,34 @@ function formatDuration(startedAt: string): string {
   return `${hours}h ${remainMins}m`
 }
 
+function formatRelativeTime(isoString: string): string {
+  const elapsed = Date.now() - new Date(isoString).getTime()
+  const secs = Math.floor(elapsed / 1000)
+  if (secs < 30) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 1) return `${secs}s ago`
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
 function getBasename(filePath: string): string {
   return filePath.split('/').pop() || filePath
 }
 
 export function PresenceCard({ session, onRemove }: PresenceCardProps) {
   const [duration, setDuration] = useState(() => formatDuration(session.started_at))
+  const [lastEventAgo, setLastEventAgo] = useState(() => formatRelativeTime(session.last_event_at))
 
   useEffect(() => {
     if (session.status === 'stopped') return
     const timer = setInterval(() => {
       setDuration(formatDuration(session.started_at))
+      setLastEventAgo(formatRelativeTime(session.last_event_at))
     }, 1000)
     return () => clearInterval(timer)
-  }, [session.started_at, session.status])
+  }, [session.started_at, session.last_event_at, session.status])
 
   const files = session.modified_files || []
   const visibleFiles = files.slice(-5)
@@ -105,6 +119,15 @@ export function PresenceCard({ session, onRemove }: PresenceCardProps) {
               <X className="h-3 w-3" />
             </Button>
           </div>
+        </div>
+
+        {/* Status line — always visible */}
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="truncate">
+            {session.status_text || session.status.charAt(0).toUpperCase() + session.status.slice(1)}
+          </span>
+          <span className="shrink-0">·</span>
+          <span className="shrink-0">{lastEventAgo}</span>
         </div>
 
         {/* Narrative */}

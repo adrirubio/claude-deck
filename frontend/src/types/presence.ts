@@ -3,6 +3,7 @@ export interface PresenceSession {
   label?: string
   project_path?: string
   status: 'active' | 'idle' | 'error' | 'stopped'
+  status_text?: string
   last_narrative?: string
   last_narrative_at?: string
   modified_files?: string[]
