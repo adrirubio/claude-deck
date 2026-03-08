@@ -99,9 +99,12 @@ class PresenceService:
         if event_type == "Notification":
             msg = payload.get("message")
             if msg:
-                session.last_narrative = msg
-                session.last_narrative_at = now
-                session.status_text = msg.replace("\n", " ").strip()[:120]
+                # Skip generic "waiting" notifications — redundant with Stop event
+                waiting_phrases = ("waiting for your input", "waiting for input")
+                if not any(p in msg.lower() for p in waiting_phrases):
+                    session.last_narrative = msg
+                    session.last_narrative_at = now
+                    session.status_text = msg.replace("\n", " ").strip()[:120]
 
         elif event_type == "PostToolUse":
             tool_name = payload.get("tool_name", "")
