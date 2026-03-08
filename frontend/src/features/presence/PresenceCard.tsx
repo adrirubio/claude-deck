@@ -46,6 +46,7 @@ function formatDuration(startedAt: string): string {
 
 function formatRelativeTime(isoString: string): string {
   const elapsed = Date.now() - new Date(isoString).getTime()
+  if (!Number.isFinite(elapsed) || elapsed < 0) return 'just now'
   const secs = Math.floor(elapsed / 1000)
   if (secs < 30) return 'just now'
   const mins = Math.floor(secs / 60)
@@ -65,11 +66,11 @@ export function PresenceCard({ session, onRemove }: PresenceCardProps) {
   const [lastEventAgo, setLastEventAgo] = useState(() => formatRelativeTime(session.last_event_at))
 
   useEffect(() => {
-    if (session.status === 'stopped') return
+    const interval = session.status === 'stopped' ? 30000 : 1000
     const timer = setInterval(() => {
       setDuration(formatDuration(session.started_at))
       setLastEventAgo(formatRelativeTime(session.last_event_at))
-    }, 1000)
+    }, interval)
     return () => clearInterval(timer)
   }, [session.started_at, session.last_event_at, session.status])
 

@@ -101,7 +101,7 @@ class PresenceService:
             if msg:
                 session.last_narrative = msg
                 session.last_narrative_at = now
-                session.status_text = msg[:120]
+                session.status_text = msg.replace("\n", " ").strip()[:120]
 
         elif event_type == "PostToolUse":
             tool_name = payload.get("tool_name", "")
@@ -238,6 +238,7 @@ class PresenceService:
         )
         for session in result.scalars().all():
             session.status = SessionStatus.IDLE
+            session.status_text = None
 
     def _update_activity_buckets(self, session: PresenceSession, now: datetime):
         buckets = list(session.activity_buckets or [0] * BUCKET_COUNT)
