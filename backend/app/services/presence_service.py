@@ -132,7 +132,7 @@ class PresenceService:
                 if exit_code and exit_code != 0:
                     session.error_count = (session.error_count or 0) + 1
                     session.status = SessionStatus.ERROR
-                session.status_text = f"Ran: {cmd[:60]}" if cmd else "Ran command"
+                session.status_text = "Ran command"
             else:
                 session.status_text = f"Used tool: {tool_name}"
 

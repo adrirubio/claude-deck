@@ -25,7 +25,8 @@ async def receive_event(
     db: AsyncSession = Depends(get_db),
 ):
     """Webhook receiver for Claude Code HTTP hooks. Always returns {} with 200."""
-    updated_session = await service.process_event(payload.model_dump(), db)
+    dumped = payload.model_dump()
+    updated_session = await service.process_event(dumped, db)
 
     # Broadcast to WebSocket clients
     msg = json.dumps({"type": "session_update", "session": updated_session.model_dump()})
