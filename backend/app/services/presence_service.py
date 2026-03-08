@@ -138,7 +138,7 @@ class PresenceService:
             session.status_text = f"Running tool: {tool_name}..."
 
         elif event_type == "UserPromptSubmit":
-            msg = payload.get("message")
+            msg = payload.get("user_prompt") or payload.get("message")
             if msg:
                 session.last_user_prompt = msg.strip()[:500]
             session.status_text = "Processing user message..."
