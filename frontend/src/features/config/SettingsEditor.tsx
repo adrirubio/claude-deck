@@ -59,6 +59,17 @@ const UPDATE_CHANNEL_OPTIONS = [
   { value: 'latest', label: 'Latest' },
 ]
 
+const LOGIN_METHOD_OPTIONS = [
+  { value: 'claudeai', label: 'Claude.ai' },
+  { value: 'console', label: 'Console' },
+]
+
+const EFFORT_LEVEL_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+]
+
 const TEAMMATE_MODE_OPTIONS = [
   { value: 'auto', label: 'Auto' },
   { value: 'in-process', label: 'In-Process' },
@@ -471,6 +482,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
             <TabsTrigger value="local" disabled={!hasProject}>
               Project Local
             </TabsTrigger>
+            <TabsTrigger value="managed">Managed</TabsTrigger>
           </TabsList>
         </Tabs>
 
@@ -491,6 +503,35 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
       )}
 
       <div className="grid gap-6">
+        {/* Authentication (managed scope only) */}
+        {scope === 'managed' && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Authentication</CardTitle>
+              <CardDescription>Restrict login method and organization (managed settings only)</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <SelectSetting
+                id="forceLoginMethod"
+                label="Force Login Method"
+                description="Restrict which authentication method users must use."
+                value={getSetting<string>('forceLoginMethod', '')}
+                onValueChange={(v) => updateSetting('forceLoginMethod', v)}
+                placeholder="Select login method"
+                options={LOGIN_METHOD_OPTIONS}
+              />
+              <TextSetting
+                id="forceLoginOrgUUID"
+                label="Force Login Org UUID"
+                description="Restrict login to a specific organization UUID."
+                value={getSetting<string>('forceLoginOrgUUID', '')}
+                onChange={(v) => updateSetting('forceLoginOrgUUID', v)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              />
+            </CardContent>
+          </Card>
+        )}
+
         {/* General Settings */}
         <Card>
           <CardHeader>
@@ -521,6 +562,63 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               value={getSetting<string>('autoUpdatesChannel', 'stable')}
               onValueChange={(v) => updateSetting('autoUpdatesChannel', v)}
               options={UPDATE_CHANNEL_OPTIONS}
+            />
+
+            <SelectSetting
+              id="effortLevel"
+              label="Effort Level"
+              description="Persist the effort level across sessions. Supported on Opus 4.6 and Sonnet 4.6."
+              value={getSetting<string>('effortLevel', '')}
+              onValueChange={(v) => updateSetting('effortLevel', v)}
+              placeholder="Select effort level"
+              options={EFFORT_LEVEL_OPTIONS}
+            />
+
+            <div className="grid gap-2">
+              <Label>Available Models</Label>
+              <p className="text-sm text-muted-foreground">
+                Restrict which models users can select via /model. Does not affect the Default option.
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('availableModels', [])}
+                onChange={(v) => updateSetting('availableModels', v)}
+                placeholder="e.g., claude-sonnet-4-6"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Model Overrides</Label>
+              <p className="text-sm text-muted-foreground">
+                Map Anthropic model IDs to provider-specific IDs (e.g., Bedrock ARNs).
+              </p>
+              <KeyValueEditor
+                value={getSetting<Record<string, string>>('modelOverrides', {})}
+                onChange={(v) => updateSetting('modelOverrides', v)}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Memory Settings */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Memory</CardTitle>
+            <CardDescription>Auto memory lets Claude accumulate learnings between sessions</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <SwitchSetting
+              label="Auto Memory"
+              description="Claude automatically takes notes on your project — build commands, preferences, architectural decisions — and loads them at the start of every session"
+              checked={getSetting<boolean>('autoMemory', false)}
+              onCheckedChange={(v) => updateSetting('autoMemory', v)}
+            />
+            <TextSetting
+              id="autoMemoryDirectory"
+              label="Memory Directory"
+              description="Custom directory for auto memory storage. Accepts ~ paths. Only available in user/local settings (not project settings)."
+              value={getSetting<string>('autoMemoryDirectory', '')}
+              onChange={(v) => updateSetting('autoMemoryDirectory', v)}
+              placeholder="~/.claude/memory"
             />
           </CardContent>
         </Card>
@@ -674,6 +772,46 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
           </CardContent>
         </Card>
 
+        {/* MCP Servers (.mcp.json) Settings */}
+        <Card>
+          <CardHeader>
+            <CardTitle>MCP Servers (.mcp.json)</CardTitle>
+            <CardDescription>Control auto-approval of MCP servers defined in project .mcp.json files</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <SwitchSetting
+              label="Enable All Project MCP Servers"
+              description="Automatically approve all MCP servers defined in project .mcp.json files"
+              checked={getSetting<boolean>('enableAllProjectMcpServers', false)}
+              onCheckedChange={(v) => updateSetting('enableAllProjectMcpServers', v)}
+            />
+
+            <div className="grid gap-2">
+              <Label>Enabled MCP Servers</Label>
+              <p className="text-sm text-muted-foreground">
+                Specific servers to approve from .mcp.json
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('enabledMcpjsonServers', [])}
+                onChange={(v) => updateSetting('enabledMcpjsonServers', v)}
+                placeholder="e.g., my-mcp-server"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Disabled MCP Servers</Label>
+              <p className="text-sm text-muted-foreground">
+                Specific servers to reject from .mcp.json
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('disabledMcpjsonServers', [])}
+                onChange={(v) => updateSetting('disabledMcpjsonServers', v)}
+                placeholder="e.g., untrusted-server"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Attribution Settings */}
         <Card>
           <CardHeader>
@@ -749,6 +887,15 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               checked={getSetting<boolean>('prefersReducedMotion', false)}
               onCheckedChange={(v) => updateSetting('prefersReducedMotion', v)}
             />
+
+            <TextSetting
+              id="fileSuggestion"
+              label="File Suggestion Script"
+              description="Custom script for @ file autocomplete suggestions."
+              value={getSetting<string>('fileSuggestion', '')}
+              onChange={(v) => updateSetting('fileSuggestion', v)}
+              placeholder="e.g., ./scripts/suggest-files.sh"
+            />
           </CardContent>
         </Card>
 
@@ -763,6 +910,39 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               value={getSetting<Record<string, string>>('env', {})}
               onChange={(v) => updateSetting('env', v)}
             />
+          </CardContent>
+        </Card>
+
+        {/* Hooks Security */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Hooks Security</CardTitle>
+            <CardDescription>Restrict HTTP hooks to approved destinations</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-2">
+              <Label>Allowed HTTP Hook URLs</Label>
+              <p className="text-sm text-muted-foreground">
+                Only these URL patterns can be called by HTTP hooks.
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('allowedHttpHookUrls', [])}
+                onChange={(v) => updateSetting('allowedHttpHookUrls', v)}
+                placeholder="https://hooks.example.com/*"
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <Label>Allowed Hook Environment Variables</Label>
+              <p className="text-sm text-muted-foreground">
+                Environment variables that HTTP hooks are allowed to access.
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('httpHookAllowedEnvVars', [])}
+                onChange={(v) => updateSetting('httpHookAllowedEnvVars', v)}
+                placeholder="MY_TOKEN"
+              />
+            </div>
           </CardContent>
         </Card>
 
@@ -815,6 +995,43 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
               value={getSetting<string | number>('cleanupPeriodDays', '')}
               onChange={(v) => updateSetting('cleanupPeriodDays', v)}
               placeholder="30"
+            />
+
+            <SwitchSetting
+              label="Include Git Instructions"
+              description="Include built-in commit and PR workflow instructions in the system prompt. Set to false if using your own git workflow skills."
+              checked={getSetting<boolean>('includeGitInstructions', true)}
+              onCheckedChange={(v) => updateSetting('includeGitInstructions', v)}
+            />
+
+            <TextSetting
+              id="apiKeyHelper"
+              label="API Key Helper"
+              description="Custom script (run via /bin/sh) to generate an auth value sent as X-Api-Key and Authorization: Bearer headers."
+              value={getSetting<string>('apiKeyHelper', '')}
+              onChange={(v) => updateSetting('apiKeyHelper', v)}
+              placeholder="/bin/generate_temp_api_key.sh"
+            />
+
+            <div className="grid gap-2">
+              <Label>Company Announcements</Label>
+              <p className="text-sm text-muted-foreground">
+                Messages displayed to users at startup, cycled through at random.
+              </p>
+              <ListEditor
+                value={getSetting<string[]>('companyAnnouncements', [])}
+                onChange={(v) => updateSetting('companyAnnouncements', v)}
+                placeholder="Add announcement..."
+              />
+            </div>
+
+            <TextSetting
+              id="agent"
+              label="Default Agent"
+              description="Run the main thread as a named subagent. Applies that subagent's system prompt, tool restrictions, and model."
+              value={getSetting<string>('agent', '')}
+              onChange={(v) => updateSetting('agent', v)}
+              placeholder="e.g., my-custom-agent"
             />
           </CardContent>
         </Card>
