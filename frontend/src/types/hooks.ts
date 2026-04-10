@@ -5,14 +5,28 @@ export type HookEvent =
   | "PostToolUse"
   | "PostToolUseFailure"
   | "Stop"
+  | "StopFailure"
   | "SessionStart"
   | "SessionEnd"
   | "UserPromptSubmit"
   | "PermissionRequest"
+  | "PermissionDenied"
   | "Notification"
   | "SubagentStart"
   | "SubagentStop"
-  | "PreCompact";
+  | "TeammateIdle"
+  | "TaskCreated"
+  | "TaskCompleted"
+  | "PreCompact"
+  | "PostCompact"
+  | "InstructionsLoaded"
+  | "ConfigChange"
+  | "CwdChanged"
+  | "FileChanged"
+  | "WorktreeCreate"
+  | "WorktreeRemove"
+  | "Elicitation"
+  | "ElicitationResult";
 
 export type HookType = "command" | "prompt" | "agent" | "http";
 
@@ -20,13 +34,15 @@ export interface Hook {
   id: string;
   event: HookEvent;
   matcher?: string;
+  if?: string;  // Permission rule filter
   type: HookType;
   command?: string;
   prompt?: string;
-  model?: string;  // For agent hooks (e.g., "haiku")
+  model?: string;
   async_?: boolean;  // Run in background (JSON field: "async")
-  statusMessage?: string;  // Custom spinner message
-  once?: boolean;  // Run only once per session
+  shell?: "bash" | "powershell";
+  statusMessage?: string;
+  once?: boolean;
   timeout?: number;
   url?: string;
   headers?: Record<string, string>;
@@ -114,8 +130,14 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
   {
     name: "Stop",
     label: "Stop",
-    description: "Triggered when a session stops",
+    description: "Triggered after Claude responds",
     icon: "🛑",
+  },
+  {
+    name: "StopFailure",
+    label: "Stop Failure",
+    description: "Triggered on API error during a turn",
+    icon: "💥",
   },
   {
     name: "SessionStart",
@@ -138,8 +160,14 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
   {
     name: "PermissionRequest",
     label: "Permission Request",
-    description: "Triggered when Claude requests user permission",
+    description: "Triggered when a permission dialog appears",
     icon: "🔐",
+  },
+  {
+    name: "PermissionDenied",
+    label: "Permission Denied",
+    description: "Triggered when auto mode denies a tool",
+    icon: "🚫",
   },
   {
     name: "Notification",
@@ -156,14 +184,86 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
   {
     name: "SubagentStop",
     label: "Subagent Stop",
-    description: "Triggered when a subagent stops",
+    description: "Triggered when a subagent finishes",
     icon: "🤖",
+  },
+  {
+    name: "TeammateIdle",
+    label: "Teammate Idle",
+    description: "Triggered when a team member becomes idle",
+    icon: "💤",
+  },
+  {
+    name: "TaskCreated",
+    label: "Task Created",
+    description: "Triggered when a task is created via TaskCreate",
+    icon: "📋",
+  },
+  {
+    name: "TaskCompleted",
+    label: "Task Completed",
+    description: "Triggered when a task is marked complete",
+    icon: "✔️",
   },
   {
     name: "PreCompact",
     label: "Pre-Compact",
     description: "Triggered before context compaction",
     icon: "📦",
+  },
+  {
+    name: "PostCompact",
+    label: "Post-Compact",
+    description: "Triggered after context compaction",
+    icon: "📦",
+  },
+  {
+    name: "InstructionsLoaded",
+    label: "Instructions Loaded",
+    description: "Triggered when CLAUDE.md or rules are loaded",
+    icon: "📄",
+  },
+  {
+    name: "ConfigChange",
+    label: "Config Change",
+    description: "Triggered when a settings file changes",
+    icon: "⚙️",
+  },
+  {
+    name: "CwdChanged",
+    label: "CWD Changed",
+    description: "Triggered when the working directory changes",
+    icon: "📂",
+  },
+  {
+    name: "FileChanged",
+    label: "File Changed",
+    description: "Triggered when a watched file changes",
+    icon: "📝",
+  },
+  {
+    name: "WorktreeCreate",
+    label: "Worktree Create",
+    description: "Triggered when a git worktree is created",
+    icon: "🌳",
+  },
+  {
+    name: "WorktreeRemove",
+    label: "Worktree Remove",
+    description: "Triggered when a git worktree is removed",
+    icon: "🌳",
+  },
+  {
+    name: "Elicitation",
+    label: "Elicitation",
+    description: "Triggered on MCP elicitation input",
+    icon: "❓",
+  },
+  {
+    name: "ElicitationResult",
+    label: "Elicitation Result",
+    description: "Triggered when MCP elicitation result arrives",
+    icon: "❓",
   },
 ];
 
