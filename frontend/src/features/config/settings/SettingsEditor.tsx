@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, Loader2, AlertTriangle } from 'lucide-react'
+import { Save, Loader2, AlertTriangle, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
@@ -157,6 +157,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
   }
 
   const hasProject = !!activeProject?.path
+  const isManaged = scope === 'managed'
   const cardProps = { getSetting, getSettingRaw, updateSetting, scope }
 
   if (loading) {
@@ -185,15 +186,29 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
           </TabsList>
         </Tabs>
 
-        <Button onClick={saveSettings} disabled={!hasChanges || saving}>
-          {saving ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <Save className="h-4 w-4 mr-2" />
-          )}
-          Save Changes
-        </Button>
+        {isManaged ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Lock className="h-4 w-4" />
+            Read-only
+          </div>
+        ) : (
+          <Button onClick={saveSettings} disabled={!hasChanges || saving}>
+            {saving ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4 mr-2" />
+            )}
+            Save Changes
+          </Button>
+        )}
       </div>
+
+      {isManaged && (
+        <div className="text-sm text-muted-foreground bg-muted p-3 rounded flex items-center gap-2">
+          <Lock className="h-4 w-4 shrink-0" />
+          Managed settings are controlled by your organization and cannot be edited here.
+        </div>
+      )}
 
       {!hasProject && (scope === 'project' || scope === 'local') && (
         <div className="text-sm text-muted-foreground bg-muted p-3 rounded">
