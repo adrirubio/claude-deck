@@ -1,4 +1,5 @@
 """Service for Presence Dashboard — event processing and session aggregation."""
+import asyncio
 import os
 import re
 import time
@@ -6,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Union
 
 from fastapi import WebSocket
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.constants import SessionStatus
@@ -46,6 +47,58 @@ BUCKET_COUNT = 30
 FILE_EDIT_TOOLS = {"Write", "Edit", "MultiEdit"}
 EVENT_RETENTION_DAYS = 7
 IDLE_CHECK_INTERVAL_SECONDS = 30  # throttle idle checks
+EVENT_BUFFER_FLUSH_SECONDS = 2
+EVENT_BUFFER_MAX_SIZE = 50
+
+
+class EventBuffer:
+    """Buffers raw presence events and flushes them to DB in batches.
+
+    Raw events are historical records — they don't affect the real-time
+    session response, so they can be safely deferred and batch-inserted.
+    """
+
+    def __init__(self):
+        self._buffer: list[dict] = []
+        self._lock = asyncio.Lock()
+        self._last_flush: float = time.monotonic()
+
+    async def add(self, event_data: dict):
+        async with self._lock:
+            self._buffer.append(event_data)
+
+    async def flush_if_needed(self, db: AsyncSession):
+        current = time.monotonic()
+        async with self._lock:
+            if not self._buffer:
+                return
+            should_flush = (
+                len(self._buffer) >= EVENT_BUFFER_MAX_SIZE
+                or current - self._last_flush >= EVENT_BUFFER_FLUSH_SECONDS
+            )
+            if not should_flush:
+                return
+            to_flush = self._buffer
+            self._buffer = []
+            self._last_flush = current
+
+        for event_data in to_flush:
+            db.add(PresenceEvent(**event_data))
+        await db.flush()
+
+    async def force_flush(self, db: AsyncSession):
+        async with self._lock:
+            to_flush = self._buffer
+            self._buffer = []
+            self._last_flush = time.monotonic()
+
+        for event_data in to_flush:
+            db.add(PresenceEvent(**event_data))
+        if to_flush:
+            await db.flush()
+
+
+_event_buffer = EventBuffer()
 
 
 class PresenceService:
@@ -59,21 +112,20 @@ class PresenceService:
         session_id = payload["session_id"]
         event_type = payload.get("hook_event_name", "Unknown")
 
-        # Store raw event
-        raw_event = PresenceEvent(
-            session_id=session_id,
-            event_type=event_type,
-            tool_name=payload.get("tool_name"),
-            tool_input=payload.get("tool_input"),
-            tool_result=payload.get("tool_result"),
-            message=payload.get("message"),
-            cwd=payload.get("cwd"),
-            timestamp=now,
-            received_at=now,
-        )
-        db.add(raw_event)
+        # Buffer raw event for batch insert (doesn't affect real-time response)
+        await _event_buffer.add({
+            "session_id": session_id,
+            "event_type": event_type,
+            "tool_name": payload.get("tool_name"),
+            "tool_input": payload.get("tool_input"),
+            "tool_result": payload.get("tool_result"),
+            "message": payload.get("message"),
+            "cwd": payload.get("cwd"),
+            "timestamp": now,
+            "received_at": now,
+        })
 
-        # Upsert presence session
+        # Upsert presence session (this query is needed for the response)
         result = await db.execute(
             select(PresenceSession).where(PresenceSession.session_id == session_id)
         )
@@ -196,7 +248,8 @@ class PresenceService:
 
         await db.flush()
 
-        # Throttled maintenance: idle check + event pruning (not on every event)
+        # Batch-flush buffered raw events + throttled maintenance
+        await _event_buffer.flush_if_needed(db)
         await self._maybe_run_maintenance(db, now)
 
         return self._to_response(session)
@@ -224,21 +277,17 @@ class PresenceService:
 
     async def remove_session(self, session_id: str, db: AsyncSession) -> bool:
         result = await db.execute(
-            select(PresenceSession).where(PresenceSession.session_id == session_id)
+            delete(PresenceSession).where(PresenceSession.session_id == session_id)
         )
-        session = result.scalar_one_or_none()
-        if not session:
-            return False
-        await db.delete(session)
         await db.flush()
-        return True
+        return result.rowcount > 0
 
     async def clear_all_sessions(self, db: AsyncSession) -> int:
-        result = await db.execute(select(PresenceSession))
-        sessions = result.scalars().all()
-        count = len(sessions)
-        for s in sessions:
-            await db.delete(s)
+        # Flush any buffered events first so they don't reference deleted sessions
+        await _event_buffer.force_flush(db)
+        result = await db.execute(select(func.count()).select_from(PresenceSession))
+        count = result.scalar() or 0
+        await db.execute(delete(PresenceSession))
         await db.flush()
         return count
 
