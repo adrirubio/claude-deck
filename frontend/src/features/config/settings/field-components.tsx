@@ -163,11 +163,12 @@ export function AttributionField({ id, label, description, defaultText, rawValue
   )
 }
 
-export function ListEditor({ value, onChange, placeholder }: {
+export function ListEditor({ value: rawValue, onChange, placeholder }: {
   value: string[]
   onChange: (value: string[]) => void
   placeholder?: string
 }) {
+  const value = Array.isArray(rawValue) ? rawValue : []
   const [newItem, setNewItem] = useState('')
 
   function addItem() {
@@ -211,7 +212,7 @@ export function ListEditor({ value, onChange, placeholder }: {
   )
 }
 
-export function ObjectArrayEditor({ value, onChange, field1Label, field2Label, field1Placeholder, field2Placeholder }: {
+export function ObjectArrayEditor({ value: rawValue, onChange, field1Label, field2Label, field1Placeholder, field2Placeholder }: {
   value: { name: string; url: string }[]
   onChange: (value: { name: string; url: string }[]) => void
   field1Label?: string
@@ -219,6 +220,7 @@ export function ObjectArrayEditor({ value, onChange, field1Label, field2Label, f
   field1Placeholder?: string
   field2Placeholder?: string
 }) {
+  const value = Array.isArray(rawValue) ? rawValue : []
   const [newField1, setNewField1] = useState('')
   const [newField2, setNewField2] = useState('')
 
