@@ -38,3 +38,41 @@ export const TEAMMATE_MODE_OPTIONS = [
   { value: 'in-process', label: 'In-Process' },
   { value: 'tmux', label: 'Tmux' },
 ]
+
+export const HANDLER_TYPE_OPTIONS = [
+  { value: 'command', label: 'Command' },
+  { value: 'http', label: 'HTTP' },
+  { value: 'prompt', label: 'Prompt' },
+  { value: 'agent', label: 'Agent' },
+]
+
+export const SHELL_OPTIONS = [
+  { value: 'bash', label: 'Bash' },
+  { value: 'powershell', label: 'PowerShell' },
+]
+
+export const HOOK_MODEL_OPTIONS = [
+  { value: 'fast-model', label: 'Fast Model (default)' },
+  { value: 'haiku', label: 'Haiku' },
+  { value: 'sonnet', label: 'Sonnet' },
+  { value: 'opus', label: 'Opus' },
+]
+
+export const HOOK_EVENT_GROUPS = [
+  {
+    label: 'Lifecycle',
+    events: ['SessionStart', 'SessionEnd', 'Stop', 'StopFailure', 'UserPromptSubmit', 'PreCompact', 'PostCompact', 'Notification'],
+  },
+  {
+    label: 'Tool',
+    events: ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'PermissionDenied'],
+  },
+  {
+    label: 'Agent & Team',
+    events: ['SubagentStart', 'SubagentStop', 'TeammateIdle', 'TaskCreated', 'TaskCompleted'],
+  },
+  {
+    label: 'Config & Infrastructure',
+    events: ['InstructionsLoaded', 'ConfigChange', 'CwdChanged', 'FileChanged', 'WorktreeCreate', 'WorktreeRemove', 'Elicitation', 'ElicitationResult'],
+  },
+] as const

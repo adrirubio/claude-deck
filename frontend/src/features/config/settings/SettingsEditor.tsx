@@ -30,6 +30,7 @@ import { AttributionCard } from './cards/AttributionCard'
 import { UiCard } from './cards/UiCard'
 import { EnvVarsCard } from './cards/EnvVarsCard'
 import { HooksSecurityCard } from './cards/HooksSecurityCard'
+import { HookEventEditorCard } from './cards/HookEventEditorCard'
 import { AdvancedCard } from './cards/AdvancedCard'
 
 interface SettingsEditorProps {
@@ -228,6 +229,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
         <AttributionCard {...cardProps} />
         <UiCard {...cardProps} />
         <EnvVarsCard {...cardProps} />
+        <HookEventEditorCard {...cardProps} />
         <HooksSecurityCard {...cardProps} />
         <AdvancedCard {...cardProps} />
       </div>
