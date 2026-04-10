@@ -7,7 +7,7 @@ Licensed under Apache 2.0
 import json
 import hashlib
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -38,7 +38,10 @@ class SessionService:
     async def get_file_hash(self, filepath: Path) -> str:
         """Calculate file hash for cache invalidation."""
         stat = filepath.stat()
-        return hashlib.md5(f"{stat.st_size}:{stat.st_mtime}".encode()).hexdigest()
+        return hashlib.md5(
+            f"{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ino}".encode(),
+            usedforsecurity=False,
+        ).hexdigest()
 
     async def get_cached_summary(self, session_id: str, project_folder: str) -> Optional[SessionSummary]:
         """Get session summary from cache if valid."""
@@ -55,8 +58,9 @@ class SessionService:
         if not cache_entry:
             return None
 
-        # Check if cache is stale
-        if datetime.utcnow() - cache_entry.cached_at > timedelta(minutes=self.CACHE_TTL_MINUTES):
+        # Check if cache is stale (cached_at is stored naive-UTC in SQLite)
+        cached_at = cache_entry.cached_at.replace(tzinfo=timezone.utc) if cache_entry.cached_at.tzinfo is None else cache_entry.cached_at
+        if datetime.now(timezone.utc) - cached_at > timedelta(minutes=self.CACHE_TTL_MINUTES):
             return None
 
         # Check if file changed
@@ -102,7 +106,7 @@ class SessionService:
             cache_entry.size_bytes = summary.size_bytes
             cache_entry.total_messages = summary.total_messages
             cache_entry.total_tool_calls = summary.total_tool_calls
-            cache_entry.cached_at = datetime.utcnow()
+            cache_entry.cached_at = datetime.now(timezone.utc)
             cache_entry.file_hash = file_hash
         else:
             cache_entry = SessionCache(
@@ -205,30 +209,6 @@ class SessionService:
             "total_messages": total_messages,
             "total_tool_calls": total_tool_calls,
         }
-
-    async def get_session_summary_text(self, entries: List[Dict]) -> str:
-        """Extract summary from parsed JSONL entries."""
-        # First pass: look for summary type
-        for obj in entries:
-            if obj.get("type") == "summary" and obj.get("summary"):
-                summary = obj["summary"]
-                if len(summary) > 200:
-                    return summary[:197] + "..."
-                return summary
-
-        # Second pass: first user message
-        for obj in entries:
-            if (obj.get("type") == "user" and
-                not obj.get("isMeta") and
-                obj.get("message", {}).get("content")):
-                content = obj["message"]["content"]
-                text = self.extract_text_from_content(content)
-                if text and not text.startswith("<"):
-                    if len(text) > 200:
-                        return text[:197] + "..."
-                    return text
-
-        return "(no summary)"
 
     async def parse_session_to_conversations(self, entries: List[Dict]) -> List[SessionConversation]:
         """Convert JSONL entries to conversation objects."""
@@ -463,7 +443,7 @@ class SessionService:
         instead of parsing every JSONL file. Falls back to filesystem counts
         when the cache doesn't have full coverage.
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=7)
 
@@ -487,6 +467,8 @@ class SessionService:
 
             for entry in cached_entries:
                 modified = entry.modified_at
+                if modified.tzinfo is None:
+                    modified = modified.replace(tzinfo=timezone.utc)
                 if modified >= today_start:
                     sessions_today += 1
                 if modified >= week_start:

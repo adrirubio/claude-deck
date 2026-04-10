@@ -4,10 +4,10 @@ import os
 import re
 import time
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from fastapi import WebSocket
-from sqlalchemy import select, delete, func, update
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.constants import SessionStatus
@@ -46,86 +46,36 @@ IDLE_TIMEOUT_MINUTES = 15
 BUCKET_COUNT = 30
 FILE_EDIT_TOOLS = {"Write", "Edit", "MultiEdit"}
 EVENT_RETENTION_DAYS = 7
-IDLE_CHECK_INTERVAL_SECONDS = 30  # throttle idle checks
-EVENT_BUFFER_FLUSH_SECONDS = 2
-EVENT_BUFFER_MAX_SIZE = 50
+IDLE_CHECK_INTERVAL_SECONDS = 30
 
-
-class EventBuffer:
-    """Buffers raw presence events and flushes them to DB in batches.
-
-    Raw events are historical records — they don't affect the real-time
-    session response, so they can be safely deferred and batch-inserted.
-    """
-
-    def __init__(self):
-        self._buffer: list[dict] = []
-        self._lock = asyncio.Lock()
-        self._last_flush: float = time.monotonic()
-
-    async def add(self, event_data: dict):
-        async with self._lock:
-            self._buffer.append(event_data)
-
-    async def flush_if_needed(self, db: AsyncSession):
-        current = time.monotonic()
-        async with self._lock:
-            if not self._buffer:
-                return
-            should_flush = (
-                len(self._buffer) >= EVENT_BUFFER_MAX_SIZE
-                or current - self._last_flush >= EVENT_BUFFER_FLUSH_SECONDS
-            )
-            if not should_flush:
-                return
-            to_flush = self._buffer
-            self._buffer = []
-            self._last_flush = current
-
-        for event_data in to_flush:
-            db.add(PresenceEvent(**event_data))
-        await db.flush()
-
-    async def force_flush(self, db: AsyncSession):
-        async with self._lock:
-            to_flush = self._buffer
-            self._buffer = []
-            self._last_flush = time.monotonic()
-
-        for event_data in to_flush:
-            db.add(PresenceEvent(**event_data))
-        if to_flush:
-            await db.flush()
-
-
-_event_buffer = EventBuffer()
+# Guarded by _maintenance_lock to prevent concurrent double-execution
+_maintenance_lock = asyncio.Lock()
+_last_idle_check: float = 0.0
+_last_prune: float = 0.0
 
 
 class PresenceService:
     """Processes webhook events and maintains aggregated session state."""
-
-    _last_idle_check: float = 0.0
-    _last_prune: float = 0.0
 
     async def process_event(self, payload: dict, db: AsyncSession) -> PresenceSessionResponse:
         now = datetime.now(timezone.utc)
         session_id = payload["session_id"]
         event_type = payload.get("hook_event_name", "Unknown")
 
-        # Buffer raw event for batch insert (doesn't affect real-time response)
-        await _event_buffer.add({
-            "session_id": session_id,
-            "event_type": event_type,
-            "tool_name": payload.get("tool_name"),
-            "tool_input": payload.get("tool_input"),
-            "tool_result": payload.get("tool_result"),
-            "message": payload.get("message"),
-            "cwd": payload.get("cwd"),
-            "timestamp": now,
-            "received_at": now,
-        })
+        # Store raw event in the same transaction as the session update
+        db.add(PresenceEvent(
+            session_id=session_id,
+            event_type=event_type,
+            tool_name=payload.get("tool_name"),
+            tool_input=payload.get("tool_input"),
+            tool_result=payload.get("tool_result"),
+            message=payload.get("message"),
+            cwd=payload.get("cwd"),
+            timestamp=now,
+            received_at=now,
+        ))
 
-        # Upsert presence session (this query is needed for the response)
+        # Upsert presence session
         result = await db.execute(
             select(PresenceSession).where(PresenceSession.session_id == session_id)
         )
@@ -172,7 +122,6 @@ class PresenceService:
             if tool_name in FILE_EDIT_TOOLS:
                 file_path = tool_input.get("file_path") or tool_input.get("path")
                 if file_path:
-                    # Write can also overwrite existing files, but we label it "created" for simplicity
                     op = "created" if tool_name == "Write" else "modified"
                     files = list(session.modified_files or [])
                     files = [f for f in files if self._get_file_path(f) != file_path]
@@ -248,8 +197,7 @@ class PresenceService:
 
         await db.flush()
 
-        # Batch-flush buffered raw events + throttled maintenance
-        await _event_buffer.flush_if_needed(db)
+        # Throttled maintenance (idle check + event pruning)
         await self._maybe_run_maintenance(db, now)
 
         return self._to_response(session)
@@ -283,8 +231,6 @@ class PresenceService:
         return result.rowcount > 0
 
     async def clear_all_sessions(self, db: AsyncSession) -> int:
-        # Flush any buffered events first so they don't reference deleted sessions
-        await _event_buffer.force_flush(db)
         result = await db.execute(select(func.count()).select_from(PresenceSession))
         count = result.scalar() or 0
         await db.execute(delete(PresenceSession))
@@ -293,15 +239,23 @@ class PresenceService:
 
     async def _maybe_run_maintenance(self, db: AsyncSession, now: datetime):
         """Run idle check and event pruning, throttled to avoid per-event overhead."""
+        global _last_idle_check, _last_prune
+
         current = time.monotonic()
+        run_idle = False
+        run_prune = False
 
-        if current - PresenceService._last_idle_check >= IDLE_CHECK_INTERVAL_SECONDS:
-            PresenceService._last_idle_check = current
+        async with _maintenance_lock:
+            if current - _last_idle_check >= IDLE_CHECK_INTERVAL_SECONDS:
+                _last_idle_check = current
+                run_idle = True
+            if current - _last_prune >= 3600:
+                _last_prune = current
+                run_prune = True
+
+        if run_idle:
             await self._mark_idle_sessions(db, now)
-
-        # Prune old events once per hour
-        if current - PresenceService._last_prune >= 3600:
-            PresenceService._last_prune = current
+        if run_prune:
             await self._prune_old_events(db, now)
 
     async def _mark_idle_sessions(self, db: AsyncSession, now: datetime):
@@ -368,26 +322,22 @@ class PresenceService:
             return f"{base_label} ({session_id[:6]})"
         return base_label
 
-    def _get_file_path(self, entry: Union[str, dict]) -> str:
+    def _get_file_path(self, entry: str | dict) -> str:
         """Extract path from either a string (legacy) or dict (new format)."""
         if isinstance(entry, str):
             return entry
         return entry.get("path", "")
 
     def _extract_exit_code(self, tool_result: dict) -> Optional[int]:
-        # tool_result may have various structures
         if not tool_result:
             return None
-        # Check direct exit_code field
         if "exit_code" in tool_result:
             return tool_result["exit_code"]
-        # Check content string for exit code pattern
         content = tool_result.get("content", "")
         if isinstance(content, str) and "exit code" in content.lower():
             match = re.search(r'exit code[:\s]+(\d+)', content, re.IGNORECASE)
             if match:
                 return int(match.group(1))
-        # Check for stderr / error indicators
         if tool_result.get("is_error"):
             return 1
         return 0

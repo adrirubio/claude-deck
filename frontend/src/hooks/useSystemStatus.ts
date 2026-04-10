@@ -22,7 +22,9 @@ export function useSystemStatus() {
   const fetchStatus = useCallback(() => {
     apiClient<SystemStatusResponse>('status').then((res) => {
       setStatus(parseStatus(res))
-    }).catch(() => { /* badges just won't show */ })
+    }).catch(() => {
+      setStatus(null)
+    })
   }, [])
 
   useEffect(() => {
