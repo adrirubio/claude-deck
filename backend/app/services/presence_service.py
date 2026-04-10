@@ -1,11 +1,12 @@
 """Service for Presence Dashboard — event processing and session aggregation."""
 import os
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Union
 
 from fastapi import WebSocket
-from sqlalchemy import select
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.constants import SessionStatus
@@ -43,10 +44,15 @@ manager = ConnectionManager()
 IDLE_TIMEOUT_MINUTES = 15
 BUCKET_COUNT = 30
 FILE_EDIT_TOOLS = {"Write", "Edit", "MultiEdit"}
+EVENT_RETENTION_DAYS = 7
+IDLE_CHECK_INTERVAL_SECONDS = 30  # throttle idle checks
 
 
 class PresenceService:
     """Processes webhook events and maintains aggregated session state."""
+
+    _last_idle_check: float = 0.0
+    _last_prune: float = 0.0
 
     async def process_event(self, payload: dict, db: AsyncSession) -> PresenceSessionResponse:
         now = datetime.now(timezone.utc)
@@ -190,8 +196,8 @@ class PresenceService:
 
         await db.flush()
 
-        # Mark idle sessions while we're here
-        await self._mark_idle_sessions(db, now)
+        # Throttled maintenance: idle check + event pruning (not on every event)
+        await self._maybe_run_maintenance(db, now)
 
         return self._to_response(session)
 
@@ -236,6 +242,19 @@ class PresenceService:
         await db.flush()
         return count
 
+    async def _maybe_run_maintenance(self, db: AsyncSession, now: datetime):
+        """Run idle check and event pruning, throttled to avoid per-event overhead."""
+        current = time.monotonic()
+
+        if current - PresenceService._last_idle_check >= IDLE_CHECK_INTERVAL_SECONDS:
+            PresenceService._last_idle_check = current
+            await self._mark_idle_sessions(db, now)
+
+        # Prune old events once per hour
+        if current - PresenceService._last_prune >= 3600:
+            PresenceService._last_prune = current
+            await self._prune_old_events(db, now)
+
     async def _mark_idle_sessions(self, db: AsyncSession, now: datetime):
         cutoff = now - timedelta(minutes=IDLE_TIMEOUT_MINUTES)
         result = await db.execute(
@@ -247,6 +266,14 @@ class PresenceService:
         for session in result.scalars().all():
             session.status = SessionStatus.IDLE
             session.status_text = None
+
+    async def _prune_old_events(self, db: AsyncSession, now: datetime):
+        """Delete presence events older than retention period."""
+        cutoff = now - timedelta(days=EVENT_RETENTION_DAYS)
+        await db.execute(
+            delete(PresenceEvent).where(PresenceEvent.timestamp < cutoff)
+        )
+        await db.flush()
 
     def _update_activity_buckets(self, session: PresenceSession, now: datetime):
         buckets = list(session.activity_buckets or [0] * BUCKET_COUNT)

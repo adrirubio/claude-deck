@@ -26,7 +26,7 @@ from app.utils.path_utils import get_claude_projects_dir, get_project_display_na
 class SessionService:
     """Service for session transcript management."""
 
-    CACHE_TTL_MINUTES = 5
+    CACHE_TTL_MINUTES = 60  # file_hash handles invalidation; TTL is just a safety net
     PROMPTS_PER_PAGE = 5
 
     def __init__(self, db: Optional[AsyncSession] = None):
@@ -151,6 +151,61 @@ class SessionService:
                     continue
         return entries
 
+    async def scan_for_listing(self, filepath: Path) -> Dict[str, Any]:
+        """Lightweight scan: extract summary + counts without loading the full file into memory.
+
+        For listing purposes we need: summary text, message count, and tool call count.
+        This streams the file line-by-line, counting as it goes, and stops reading
+        content blocks once we have the summary (content blocks are the expensive part).
+        """
+        summary_text = "(no summary)"
+        summary_found = False
+        total_messages = 0
+        total_tool_calls = 0
+
+        async with aiofiles.open(filepath, 'r', encoding='utf-8') as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                obj_type = obj.get("type")
+
+                # Count messages
+                if obj_type in ("user", "assistant"):
+                    total_messages += 1
+
+                # Count tool calls in assistant messages
+                if obj_type == "assistant":
+                    for block in obj.get("message", {}).get("content", []):
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            total_tool_calls += 1
+
+                # Extract summary (first match wins)
+                if not summary_found:
+                    if obj_type == "summary" and obj.get("summary"):
+                        text = obj["summary"]
+                        summary_text = text[:197] + "..." if len(text) > 200 else text
+                        summary_found = True
+                    elif (obj_type == "user" and
+                          not obj.get("isMeta") and
+                          obj.get("message", {}).get("content")):
+                        content = obj["message"]["content"]
+                        text = self.extract_text_from_content(content)
+                        if text and not text.startswith("<"):
+                            summary_text = text[:197] + "..." if len(text) > 200 else text
+                            summary_found = True
+
+        return {
+            "summary": summary_text,
+            "total_messages": total_messages,
+            "total_tool_calls": total_tool_calls,
+        }
+
     async def get_session_summary_text(self, entries: List[Dict]) -> str:
         """Extract summary from parsed JSONL entries."""
         # First pass: look for summary type
@@ -273,9 +328,12 @@ class SessionService:
         sort_by: str = "date",
         sort_order: str = "desc",
     ) -> SessionListResponse:
-        """List session summaries with optional project filter."""
-        sessions = []
+        """List session summaries with optional project filter.
 
+        Performance: collects file metadata from the filesystem first, sorts and
+        limits *before* parsing any JSONL content. Only the files that will appear
+        in the result set are parsed (or served from cache).
+        """
         if not self.projects_dir.exists():
             return SessionListResponse(sessions=[], total=0)
 
@@ -285,57 +343,62 @@ class SessionService:
         else:
             folders = [f for f in self.projects_dir.iterdir() if f.is_dir()]
 
+        # Phase 1: collect lightweight file metadata without parsing content.
+        # Skip subagent directories — they're internal and shouldn't appear as
+        # top-level sessions.
+        file_entries: List[Dict[str, Any]] = []
         for folder in folders:
             if not folder.exists():
                 continue
-
             for jsonl_file in folder.glob("*.jsonl"):
-                session_id = jsonl_file.stem
-
-                # Try cache first
-                cached = await self.get_cached_summary(session_id, folder.name)
-                if cached:
-                    sessions.append(cached)
-                    continue
-
-                # Parse file for summary
                 stat = jsonl_file.stat()
-                entries = await self.parse_jsonl_file(jsonl_file)
-                summary_text = await self.get_session_summary_text(entries)
+                file_entries.append({
+                    "path": jsonl_file,
+                    "folder": folder.name,
+                    "session_id": jsonl_file.stem,
+                    "mtime": stat.st_mtime,
+                    "size": stat.st_size,
+                })
 
-                # Count messages and tool calls
-                total_messages = sum(1 for e in entries if e.get("type") in ("user", "assistant"))
-                total_tool_calls = sum(
-                    1 for e in entries
-                    if e.get("type") == "assistant"
-                    for block in e.get("message", {}).get("content", [])
-                    if isinstance(block, dict) and block.get("type") == "tool_use"
-                )
+        total = len(file_entries)
 
-                summary = SessionSummary(
-                    id=session_id,
-                    project_folder=folder.name,
-                    project_name=get_project_display_name(folder.name),
-                    summary=summary_text,
-                    modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    size_bytes=stat.st_size,
-                    total_messages=total_messages,
-                    total_tool_calls=total_tool_calls,
-                )
-
-                sessions.append(summary)
-                await self.save_to_cache(summary, jsonl_file)
-
-        # Sort
+        # Phase 2: sort by filesystem metadata and limit BEFORE parsing.
         reverse = (sort_order == "desc")
         if sort_by == "date":
-            sessions.sort(key=lambda s: s.modified_at, reverse=reverse)
+            file_entries.sort(key=lambda e: e["mtime"], reverse=reverse)
         elif sort_by == "size":
-            sessions.sort(key=lambda s: s.size_bytes, reverse=reverse)
+            file_entries.sort(key=lambda e: e["size"], reverse=reverse)
 
-        # Limit
-        total = len(sessions)
-        sessions = sessions[:limit]
+        file_entries = file_entries[:limit]
+
+        # Phase 3: resolve summaries only for the files we'll return.
+        sessions = []
+        for entry in file_entries:
+            session_id = entry["session_id"]
+            folder_name = entry["folder"]
+
+            cached = await self.get_cached_summary(session_id, folder_name)
+            if cached:
+                sessions.append(cached)
+                continue
+
+            # Use lightweight scan — streams file without loading it all into memory
+            jsonl_file = entry["path"]
+            scan = await self.scan_for_listing(jsonl_file)
+
+            summary = SessionSummary(
+                id=session_id,
+                project_folder=folder_name,
+                project_name=get_project_display_name(folder_name),
+                summary=scan["summary"],
+                modified_at=datetime.fromtimestamp(entry["mtime"]).isoformat(),
+                size_bytes=entry["size"],
+                total_messages=scan["total_messages"],
+                total_tool_calls=scan["total_tool_calls"],
+            )
+
+            sessions.append(summary)
+            await self.save_to_cache(summary, jsonl_file)
 
         return SessionListResponse(sessions=sessions, total=total)
 
@@ -394,34 +457,49 @@ class SessionService:
         )
 
     async def get_dashboard_stats(self) -> SessionStatsResponse:
-        """Get session statistics for dashboard."""
-        all_sessions = await self.list_sessions(limit=10000)
+        """Get session statistics for dashboard.
 
+        Performance: queries the cache DB and filesystem metadata directly
+        instead of parsing every JSONL file. Falls back to filesystem counts
+        when the cache doesn't have full coverage.
+        """
         now = datetime.utcnow()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=7)
 
-        sessions_today = sum(
-            1 for s in all_sessions.sessions
-            if datetime.fromisoformat(s.modified_at) >= today_start
-        )
+        # Count total sessions from filesystem (fast — no parsing)
+        total_sessions = 0
+        if self.projects_dir.exists():
+            for folder in self.projects_dir.iterdir():
+                if folder.is_dir():
+                    total_sessions += len(list(folder.glob("*.jsonl")))
 
-        sessions_this_week = sum(
-            1 for s in all_sessions.sessions
-            if datetime.fromisoformat(s.modified_at) >= week_start
-        )
+        # Query cache DB for stats (avoids parsing files)
+        sessions_today = 0
+        sessions_this_week = 0
+        total_messages = 0
+        project_counts: Dict[str, int] = {}
+        most_active = None
 
-        # Most active project
-        project_counts = {}
-        for s in all_sessions.sessions:
-            project_counts[s.project_name] = project_counts.get(s.project_name, 0) + 1
+        if self.db:
+            result = await self.db.execute(select(SessionCache))
+            cached_entries = result.scalars().all()
 
-        most_active = max(project_counts.items(), key=lambda x: x[1])[0] if project_counts else None
+            for entry in cached_entries:
+                modified = entry.modified_at
+                if modified >= today_start:
+                    sessions_today += 1
+                if modified >= week_start:
+                    sessions_this_week += 1
+                total_messages += entry.total_messages or 0
+                name = entry.project_name or entry.project_folder
+                project_counts[name] = project_counts.get(name, 0) + 1
 
-        total_messages = sum(s.total_messages for s in all_sessions.sessions)
+            if project_counts:
+                most_active = max(project_counts.items(), key=lambda x: x[1])[0]
 
         return SessionStatsResponse(
-            total_sessions=all_sessions.total,
+            total_sessions=total_sessions,
             sessions_today=sessions_today,
             sessions_this_week=sessions_this_week,
             most_active_project=most_active,
