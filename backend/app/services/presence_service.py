@@ -1,11 +1,13 @@
 """Service for Presence Dashboard — event processing and session aggregation."""
+import asyncio
 import os
 import re
+import time
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from fastapi import WebSocket
-from sqlalchemy import select
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.constants import SessionStatus
@@ -43,6 +45,13 @@ manager = ConnectionManager()
 IDLE_TIMEOUT_MINUTES = 15
 BUCKET_COUNT = 30
 FILE_EDIT_TOOLS = {"Write", "Edit", "MultiEdit"}
+EVENT_RETENTION_DAYS = 7
+IDLE_CHECK_INTERVAL_SECONDS = 30
+
+# Guarded by _maintenance_lock to prevent concurrent double-execution
+_maintenance_lock = asyncio.Lock()
+_last_idle_check: float = 0.0
+_last_prune: float = 0.0
 
 
 class PresenceService:
@@ -53,8 +62,8 @@ class PresenceService:
         session_id = payload["session_id"]
         event_type = payload.get("hook_event_name", "Unknown")
 
-        # Store raw event
-        raw_event = PresenceEvent(
+        # Store raw event in the same transaction as the session update
+        db.add(PresenceEvent(
             session_id=session_id,
             event_type=event_type,
             tool_name=payload.get("tool_name"),
@@ -64,8 +73,7 @@ class PresenceService:
             cwd=payload.get("cwd"),
             timestamp=now,
             received_at=now,
-        )
-        db.add(raw_event)
+        ))
 
         # Upsert presence session
         result = await db.execute(
@@ -114,7 +122,6 @@ class PresenceService:
             if tool_name in FILE_EDIT_TOOLS:
                 file_path = tool_input.get("file_path") or tool_input.get("path")
                 if file_path:
-                    # Write can also overwrite existing files, but we label it "created" for simplicity
                     op = "created" if tool_name == "Write" else "modified"
                     files = list(session.modified_files or [])
                     files = [f for f in files if self._get_file_path(f) != file_path]
@@ -190,8 +197,8 @@ class PresenceService:
 
         await db.flush()
 
-        # Mark idle sessions while we're here
-        await self._mark_idle_sessions(db, now)
+        # Throttled maintenance (idle check + event pruning)
+        await self._maybe_run_maintenance(db, now)
 
         return self._to_response(session)
 
@@ -218,23 +225,38 @@ class PresenceService:
 
     async def remove_session(self, session_id: str, db: AsyncSession) -> bool:
         result = await db.execute(
-            select(PresenceSession).where(PresenceSession.session_id == session_id)
+            delete(PresenceSession).where(PresenceSession.session_id == session_id)
         )
-        session = result.scalar_one_or_none()
-        if not session:
-            return False
-        await db.delete(session)
         await db.flush()
-        return True
+        return result.rowcount > 0
 
     async def clear_all_sessions(self, db: AsyncSession) -> int:
-        result = await db.execute(select(PresenceSession))
-        sessions = result.scalars().all()
-        count = len(sessions)
-        for s in sessions:
-            await db.delete(s)
+        result = await db.execute(select(func.count()).select_from(PresenceSession))
+        count = result.scalar() or 0
+        await db.execute(delete(PresenceSession))
         await db.flush()
         return count
+
+    async def _maybe_run_maintenance(self, db: AsyncSession, now: datetime):
+        """Run idle check and event pruning, throttled to avoid per-event overhead."""
+        global _last_idle_check, _last_prune
+
+        current = time.monotonic()
+        run_idle = False
+        run_prune = False
+
+        async with _maintenance_lock:
+            if current - _last_idle_check >= IDLE_CHECK_INTERVAL_SECONDS:
+                _last_idle_check = current
+                run_idle = True
+            if current - _last_prune >= 3600:
+                _last_prune = current
+                run_prune = True
+
+        if run_idle:
+            await self._mark_idle_sessions(db, now)
+        if run_prune:
+            await self._prune_old_events(db, now)
 
     async def _mark_idle_sessions(self, db: AsyncSession, now: datetime):
         cutoff = now - timedelta(minutes=IDLE_TIMEOUT_MINUTES)
@@ -247,6 +269,14 @@ class PresenceService:
         for session in result.scalars().all():
             session.status = SessionStatus.IDLE
             session.status_text = None
+
+    async def _prune_old_events(self, db: AsyncSession, now: datetime):
+        """Delete presence events older than retention period."""
+        cutoff = now - timedelta(days=EVENT_RETENTION_DAYS)
+        await db.execute(
+            delete(PresenceEvent).where(PresenceEvent.timestamp < cutoff)
+        )
+        await db.flush()
 
     def _update_activity_buckets(self, session: PresenceSession, now: datetime):
         buckets = list(session.activity_buckets or [0] * BUCKET_COUNT)
@@ -292,26 +322,22 @@ class PresenceService:
             return f"{base_label} ({session_id[:6]})"
         return base_label
 
-    def _get_file_path(self, entry: Union[str, dict]) -> str:
+    def _get_file_path(self, entry: str | dict) -> str:
         """Extract path from either a string (legacy) or dict (new format)."""
         if isinstance(entry, str):
             return entry
         return entry.get("path", "")
 
     def _extract_exit_code(self, tool_result: dict) -> Optional[int]:
-        # tool_result may have various structures
         if not tool_result:
             return None
-        # Check direct exit_code field
         if "exit_code" in tool_result:
             return tool_result["exit_code"]
-        # Check content string for exit code pattern
         content = tool_result.get("content", "")
         if isinstance(content, str) and "exit code" in content.lower():
             match = re.search(r'exit code[:\s]+(\d+)', content, re.IGNORECASE)
             if match:
                 return int(match.group(1))
-        # Check for stderr / error indicators
         if tool_result.get("is_error"):
             return 1
         return 0

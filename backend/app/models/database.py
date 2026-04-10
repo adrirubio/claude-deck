@@ -151,7 +151,7 @@ class PresenceSession(Base):
     session_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     project_path: Mapped[str | None] = mapped_column(String, nullable=True)
-    status: Mapped[str] = mapped_column(String, default=SessionStatus.ACTIVE, nullable=False)
+    status: Mapped[str] = mapped_column(String, default=SessionStatus.ACTIVE, nullable=False, index=True)
     status_text: Mapped[str | None] = mapped_column(String, nullable=True)
     last_narrative: Mapped[str | None] = mapped_column(String, nullable=True)
     last_narrative_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -166,7 +166,7 @@ class PresenceSession(Base):
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
     last_event_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_user_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
