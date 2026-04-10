@@ -69,7 +69,9 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
   }, [fetchSettings])
 
   const updateSetting = (path: string, value: ConfigValue) => {
+    const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
     const keys = path.split('.')
+    if (keys.some((k) => UNSAFE_KEYS.has(k))) return
     setSettings((prev) => {
       const updated = { ...prev }
       let current: Record<string, ConfigValue> = updated
