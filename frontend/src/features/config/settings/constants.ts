@@ -1,4 +1,5 @@
 export const MODEL_OPTIONS = [
+  { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
   { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
   { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
   { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
@@ -56,6 +57,28 @@ export const HOOK_MODEL_OPTIONS = [
   { value: 'haiku', label: 'Haiku' },
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'opus', label: 'Opus' },
+]
+
+export const TUI_OPTIONS = [
+  { value: 'default', label: 'Default' },
+  { value: 'fullscreen', label: 'Fullscreen' },
+]
+
+export const VIEW_MODE_OPTIONS = [
+  { value: 'default', label: 'Default' },
+  { value: 'verbose', label: 'Verbose' },
+  { value: 'focus', label: 'Focus' },
+]
+
+export const EDITOR_MODE_OPTIONS = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'vim', label: 'Vim' },
+]
+
+export const SPINNER_VERBS_MODE_OPTIONS = [
+  { value: 'default', label: 'Default' },
+  { value: 'append', label: 'Append to defaults' },
+  { value: 'replace', label: 'Replace defaults' },
 ]
 
 export const HOOK_EVENT_GROUPS = [

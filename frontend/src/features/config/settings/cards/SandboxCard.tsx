@@ -3,7 +3,7 @@ import { Label } from '@/components/ui/label'
 import { SwitchSetting, NumberSetting, ListEditor } from '../field-components'
 import type { SettingsCardProps } from '../types'
 
-export function SandboxCard({ getSetting, updateSetting, scope }: SettingsCardProps) {
+export function SandboxCard({ getSetting, updateSetting }: SettingsCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -16,6 +16,13 @@ export function SandboxCard({ getSetting, updateSetting, scope }: SettingsCardPr
           description="Run commands in an isolated environment"
           checked={getSetting<boolean>('sandbox.enabled', false)}
           onCheckedChange={(v) => updateSetting('sandbox.enabled', v)}
+        />
+
+        <SwitchSetting
+          label="Fail If Unavailable"
+          description="Refuse to run commands when the sandbox is enabled but unavailable on this platform"
+          checked={getSetting<boolean>('sandbox.failIfUnavailable', false)}
+          onCheckedChange={(v) => updateSetting('sandbox.failIfUnavailable', v)}
         />
 
         <SwitchSetting
@@ -39,6 +46,13 @@ export function SandboxCard({ getSetting, updateSetting, scope }: SettingsCardPr
           onCheckedChange={(v) => updateSetting('sandbox.enableWeakerNestedSandbox', v)}
         />
 
+        <SwitchSetting
+          label="Weaker Network Isolation (macOS)"
+          description="Use a looser network isolation policy — needed on some macOS versions where strict isolation breaks DNS."
+          checked={getSetting<boolean>('sandbox.enableWeakerNetworkIsolation', false)}
+          onCheckedChange={(v) => updateSetting('sandbox.enableWeakerNetworkIsolation', v)}
+        />
+
         <div className="grid gap-2">
           <Label>Excluded Commands</Label>
           <p className="text-sm text-muted-foreground">
@@ -59,6 +73,18 @@ export function SandboxCard({ getSetting, updateSetting, scope }: SettingsCardPr
           <ListEditor
             value={getSetting<string[]>('sandbox.network.allowedDomains', [])}
             onChange={(v) => updateSetting('sandbox.network.allowedDomains', v)}
+            placeholder="Add domain..."
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Denied Domains</Label>
+          <p className="text-sm text-muted-foreground">
+            Network domains explicitly blocked from the sandbox (overrides allowed list)
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('sandbox.network.deniedDomains', [])}
+            onChange={(v) => updateSetting('sandbox.network.deniedDomains', v)}
             placeholder="Add domain..."
           />
         </div>
@@ -87,6 +113,13 @@ export function SandboxCard({ getSetting, updateSetting, scope }: SettingsCardPr
           description="Allow localhost binding in sandbox (macOS only)"
           checked={getSetting<boolean>('sandbox.network.allowLocalBinding', false)}
           onCheckedChange={(v) => updateSetting('sandbox.network.allowLocalBinding', v)}
+        />
+
+        <SwitchSetting
+          label="Allow Mach Lookup (macOS)"
+          description="Allow mach-bootstrap service lookups from inside the sandbox."
+          checked={getSetting<boolean>('sandbox.network.allowMachLookup', false)}
+          onCheckedChange={(v) => updateSetting('sandbox.network.allowMachLookup', v)}
         />
 
         <div className="grid grid-cols-2 gap-4">
@@ -131,22 +164,29 @@ export function SandboxCard({ getSetting, updateSetting, scope }: SettingsCardPr
           />
         </div>
 
-        {scope === 'managed' && (
-          <>
-            <SwitchSetting
-              label="Allow Managed Read Paths Only"
-              description="Only allow filesystem read paths defined in managed settings"
-              checked={getSetting<boolean>('sandbox.filesystem.allowManagedReadPathsOnly', false)}
-              onCheckedChange={(v) => updateSetting('sandbox.filesystem.allowManagedReadPathsOnly', v)}
-            />
-            <SwitchSetting
-              label="Allow Managed Domains Only"
-              description="Only allow network domains defined in managed settings"
-              checked={getSetting<boolean>('sandbox.network.allowManagedDomainsOnly', false)}
-              onCheckedChange={(v) => updateSetting('sandbox.network.allowManagedDomainsOnly', v)}
-            />
-          </>
-        )}
+        <div className="grid gap-2">
+          <Label>Allowed Write Paths</Label>
+          <p className="text-sm text-muted-foreground">
+            Gitignore-style patterns for allowed filesystem write paths
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('sandbox.filesystem.allowWrite', [])}
+            onChange={(v) => updateSetting('sandbox.filesystem.allowWrite', v)}
+            placeholder="e.g., /tmp/**, ./build/**"
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Denied Write Paths</Label>
+          <p className="text-sm text-muted-foreground">
+            Gitignore-style patterns for blocked filesystem write paths
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('sandbox.filesystem.denyWrite', [])}
+            onChange={(v) => updateSetting('sandbox.filesystem.denyWrite', v)}
+            placeholder="e.g., ~/.ssh/**, /etc/**"
+          />
+        </div>
       </CardContent>
     </Card>
   )
