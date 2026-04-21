@@ -81,9 +81,9 @@ All under `/api/v1/`: health, config, projects, cli, mcp, commands, plugins, hoo
 
 ## CI/CD
 
-Three GitHub Actions workflows in `.github/workflows/`:
+GitHub Actions workflows in `.github/workflows/`:
 - `claude.yml` — Claude Code integration (triggers on @claude mentions)
-- `claude-code-review.yml` — Automated code review
+- `codeql.yml` — CodeQL security analysis
 - `release.yml` — Manual release (builds frontend, creates GitHub release)
 
 ## Gotchas
