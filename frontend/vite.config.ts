@@ -20,6 +20,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Accept any Host header. Vite 7 blocks unknown hostnames by default
+    // (DNS-rebinding protection), which rejects access via LAN/tailnet
+    // hostnames like `ubuntu1804`. The backend enforces its own same-origin
+    // check on WebSocket upgrades, so this is safe on a trusted network.
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
