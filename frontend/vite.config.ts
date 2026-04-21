@@ -23,7 +23,11 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true,
+        // Preserve the browser's Host header so the backend can enforce
+        // same-origin on WebSocket upgrades (cc-bridge terminal). With
+        // changeOrigin:true, vite would rewrite Host to localhost:8000
+        // and the same-origin check would fail for LAN/tailnet access.
+        changeOrigin: false,
         ws: true,
       },
     },

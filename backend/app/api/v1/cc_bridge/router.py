@@ -3,6 +3,7 @@ import logging
 import secrets
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, WebSocket, HTTPException
 from pydantic import BaseModel
@@ -56,6 +57,34 @@ async def get_terminal_token():
     return {"token": token}
 
 
+def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
+    """Accept the WebSocket if the Origin host matches the request Host header.
+
+    This lets the UI attach over any reachable address (localhost, LAN, tailnet)
+    without requiring explicit allowlist config, while still blocking cross-site
+    WebSocket hijacking from unrelated domains.
+    """
+    try:
+        origin_host = urlparse(origin).netloc.lower()
+    except ValueError:
+        return False
+    if not origin_host:
+        return False
+
+    request_host = (websocket.headers.get("host") or "").lower()
+    if request_host and origin_host == request_host:
+        return True
+
+    # Dev-mode fallback: Vite proxies WS to uvicorn, so when the browser
+    # connects to <host>:5173 the WS Host header is still <host>:5173 —
+    # which matches above. This branch only fires if a reverse proxy strips
+    # the port; accept any loopback origin in that case.
+    if origin_host.split(":")[0] in {"localhost", "127.0.0.1", "[::1]"}:
+        return True
+
+    return False
+
+
 def _validate_token(token: str) -> bool:
     """Validate and consume a one-time token."""
     issued_at = _tokens.pop(token, None)
@@ -73,8 +102,7 @@ async def session_terminal(
 ):
     """Attach to a CC tmux session via WebSocket terminal relay."""
     origin = websocket.headers.get("origin", "")
-    allowed_origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
-    if origin and origin not in allowed_origins:
+    if origin and not _is_same_origin(origin, websocket):
         await websocket.close(code=4403, reason="Invalid origin")
         return
 
