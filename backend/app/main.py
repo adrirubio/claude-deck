@@ -32,10 +32,14 @@ app = FastAPI(
 )
 
 # Configure CORS
+# Accept any origin reaching the dev (5173) or prod (8000) ports — this lets
+# the UI load over localhost, LAN, or tailnet without requiring env config.
+# allow_credentials must be False when using a wildcard regex (browsers reject
+# "*"-style wildcards with credentials); our API does not rely on cookies.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=settings.cors_credentials,
+    allow_origin_regex=r"^https?://[^/]+(:\d+)?$",
+    allow_credentials=False,
     allow_methods=settings.cors_methods,
     allow_headers=settings.cors_headers,
 )
