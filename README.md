@@ -83,6 +83,14 @@ This starts:
 - Backend at http://localhost:8000 (API docs at http://localhost:8000/docs)
 - Frontend at http://localhost:5173
 
+To make the dev environment reachable from another machine on your LAN or tailnet (e.g. to monitor tmux sessions via CC Bridge from a different host), pass `--host`:
+
+```bash
+./scripts/dev.sh --host 0.0.0.0
+```
+
+Both servers will then bind to all interfaces.
+
 ## Configuration Files
 
 Claude Deck reads and writes these Claude Code configuration files:
