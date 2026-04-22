@@ -117,7 +117,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 min-w-0">
           {/* Mode selector */}
           <div className="space-y-1.5">
             <Label>Mode</Label>
@@ -200,21 +200,21 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
                   No recent sessions found.
                 </div>
               ) : (
-                <div className="max-h-48 overflow-y-auto rounded-md border">
+                <div className="max-h-48 w-full overflow-y-auto rounded-md border">
                   {recentSessions.map((session) => (
                     <button
                       key={session.id}
                       type="button"
                       className={cn(
-                        'w-full text-left px-3 py-2 border-b last:border-b-0 transition-colors',
+                        'block w-full min-w-0 text-left px-3 py-2 border-b last:border-b-0 transition-colors',
                         selectedSession?.id === session.id
                           ? 'border-l-2 border-l-primary bg-primary/5'
                           : 'hover:bg-muted/50'
                       )}
                       onClick={() => setSelectedSession(session)}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-medium truncate">
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        <span className="text-sm font-medium truncate min-w-0">
                           {session.project_name}
                         </span>
                         <span className="text-xs text-muted-foreground shrink-0">
