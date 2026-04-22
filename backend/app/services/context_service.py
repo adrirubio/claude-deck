@@ -52,6 +52,11 @@ CHARS_PER_TOKEN_ESTIMATE = 4
 # System prompt from System tools in the composition breakdown.
 SYSTEM_TOOLS_ESTIMATE = 8_200
 
+# Per-skill overhead in the system prompt (structural/envelope tokens
+# around each skill's metadata). Calibrated against /context on a session
+# with 80 skills showing 9.3k total.
+SKILL_OVERHEAD_TOKENS = 50
+
 
 def _normalize_model(model: str) -> str:
     """Strip trailing YYYYMMDD date suffix (e.g. claude-opus-4-6-20260101 → claude-opus-4-6)."""
@@ -325,16 +330,26 @@ class ContextService:
             pass
 
         # --- Skills ---
+        # CC only loads skill metadata (name + description) into the system
+        # prompt at startup. Full bodies are pulled only when a skill is
+        # invoked. Counting every installed skill's full content over-counts
+        # this category by ~20x on a session with many skills installed.
         skill_items: List[ContextCategoryItem] = []
         skill_total = 0
         try:
             skills = AgentService.list_skills(project_path)
             for skill in skills:
                 detail = AgentService.get_skill(skill.name, skill.location, project_path)
-                if detail and detail.content:
-                    tokens = len(detail.content) // CHARS_PER_TOKEN_ESTIMATE
-                    skill_items.append(ContextCategoryItem(name=skill.name, estimated_tokens=tokens))
-                    skill_total += tokens
+                description = ""
+                if detail:
+                    if detail.frontmatter and detail.frontmatter.description:
+                        description = detail.frontmatter.description
+                    elif detail.description:
+                        description = detail.description
+                metadata_chars = len(skill.name) + len(description)
+                tokens = metadata_chars // CHARS_PER_TOKEN_ESTIMATE + SKILL_OVERHEAD_TOKENS
+                skill_items.append(ContextCategoryItem(name=skill.name, estimated_tokens=tokens))
+                skill_total += tokens
         except Exception:
             pass
 
