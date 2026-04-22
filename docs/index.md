@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Claude Deck
   text: Documentation
-  tagline: Web Dashboard for Claude Code
+  tagline: Visual configuration and live session control for Claude Code
   actions:
     - theme: brand
       text: Get Started
@@ -14,22 +14,22 @@ hero:
       link: https://github.com/adrirubio/claude-deck
 
 features:
+  - icon: 🌉
+    title: CC Bridge
+    details: Monitor and interact with live Claude Code tmux sessions from the browser in a multi-terminal grid.
+  - icon: 🎛️
+    title: Visual Configuration
+    details: Manage Claude Code settings, MCP servers, commands, hooks, and permissions without a command-line-only workflow.
   - icon: 📊
-    title: Dashboard
-    details: Overview of all Claude Code configurations with context window monitoring and session activity.
-  - icon: 🔌
-    title: MCP Servers
-    details: Add, edit, test, and manage MCP server connections. Browse and install from the MCP Registry.
+    title: Dashboard & Usage
+    details: See configuration status, context windows, session activity, and token usage in one place.
   - icon: 💬
-    title: Sessions
-    details: View conversation history with full message details, tool use, and token tracking.
-  - icon: ⚡
-    title: Commands & Hooks
-    details: Create slash commands, configure automation hooks, and manage permissions.
+    title: Sessions & Transcripts
+    details: Browse conversation history with full message details, tool use, and token tracking.
   - icon: 🤖
     title: Agents & Skills
     details: Create custom agent configurations and discover skills from the community.
-  - icon: 📈
-    title: Usage Tracking
-    details: Monitor token usage, costs, and billing blocks with daily and monthly charts.
+  - icon: 💾
+    title: Backup & Restore
+    details: Protect real Claude Code setups with full backup and restore before major changes.
 ---

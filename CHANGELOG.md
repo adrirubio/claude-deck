@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-22
+
+### Added
+- **CC Bridge**: Live terminal bridge to Claude Code sessions running in tmux
+  - Multi-terminal grid layout supporting up to 4 simultaneous panes (auto-layout: 1, 2-column, or 2x2 grid)
+  - Per-pane read-only/interactive mode toggle, fullscreen, attach/detach, and close controls
+  - Active terminal focus indicator — green glow on the focused pane
+  - Session discovery via `tmux list-panes` with auto-refresh polling
+  - Spawn new Claude Code sessions (plain, worktree, or resume mode) from the UI
+  - Kill sessions with optional worktree cleanup
+  - WebSocket-based PTY relay with xterm.js (WebGL rendering, web links)
+- **Projects**: Discover projects from `~/.claude/projects/` session history
+- **Dashboard**: Cache stats in context to avoid re-fetching on navigation
+- **Documentation**: VitePress documentation site with guide, features, and API reference
+
+### Fixed
+- **CC Bridge**: Prevent orphaned `tmux attach-session` processes from accumulating on server reload/crash via `PR_SET_PDEATHSIG` and startup cleanup
+- **CC Bridge**: Fix terminal not rendering in React StrictMode due to race condition in async attach flow
+
 ## [1.1.0] - 2026-03-03
 
 ### Added
@@ -47,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RESTful API at `/api/v1/`
 - CORS configured for local development
 
-[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/adrirubio/claude-deck/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/adrirubio/claude-deck/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/adrirubio/claude-deck/releases/tag/v1.0.0

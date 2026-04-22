@@ -2,7 +2,7 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 1.2.0 — 2026-04-22
 
 ### Added
 
@@ -27,7 +27,7 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 - **Dashboard** — configuration status and usage overview
 - **MCP Server Management** — add, edit, test, configure servers (global + project)
 - **Commands** — create and manage slash commands
-- **Plugins** — install, configure, and manage plugins
+- **Plugins** — create, install, and manage plugins
 - **Hooks** — configure event hooks for Claude Code lifecycle
 - **Permissions** — manage allow/deny rules for tools
 - **Backup & Restore** — full configuration backup and restore
