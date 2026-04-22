@@ -23,6 +23,9 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **No telemetry** — no usage tracking sent anywhere
 - **Works with your real files** — reads and writes existing Claude Code config files
 
+> [!WARNING]
+> Claude Deck reads and writes your real Claude Code configuration files. Changes made in the UI affect the files Claude Code actually uses. Review changes carefully, and create a backup before major edits.
+
 ## Features
 
 - **Dashboard** — Overview of all Claude Code configurations with context window visualizer
@@ -81,6 +84,9 @@ docker compose up
 ```
 
 This builds and starts Claude Deck at http://localhost:8000, mounting your `~/.claude` directory and `~/.claude.json` configuration file.
+
+> [!WARNING]
+> Claude Deck is not a mock viewer. It works with your real local Claude Code files, so changes made in the UI can change your working setup.
 
 > [!NOTE]
 > The container mounts your home directory's Claude Code configuration. The container runs as root to access these files; adjust permissions if running as a non-root user.
