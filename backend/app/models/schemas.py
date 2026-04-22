@@ -1555,6 +1555,16 @@ class ToolConsumption(BaseModel):
     avg_result_tokens: int
 
 
+class ContextInsight(BaseModel):
+    """One heuristic observation about the context state."""
+
+    severity: str  # "info" | "warning" | "critical"
+    rule_id: str
+    message: str
+    path: Optional[str] = None
+    value: Optional[float] = None
+
+
 class CacheEfficiency(BaseModel):
     """Cache hit/miss breakdown."""
 
@@ -1610,6 +1620,7 @@ class ContextAnalysis(BaseModel):
     context_zone: str  # "green", "yellow", "orange", "red"
     total_turns: int
     composition: Optional[ContextComposition] = None
+    insights: List[ContextInsight] = []
 
 
 class ContextAnalysisResponse(BaseModel):

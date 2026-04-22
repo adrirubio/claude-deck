@@ -15,6 +15,7 @@ import { CacheEfficiencyCard } from '@/features/context/CacheEfficiencyCard'
 import { ProjectionsCard } from '@/features/context/ProjectionsCard'
 import { FileConsumptionTable } from '@/features/context/FileConsumptionTable'
 import { ToolUsageTable } from '@/features/context/ToolUsageTable'
+import { InsightsCard } from '@/features/context/InsightsCard'
 import type { SessionDetail } from '@/types/sessions'
 import type { ContextAnalysis } from '@/types/context'
 
@@ -274,6 +275,8 @@ export function SessionViewPage() {
                   </div>
 
                   <ToolUsageTable tools={contextAnalysis.tool_consumptions} showHelp={showHelp} />
+
+                  <InsightsCard insights={contextAnalysis.insights} showHelp={showHelp} />
                 </div>
               )}
             </TabsContent>

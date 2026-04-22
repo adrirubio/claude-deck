@@ -18,6 +18,7 @@ from app.models.schemas import (
     ContextCategoryItem,
     ContextComposition,
     ContextCompositionCategory,
+    ContextInsight,
     ContextSnapshot,
     FileConsumption,
     ToolConsumption,
@@ -63,6 +64,125 @@ def get_context_zone(percentage: float) -> str:
     elif percentage >= 50:
         return "yellow"
     return "green"
+
+
+def _shorten_path(path: str, keep: int = 3) -> str:
+    """Shorten a long path for insight messages."""
+    parts = path.split("/")
+    if len(parts) <= keep:
+        return path
+    return ".../" + "/".join(parts[-keep:])
+
+
+def _format_tokens(n: int) -> str:
+    """Human-readable token count."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}k"
+    return str(n)
+
+
+def _compute_insights(
+    *,
+    context_percentage: float,
+    current_context: int,
+    file_consumptions: List[FileConsumption],
+    tool_consumptions: List[ToolConsumption],
+    content_categories: List[ContentCategory],
+    cache_efficiency: CacheEfficiency,
+    total_turns: int,
+) -> List[ContextInsight]:
+    """Heuristic insights. Each rule produces at most one insight."""
+    out: List[ContextInsight] = []
+
+    # Rule 1: context near limit
+    if context_percentage >= 95:
+        out.append(
+            ContextInsight(
+                severity="critical",
+                rule_id="context_near_limit",
+                message=f"Context at {context_percentage:.0f}% — compaction is imminent. Start a fresh session or compact now.",
+                value=context_percentage,
+            )
+        )
+    elif context_percentage >= 80:
+        out.append(
+            ContextInsight(
+                severity="warning",
+                rule_id="context_near_limit",
+                message=f"Context at {context_percentage:.0f}%. Consider /compact after your next turn.",
+                value=context_percentage,
+            )
+        )
+
+    # Rule 2: file read repeatedly
+    hot_file = next((f for f in file_consumptions if f.read_count >= 4), None)
+    if hot_file:
+        out.append(
+            ContextInsight(
+                severity="warning",
+                rule_id="repeated_file_reads",
+                message=(
+                    f"{_shorten_path(hot_file.file_path)} was read {hot_file.read_count} times "
+                    f"(~{_format_tokens(hot_file.estimated_tokens)} tokens total) — consider Grep or targeted line ranges instead."
+                ),
+                path=hot_file.file_path,
+                value=float(hot_file.read_count),
+            )
+        )
+
+    # Rule 3: single file dominates
+    if file_consumptions and current_context > 0:
+        top = file_consumptions[0]
+        share = top.estimated_tokens / current_context if current_context else 0
+        if share > 0.15:
+            out.append(
+                ContextInsight(
+                    severity="info",
+                    rule_id="single_file_dominates",
+                    message=(
+                        f"{_shorten_path(top.file_path)} is ~{_format_tokens(top.estimated_tokens)} tokens "
+                        f"({share * 100:.0f}% of your context)."
+                    ),
+                    path=top.file_path,
+                    value=round(share, 3),
+                )
+            )
+
+    # Rule 4: tool-result heavy session
+    tool_results_cat = next((c for c in content_categories if c.category == "Tool Results"), None)
+    if tool_results_cat and tool_results_cat.percentage > 50:
+        # Pick the biggest contributor if we have tool consumption data
+        top_tool = tool_consumptions[0] if tool_consumptions else None
+        suffix = f" {top_tool.tool_name} is the biggest contributor." if top_tool else ""
+        out.append(
+            ContextInsight(
+                severity="warning",
+                rule_id="tool_results_dominate",
+                message=(
+                    f"Tool outputs are {tool_results_cat.percentage:.0f}% of your context.{suffix} "
+                    f"Narrower Bash/Grep queries would help."
+                ),
+                value=tool_results_cat.percentage,
+            )
+        )
+
+    # Rule 5: low cache hit ratio
+    if total_turns >= 5 and cache_efficiency.hit_ratio < 0.5:
+        out.append(
+            ContextInsight(
+                severity="info",
+                rule_id="low_cache_hit_ratio",
+                message=(
+                    f"Cache hit ratio is {cache_efficiency.hit_ratio * 100:.0f}% — lots of context is being re-ingested. "
+                    f"Editing files high up in the conversation invalidates the cache."
+                ),
+                value=round(cache_efficiency.hit_ratio, 3),
+            )
+        )
+
+    return out
 
 
 class ContextService:
@@ -649,6 +769,16 @@ class ContextService:
         except Exception:
             pass  # Composition is best-effort
 
+        insights = _compute_insights(
+            context_percentage=context_percentage,
+            current_context=current_context,
+            file_consumptions=file_consumptions,
+            tool_consumptions=tool_consumptions,
+            content_categories=categories,
+            cache_efficiency=cache_efficiency,
+            total_turns=turn_number,
+        )
+
         analysis = ContextAnalysis(
             session_id=session_id,
             project_folder=project_folder,
@@ -667,6 +797,7 @@ class ContextService:
             context_zone=get_context_zone(context_percentage),
             total_turns=turn_number,
             composition=composition,
+            insights=insights,
         )
 
         return ContextAnalysisResponse(analysis=analysis)

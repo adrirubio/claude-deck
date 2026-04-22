@@ -28,6 +28,16 @@ export interface FileConsumption {
   estimated_tokens: number
 }
 
+export type InsightSeverity = 'info' | 'warning' | 'critical'
+
+export interface ContextInsight {
+  severity: InsightSeverity
+  rule_id: string
+  message: string
+  path?: string
+  value?: number
+}
+
 export interface ToolConsumption {
   tool_name: string
   call_count: number
@@ -81,6 +91,7 @@ export interface ContextAnalysis {
   context_zone: string
   total_turns: number
   composition?: ContextComposition
+  insights: ContextInsight[]
 }
 
 export interface ContextAnalysisResponse {

@@ -9,6 +9,7 @@ import { ContextTimelineChart } from './ContextTimelineChart'
 import { ContextCompositionChart } from './ContextCompositionChart'
 import { FileConsumptionTable } from './FileConsumptionTable'
 import { ToolUsageTable } from './ToolUsageTable'
+import { InsightsCard } from './InsightsCard'
 import { CacheEfficiencyCard } from './CacheEfficiencyCard'
 import { ProjectionsCard } from './ProjectionsCard'
 import type { ActiveSessionContext, ContextAnalysis } from '@/types/context'
@@ -161,6 +162,8 @@ export function ContextPage() {
           </div>
 
           <ToolUsageTable tools={analysis.tool_consumptions} showHelp={showHelp} />
+
+          <InsightsCard insights={analysis.insights} showHelp={showHelp} />
         </div>
       )}
     </div>
