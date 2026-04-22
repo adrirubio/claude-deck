@@ -2,7 +2,26 @@
 
 **Website**: [claudedeck.org](https://claudedeck.org)
 
-A self-hosted web application for visualizing and managing Claude Code configuration. Provides a unified interface for managing MCP servers, plugins, slash commands, hooks, agents, permissions, usage tracking, and other Claude Code extensions.
+A self-hosted web application for visualizing and managing Claude Code configuration. Provides a unified interface for managing MCP servers, plugins, slash commands, hooks, agents, permissions, usage tracking, session transcripts, CC Bridge, and other Claude Code extensions.
+
+## Why This Exists
+
+Claude Code starts simple, then slowly sprawls across config files and directories: `~/.claude.json`, `~/.claude/settings.json`, `.mcp.json`, slash commands, agents, skills, project settings, transcripts, and usage data. That works fine at small scale, but once your setup gets serious it becomes hard to see the whole picture, change things confidently, or understand what is actually configured.
+
+Claude Deck gives you one local interface for that sprawl.
+
+## Best For
+
+Claude Deck is best for people running multiple MCP servers, custom commands, hooks, agents, or tracking Claude Code usage across sessions.
+
+If you only use Claude Code casually with mostly default config, Claude Deck may be overkill.
+
+## Trust Model
+
+- **Local only** — no cloud
+- **No account** — nothing to sign up for
+- **No telemetry** — no usage tracking sent anywhere
+- **Works with your real files** — reads and writes existing Claude Code config files
 
 ## Features
 
@@ -30,14 +49,17 @@ A self-hosted web application for visualizing and managing Claude Code configura
 | Dashboard | MCP Servers |
 |-----------|-------------|
 | ![Dashboard](screenshots/dashboard.png) | ![MCP Servers](screenshots/mcp-servers.png) |
+| High-level overview of your Claude Code setup | Manage MCP connections, status, and configuration |
 
 | Usage Tracking | Session Transcripts |
 |----------------|---------------------|
 | ![Usage Tracking](screenshots/usage-tracking.png) | ![Session Transcripts](screenshots/sessions.png) |
+| Cost visibility, charts, and billing blocks | Browse conversation history and tool usage details |
 
 | CC Bridge | Skills |
 |-----------|--------|
 | ![CC Bridge](screenshots/cc-bridge.png) | ![Skills](screenshots/skills.png) |
+| Monitor and interact with Claude Code tmux sessions | Browse installed skills and discover new ones |
 
 ## Tech Stack
 
@@ -58,7 +80,7 @@ cd claude-deck
 docker compose up
 ```
 
-This builds and starts Claude Deck at http://localhost:8000, mounting your `~/.claude` and `~/.claude.json` configuration files.
+This builds and starts Claude Deck at http://localhost:8000, mounting your `~/.claude` directory and `~/.claude.json` configuration file.
 
 > [!NOTE]
 > The container mounts your home directory's Claude Code configuration. The container runs as root to access these files; adjust permissions if running as a non-root user.
@@ -111,11 +133,13 @@ Claude Deck reads and writes these Claude Code configuration files:
 
 ## Contributing
 
-1. Fork the repo and create a feature branch
-2. Run `cd frontend && npm run lint` before submitting
-3. Open a pull request against `master`
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, style, and PR guidelines.
 
 API documentation is available at http://localhost:8000/docs when running the dev server.
+
+## Feedback
+
+If you use Claude Code heavily, issues and feature requests are especially welcome.
 
 ## Built By
 
