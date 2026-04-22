@@ -106,9 +106,9 @@ export function ContextCompositionChart({ composition, showHelp }: ContextCompos
     return null
   }
 
-  // Filter out categories with 0 tokens except Free Space
+  // Filter out categories with 0 tokens except Free space
   const visibleCategories = composition.categories.filter(
-    (c) => c.estimated_tokens > 0 || c.category === 'Free Space'
+    (c) => c.estimated_tokens > 0 || c.category === 'Free space'
   )
 
   return (
@@ -158,14 +158,15 @@ export function ContextCompositionChart({ composition, showHelp }: ContextCompos
               <Info className="h-3.5 w-3.5" />
               Category Glossary
             </p>
-            <p><span className="font-medium">System & Tools</span> — Claude's base instructions, personality, and built-in tool definitions (Read, Write, Bash, etc.). Derived as the residual after subtracting measurable categories.</p>
-            <p><span className="font-medium">MCP Tools</span> — tools from connected MCP servers.</p>
-            <p><span className="font-medium">Agents</span> — custom agent definitions loaded for this project.</p>
-            <p><span className="font-medium">Memory</span> — CLAUDE.md files and project memory loaded at startup.</p>
+            <p><span className="font-medium">System prompt</span> — Claude's base instructions and personality. Derived as the residual after subtracting system tools and other measurable categories.</p>
+            <p><span className="font-medium">System tools</span> — built-in tool definitions (Read, Write, Bash, etc.). Approximated at a calibrated constant that matches CC's /context output.</p>
+            <p><span className="font-medium">MCP tools</span> — tools from connected MCP servers.</p>
+            <p><span className="font-medium">Custom agents</span> — custom agent definitions loaded for this project.</p>
+            <p><span className="font-medium">Memory files</span> — CLAUDE.md files and project memory loaded at startup.</p>
             <p><span className="font-medium">Skills</span> — skill definitions available in this session.</p>
             <p><span className="font-medium">Messages</span> — the actual conversation (prompts, responses, tool results).</p>
-            <p><span className="font-medium">Autocompact Buffer</span> — space reserved for auto-compaction.</p>
-            <p><span className="font-medium">Free Space</span> — remaining capacity for more conversation.</p>
+            <p><span className="font-medium">Autocompact buffer</span> — space reserved for auto-compaction.</p>
+            <p><span className="font-medium">Free space</span> — remaining capacity for more conversation.</p>
           </div>
         )}
       </CardContent>
