@@ -28,6 +28,13 @@ export function PermissionsCard({ getSetting, updateSetting }: SettingsCardProps
           onCheckedChange={(v) => updateSetting('permissions.disableBypassPermissionsMode', v ? 'disable' : '')}
         />
 
+        <SwitchSetting
+          label="Skip Dangerous Mode Permission Prompt"
+          description="Don't prompt when entering bypassPermissions/dangerous mode. Use with caution."
+          checked={getSetting<boolean>('permissions.skipDangerousModePermissionPrompt', false)}
+          onCheckedChange={(v) => updateSetting('permissions.skipDangerousModePermissionPrompt', v)}
+        />
+
         <div className="grid gap-2">
           <Label>Additional Directories</Label>
           <p className="text-sm text-muted-foreground">

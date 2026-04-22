@@ -32,6 +32,9 @@ import { EnvVarsCard } from './cards/EnvVarsCard'
 import { HooksSecurityCard } from './cards/HooksSecurityCard'
 import { HookEventEditorCard } from './cards/HookEventEditorCard'
 import { AdvancedCard } from './cards/AdvancedCard'
+import { IdeCard } from './cards/IdeCard'
+import { WorktreeCard } from './cards/WorktreeCard'
+import { ManagedPolicyCard } from './cards/ManagedPolicyCard'
 
 interface SettingsEditorProps {
   onSave?: () => void
@@ -219,22 +222,27 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
         </div>
       )}
 
-      <div className="grid gap-6">
-        <AuthenticationCard {...cardProps} />
-        <GeneralCard {...cardProps} />
-        <MemoryCard {...cardProps} />
-        <SandboxCard {...cardProps} />
-        <PermissionsCard {...cardProps} />
-        <AutoModeCard {...cardProps} />
-        <McpServersCard {...cardProps} />
-        <PluginManagementCard {...cardProps} />
-        <AttributionCard {...cardProps} />
-        <UiCard {...cardProps} />
-        <EnvVarsCard {...cardProps} />
-        <HookEventEditorCard {...cardProps} />
-        <HooksSecurityCard {...cardProps} />
-        <AdvancedCard {...cardProps} />
-      </div>
+      <fieldset disabled={isManaged} className="contents">
+        <div className="grid gap-6">
+          <AuthenticationCard {...cardProps} />
+          <GeneralCard {...cardProps} />
+          <IdeCard {...cardProps} />
+          <MemoryCard {...cardProps} />
+          <SandboxCard {...cardProps} />
+          <PermissionsCard {...cardProps} />
+          <AutoModeCard {...cardProps} />
+          <McpServersCard {...cardProps} />
+          <PluginManagementCard {...cardProps} />
+          <AttributionCard {...cardProps} />
+          <UiCard {...cardProps} />
+          <EnvVarsCard {...cardProps} />
+          <HookEventEditorCard {...cardProps} />
+          <HooksSecurityCard {...cardProps} />
+          <WorktreeCard {...cardProps} />
+          <AdvancedCard {...cardProps} />
+          <ManagedPolicyCard {...cardProps} />
+        </div>
+      </fieldset>
 
       {/* Pattern Fix Confirmation Dialog */}
       <AlertDialog open={showFixDialog} onOpenChange={setShowFixDialog}>

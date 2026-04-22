@@ -1,7 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { TextSetting, NumberSetting, SelectSetting, SwitchSetting, ListEditor } from '../field-components'
-import { TEAMMATE_MODE_OPTIONS } from '../constants'
+import { SPINNER_VERBS_MODE_OPTIONS, TEAMMATE_MODE_OPTIONS } from '../constants'
 import type { SettingsCardProps } from '../types'
 
 export function AdvancedCard({ getSetting, updateSetting }: SettingsCardProps) {
@@ -92,6 +92,66 @@ export function AdvancedCard({ getSetting, updateSetting }: SettingsCardProps) {
           onChange={(v) => updateSetting('agent', v)}
           placeholder="e.g., my-custom-agent"
         />
+
+        <TextSetting
+          id="minimumVersion"
+          label="Minimum Version"
+          description="Refuse to run if the Claude Code binary is older than this semver."
+          value={getSetting<string>('minimumVersion', '')}
+          onChange={(v) => updateSetting('minimumVersion', v)}
+          placeholder="e.g., 1.5.0"
+        />
+
+        <SwitchSetting
+          label="Disable Deep Link Registration"
+          description="Skip registering the claude:// URL scheme handler"
+          checked={getSetting<boolean>('disableDeepLinkRegistration', false)}
+          onCheckedChange={(v) => updateSetting('disableDeepLinkRegistration', v)}
+        />
+
+        <div className="grid gap-2 rounded border p-3">
+          <Label>Spinner Tips Override</Label>
+          <p className="text-sm text-muted-foreground">
+            Replace or extend the default loading-spinner tips.
+          </p>
+          <SwitchSetting
+            label="Exclude Default Tips"
+            description="Only show the tips listed below"
+            checked={getSetting<boolean>('spinnerTipsOverride.excludeDefault', false)}
+            onCheckedChange={(v) => updateSetting('spinnerTipsOverride.excludeDefault', v)}
+          />
+          <div className="grid gap-2">
+            <Label>Custom Tips</Label>
+            <ListEditor
+              value={getSetting<string[]>('spinnerTipsOverride.tips', [])}
+              onChange={(v) => updateSetting('spinnerTipsOverride.tips', v)}
+              placeholder="Add a tip..."
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-2 rounded border p-3">
+          <Label>Spinner Verbs</Label>
+          <p className="text-sm text-muted-foreground">
+            Customize the verbs shown next to the spinner (e.g., "Thinking...", "Cooking...").
+          </p>
+          <SelectSetting
+            id="spinnerVerbsMode"
+            label="Mode"
+            value={getSetting<string>('spinnerVerbs.mode', '')}
+            onValueChange={(v) => updateSetting('spinnerVerbs.mode', v)}
+            placeholder="Default"
+            options={SPINNER_VERBS_MODE_OPTIONS}
+          />
+          <div className="grid gap-2">
+            <Label>Verbs</Label>
+            <ListEditor
+              value={getSetting<string[]>('spinnerVerbs.verbs', [])}
+              onChange={(v) => updateSetting('spinnerVerbs.verbs', v)}
+              placeholder="e.g., Pondering"
+            />
+          </div>
+        </div>
       </CardContent>
     </Card>
   )
