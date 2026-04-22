@@ -25,33 +25,56 @@ from app.models.schemas import (
 from app.utils.path_utils import get_claude_projects_dir, get_project_display_name
 
 
-# Model context window limits (input tokens)
+# Model context window limits (input tokens). Keys are normalized
+# substrings — `_normalize_model` strips dated suffixes before lookup.
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
-    "claude-sonnet-4-5-20250929": 200_000,
+    # Claude 4.7 — 1M window
+    "claude-opus-4-7": 1_000_000,
+    # Claude 4.6
     "claude-opus-4-6": 200_000,
-    "claude-haiku-4-5-20251001": 200_000,
-    "claude-sonnet-4-20250514": 200_000,
-    "claude-opus-4-20250514": 200_000,
-    # Older models
-    "claude-3-5-sonnet-20241022": 200_000,
-    "claude-3-5-haiku-20241022": 200_000,
-    "claude-3-opus-20240229": 200_000,
+    "claude-sonnet-4-6": 1_000_000,  # 1M beta context enabled by default in CC
+    "claude-haiku-4-5": 200_000,
+    # Claude 4.5 and older 4.x
+    "claude-sonnet-4-5": 200_000,
+    "claude-sonnet-4": 200_000,
+    "claude-opus-4": 200_000,
+    # Claude 3.x
+    "claude-3-5-sonnet": 200_000,
+    "claude-3-5-haiku": 200_000,
+    "claude-3-opus": 200_000,
 }
 DEFAULT_CONTEXT_LIMIT = 200_000
 ACTIVE_SESSION_THRESHOLD_SECONDS = 600  # 10 minutes
 CHARS_PER_TOKEN_ESTIMATE = 4
 
+# CC's built-in tool definitions add a roughly constant overhead. Calibrated
+# against `/context` output (≈8.2k on a standard session). Used to split
+# System prompt from System tools in the composition breakdown.
+SYSTEM_TOOLS_ESTIMATE = 8_200
+
+
+def _normalize_model(model: str) -> str:
+    """Strip trailing YYYYMMDD date suffix (e.g. claude-opus-4-6-20260101 → claude-opus-4-6)."""
+    if not model:
+        return model
+    parts = model.rsplit("-", 1)
+    if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 8:
+        return parts[0]
+    return model
+
 
 def get_context_limit(model: str) -> int:
-    """Get context window limit for a model."""
-    # Try exact match first
-    if model in MODEL_CONTEXT_LIMITS:
-        return MODEL_CONTEXT_LIMITS[model]
-    # Try prefix match
+    """Get context window limit for a model, preferring the longest matching key."""
+    normalized = _normalize_model(model)
+    # Exact match first
+    if normalized in MODEL_CONTEXT_LIMITS:
+        return MODEL_CONTEXT_LIMITS[normalized]
+    # Longest-prefix match so claude-opus-4-7 picks the 4-7 entry over 4 entry
+    best: tuple[int, int] = (-1, DEFAULT_CONTEXT_LIMIT)
     for key, limit in MODEL_CONTEXT_LIMITS.items():
-        if model.startswith(key.rsplit("-", 1)[0]):
-            return limit
-    return DEFAULT_CONTEXT_LIMIT
+        if normalized.startswith(key) and len(key) > best[0]:
+            best = (len(key), limit)
+    return best[1]
 
 
 def get_context_zone(percentage: float) -> str:
@@ -318,11 +341,17 @@ class ContextService:
         # --- Messages (estimated from JSONL content) ---
         messages_tokens = message_chars // CHARS_PER_TOKEN_ESTIMATE
 
-        # --- System & Tools (derived as residual) ---
-        system_and_tools_tokens = max(
+        # --- System prompt + System tools ---
+        # Total non-message, non-addon context is the residual. CC /context
+        # splits this into "System prompt" (fairly small) and "System tools"
+        # (large constant from built-in tool definitions). We subtract a
+        # calibrated constant for system tools; the remainder is system prompt.
+        system_total = max(
             0,
             current_context_tokens - messages_tokens - mcp_total - agent_total - memory_total - skill_total,
         )
+        system_tools_tokens = min(system_total, SYSTEM_TOOLS_ESTIMATE)
+        system_prompt_tokens = system_total - system_tools_tokens
 
         # --- Free Space ---
         free_space = max(0, context_limit - current_context_tokens - autocompact_buffer)
@@ -341,14 +370,15 @@ class ContextService:
                     items=items if items else None,
                 ))
 
-        _add("System & Tools", system_and_tools_tokens, "#888888")
-        _add("MCP Tools", mcp_total, "#0891b2", mcp_items)
-        _add("Custom Agents", agent_total, "#b1b9f9", agent_items)
-        _add("Memory Files", memory_total, "#d77757", memory_items)
+        _add("System prompt", system_prompt_tokens, "#6b7280")
+        _add("System tools", system_tools_tokens, "#9ca3af")
+        _add("MCP tools", mcp_total, "#0891b2", mcp_items)
+        _add("Custom agents", agent_total, "#b1b9f9", agent_items)
+        _add("Memory files", memory_total, "#d77757", memory_items)
         _add("Skills", skill_total, "#ffc107", skill_items)
         _add("Messages", messages_tokens, "#9333ea")
-        _add("Autocompact Buffer", autocompact_buffer, "#555555")
-        _add("Free Space", free_space, "#333333")
+        _add("Autocompact buffer", autocompact_buffer, "#555555")
+        _add("Free space", free_space, "#333333")
 
         total_tokens = sum(c.estimated_tokens for c in categories)
 
