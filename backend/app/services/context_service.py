@@ -20,6 +20,7 @@ from app.models.schemas import (
     ContextCompositionCategory,
     ContextSnapshot,
     FileConsumption,
+    ToolConsumption,
 )
 from app.utils.path_utils import get_claude_projects_dir, get_project_display_name
 
@@ -385,6 +386,11 @@ class ContextService:
         # File tracking
         file_reads: dict[str, dict] = {}  # path -> {count, chars}
 
+        # Tool usage tracking
+        tool_stats: dict[str, dict] = {}  # tool_name -> {count, result_chars}
+        # Map tool_use_id -> tool_name so we can attribute result blocks back to their tool
+        tool_use_id_to_name: dict[str, str] = {}
+
         # Cache totals
         total_cache_read = 0
         total_cache_creation = 0
@@ -408,12 +414,22 @@ class ContextService:
                         user_chars += len(block.get("text", ""))
                     elif block_type == "tool_result":
                         result_content = block.get("content", "")
+                        result_chars = 0
                         if isinstance(result_content, str):
-                            tool_result_chars += len(result_content)
+                            result_chars = len(result_content)
                         elif isinstance(result_content, list):
                             for rc in result_content:
                                 if isinstance(rc, dict) and rc.get("type") == "text":
-                                    tool_result_chars += len(rc.get("text", ""))
+                                    result_chars += len(rc.get("text", ""))
+                        tool_result_chars += result_chars
+
+                        # Attribute result to the tool via tool_use_id
+                        tool_use_id = block.get("tool_use_id")
+                        if tool_use_id:
+                            name = tool_use_id_to_name.get(tool_use_id)
+                            if name:
+                                stats = tool_stats.setdefault(name, {"count": 0, "result_chars": 0})
+                                stats["result_chars"] += result_chars
 
             elif entry_type == "assistant":
                 usage = message.get("usage")
@@ -434,8 +450,17 @@ class ContextService:
                         tool_input = block.get("input", {})
                         tool_call_chars += len(json.dumps(tool_input))
 
-                        # Track file reads
                         tool_name = block.get("name", "")
+                        tool_use_id = block.get("id")
+
+                        # Per-tool call count + id->name map for later result attribution
+                        if tool_name:
+                            stats = tool_stats.setdefault(tool_name, {"count": 0, "result_chars": 0})
+                            stats["count"] += 1
+                            if tool_use_id:
+                                tool_use_id_to_name[tool_use_id] = tool_name
+
+                        # Track file reads
                         if tool_name == "Read":
                             file_path = tool_input.get("file_path", "")
                             if file_path:
@@ -549,6 +574,26 @@ class ContextService:
         file_consumptions.sort(key=lambda f: f.estimated_tokens, reverse=True)
         file_consumptions = file_consumptions[:50]  # Top 50
 
+        # Build per-tool consumption list
+        tool_consumptions: List[ToolConsumption] = []
+        for name, stats in tool_stats.items():
+            count = stats["count"]
+            result_chars = stats["result_chars"]
+            result_tokens = result_chars // CHARS_PER_TOKEN_ESTIMATE
+            avg_tokens = result_tokens // count if count > 0 else 0
+            tool_consumptions.append(
+                ToolConsumption(
+                    tool_name=name,
+                    call_count=count,
+                    total_result_chars=result_chars,
+                    total_result_tokens=result_tokens,
+                    avg_result_tokens=avg_tokens,
+                )
+            )
+        tool_consumptions.sort(
+            key=lambda t: (t.total_result_tokens, t.call_count), reverse=True
+        )
+
         # Cache efficiency
         total_input_all = total_cache_read + total_cache_creation + total_uncached
         hit_ratio = total_cache_read / total_input_all if total_input_all > 0 else 0
@@ -615,6 +660,7 @@ class ContextService:
             snapshots=snapshots,
             content_categories=categories,
             file_consumptions=file_consumptions,
+            tool_consumptions=tool_consumptions,
             cache_efficiency=cache_efficiency,
             avg_tokens_per_turn=avg_tokens_per_turn,
             estimated_turns_remaining=estimated_turns_remaining,
