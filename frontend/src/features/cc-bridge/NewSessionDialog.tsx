@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import { spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
+import { useProjectContext } from '@/contexts/ProjectContext'
 import type { SpawnSessionRequest } from './types'
 import type { SessionSummary } from '@/types/sessions'
 
@@ -46,6 +47,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
   const [loadingSessions, setLoadingSessions] = useState(false)
 
   const { listSessions } = useSessionsApi()
+  const { projects } = useProjectContext()
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
@@ -148,10 +150,24 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
               <Label htmlFor="session-directory">Project Directory</Label>
               <Input
                 id="session-directory"
+                list="session-directory-projects"
                 value={directory}
                 onChange={(e) => setDirectory(e.target.value)}
                 placeholder="/home/user/project"
+                autoComplete="off"
               />
+              {projects.length > 0 && (
+                <>
+                  <datalist id="session-directory-projects">
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.path} label={p.name} />
+                    ))}
+                  </datalist>
+                  <p className="text-xs text-muted-foreground">
+                    Pick from configured projects or type any path.
+                  </p>
+                </>
+              )}
             </div>
           )}
 
