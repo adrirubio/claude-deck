@@ -13,6 +13,7 @@ import { CostChart } from './CostChart'
 import { SessionUsageTable } from './SessionUsageTable'
 import { BlocksView } from './BlocksView'
 import { MonthlyUsageChart } from './MonthlyUsageChart'
+import { ExportCard } from './ExportCard'
 import { getFromCache, saveToCache, isCacheStale, invalidateCache } from '@/lib/usageCache'
 import type {
   UsageSummary,
@@ -187,6 +188,9 @@ export function UsagePage() {
           </Select>
         </CardContent>
       </Card>
+
+      {/* Export */}
+      <ExportCard projectPath={selectedProject} />
 
       {/* Summary Cards */}
       <UsageSummaryCards summary={summary} loading={loading} />
