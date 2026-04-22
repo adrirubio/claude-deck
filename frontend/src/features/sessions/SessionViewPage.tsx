@@ -14,6 +14,7 @@ import { ContextCompositionChart } from '@/features/context/ContextCompositionCh
 import { CacheEfficiencyCard } from '@/features/context/CacheEfficiencyCard'
 import { ProjectionsCard } from '@/features/context/ProjectionsCard'
 import { FileConsumptionTable } from '@/features/context/FileConsumptionTable'
+import { ToolUsageTable } from '@/features/context/ToolUsageTable'
 import type { SessionDetail } from '@/types/sessions'
 import type { ContextAnalysis } from '@/types/context'
 
@@ -271,6 +272,8 @@ export function SessionViewPage() {
                     <ContextCompositionChart composition={contextAnalysis.composition} showHelp={showHelp} />
                     <FileConsumptionTable files={contextAnalysis.file_consumptions} showHelp={showHelp} />
                   </div>
+
+                  <ToolUsageTable tools={contextAnalysis.tool_consumptions} showHelp={showHelp} />
                 </div>
               )}
             </TabsContent>

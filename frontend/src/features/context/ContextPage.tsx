@@ -8,6 +8,7 @@ import { ContextGauge } from './ContextGauge'
 import { ContextTimelineChart } from './ContextTimelineChart'
 import { ContextCompositionChart } from './ContextCompositionChart'
 import { FileConsumptionTable } from './FileConsumptionTable'
+import { ToolUsageTable } from './ToolUsageTable'
 import { CacheEfficiencyCard } from './CacheEfficiencyCard'
 import { ProjectionsCard } from './ProjectionsCard'
 import type { ActiveSessionContext, ContextAnalysis } from '@/types/context'
@@ -158,6 +159,8 @@ export function ContextPage() {
             <ContextCompositionChart composition={analysis.composition} showHelp={showHelp} />
             <FileConsumptionTable files={analysis.file_consumptions} showHelp={showHelp} />
           </div>
+
+          <ToolUsageTable tools={analysis.tool_consumptions} showHelp={showHelp} />
         </div>
       )}
     </div>

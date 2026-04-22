@@ -1545,6 +1545,16 @@ class FileConsumption(BaseModel):
     estimated_tokens: int
 
 
+class ToolConsumption(BaseModel):
+    """Per-tool aggregate usage within a session."""
+
+    tool_name: str
+    call_count: int
+    total_result_chars: int
+    total_result_tokens: int
+    avg_result_tokens: int
+
+
 class CacheEfficiency(BaseModel):
     """Cache hit/miss breakdown."""
 
@@ -1593,6 +1603,7 @@ class ContextAnalysis(BaseModel):
     snapshots: List[ContextSnapshot]
     content_categories: List[ContentCategory]
     file_consumptions: List[FileConsumption]
+    tool_consumptions: List[ToolConsumption]
     cache_efficiency: CacheEfficiency
     avg_tokens_per_turn: int
     estimated_turns_remaining: int

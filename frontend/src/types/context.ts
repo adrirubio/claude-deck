@@ -28,6 +28,14 @@ export interface FileConsumption {
   estimated_tokens: number
 }
 
+export interface ToolConsumption {
+  tool_name: string
+  call_count: number
+  total_result_chars: number
+  total_result_tokens: number
+  avg_result_tokens: number
+}
+
 export interface CacheEfficiency {
   total_cache_read: number
   total_cache_creation: number
@@ -66,6 +74,7 @@ export interface ContextAnalysis {
   snapshots: ContextSnapshot[]
   content_categories: ContentCategory[]
   file_consumptions: FileConsumption[]
+  tool_consumptions: ToolConsumption[]
   cache_efficiency: CacheEfficiency
   avg_tokens_per_turn: number
   estimated_turns_remaining: number
