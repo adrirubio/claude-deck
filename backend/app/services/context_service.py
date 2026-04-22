@@ -57,6 +57,13 @@ SYSTEM_TOOLS_ESTIMATE = 8_200
 # with 80 skills showing 9.3k total.
 SKILL_OVERHEAD_TOKENS = 50
 
+# CC caps per-agent context at roughly this many tokens — it loads an
+# abridged representation (description + truncated prompt) rather than
+# the full system prompt. Observed in /context output where per-agent
+# token counts clustered in the 200–510 range regardless of prompt size.
+# Calibrated so sum matches CC's reported 9k on a 17-agent session.
+AGENT_MAX_TOKENS_PER_ITEM = 550
+
 
 def _normalize_model(model: str) -> str:
     """Strip trailing YYYYMMDD date suffix (e.g. claude-opus-4-6-20260101 → claude-opus-4-6)."""
@@ -295,12 +302,17 @@ class ContextService:
             pass
 
         # --- Custom Agents ---
+        # CC doesn't inject each agent's full system prompt at session start.
+        # Per-agent numbers in /context cluster in the 200–510 range even
+        # when the actual prompt is 6k+ tokens, so CC is loading a summary
+        # or truncated representation. Cap per-agent at AGENT_MAX_TOKENS_PER_ITEM.
         agent_items: List[ContextCategoryItem] = []
         agent_total = 0
         try:
             agents = AgentService.list_agents(project_path)
             for agent in agents:
-                tokens = len(agent.prompt) // CHARS_PER_TOKEN_ESTIMATE
+                full_tokens = len(agent.prompt or "") // CHARS_PER_TOKEN_ESTIMATE
+                tokens = min(full_tokens, AGENT_MAX_TOKENS_PER_ITEM)
                 agent_items.append(ContextCategoryItem(name=agent.name, estimated_tokens=tokens))
                 agent_total += tokens
         except Exception:
