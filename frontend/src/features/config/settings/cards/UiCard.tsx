@@ -1,5 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { SelectSetting, SwitchSetting, TextSetting } from '../field-components'
+import { Label } from '@/components/ui/label'
+import { NumberSetting, SelectSetting, SwitchSetting, TextSetting } from '../field-components'
 import { SHELL_OPTIONS, TUI_OPTIONS, VIEW_MODE_OPTIONS } from '../constants'
 import type { SettingsCardProps } from '../types'
 
@@ -141,14 +142,28 @@ export function UiCard({ getSetting, updateSetting }: SettingsCardProps) {
           placeholder="0"
         />
 
-        <TextSetting
-          id="fileSuggestion"
-          label="File Suggestion Script"
-          description="Custom script for @ file autocomplete suggestions."
-          value={getSetting<string>('fileSuggestion', '')}
-          onChange={(v) => updateSetting('fileSuggestion', v)}
-          placeholder="e.g., ./scripts/suggest-files.sh"
-        />
+        <div className="grid gap-2">
+          <Label>File Suggestion</Label>
+          <p className="text-xs text-muted-foreground">
+            Custom command for @-file autocomplete. Leave command empty to use the default.
+          </p>
+          <div className="grid gap-3 md:grid-cols-[1fr_140px]">
+            <TextSetting
+              id="fileSuggestionCommand"
+              label="Command"
+              value={getSetting<string>('fileSuggestion.command', '')}
+              onChange={(v) => updateSetting('fileSuggestion.command', v || null)}
+              placeholder="fd --type f --hidden --exclude .git"
+            />
+            <NumberSetting
+              id="fileSuggestionTimeout"
+              label="Timeout (ms)"
+              value={getSetting<string | number>('fileSuggestion.timeout', '')}
+              onChange={(v) => updateSetting('fileSuggestion.timeout', v)}
+              placeholder="5000"
+            />
+          </div>
+        </div>
       </CardContent>
     </Card>
   )
