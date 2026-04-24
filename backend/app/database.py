@@ -1,4 +1,5 @@
 """Database setup with SQLAlchemy async."""
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -16,6 +17,21 @@ engine = create_async_engine(
     echo=settings.debug,
     future=True,
 )
+
+
+# For SQLite: enable WAL so readers don't block writers (and vice versa).
+# Without this, any write (usage ingest, presence event, etc.) stalls
+# concurrent chart/page reads and can surface "database is locked" under
+# load. WAL is a one-time pragma that persists in the DB header.
+if settings.database_url.startswith("sqlite"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.close()
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(
