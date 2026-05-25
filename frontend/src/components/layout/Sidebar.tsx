@@ -49,60 +49,121 @@ type NavGroup = {
   items: NavItem[]
 }
 
-const CLAUDE_ONLY: AgentProviderId[] = ['claude-code']
-const ALL_PROVIDERS: AgentProviderId[] = ['claude-code', 'codex-cli']
-
-const navigation: NavGroup[] = [
+const commonNavigation: NavGroup[] = [
   {
-    name: 'Primary',
+    name: 'Core',
     items: [
-      { name: 'Dashboard', href: '/', icon: LayoutDashboard, providerSupport: ALL_PROVIDERS },
-      { name: 'Projects', href: '/projects', icon: FolderOpen, providerSupport: ALL_PROVIDERS },
-      { name: 'Agent Bridge', href: '/agent-bridge', icon: MonitorPlay, providerSupport: ALL_PROVIDERS },
-      { name: 'Sessions', href: '/sessions', icon: MessageSquare, providerSupport: CLAUDE_ONLY },
-    ],
-  },
-  {
-    name: 'Configuration',
-    items: [
-      { name: 'Config', href: '/config', icon: Settings, providerSupport: ALL_PROVIDERS },
-      { name: 'MCP Servers', href: '/mcp', icon: Server, providerSupport: CLAUDE_ONLY },
-      { name: 'Plugins', href: '/plugins', icon: Package, providerSupport: CLAUDE_ONLY },
-      { name: 'Permissions / Trust', href: '/permissions', icon: Shield, providerSupport: CLAUDE_ONLY },
-      { name: 'Commands', href: '/commands', icon: Terminal, providerSupport: CLAUDE_ONLY },
-      { name: 'Hooks', href: '/hooks', icon: Webhook, providerSupport: CLAUDE_ONLY },
-      { name: 'Agents', href: '/agents', icon: Bot, providerSupport: CLAUDE_ONLY },
-      { name: 'Skills', href: '/skills', icon: Sparkles, providerSupport: CLAUDE_ONLY },
-      { name: 'Memory', href: '/memory', icon: Brain, providerSupport: CLAUDE_ONLY },
-      { name: 'Output Styles', href: '/output-styles', icon: Paintbrush, providerSupport: CLAUDE_ONLY },
-      { name: 'Status Line', href: '/statusline', icon: Activity, providerSupport: CLAUDE_ONLY },
+      { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+      { name: 'Projects', href: '/projects', icon: FolderOpen },
+      { name: 'Agent Bridge', href: '/agent-bridge', icon: MonitorPlay },
     ],
   },
   {
     name: 'Operations',
     items: [
-      { name: 'Presence', href: '/presence', icon: Radio, providerSupport: ALL_PROVIDERS },
-      { name: 'Plans', href: '/plans', icon: ClipboardList, providerSupport: ALL_PROVIDERS },
-      { name: 'Context', href: '/context', icon: Gauge, providerSupport: CLAUDE_ONLY },
-      { name: 'Usage', href: '/usage', icon: BarChart3, providerSupport: CLAUDE_ONLY },
-      { name: 'Backup', href: '/backup', icon: Archive, providerSupport: ALL_PROVIDERS },
+      { name: 'Presence', href: '/presence', icon: Radio },
+      { name: 'Plans', href: '/plans', icon: ClipboardList },
+      { name: 'Backup', href: '/backup', icon: Archive },
     ],
   },
 ]
+
+const providerNavigation: Record<AgentProviderId, NavGroup[]> = {
+  'claude-code': [
+    {
+      name: 'Claude Code',
+      items: [
+        { name: 'Config', href: '/config', icon: Settings },
+        { name: 'Sessions', href: '/sessions', icon: MessageSquare },
+        { name: 'MCP Servers', href: '/mcp', icon: Server },
+        { name: 'Plugins', href: '/plugins', icon: Package },
+        { name: 'Permissions / Trust', href: '/permissions', icon: Shield },
+      ],
+    },
+    {
+      name: 'Claude Tools',
+      items: [
+        { name: 'Commands', href: '/commands', icon: Terminal },
+        { name: 'Hooks', href: '/hooks', icon: Webhook },
+        { name: 'Agents', href: '/agents', icon: Bot },
+        { name: 'Skills', href: '/skills', icon: Sparkles },
+        { name: 'Memory', href: '/memory', icon: Brain },
+        { name: 'Output Styles', href: '/output-styles', icon: Paintbrush },
+        { name: 'Status Line', href: '/statusline', icon: Activity },
+      ],
+    },
+    {
+      name: 'Claude Metrics',
+      items: [
+        { name: 'Context', href: '/context', icon: Gauge },
+        { name: 'Usage', href: '/usage', icon: BarChart3 },
+      ],
+    },
+  ],
+  'codex-cli': [
+    {
+      name: 'Codex',
+      items: [
+        { name: 'Config', href: '/config', icon: Settings },
+      ],
+    },
+  ],
+}
+
+function getNavigation(providerId: AgentProviderId): NavGroup[] {
+  return [
+    ...commonNavigation,
+    ...(providerNavigation[providerId] ?? []),
+  ]
+}
 
 function supportsProvider(item: NavItem, providerId: AgentProviderId) {
   return !item.providerSupport || item.providerSupport.includes(providerId)
 }
 
+function NavGroupSection({ group, collapsed, selectedProviderId }: {
+  group: NavGroup
+  collapsed: boolean
+  selectedProviderId: AgentProviderId
+}) {
+  const visibleItems = group.items.filter((item) => supportsProvider(item, selectedProviderId))
+  if (visibleItems.length === 0) return null
+
+  return (
+    <div className="space-y-1">
+      {!collapsed && (
+        <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          {group.name}
+        </p>
+      )}
+      {visibleItems.map((item) => (
+        <NavLink
+          key={item.href}
+          to={item.href}
+          end={item.href === '/'}
+          title={collapsed ? item.name : undefined}
+          className={({ isActive }) =>
+            cn(
+              'flex items-center rounded-md text-sm font-medium transition-colors',
+              collapsed ? 'justify-center p-2' : 'gap-2 px-3 py-2',
+              isActive
+                ? 'bg-primary text-primary-foreground'
+                : 'text-foreground hover:bg-accent hover:text-accent-foreground'
+            )
+          }
+        >
+          <item.icon className="h-4 w-4 shrink-0" />
+          {!collapsed && item.name}
+        </NavLink>
+      ))}
+    </div>
+  )
+}
+
 export function Sidebar() {
   const { collapsed, setCollapsed } = useSidebar()
   const { providers, selectedProviderId, setSelectedProviderId } = useProviderContext()
-  const visibleGroups = navigation
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => supportsProvider(item, selectedProviderId)),
-    }))
-    .filter((group) => group.items.length > 0)
+  const visibleGroups = getNavigation(selectedProviderId)
 
   return (
     <aside className={cn(
@@ -134,33 +195,12 @@ export function Sidebar() {
         collapsed ? 'gap-1 p-2' : 'gap-4 p-4'
       )}>
         {visibleGroups.map((group) => (
-          <div key={group.name} className="space-y-1">
-            {!collapsed && (
-              <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                {group.name}
-              </p>
-            )}
-            {group.items.map((item) => (
-              <NavLink
-                key={item.href}
-                to={item.href}
-                end={item.href === '/'}
-                title={collapsed ? item.name : undefined}
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center rounded-md text-sm font-medium transition-colors',
-                    collapsed ? 'justify-center p-2' : 'gap-2 px-3 py-2',
-                    isActive
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-foreground hover:bg-accent hover:text-accent-foreground'
-                  )
-                }
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                {!collapsed && item.name}
-              </NavLink>
-            ))}
-          </div>
+          <NavGroupSection
+            key={group.name}
+            group={group}
+            collapsed={collapsed}
+            selectedProviderId={selectedProviderId}
+          />
         ))}
       </nav>
       <button
