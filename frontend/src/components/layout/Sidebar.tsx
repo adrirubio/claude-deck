@@ -59,7 +59,7 @@ const navigation: NavGroup[] = [
       { name: 'Dashboard', href: '/', icon: LayoutDashboard, providerSupport: ALL_PROVIDERS },
       { name: 'Projects', href: '/projects', icon: FolderOpen, providerSupport: ALL_PROVIDERS },
       { name: 'Agent Bridge', href: '/agent-bridge', icon: MonitorPlay, providerSupport: ALL_PROVIDERS },
-      { name: 'Sessions', href: '/sessions', icon: MessageSquare, providerSupport: ALL_PROVIDERS },
+      { name: 'Sessions', href: '/sessions', icon: MessageSquare, providerSupport: CLAUDE_ONLY },
     ],
   },
   {

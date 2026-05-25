@@ -68,8 +68,9 @@ class ClaudeCodeProvider(AgentProvider):
         if options.mode == "plain":
             pass
         elif options.mode == "worktree":
-            worktree_name = options.worktree_name or Path(options.directory).name
-            command += ["--worktree", worktree_name]
+            if not options.worktree_name:
+                raise ValueError("worktree_name is required for Claude Code worktree mode")
+            command += ["--worktree", options.worktree_name]
         elif options.mode == "resume":
             if not options.session_id:
                 raise ValueError("session_id is required for Claude Code resume mode")

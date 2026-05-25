@@ -44,6 +44,8 @@ def spawn_session(provider_id: str, options: SpawnCommandOptions) -> dict:
     directory = _validate_directory(options.directory)
     options = SpawnCommandOptions(**{**options.__dict__, "directory": directory})
     name = _session_name_for(directory)
+    if provider.id == "claude-code" and options.mode == "worktree" and not options.worktree_name:
+        options = SpawnCommandOptions(**{**options.__dict__, "worktree_name": name})
     command = provider.build_spawn_command(options)
     shell_command = " ".join(shlex.quote(part) for part in command)
 
@@ -115,4 +117,3 @@ def kill_session(session_name: str, cleanup_worktree: bool = False) -> dict:
 
 def get_spawned_sessions() -> dict[str, dict]:
     return _spawned_sessions
-
