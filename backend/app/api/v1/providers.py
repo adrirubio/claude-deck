@@ -202,9 +202,11 @@ def get_provider_mcp_inventory(provider_id: str):
     result = executor.execute("mcp", ["list", "--json"], timeout=30)
     servers = None
     parse_error = None
+    raw_stdout = _redact_value(result.stdout)
     if result.stdout.strip():
         try:
             servers = _redact_value(json.loads(result.stdout))
+            raw_stdout = json.dumps(servers)
         except json.JSONDecodeError as exc:
             parse_error = str(exc)
 
@@ -215,7 +217,7 @@ def get_provider_mcp_inventory(provider_id: str):
         "servers": servers,
         "parse_error": parse_error,
         "stderr": _redact_value(result.stderr),
-        "raw_stdout": _redact_value(result.stdout),
+        "raw_stdout": raw_stdout,
     }
 
 

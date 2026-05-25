@@ -66,9 +66,9 @@ const navigation: NavGroup[] = [
     name: 'Configuration',
     items: [
       { name: 'Config', href: '/config', icon: Settings, providerSupport: ALL_PROVIDERS },
-      { name: 'MCP Servers', href: '/mcp', icon: Server, providerSupport: ALL_PROVIDERS },
-      { name: 'Plugins', href: '/plugins', icon: Package, providerSupport: ALL_PROVIDERS },
-      { name: 'Permissions / Trust', href: '/permissions', icon: Shield, providerSupport: ALL_PROVIDERS },
+      { name: 'MCP Servers', href: '/mcp', icon: Server, providerSupport: CLAUDE_ONLY },
+      { name: 'Plugins', href: '/plugins', icon: Package, providerSupport: CLAUDE_ONLY },
+      { name: 'Permissions / Trust', href: '/permissions', icon: Shield, providerSupport: CLAUDE_ONLY },
       { name: 'Commands', href: '/commands', icon: Terminal, providerSupport: CLAUDE_ONLY },
       { name: 'Hooks', href: '/hooks', icon: Webhook, providerSupport: CLAUDE_ONLY },
       { name: 'Agents', href: '/agents', icon: Bot, providerSupport: CLAUDE_ONLY },

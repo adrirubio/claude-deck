@@ -24,6 +24,8 @@ def test_codex_mcp_inventory_parses_json_and_redacts(monkeypatch):
     assert response["exit_code"] == 0
     assert response["parse_error"] is None
     assert response["servers"]["servers"]["local"]["authToken"] == "[redacted]"
+    assert "abc123" not in response["raw_stdout"]
+    assert '"authToken": "[redacted]"' in response["raw_stdout"]
 
 
 def test_codex_mcp_inventory_surfaces_errors(monkeypatch):
