@@ -99,6 +99,24 @@ export interface CodexMcpInventoryResponse {
   raw_stdout: string
 }
 
+export interface CodexMcpAddRequest {
+  name: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  bearer_token_env_var?: string
+}
+
+export interface CodexMcpMutationResponse {
+  provider: 'codex-cli'
+  provider_display_name: string
+  name: string
+  stdout: string
+  stderr: string
+  exit_code: number
+}
+
 export interface CodexPluginInventoryRow {
   name: string
   status?: string

@@ -4,7 +4,9 @@ import type {
   AgentProviderId,
   AgentProviderStatus,
   CodexConfigUpdateRequest,
+  CodexMcpAddRequest,
   CodexMcpInventoryResponse,
+  CodexMcpMutationResponse,
   CodexPluginInventoryResponse,
   ProviderDoctorResponse,
   ProvidersResponse,
@@ -51,6 +53,19 @@ export async function updateCodexConfig(request: CodexConfigUpdateRequest): Prom
 
 export async function fetchCodexMcpInventory(): Promise<CodexMcpInventoryResponse> {
   return apiClient<CodexMcpInventoryResponse>('providers/codex-cli/mcp')
+}
+
+export async function addCodexMcpServer(request: CodexMcpAddRequest): Promise<CodexMcpMutationResponse> {
+  return apiClient<CodexMcpMutationResponse>('providers/codex-cli/mcp', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function removeCodexMcpServer(name: string): Promise<CodexMcpMutationResponse> {
+  return apiClient<CodexMcpMutationResponse>(`providers/codex-cli/mcp/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function fetchCodexPluginInventory(): Promise<CodexPluginInventoryResponse> {
