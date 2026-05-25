@@ -1,6 +1,6 @@
 """Pydantic schemas for API models."""
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ConfigFile(BaseModel):
@@ -1816,3 +1816,4 @@ class SystemStatusResponse(BaseModel):
 
     claude_code_version: Optional[str] = None
     active_sessions: int = 0
+    providers: Dict[str, Any] = Field(default_factory=dict)

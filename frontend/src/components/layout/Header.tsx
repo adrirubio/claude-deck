@@ -3,11 +3,14 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { useProviderContext } from "@/contexts/ProviderContext";
 import { cn } from "@/lib/utils";
 
 export function Header() {
   const { theme } = useTheme();
   const status = useSystemStatus();
+  const { selectedProviderId, selectedProvider } = useProviderContext();
+  const selectedStatus = status?.providers?.[selectedProviderId] ?? selectedProvider;
 
   return (
     <header className="border-b bg-background">
@@ -20,16 +23,16 @@ export function Header() {
           />
           <div>
             <h1 className="text-2xl font-bold text-primary leading-tight">Claude Deck</h1>
-            <p className="text-xs text-muted-foreground">Your Claude Code command centre</p>
+            <p className="text-xs text-muted-foreground">Your local agent command centre</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {status && (
             <>
-              {status.claudeCodeVersion && (
+              {selectedStatus?.version && (
                 <Badge variant="outline" className="gap-1 font-mono text-xs">
                   <Terminal className="h-3 w-3" />
-                  Claude Code v{status.claudeCodeVersion}
+                  {selectedStatus.display_name} v{selectedStatus.version}
                 </Badge>
               )}
               <Badge
