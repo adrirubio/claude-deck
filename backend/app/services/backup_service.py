@@ -2,6 +2,7 @@
 import json
 import os
 import platform
+import re
 import subprocess
 import zipfile
 from datetime import datetime
@@ -42,6 +43,24 @@ from app.utils.path_utils import (
     get_project_mcp_config_file,
     get_project_claude_md_file,
 )
+from app.services.cli_executor import ProviderCLIExecutor
+from app.services.providers.codex_cli import get_codex_home
+
+
+SENSITIVE_KEY_PATTERN = re.compile(r"(token|secret|password|credential|api[_-]?key|auth|cookie|session)", re.I)
+SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+    r"(?P<key>[A-Za-z0-9_.-]*(?:token|secret|password|credential|api[_-]?key|auth|cookie|session)[A-Za-z0-9_.-]*)"
+    r"(?P<sep>\s*[:=]\s*)"
+    r"(?P<value>[^\s,;]+)",
+    re.I,
+)
+SENSITIVE_TOML_ASSIGNMENT_PATTERN = re.compile(
+    r"(?im)^"
+    r"(?P<prefix>\s*[A-Za-z0-9_.-]*(?:token|secret|password|credential|api[_-]?key|auth|cookie|session)"
+    r"[A-Za-z0-9_.-]*\s*=\s*)"
+    r"(?P<value>.+?)"
+    r"(?P<suffix>\s*(?:#.*)?)$"
+)
 
 
 def get_backup_storage_dir() -> Path:
@@ -80,8 +99,9 @@ def _get_claude_code_version() -> Optional[str]:
 class BackupService:
     """Service for managing configuration backups."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, codex_home: Optional[Path] = None):
         self.db = db
+        self.codex_home = codex_home or get_codex_home()
 
     def _get_user_config_paths(self) -> List[Path]:
         """Get all user-level configuration paths."""
@@ -134,6 +154,109 @@ class BackupService:
             paths.append(claude_md)
 
         return paths
+
+    def _get_codex_config_paths(self) -> List[Path]:
+        """Get safe Codex configuration files for export-only backups."""
+        paths: List[Path] = []
+        config_file = self.codex_home / "config.toml"
+        if config_file.exists() and config_file.is_file():
+            paths.append(config_file)
+
+        if self.codex_home.exists():
+            for profile in sorted(self.codex_home.glob("*.config.toml")):
+                if profile.is_file():
+                    paths.append(profile)
+
+            rules_dir = self.codex_home / "rules"
+            if rules_dir.exists():
+                for rule in sorted(rules_dir.glob("*.rules")):
+                    if rule.is_file():
+                        paths.append(rule)
+
+        return paths
+
+    def _redact_value(self, value: Any, parent_key: str = "") -> Any:
+        """Redact sensitive values from generated backup metadata."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return {
+                key: "[redacted]" if SENSITIVE_KEY_PATTERN.search(key) or SENSITIVE_KEY_PATTERN.search(parent_key)
+                else self._redact_value(child, key)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [self._redact_value(item, parent_key) for item in value]
+        if SENSITIVE_KEY_PATTERN.search(parent_key):
+            return "[redacted]"
+        if isinstance(value, str):
+            return SENSITIVE_ASSIGNMENT_PATTERN.sub(r"\g<key>\g<sep>[redacted]", value)
+        return value
+
+    def _redact_text_content(self, content: str) -> str:
+        """Redact obvious secret assignments in text files before exporting."""
+        redacted = SENSITIVE_TOML_ASSIGNMENT_PATTERN.sub(
+            lambda match: f'{match.group("prefix")}"[redacted]"{match.group("suffix")}',
+            content,
+        )
+        return SENSITIVE_ASSIGNMENT_PATTERN.sub(r'\g<key>\g<sep>"[redacted]"', redacted)
+
+    def _read_redacted_file(self, path: Path) -> str:
+        try:
+            return self._redact_text_content(path.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            return self._redact_text_content(path.read_text(errors="replace"))
+
+    def _get_codex_provider_inventory(self, paths: List[Path]) -> Dict[str, Any]:
+        """Collect safe provider metadata for Codex export manifests."""
+        inventory: Dict[str, Any] = {
+            "provider": "codex-cli",
+            "codex_home": str(self.codex_home),
+            "files": [
+                {
+                    "path": str(path),
+                    "scope": (
+                        "user" if path.name == "config.toml"
+                        else "rules" if path.suffix == ".rules"
+                        else "profile"
+                    ),
+                }
+                for path in paths
+            ],
+        }
+
+        try:
+            executor = ProviderCLIExecutor("codex-cli")
+            if not executor.binary_path:
+                inventory["cli"] = {"installed": False}
+                return inventory
+        except Exception as exc:
+            inventory["cli"] = {"installed": False, "error": str(exc)}
+            return inventory
+
+        inventory["cli"] = {"installed": True, "binary_path": executor.binary_path}
+
+        mcp_result = executor.execute("mcp", ["list", "--json"], timeout=30)
+        mcp_inventory: Dict[str, Any] = {
+            "exit_code": mcp_result.exit_code,
+            "stderr": self._redact_value(mcp_result.stderr),
+        }
+        if mcp_result.stdout.strip():
+            try:
+                mcp_inventory["servers"] = self._redact_value(json.loads(mcp_result.stdout))
+            except json.JSONDecodeError as exc:
+                mcp_inventory["parse_error"] = str(exc)
+                mcp_inventory["raw_stdout"] = self._redact_value(mcp_result.stdout)
+        inventory["mcp"] = mcp_inventory
+
+        plugin_result = executor.execute("plugin", ["list"], timeout=30)
+        inventory["plugins"] = {
+            "exit_code": plugin_result.exit_code,
+            "stderr": self._redact_value(plugin_result.stderr),
+            "raw_stdout": self._redact_value(plugin_result.stdout),
+        }
+
+        return self._redact_value(inventory)
 
     def _detect_skill_dependencies(self, skill_path: Path) -> BackupSkillInfo:
         """Detect dependencies in a skill directory."""
@@ -243,7 +366,13 @@ class BackupService:
 
         return info
 
-    def _generate_manifest(self, paths: List[Path], scope: str) -> BackupManifest:
+    def _generate_manifest(
+        self,
+        paths: List[Path],
+        scope: str,
+        extra_files: Optional[Dict[str, str]] = None,
+        provider_inventory: Optional[Dict[str, Any]] = None,
+    ) -> BackupManifest:
         """Generate a backup manifest with all dependency information."""
         contents = BackupManifestContents()
 
@@ -255,55 +384,60 @@ class BackupService:
             except ValueError:
                 rel_path = str(path)
             contents.files.append(rel_path)
+        if extra_files:
+            contents.files.extend(extra_files.keys())
+        if provider_inventory:
+            contents.provider_inventory = provider_inventory
 
         # Detect skills
-        skills_dir = get_claude_user_skills_dir()
-        if skills_dir.exists():
-            for skill_path in skills_dir.iterdir():
-                if skill_path.is_dir():
-                    skill_info = self._detect_skill_dependencies(skill_path)
-                    contents.skills.append(skill_info)
+        if scope != "codex":
+            skills_dir = get_claude_user_skills_dir()
+            if skills_dir.exists():
+                for skill_path in skills_dir.iterdir():
+                    if skill_path.is_dir():
+                        skill_info = self._detect_skill_dependencies(skill_path)
+                        contents.skills.append(skill_info)
 
-        # Detect plugins
-        plugins_dir = get_claude_user_plugins_dir()
-        if plugins_dir.exists():
-            for plugin_path in plugins_dir.iterdir():
-                if plugin_path.is_dir():
-                    plugin_info = self._get_plugin_install_info(plugin_path.name, plugin_path)
-                    contents.plugins.append(plugin_info)
+            # Detect plugins
+            plugins_dir = get_claude_user_plugins_dir()
+            if plugins_dir.exists():
+                for plugin_path in plugins_dir.iterdir():
+                    if plugin_path.is_dir():
+                        plugin_info = self._get_plugin_install_info(plugin_path.name, plugin_path)
+                        contents.plugins.append(plugin_info)
 
-        # Detect MCP servers from user config
-        config_file = get_claude_user_config_file()
-        if config_file.exists():
-            try:
-                with open(config_file) as f:
-                    config = json.load(f)
-                    mcp_servers = config.get("mcpServers", {})
-                    for name, srv_config in mcp_servers.items():
-                        mcp_info = self._detect_mcp_server_info(name, srv_config, "user")
-                        contents.mcp_servers.append(mcp_info)
-            except Exception:
-                pass
-
-        # Detect agents
-        agents_dir = get_claude_user_agents_dir()
-        if agents_dir.exists():
-            for agent_file in agents_dir.glob("*.md"):
-                contents.agents.append(agent_file.stem)
-
-        # Detect commands
-        commands_dir = get_claude_user_commands_dir()
-        if commands_dir.exists():
-            for cmd_file in commands_dir.rglob("*.md"):
+            # Detect MCP servers from user config
+            config_file = get_claude_user_config_file()
+            if config_file.exists():
                 try:
-                    rel = cmd_file.relative_to(commands_dir)
-                    contents.commands.append(str(rel).replace(".md", ""))
-                except ValueError:
-                    contents.commands.append(cmd_file.stem)
+                    with open(config_file) as f:
+                        config = json.load(f)
+                        mcp_servers = config.get("mcpServers", {})
+                        for name, srv_config in mcp_servers.items():
+                            mcp_info = self._detect_mcp_server_info(name, srv_config, "user")
+                            contents.mcp_servers.append(mcp_info)
+                except Exception:
+                    pass
+
+            # Detect agents
+            agents_dir = get_claude_user_agents_dir()
+            if agents_dir.exists():
+                for agent_file in agents_dir.glob("*.md"):
+                    contents.agents.append(agent_file.stem)
+
+            # Detect commands
+            commands_dir = get_claude_user_commands_dir()
+            if commands_dir.exists():
+                for cmd_file in commands_dir.rglob("*.md"):
+                    try:
+                        rel = cmd_file.relative_to(commands_dir)
+                        contents.commands.append(str(rel).replace(".md", ""))
+                    except ValueError:
+                        contents.commands.append(cmd_file.stem)
 
         manifest = BackupManifest(
             created_at=datetime.utcnow().isoformat(),
-            claude_code_version=_get_claude_code_version(),
+            claude_code_version=None if scope == "codex" else _get_claude_code_version(),
             platform=_get_current_platform(),
             scope=scope,
             contents=contents,
@@ -312,7 +446,14 @@ class BackupService:
         return manifest
 
     def _create_archive(
-        self, name: str, paths: List[Path], scope: str, base_path: Optional[Path] = None
+        self,
+        name: str,
+        paths: List[Path],
+        scope: str,
+        base_path: Optional[Path] = None,
+        extra_files: Optional[Dict[str, str]] = None,
+        file_overrides: Optional[Dict[Path, str]] = None,
+        provider_inventory: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Path, int, BackupManifest]:
         """
         Create a zip archive from the given paths.
@@ -331,11 +472,13 @@ class BackupService:
         archive_path = get_backup_storage_dir() / archive_name
 
         # Generate manifest
-        manifest = self._generate_manifest(paths, scope)
+        manifest = self._generate_manifest(paths, scope, extra_files, provider_inventory)
 
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
             # Add manifest.json first
             zf.writestr("manifest.json", manifest.model_dump_json(indent=2))
+            for arcname, content in (extra_files or {}).items():
+                zf.writestr(arcname, content)
 
             for file_path in paths:
                 if base_path:
@@ -350,7 +493,10 @@ class BackupService:
                     except ValueError:
                         arcname = str(file_path)
 
-                zf.write(file_path, arcname)
+                if file_overrides and file_path in file_overrides:
+                    zf.writestr(arcname, file_overrides[file_path])
+                else:
+                    zf.write(file_path, arcname)
 
         size_bytes = archive_path.stat().st_size
         return archive_path, size_bytes, manifest
@@ -377,12 +523,28 @@ class BackupService:
             Tuple of (Backup record, BackupManifest)
         """
         paths = []
+        extra_files: Dict[str, str] = {}
+        file_overrides: Dict[Path, str] = {}
+        provider_inventory: Optional[Dict[str, Any]] = None
 
         if scope in ["full", "user"]:
             paths.extend(self._get_user_config_paths())
 
         if scope in ["full", "project"] and project_path:
             paths.extend(self._get_project_config_paths(project_path))
+
+        if scope == "codex":
+            paths.extend(self._get_codex_config_paths())
+            provider_inventory = self._get_codex_provider_inventory(paths)
+            extra_files[".codex/provider-inventory.json"] = json.dumps(
+                provider_inventory,
+                indent=2,
+                sort_keys=True,
+            )
+            file_overrides = {
+                path: self._read_redacted_file(path)
+                for path in paths
+            }
 
         if not paths:
             raise ValueError("No configuration files found to backup")
@@ -391,9 +553,17 @@ class BackupService:
         base_path = None
         if scope == "project" and project_path:
             base_path = Path(project_path)
+        elif scope == "codex":
+            base_path = self.codex_home.parent
 
         archive_path, size_bytes, manifest = self._create_archive(
-            name, paths, scope, base_path
+            name,
+            paths,
+            scope,
+            base_path,
+            extra_files=extra_files,
+            file_overrides=file_overrides,
+            provider_inventory=provider_inventory,
         )
 
         backup = Backup(
@@ -497,6 +667,15 @@ class BackupService:
             platform_backup=manifest.platform if manifest else "unknown",
             platform_compatible=True,
         )
+        if backup.scope == "codex":
+            plan.warnings.append(
+                RestorePlanWarning(
+                    type="version",
+                    message="Codex backups are export-only in this version. Download the archive and restore files manually.",
+                    severity="warning",
+                )
+            )
+            plan.manual_steps.append("Review the redacted Codex export before manually copying files into CODEX_HOME.")
 
         # Check platform compatibility
         if manifest and manifest.platform != current_platform:
@@ -710,6 +889,12 @@ class BackupService:
         backup = await self.get_backup(backup_id)
         if not backup:
             return RestoreResult(success=False, message="Backup not found")
+
+        if backup.scope == "codex":
+            return RestoreResult(
+                success=False,
+                message="Codex backups are export-only; automatic restore is not supported",
+            )
 
         archive_path = Path(backup.file_path)
         if not archive_path.exists():

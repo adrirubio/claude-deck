@@ -1400,6 +1400,7 @@ class BackupManifestContents(BaseModel):
     mcp_servers: List[BackupMCPServerInfo] = []
     agents: List[str] = []
     commands: List[str] = []
+    provider_inventory: Dict[str, Any] = {}
 
 
 class BackupManifest(BaseModel):
