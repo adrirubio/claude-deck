@@ -37,7 +37,42 @@ def test_codex_config_reports_parse_errors(tmp_path):
 
     assert data["exists"] is True
     assert data["parse_error"]
-    assert data["config"] == {}
+    assert "config" not in data
+
+
+def test_codex_config_summary_omits_full_config_and_secrets(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'model = "gpt-5"',
+            '',
+            '[mcp_servers.linear]',
+            'command = "npx"',
+            'args = ["-y", "@linear/mcp"]',
+            '',
+            '[mcp_servers.linear.env]',
+            'LINEAR_API_KEY = "secret-api-key"',
+            '',
+            '[auth]',
+            'token = "secret-auth-token"',
+            '',
+            '[profiles.work]',
+            'api_key = "secret-profile-key"',
+        ]),
+        encoding="utf-8",
+    )
+
+    data = CodexConfigService(codex_home=tmp_path).get_config()
+    serialized = str(data)
+
+    assert "config" not in data
+    assert data["summary"]["model"] == "gpt-5"
+    assert data["summary"]["profiles"]["work"]["api_key"] == "[redacted]"
+    assert "secret-api-key" not in serialized
+    assert "secret-auth-token" not in serialized
+    assert "secret-profile-key" not in serialized
+    assert "mcp_servers" not in serialized
 
 
 def test_codex_update_preserves_comments_and_creates_backup(tmp_path):

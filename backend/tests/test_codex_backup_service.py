@@ -22,7 +22,7 @@ def test_codex_backup_exports_config_rules_and_redacted_inventory(monkeypatch, t
     from app.services import backup_service
     from app.services.backup_service import BackupService
 
-    codex_home = tmp_path / ".codex"
+    codex_home = tmp_path / "my-codex"
     rules_dir = codex_home / "rules"
     rules_dir.mkdir(parents=True)
     (codex_home / "config.toml").write_text(
@@ -73,19 +73,20 @@ def test_codex_backup_exports_config_rules_and_redacted_inventory(monkeypatch, t
 
     with zipfile.ZipFile(backup.file_path) as zf:
         names = set(zf.namelist())
-        assert ".codex/config.toml" in names
-        assert ".codex/work.config.toml" in names
-        assert ".codex/rules/team.rules" in names
-        assert ".codex/provider-inventory.json" in names
-        assert ".codex/auth.json" not in names
-        assert ".codex/history.jsonl" not in names
-        assert ".codex/models_cache.json" not in names
+        assert "my-codex/config.toml" in names
+        assert "my-codex/work.config.toml" in names
+        assert "my-codex/rules/team.rules" in names
+        assert "my-codex/provider-inventory.json" in names
+        assert ".codex/provider-inventory.json" not in names
+        assert "my-codex/auth.json" not in names
+        assert "my-codex/history.jsonl" not in names
+        assert "my-codex/models_cache.json" not in names
 
-        config_export = zf.read(".codex/config.toml").decode()
+        config_export = zf.read("my-codex/config.toml").decode()
         assert "secret-config-token" not in config_export
         assert 'authToken = "[redacted]"' in config_export
 
-        inventory_export = json.loads(zf.read(".codex/provider-inventory.json"))
+        inventory_export = json.loads(zf.read("my-codex/provider-inventory.json"))
         assert "secret-api-key" not in json.dumps(inventory_export)
         assert "secret-plugin-token" not in json.dumps(inventory_export)
 

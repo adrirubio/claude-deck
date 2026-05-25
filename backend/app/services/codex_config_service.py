@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import tomllib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ SAFE_SCALAR_FIELDS = {
     "strict_config": bool,
     "no_alt_screen": bool,
 }
+SENSITIVE_KEY_PATTERN = re.compile(r"(token|secret|password|credential|api[_-]?key|auth|cookie|session)", re.I)
 
 
 class CodexConfigService:
@@ -55,6 +57,21 @@ class CodexConfigService:
             return tomlkit.parse(path.read_text(encoding="utf-8")), None
         except (TOMLKitError, OSError) as exc:
             return None, str(exc)
+
+    def _redact_summary_value(self, value: Any, parent_key: str = "") -> Any:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return {
+                key: "[redacted]" if SENSITIVE_KEY_PATTERN.search(key) or SENSITIVE_KEY_PATTERN.search(parent_key)
+                else self._redact_summary_value(child, key)
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [self._redact_summary_value(item, parent_key) for item in value]
+        if SENSITIVE_KEY_PATTERN.search(parent_key):
+            return "[redacted]"
+        return value
 
     def get_all_config_files(self) -> list[dict[str, Any]]:
         files: list[dict[str, Any]] = []
@@ -100,7 +117,6 @@ class CodexConfigService:
             "path": str(self.config_file),
             "exists": self.config_file.exists(),
             "parse_error": parse_error,
-            "config": config,
             "summary": {
                 "model": config.get("model"),
                 "model_reasoning_effort": config.get("model_reasoning_effort"),
@@ -110,9 +126,9 @@ class CodexConfigService:
                 "search": config.get("search"),
                 "strict_config": config.get("strict_config"),
                 "no_alt_screen": config.get("no_alt_screen"),
-                "projects": projects,
-                "profiles": profiles,
-                "features": features,
+                "projects": self._redact_summary_value(projects),
+                "profiles": self._redact_summary_value(profiles),
+                "features": self._redact_summary_value(features),
             },
         }
 

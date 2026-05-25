@@ -536,7 +536,10 @@ class BackupService:
         if scope == "codex":
             paths.extend(self._get_codex_config_paths())
             provider_inventory = self._get_codex_provider_inventory(paths)
-            extra_files[".codex/provider-inventory.json"] = json.dumps(
+            inventory_arcname = str(
+                (self.codex_home / "provider-inventory.json").relative_to(self.codex_home.parent)
+            )
+            extra_files[inventory_arcname] = json.dumps(
                 provider_inventory,
                 indent=2,
                 sort_keys=True,
