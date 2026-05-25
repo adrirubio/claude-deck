@@ -1,28 +1,28 @@
-"""
-CLI Executor Service for Claude Deck
-
-Securely executes whitelisted Claude CLI commands via subprocess.
-"""
+"""Provider-aware CLI executor service."""
 
 import subprocess
 import shutil
 from typing import List, Optional, Dict
 from ..models.schemas import CLIResult
+from .providers import get_provider
+from .providers.base import AgentProvider
 
 
-class CLIExecutor:
-    """Service for executing Claude CLI commands with security constraints"""
+class ProviderCLIExecutor:
+    """Execute whitelisted provider CLI commands with security constraints."""
 
-    # Whitelist of allowed Claude CLI subcommands
-    ALLOWED_COMMANDS = ["mcp", "config", "plugin"]
+    DEFAULT_PROVIDER = "claude-code"
 
-    def __init__(self):
-        """Initialize CLI executor"""
-        self.claude_binary = self._find_claude_binary()
+    def __init__(self, provider_id: str = DEFAULT_PROVIDER):
+        self.provider = get_provider(provider_id)
+        self.provider_id = self.provider.id
+        self.binary_path = self._find_binary(self.provider)
+        self.ALLOWED_COMMANDS = self.provider.get_allowed_cli_commands()
+        # Compatibility for existing callers that check claude_binary directly.
+        self.claude_binary = self.binary_path if self.provider_id == "claude-code" else None
 
-    def _find_claude_binary(self) -> Optional[str]:
-        """Find the claude binary in PATH"""
-        return shutil.which("claude")
+    def _find_binary(self, provider: AgentProvider) -> Optional[str]:
+        return shutil.which(provider.binary_name)
 
     def validate_command(self, command: str) -> bool:
         """
@@ -34,7 +34,7 @@ class CLIExecutor:
         Returns:
             True if command is allowed, False otherwise
         """
-        return command in self.ALLOWED_COMMANDS
+        return command in self.provider.get_allowed_cli_commands()
 
     def execute(
         self,
@@ -44,10 +44,10 @@ class CLIExecutor:
         env: Optional[Dict[str, str]] = None
     ) -> CLIResult:
         """
-        Execute a Claude CLI command
+        Execute a provider CLI command
 
         Args:
-            command: The Claude CLI subcommand (must be whitelisted)
+            command: The provider CLI subcommand (must be whitelisted)
             args: List of arguments to pass to the command
             timeout: Maximum execution time in seconds (default: 30)
             env: Optional environment variables to pass to the command
@@ -56,35 +56,32 @@ class CLIExecutor:
             CLIResult containing stdout, stderr, and exit code
 
         Raises:
-            ValueError: If command is not whitelisted or claude binary not found
+            ValueError: If command is not whitelisted or provider binary not found
             subprocess.TimeoutExpired: If command execution exceeds timeout
         """
-        # Check if command is whitelisted
         if not self.validate_command(command):
             raise ValueError(
                 f"Command '{command}' is not allowed. "
-                f"Allowed commands: {', '.join(self.ALLOWED_COMMANDS)}"
+                f"Allowed commands for {self.provider.display_name}: "
+                f"{', '.join(self.provider.get_allowed_cli_commands())}"
             )
 
-        # Check if claude binary exists
-        if not self.claude_binary:
+        if not self.binary_path:
             raise ValueError(
-                "Claude CLI binary not found in PATH. "
-                "Please ensure Claude Code is installed and accessible."
+                f"{self.provider.display_name} binary not found in PATH. "
+                f"Please ensure {self.provider.display_name} is installed and accessible."
             )
 
-        # Build full command
-        full_command = [self.claude_binary, command] + args
+        full_command = [self.binary_path, command] + args
 
         try:
-            # Execute command with timeout
             result = subprocess.run(
                 full_command,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
                 env=env,
-                check=False  # Don't raise exception on non-zero exit
+                check=False,
             )
 
             return CLIResult(
@@ -92,7 +89,6 @@ class CLIExecutor:
                 stderr=result.stderr,
                 exit_code=result.returncode
             )
-
         except subprocess.TimeoutExpired as e:
             return CLIResult(
                 stdout=e.stdout.decode() if e.stdout else "",
@@ -105,3 +101,10 @@ class CLIExecutor:
                 stderr=f"Failed to execute command: {str(e)}",
                 exit_code=-1
             )
+
+
+class CLIExecutor(ProviderCLIExecutor):
+    """Backward-compatible Claude Code executor."""
+
+    def __init__(self):
+        super().__init__("claude-code")

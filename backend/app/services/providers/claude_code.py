@@ -89,5 +89,4 @@ class ClaudeCodeProvider(AgentProvider):
         return options.directory
 
     def get_allowed_cli_commands(self) -> list[str]:
-        return ["mcp", "plugin"]
-
+        return ["mcp", "config", "plugin"]

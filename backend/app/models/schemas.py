@@ -105,6 +105,7 @@ class CLIExecuteRequest(BaseModel):
 
     command: str
     args: List[str] = []
+    provider: str = "claude-code"
 
 
 class CLIResult(BaseModel):

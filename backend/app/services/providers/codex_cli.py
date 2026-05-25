@@ -102,4 +102,4 @@ class CodexCliProvider(AgentProvider):
         return command
 
     def get_allowed_cli_commands(self) -> list[str]:
-        return ["doctor", "mcp", "plugin", "features", "completion"]
+        return ["doctor", "mcp", "plugin", "features"]
