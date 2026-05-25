@@ -4,6 +4,8 @@ import type {
   AgentProviderId,
   AgentProviderStatus,
   CodexConfigUpdateRequest,
+  CodexMcpInventoryResponse,
+  CodexPluginInventoryResponse,
   ProviderDoctorResponse,
   ProvidersResponse,
 } from '@/types/providers'
@@ -45,4 +47,12 @@ export async function updateCodexConfig(request: CodexConfigUpdateRequest): Prom
     method: 'PATCH',
     body: JSON.stringify(request),
   })
+}
+
+export async function fetchCodexMcpInventory(): Promise<CodexMcpInventoryResponse> {
+  return apiClient<CodexMcpInventoryResponse>('providers/codex-cli/mcp')
+}
+
+export async function fetchCodexPluginInventory(): Promise<CodexPluginInventoryResponse> {
+  return apiClient<CodexPluginInventoryResponse>('providers/codex-cli/plugins')
 }

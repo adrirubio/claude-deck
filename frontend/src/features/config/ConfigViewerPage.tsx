@@ -5,6 +5,7 @@ import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
 import { CodexDiagnosticsCard } from './CodexDiagnosticsCard'
+import { CodexInventoryCard } from './CodexInventoryCard'
 import { CodexSettingsEditor } from './CodexSettingsEditor'
 import { SettingsEditor } from './settings'
 import { ScopeResolver } from './ScopeResolver'
@@ -13,8 +14,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
-import { fetchProviderDoctor } from '@/hooks/useProviders'
-import type { CodexConfigResponse, ProviderDoctorResponse } from '@/types/providers'
+import { fetchCodexMcpInventory, fetchCodexPluginInventory, fetchProviderDoctor } from '@/hooks/useProviders'
+import type {
+  CodexConfigResponse,
+  CodexMcpInventoryResponse,
+  CodexPluginInventoryResponse,
+  ProviderDoctorResponse,
+} from '@/types/providers'
 import { toast } from 'sonner'
 
 export function ConfigViewerPage() {
@@ -24,6 +30,10 @@ export function ConfigViewerPage() {
   const [codexConfig, setCodexConfig] = useState<CodexConfigResponse | null>(null)
   const [codexDoctor, setCodexDoctor] = useState<ProviderDoctorResponse | null>(null)
   const [codexDoctorError, setCodexDoctorError] = useState<string | null>(null)
+  const [codexMcpInventory, setCodexMcpInventory] = useState<CodexMcpInventoryResponse | null>(null)
+  const [codexPluginInventory, setCodexPluginInventory] = useState<CodexPluginInventoryResponse | null>(null)
+  const [codexMcpError, setCodexMcpError] = useState<string | null>(null)
+  const [codexPluginError, setCodexPluginError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -42,16 +52,34 @@ export function ConfigViewerPage() {
             doctor: null,
             error: err instanceof Error ? err.message : 'Failed to load Codex diagnostics',
           }))
+        const mcpPromise = fetchCodexMcpInventory()
+          .then((inventory) => ({ inventory, error: null }))
+          .catch((err) => ({
+            inventory: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex MCP inventory',
+          }))
+        const pluginsPromise = fetchCodexPluginInventory()
+          .then((inventory) => ({ inventory, error: null }))
+          .catch((err) => ({
+            inventory: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex plugin inventory',
+          }))
 
-        const [files, config, doctorResult] = await Promise.all([
+        const [files, config, doctorResult, mcpResult, pluginResult] = await Promise.all([
           filesPromise,
           configPromise,
           doctorPromise,
+          mcpPromise,
+          pluginsPromise,
         ])
         setData(files)
         setCodexConfig(config)
         setCodexDoctor(doctorResult.doctor)
         setCodexDoctorError(doctorResult.error)
+        setCodexMcpInventory(mcpResult.inventory)
+        setCodexMcpError(mcpResult.error)
+        setCodexPluginInventory(pluginResult.inventory)
+        setCodexPluginError(pluginResult.error)
         if (activeTab === 'scopes') setActiveTab('editor')
       } else {
         const endpoint = buildEndpoint('config/files', { project_path: activeProject?.path })
@@ -60,6 +88,10 @@ export function ConfigViewerPage() {
         setCodexConfig(null)
         setCodexDoctor(null)
         setCodexDoctorError(null)
+        setCodexMcpInventory(null)
+        setCodexPluginInventory(null)
+        setCodexMcpError(null)
+        setCodexPluginError(null)
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load config files'
@@ -157,6 +189,14 @@ export function ConfigViewerPage() {
                 doctor={codexDoctor}
                 loading={loading}
                 error={codexDoctorError}
+                onRefresh={fetchData}
+              />
+              <CodexInventoryCard
+                mcp={codexMcpInventory}
+                plugins={codexPluginInventory}
+                mcpError={codexMcpError}
+                pluginError={codexPluginError}
+                loading={loading}
                 onRefresh={fetchData}
               />
             </div>

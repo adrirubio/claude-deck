@@ -88,3 +88,29 @@ export interface CodexConfigUpdateRequest {
   settings?: Record<string, string | boolean | null>
   features?: Record<string, boolean | null>
 }
+
+export interface CodexMcpInventoryResponse {
+  provider: 'codex-cli'
+  provider_display_name: string
+  exit_code: number
+  servers: unknown
+  parse_error: string | null
+  stderr: string
+  raw_stdout: string
+}
+
+export interface CodexPluginInventoryRow {
+  name: string
+  status?: string
+  version?: string
+  path?: string
+}
+
+export interface CodexPluginInventoryResponse {
+  provider: 'codex-cli'
+  provider_display_name: string
+  exit_code: number
+  plugins: CodexPluginInventoryRow[]
+  stderr: string
+  raw_stdout: string
+}
