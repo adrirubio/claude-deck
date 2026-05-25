@@ -33,3 +33,31 @@ export interface ProvidersResponse {
   count: number
 }
 
+export type ProviderDoctorStatus = 'ok' | 'warn' | 'error' | 'unknown' | string
+
+export interface ProviderDoctorCheck {
+  id: string
+  category: string
+  status: ProviderDoctorStatus
+  summary: string
+  details?: Record<string, unknown>
+  remediation?: string | null
+  durationMs?: number
+}
+
+export interface ProviderDoctorReport {
+  schemaVersion?: number
+  generatedAt?: string
+  overallStatus?: ProviderDoctorStatus
+  codexVersion?: string
+  checks?: Record<string, ProviderDoctorCheck>
+}
+
+export interface ProviderDoctorResponse {
+  provider: AgentProviderId
+  provider_display_name: string
+  exit_code: number
+  report: ProviderDoctorReport | null
+  parse_error: string | null
+  stderr: string
+}

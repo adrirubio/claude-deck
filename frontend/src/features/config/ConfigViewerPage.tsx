@@ -4,6 +4,7 @@ import type { ConfigFileListResponse, ConfigValue } from '@/types/config'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
+import { CodexDiagnosticsCard } from './CodexDiagnosticsCard'
 import { SettingsEditor } from './settings'
 import { ScopeResolver } from './ScopeResolver'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,6 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
+import { fetchProviderDoctor } from '@/hooks/useProviders'
+import type { ProviderDoctorResponse } from '@/types/providers'
 import { toast } from 'sonner'
 
 interface CodexConfigResponse {
@@ -33,6 +36,8 @@ export function ConfigViewerPage() {
   const { selectedProviderId, selectedProvider } = useProviderContext()
   const [data, setData] = useState<ConfigFileListResponse | null>(null)
   const [codexConfig, setCodexConfig] = useState<CodexConfigResponse | null>(null)
+  const [codexDoctor, setCodexDoctor] = useState<ProviderDoctorResponse | null>(null)
+  const [codexDoctorError, setCodexDoctorError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -43,18 +48,32 @@ export function ConfigViewerPage() {
     setError(null)
     try {
       if (selectedProviderId === 'codex-cli') {
-        const [files, config] = await Promise.all([
-          apiClient<ConfigFileListResponse>('codex-config/files'),
-          apiClient<CodexConfigResponse>('codex-config'),
+        const filesPromise = apiClient<ConfigFileListResponse>('codex-config/files')
+        const configPromise = apiClient<CodexConfigResponse>('codex-config')
+        const doctorPromise = fetchProviderDoctor('codex-cli')
+          .then((doctor) => ({ doctor, error: null }))
+          .catch((err) => ({
+            doctor: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex diagnostics',
+          }))
+
+        const [files, config, doctorResult] = await Promise.all([
+          filesPromise,
+          configPromise,
+          doctorPromise,
         ])
         setData(files)
         setCodexConfig(config)
+        setCodexDoctor(doctorResult.doctor)
+        setCodexDoctorError(doctorResult.error)
         if (activeTab === 'scopes') setActiveTab('editor')
       } else {
         const endpoint = buildEndpoint('config/files', { project_path: activeProject?.path })
         const response = await apiClient<ConfigFileListResponse>(endpoint)
         setData(response)
         setCodexConfig(null)
+        setCodexDoctor(null)
+        setCodexDoctorError(null)
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load config files'
@@ -135,35 +154,43 @@ export function ConfigViewerPage() {
 
         <TabsContent value="editor" className="flex-1 overflow-auto mt-4">
           {selectedProviderId === 'codex-cli' ? (
-            <Card>
-              <CardHeader>
-                <CardTitle>Codex Config</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                {!codexConfig?.exists && (
-                  <p className="text-muted-foreground">No ~/.codex/config.toml file found.</p>
-                )}
-                {codexConfig?.parse_error && (
-                  <p className="text-destructive">{codexConfig.parse_error}</p>
-                )}
-                {codexConfig && (
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground">Model</p>
-                      <p className="font-medium">{codexConfig.summary.model ?? 'Default'}</p>
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Codex Config</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  {!codexConfig?.exists && (
+                    <p className="text-muted-foreground">No ~/.codex/config.toml file found.</p>
+                  )}
+                  {codexConfig?.parse_error && (
+                    <p className="text-destructive">{codexConfig.parse_error}</p>
+                  )}
+                  {codexConfig && (
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Model</p>
+                        <p className="font-medium">{codexConfig.summary.model ?? 'Default'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Reasoning</p>
+                        <p className="font-medium">{codexConfig.summary.model_reasoning_effort ?? 'Default'}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Trusted Projects</p>
+                        <p className="font-medium">{Object.keys(codexConfig.summary.projects).length}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Reasoning</p>
-                      <p className="font-medium">{codexConfig.summary.model_reasoning_effort ?? 'Default'}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground">Trusted Projects</p>
-                      <p className="font-medium">{Object.keys(codexConfig.summary.projects).length}</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                </CardContent>
+              </Card>
+              <CodexDiagnosticsCard
+                doctor={codexDoctor}
+                loading={loading}
+                error={codexDoctorError}
+                onRefresh={fetchData}
+              />
+            </div>
           ) : (
             <SettingsEditor onSave={fetchData} />
           )}

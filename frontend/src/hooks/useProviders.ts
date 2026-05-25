@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiClient } from '@/lib/api'
-import type { AgentProviderStatus, ProvidersResponse } from '@/types/providers'
+import type { AgentProviderId, AgentProviderStatus, ProviderDoctorResponse, ProvidersResponse } from '@/types/providers'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -30,3 +30,6 @@ export function useProviders() {
   return { providers, loading, error, refresh }
 }
 
+export async function fetchProviderDoctor(providerId: AgentProviderId): Promise<ProviderDoctorResponse> {
+  return apiClient<ProviderDoctorResponse>(`providers/${providerId}/doctor`)
+}
