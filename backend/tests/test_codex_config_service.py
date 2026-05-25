@@ -39,3 +39,133 @@ def test_codex_config_reports_parse_errors(tmp_path):
     assert data["parse_error"]
     assert data["config"] == {}
 
+
+def test_codex_update_preserves_comments_and_creates_backup(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '\n'.join([
+            "# keep this comment",
+            'model = "old-model"',
+            "",
+            "[features]",
+            "# feature comment",
+            "shell_tool = false",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = CodexConfigService(codex_home=tmp_path).update_safe_settings(
+        settings={"model": "new-model"},
+        features={"shell_tool": True},
+    )
+
+    updated = config_path.read_text(encoding="utf-8")
+    assert "# keep this comment" in updated
+    assert "# feature comment" in updated
+    assert 'model = "new-model"' in updated
+    assert "shell_tool = true" in updated
+    assert result["backup_path"] is not None
+    backup_path = tmp_path / result["backup_path"].split("/")[-1]
+    assert backup_path.exists()
+    assert 'model = "old-model"' in backup_path.read_text(encoding="utf-8")
+
+
+def test_codex_update_creates_missing_config(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    result = CodexConfigService(codex_home=tmp_path).update_safe_settings(
+        settings={"model": "gpt-5.1-codex", "strict_config": True},
+        features={"search": True},
+    )
+
+    config_path = tmp_path / "config.toml"
+    assert config_path.exists()
+    assert result["backup_path"] is None
+    data = CodexConfigService(codex_home=tmp_path).get_config()
+    assert data["summary"]["model"] == "gpt-5.1-codex"
+    assert data["summary"]["strict_config"] is True
+    assert data["summary"]["features"]["search"] is True
+
+
+def test_codex_update_cleans_up_temp_file_on_atomic_write_failure(tmp_path, monkeypatch):
+    from app.services.codex_config_service import CodexConfigService
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('model = "old-model"\n', encoding="utf-8")
+    original_replace = type(config_path).replace
+
+    def fail_replace(self, target):
+        if self.name.startswith(".config.toml.") and self.name.endswith(".tmp"):
+            raise OSError("replace failed")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(type(config_path), "replace", fail_replace)
+
+    try:
+        CodexConfigService(codex_home=tmp_path).update_safe_settings(
+            settings={"model": "new-model"},
+        )
+    except OSError as exc:
+        assert "replace failed" in str(exc)
+    else:
+        raise AssertionError("Expected atomic replace failure")
+
+    assert config_path.read_text(encoding="utf-8") == 'model = "old-model"\n'
+    assert list(tmp_path.glob(".config.toml.*.tmp")) == []
+    assert list(tmp_path.glob("config.toml.*.bak"))
+
+
+def test_codex_update_rejects_unsafe_fields(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    service = CodexConfigService(codex_home=tmp_path)
+
+    try:
+        service.update_safe_settings(settings={"auth": "secret"})
+    except ValueError as exc:
+        assert "Unsupported Codex setting" in str(exc)
+    else:
+        raise AssertionError("Expected unsafe setting to be rejected")
+
+    try:
+        service.update_safe_settings(features={"../bad": True})
+    except ValueError as exc:
+        assert "Unsafe feature name" in str(exc)
+    else:
+        raise AssertionError("Expected unsafe feature name to be rejected")
+
+
+def test_codex_update_rejects_traversal_config_home(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    service = CodexConfigService(codex_home=tmp_path / "nested" / "..")
+
+    try:
+        service.update_safe_settings(settings={"model": "new-model"})
+    except ValueError as exc:
+        assert "Unsafe Codex config path" in str(exc)
+    else:
+        raise AssertionError("Expected traversal config path to be rejected")
+
+
+def test_codex_update_rejects_parse_error_without_overwriting(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    config_path = tmp_path / "config.toml"
+    original = "invalid = ["
+    config_path.write_text(original, encoding="utf-8")
+
+    try:
+        CodexConfigService(codex_home=tmp_path).update_safe_settings(
+            settings={"model": "new-model"},
+        )
+    except ValueError as exc:
+        assert "parse errors" in str(exc)
+    else:
+        raise AssertionError("Expected parse-error config to be rejected")
+
+    assert config_path.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob("*.bak")) == []

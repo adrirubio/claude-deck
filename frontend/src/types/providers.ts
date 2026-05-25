@@ -61,3 +61,30 @@ export interface ProviderDoctorResponse {
   parse_error: string | null
   stderr: string
 }
+
+export interface CodexConfigSummary {
+  model?: string
+  model_reasoning_effort?: string
+  profile?: string
+  sandbox_mode?: string
+  approval_policy?: string
+  search?: boolean
+  strict_config?: boolean
+  no_alt_screen?: boolean
+  projects: Record<string, { trust_level?: string }>
+  profiles: Record<string, unknown>
+  features: Record<string, boolean>
+}
+
+export interface CodexConfigResponse {
+  provider: 'codex-cli'
+  path: string
+  exists: boolean
+  parse_error: string | null
+  summary: CodexConfigSummary
+}
+
+export interface CodexConfigUpdateRequest {
+  settings?: Record<string, string | boolean | null>
+  features?: Record<string, boolean | null>
+}

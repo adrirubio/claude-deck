@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiClient } from '@/lib/api'
-import type { AgentProviderId, AgentProviderStatus, ProviderDoctorResponse, ProvidersResponse } from '@/types/providers'
+import type {
+  AgentProviderId,
+  AgentProviderStatus,
+  CodexConfigUpdateRequest,
+  ProviderDoctorResponse,
+  ProvidersResponse,
+} from '@/types/providers'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -32,4 +38,11 @@ export function useProviders() {
 
 export async function fetchProviderDoctor(providerId: AgentProviderId): Promise<ProviderDoctorResponse> {
   return apiClient<ProviderDoctorResponse>(`providers/${providerId}/doctor`)
+}
+
+export async function updateCodexConfig(request: CodexConfigUpdateRequest): Promise<unknown> {
+  return apiClient('codex-config', {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  })
 }

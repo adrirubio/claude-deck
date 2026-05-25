@@ -5,6 +5,7 @@ import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
 import { CodexDiagnosticsCard } from './CodexDiagnosticsCard'
+import { CodexSettingsEditor } from './CodexSettingsEditor'
 import { SettingsEditor } from './settings'
 import { ScopeResolver } from './ScopeResolver'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,23 +14,8 @@ import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
 import { fetchProviderDoctor } from '@/hooks/useProviders'
-import type { ProviderDoctorResponse } from '@/types/providers'
+import type { CodexConfigResponse, ProviderDoctorResponse } from '@/types/providers'
 import { toast } from 'sonner'
-
-interface CodexConfigResponse {
-  provider: 'codex-cli'
-  path: string
-  exists: boolean
-  parse_error: string | null
-  summary: {
-    model?: string
-    model_reasoning_effort?: string
-    profile?: string
-    projects: Record<string, { trust_level?: string }>
-    profiles: Record<string, unknown>
-    features: Record<string, boolean>
-  }
-}
 
 export function ConfigViewerPage() {
   const { activeProject } = useProjectContext()
@@ -155,35 +141,18 @@ export function ConfigViewerPage() {
         <TabsContent value="editor" className="flex-1 overflow-auto mt-4">
           {selectedProviderId === 'codex-cli' ? (
             <div className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Codex Config</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  {!codexConfig?.exists && (
-                    <p className="text-muted-foreground">No ~/.codex/config.toml file found.</p>
-                  )}
-                  {codexConfig?.parse_error && (
-                    <p className="text-destructive">{codexConfig.parse_error}</p>
-                  )}
-                  {codexConfig && (
-                    <div className="grid gap-3 md:grid-cols-3">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Model</p>
-                        <p className="font-medium">{codexConfig.summary.model ?? 'Default'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Reasoning</p>
-                        <p className="font-medium">{codexConfig.summary.model_reasoning_effort ?? 'Default'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Trusted Projects</p>
-                        <p className="font-medium">{Object.keys(codexConfig.summary.projects).length}</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              {!codexConfig?.exists && (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">No ~/.codex/config.toml file found. Saving will create it.</p>
+                  </CardContent>
+                </Card>
+              )}
+              <CodexSettingsEditor
+                key={JSON.stringify(codexConfig?.summary ?? {})}
+                config={codexConfig}
+                onSaved={fetchData}
+              />
               <CodexDiagnosticsCard
                 doctor={codexDoctor}
                 loading={loading}
