@@ -101,6 +101,15 @@ class AgentProvider(ABC):
     def get_capabilities(self) -> dict[str, bool]:
         """Return provider feature support flags."""
 
+    def get_capability_details(self) -> dict[str, dict[str, str]]:
+        """Return richer capability metadata for UI/action state."""
+        return {
+            name: {
+                "state": "write_capable" if enabled else "unsupported",
+            }
+            for name, enabled in self.get_capabilities().items()
+        }
+
     @abstractmethod
     def get_config_paths(self, project_path: str | None = None) -> dict[str, Any]:
         """Return important config paths for this provider."""
@@ -149,6 +158,6 @@ class AgentProvider(ABC):
             "binary_path": binary_path,
             "version": version,
             "capabilities": self.get_capabilities(),
+            "capability_details": self.get_capability_details(),
             "config_paths": self.get_config_paths(),
         }
-
