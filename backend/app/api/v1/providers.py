@@ -206,9 +206,12 @@ def _build_codex_mcp_add_args(request: CodexMcpAddRequest) -> list[str]:
 def _build_codex_plugin_args(action: str, name: str, marketplace: str | None = None) -> list[str]:
     if action not in {"add", "remove"}:
         raise HTTPException(status_code=400, detail="Codex plugin action is not supported")
-    safe_name = _validate_plugin_selector(name)
+    try:
+        safe_name = _validate_plugin_selector(name)
+        safe_marketplace = _validate_plugin_marketplace(marketplace) if marketplace else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if marketplace:
-        safe_marketplace = _validate_plugin_marketplace(marketplace)
         if "@" in safe_name:
             raise HTTPException(
                 status_code=400,
@@ -491,7 +494,10 @@ def remove_provider_plugin(provider_id: str, plugin_name: str, marketplace: str 
 @router.post("/providers/{provider_id}/plugins/{plugin_name}/enable")
 def enable_provider_plugin(provider_id: str, plugin_name: str):
     _require_codex_provider(provider_id)
-    _validate_plugin_selector(plugin_name)
+    try:
+        _validate_plugin_selector(plugin_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise HTTPException(
         status_code=400,
         detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["enable"]["reason"],
@@ -501,7 +507,10 @@ def enable_provider_plugin(provider_id: str, plugin_name: str):
 @router.post("/providers/{provider_id}/plugins/{plugin_name}/disable")
 def disable_provider_plugin(provider_id: str, plugin_name: str):
     _require_codex_provider(provider_id)
-    _validate_plugin_selector(plugin_name)
+    try:
+        _validate_plugin_selector(plugin_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise HTTPException(
         status_code=400,
         detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["disable"]["reason"],

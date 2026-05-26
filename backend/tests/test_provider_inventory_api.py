@@ -306,6 +306,11 @@ def test_codex_plugin_mutation_rejects_unsafe_selectors():
 
     assert exc_info.value.status_code == 400
 
+    with pytest.raises(providers_api.HTTPException) as remove_exc:
+        providers_api.remove_provider_plugin("codex-cli", "..bad")
+
+    assert remove_exc.value.status_code == 400
+
 
 def test_codex_plugin_enable_disable_are_explicitly_unsupported():
     from app.api.v1 import providers as providers_api
@@ -319,3 +324,17 @@ def test_codex_plugin_enable_disable_are_explicitly_unsupported():
     assert "does not expose plugin enable" in enable_exc.value.detail
     assert disable_exc.value.status_code == 400
     assert "does not expose plugin disable" in disable_exc.value.detail
+
+
+def test_codex_plugin_enable_disable_reject_unsafe_selectors():
+    from app.api.v1 import providers as providers_api
+
+    with pytest.raises(providers_api.HTTPException) as enable_exc:
+        providers_api.enable_provider_plugin("codex-cli", "..bad")
+    with pytest.raises(providers_api.HTTPException) as disable_exc:
+        providers_api.disable_provider_plugin("codex-cli", "..bad")
+
+    assert enable_exc.value.status_code == 400
+    assert "Plugin selector" in enable_exc.value.detail
+    assert disable_exc.value.status_code == 400
+    assert "Plugin selector" in disable_exc.value.detail
