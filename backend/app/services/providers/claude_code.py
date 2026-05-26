@@ -18,24 +18,6 @@ class ClaudeCodeProvider(AgentProvider):
     display_name = "Claude Code"
     binary_name = "claude"
 
-    def get_capabilities(self) -> dict[str, bool]:
-        return {
-            "sessions": True,
-            "spawn": True,
-            "resume": True,
-            "fork": False,
-            "mcp": True,
-            "plugins": True,
-            "commands": True,
-            "agents": True,
-            "skills": True,
-            "hooks": True,
-            "memory": True,
-            "usage": True,
-            "context": True,
-            "doctor": False,
-        }
-
     def get_config_paths(self, project_path: str | None = None) -> dict:
         paths = ClaudePathUtils()
         result = {

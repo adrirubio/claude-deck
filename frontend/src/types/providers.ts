@@ -1,20 +1,33 @@
 export type AgentProviderId = 'claude-code' | 'codex-cli'
 
 export interface AgentProviderCapabilities {
+  config: boolean
   sessions: boolean
   spawn: boolean
   resume: boolean
   fork: boolean
   mcp: boolean
   plugins: boolean
+  permissions: boolean
   commands: boolean
   agents: boolean
   skills: boolean
   hooks: boolean
   memory: boolean
+  output_styles: boolean
+  statusline: boolean
   usage: boolean
   context: boolean
   doctor: boolean
+  backup: boolean
+}
+
+export type AgentProviderCapabilityState = 'supported' | 'read_only' | 'write_capable' | 'unsupported' | 'unknown'
+
+export interface AgentProviderCapabilityDetail {
+  state: AgentProviderCapabilityState
+  label: string
+  reason?: string
 }
 
 export interface AgentProviderStatus {
@@ -25,6 +38,8 @@ export interface AgentProviderStatus {
   binary_path: string | null
   version: string | null
   capabilities: AgentProviderCapabilities
+  capability_matrix: Partial<Record<keyof AgentProviderCapabilities, AgentProviderCapabilityDetail>>
+  capability_details?: Partial<Record<keyof AgentProviderCapabilities, AgentProviderCapabilityDetail>>
   config_paths: Record<string, string>
 }
 
@@ -66,6 +81,7 @@ export interface CodexConfigSummary {
   model?: string
   model_reasoning_effort?: string
   profile?: string
+  profile_v2?: string
   sandbox_mode?: string
   approval_policy?: string
   search?: boolean
@@ -76,12 +92,54 @@ export interface CodexConfigSummary {
   features: Record<string, boolean>
 }
 
+export interface CodexProfileOverride {
+  key: string
+  base?: unknown
+  value: unknown
+}
+
+export interface CodexProfileSource {
+  name: string
+  source: 'inline' | 'file' | string
+  path: string | null
+  exists: boolean
+  parse_error: string | null
+  summary: Record<string, unknown>
+  overrides: CodexProfileOverride[]
+}
+
+export interface CodexMissingProfileReference {
+  name: string
+  reference: 'profile' | 'profile_v2' | string
+  expected_file: string | null
+  unsafe_reference: boolean
+}
+
+export interface CodexMalformedProfile {
+  name: string
+  path: string | null
+  parse_error: string
+}
+
+export interface CodexProfileResolution {
+  active_profile: string | null
+  active_profile_v2: string | null
+  resolution_order: string[]
+  base_summary: Record<string, unknown>
+  profiles: CodexProfileSource[]
+  active_sources: CodexProfileSource[]
+  missing_references: CodexMissingProfileReference[]
+  malformed_profiles: CodexMalformedProfile[]
+  effective_summary: Record<string, unknown>
+}
+
 export interface CodexConfigResponse {
   provider: 'codex-cli'
   path: string
   exists: boolean
   parse_error: string | null
   summary: CodexConfigSummary
+  profile_resolution: CodexProfileResolution | null
 }
 
 export interface CodexConfigUpdateRequest {
@@ -124,11 +182,38 @@ export interface CodexPluginInventoryRow {
   path?: string
 }
 
+export interface CodexPluginMutationCapability {
+  state: 'supported' | 'unsupported'
+  command?: string
+  reason: string
+}
+
 export interface CodexPluginInventoryResponse {
   provider: 'codex-cli'
   provider_display_name: string
   exit_code: number
   plugins: CodexPluginInventoryRow[]
+  mutation_capabilities: {
+    install: CodexPluginMutationCapability
+    remove: CodexPluginMutationCapability
+    enable: CodexPluginMutationCapability
+    disable: CodexPluginMutationCapability
+  }
   stderr: string
   raw_stdout: string
+}
+
+export interface CodexPluginMutationRequest {
+  name: string
+  marketplace?: string
+}
+
+export interface CodexPluginMutationResponse {
+  provider: 'codex-cli'
+  provider_display_name: string
+  name: string
+  action: 'install' | 'remove'
+  stdout: string
+  stderr: string
+  exit_code: number
 }
