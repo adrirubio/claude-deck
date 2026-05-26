@@ -283,8 +283,8 @@ def get_provider_doctor(provider_id: str):
     if result.stdout.strip():
         try:
             report = _redact_value(json.loads(result.stdout))
-        except json.JSONDecodeError as exc:
-            parse_error = str(exc)
+        except json.JSONDecodeError:
+            parse_error = "Provider doctor output was not valid JSON"
 
     return {
         "provider": provider.id,
@@ -311,8 +311,8 @@ def get_provider_mcp_inventory(provider_id: str):
         try:
             servers = _redact_value(json.loads(result.stdout))
             raw_stdout = json.dumps(servers)
-        except json.JSONDecodeError as exc:
-            parse_error = str(exc)
+        except json.JSONDecodeError:
+            parse_error = "Provider MCP inventory output was not valid JSON"
 
     return {
         "provider": provider.id,

@@ -75,6 +75,9 @@ class ProviderCLIExecutor:
         full_command = [self.binary_path, command] + args
 
         try:
+            # codeql[py/command-line-injection]
+            # Provider commands use a resolved fixed binary, a provider-owned subcommand whitelist,
+            # shell=False, and endpoint-specific validation for user-controlled arguments.
             result = subprocess.run(
                 full_command,
                 capture_output=True,
