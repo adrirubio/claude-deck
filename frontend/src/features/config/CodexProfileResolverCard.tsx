@@ -76,7 +76,8 @@ export function CodexProfileResolverCard({ resolution }: CodexProfileResolverCar
                 key={`${missing.reference}:${missing.name}`}
                 className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
               >
-                Missing {missing.reference} profile "{missing.name}" at {missing.expected_file}
+                Missing {missing.reference} profile "{missing.name}"
+                {missing.expected_file ? ` at ${missing.expected_file}` : ' with an unsafe file reference'}
               </p>
             ))}
             {resolution.malformed_profiles.map((profile) => (

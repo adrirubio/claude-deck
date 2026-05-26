@@ -96,7 +96,8 @@ export interface CodexProfileSource {
 export interface CodexMissingProfileReference {
   name: string
   reference: 'profile' | 'profile_v2' | string
-  expected_file: string
+  expected_file: string | null
+  unsafe_reference: boolean
 }
 
 export interface CodexMalformedProfile {

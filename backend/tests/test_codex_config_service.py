@@ -159,6 +159,7 @@ def test_codex_profile_resolution_reports_missing_and_malformed_profiles(tmp_pat
             "name": "missing",
             "reference": "profile",
             "expected_file": str(tmp_path / "missing.config.toml"),
+            "unsafe_reference": False,
         }
     ]
     assert resolution["malformed_profiles"][0]["name"] == "broken"
@@ -187,6 +188,33 @@ def test_codex_profile_resolution_handles_default_config_without_profile(tmp_pat
     assert resolution["missing_references"] == []
     assert resolution["effective_summary"]["model"] == "base-model"
     assert resolution["effective_summary"]["features"]["search"] is True
+
+
+def test_codex_profile_resolution_does_not_build_paths_for_unsafe_references(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'profile = "../outside"',
+            'profile_v2 = "safe-profile"',
+        ]),
+        encoding="utf-8",
+    )
+
+    missing = CodexConfigService(codex_home=tmp_path).get_config()["profile_resolution"]["missing_references"]
+
+    assert missing[0] == {
+        "name": "../outside",
+        "reference": "profile",
+        "expected_file": None,
+        "unsafe_reference": True,
+    }
+    assert missing[1] == {
+        "name": "safe-profile",
+        "reference": "profile_v2",
+        "expected_file": str(tmp_path / "safe-profile.config.toml"),
+        "unsafe_reference": False,
+    }
 
 
 def test_codex_raw_view_rejects_auth_and_allows_safe_files(tmp_path):

@@ -28,6 +28,7 @@ SAFE_SCALAR_FIELDS = {
     "no_alt_screen": bool,
 }
 SENSITIVE_KEY_PATTERN = re.compile(r"(token|secret|password|credential|api[_-]?key|auth|cookie|session)", re.I)
+PROFILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 PROFILE_V2_KEYS = ("profile-v2", "profile_v2")
 
 
@@ -78,6 +79,9 @@ class CodexConfigService:
     def _profile_name_from_file(self, path: Path) -> str:
         suffix = ".config.toml"
         return path.name[:-len(suffix)] if path.name.endswith(suffix) else path.stem
+
+    def _is_safe_profile_name(self, name: str) -> bool:
+        return bool(PROFILE_NAME_PATTERN.fullmatch(name))
 
     def _get_profile_files(self) -> list[Path]:
         if not self.codex_home.exists():
@@ -220,11 +224,15 @@ class CodexConfigService:
             if not reference:
                 continue
             if (reference, "inline") not in source_names and (reference, "file") not in source_names:
-                missing.append({
+                entry = {
                     "name": reference,
                     "reference": reference_type,
-                    "expected_file": str(self.codex_home / f"{reference}.config.toml"),
-                })
+                    "expected_file": None,
+                    "unsafe_reference": not self._is_safe_profile_name(reference),
+                }
+                if self._is_safe_profile_name(reference):
+                    entry["expected_file"] = str(self.codex_home / f"{reference}.config.toml")
+                missing.append(entry)
 
         active_sources = [
             source for source in sources
