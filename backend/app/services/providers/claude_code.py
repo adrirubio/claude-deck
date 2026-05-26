@@ -18,37 +18,6 @@ class ClaudeCodeProvider(AgentProvider):
     display_name = "Claude Code"
     binary_name = "claude"
 
-    def get_capabilities(self) -> dict[str, bool]:
-        return {
-            "sessions": True,
-            "spawn": True,
-            "resume": True,
-            "fork": False,
-            "mcp": True,
-            "plugins": True,
-            "commands": True,
-            "agents": True,
-            "skills": True,
-            "hooks": True,
-            "memory": True,
-            "usage": True,
-            "context": True,
-            "doctor": False,
-        }
-
-    def get_capability_details(self) -> dict[str, dict[str, str]]:
-        details = super().get_capability_details()
-        details.update({
-            "sessions": {"state": "write_capable", "label": "tmux sessions"},
-            "spawn": {"state": "write_capable", "label": "new sessions"},
-            "resume": {"state": "write_capable", "label": "resume transcript"},
-            "fork": {"state": "unsupported", "reason": "Claude Code fork mode is not exposed"},
-            "mcp": {"state": "write_capable", "label": "MCP servers"},
-            "plugins": {"state": "write_capable", "label": "plugins"},
-            "doctor": {"state": "unsupported", "reason": "Claude Code does not expose provider doctor diagnostics"},
-        })
-        return details
-
     def get_config_paths(self, project_path: str | None = None) -> dict:
         paths = ClaudePathUtils()
         result = {

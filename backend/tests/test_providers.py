@@ -13,20 +13,34 @@ def test_provider_registry_contains_initial_providers():
     assert get_provider("codex-cli").binary_name == "codex"
 
 
-def test_provider_status_includes_capability_details():
+def test_provider_status_includes_central_capability_matrix():
     from app.services.providers import get_provider
 
-    claude_status = get_provider("claude-code").get_status()
-    codex_status = get_provider("codex-cli").get_status()
+    claude = get_provider("claude-code").get_status()
+    codex = get_provider("codex-cli").get_status()
 
-    assert claude_status["capabilities"]["spawn"] is True
-    assert claude_status["capability_details"]["spawn"]["state"] == "write_capable"
-    assert claude_status["capability_details"]["fork"]["state"] == "unsupported"
+    assert claude["capabilities"]["plugins"] is True
+    assert claude["capabilities"]["fork"] is False
+    assert claude["capability_matrix"]["plugins"]["state"] == "write_capable"
+    assert claude["capability_details"]["plugins"]["state"] == "write_capable"
+    assert claude["capability_matrix"]["doctor"]["state"] == "unsupported"
+    assert codex["capabilities"]["plugins"] is True
+    assert codex["capability_matrix"]["plugins"]["state"] == "write_capable"
+    assert codex["capability_details"]["plugins"]["state"] == "write_capable"
+    assert codex["capability_matrix"]["mcp"]["state"] == "write_capable"
+    assert codex["capability_matrix"]["usage"]["state"] == "unsupported"
+    assert codex["capability_matrix"]["doctor"]["state"] == "read_only"
 
-    assert codex_status["capabilities"]["plugins"] is True
-    assert codex_status["capability_details"]["plugins"]["state"] == "read_only"
-    assert codex_status["capability_details"]["doctor"]["state"] == "read_only"
-    assert codex_status["capability_details"]["usage"]["state"] == "unsupported"
+
+def test_provider_capabilities_api_returns_matrix():
+    from app.api.v1 import providers as providers_api
+
+    response = providers_api.get_provider_capabilities("codex-cli")
+
+    assert response["provider"] == "codex-cli"
+    assert response["capabilities"]["config"] is True
+    assert response["capability_matrix"]["config"]["state"] == "write_capable"
+    assert response["capability_matrix"]["commands"]["state"] == "unsupported"
 
 
 def test_codex_process_detection_matches_interactive_binary():

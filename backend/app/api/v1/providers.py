@@ -119,6 +119,20 @@ def get_provider_status(provider_id: str):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+@router.get("/providers/{provider_id}/capabilities")
+def get_provider_capabilities(provider_id: str):
+    try:
+        provider = get_provider(provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "capabilities": provider.get_capabilities(),
+        "capability_matrix": provider.get_capability_matrix(),
+    }
+
+
 def _require_codex_provider(provider_id: str):
     try:
         provider = get_provider(provider_id)

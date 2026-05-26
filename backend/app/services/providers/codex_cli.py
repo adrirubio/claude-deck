@@ -23,44 +23,6 @@ class CodexCliProvider(AgentProvider):
     binary_name = "codex"
     version_args = ("--version",)
 
-    def get_capabilities(self) -> dict[str, bool]:
-        return {
-            "sessions": True,
-            "spawn": True,
-            "resume": True,
-            "fork": True,
-            "mcp": True,
-            "plugins": True,
-            "commands": False,
-            "agents": False,
-            "skills": False,
-            "hooks": False,
-            "memory": False,
-            "usage": False,
-            "context": False,
-            "doctor": True,
-        }
-
-    def get_capability_details(self) -> dict[str, dict[str, str]]:
-        details = super().get_capability_details()
-        details.update({
-            "sessions": {"state": "write_capable", "label": "tmux sessions"},
-            "spawn": {"state": "write_capable", "label": "new sessions"},
-            "resume": {"state": "write_capable", "label": "resume session"},
-            "fork": {"state": "write_capable", "label": "fork session"},
-            "mcp": {"state": "write_capable", "label": "MCP servers"},
-            "plugins": {"state": "read_only", "label": "plugin inventory"},
-            "commands": {"state": "unsupported", "reason": "Codex command files are not modeled yet"},
-            "agents": {"state": "unsupported", "reason": "Codex agent files are not modeled yet"},
-            "skills": {"state": "unsupported", "reason": "Codex skills are not modeled yet"},
-            "hooks": {"state": "unsupported", "reason": "Codex hooks are not modeled yet"},
-            "memory": {"state": "unsupported", "reason": "Codex memory is not modeled yet"},
-            "usage": {"state": "unsupported", "reason": "Codex usage data is not available yet"},
-            "context": {"state": "unsupported", "reason": "Codex context metrics are not available yet"},
-            "doctor": {"state": "read_only", "label": "doctor diagnostics"},
-        })
-        return details
-
     def get_config_paths(self, project_path: str | None = None) -> dict:
         home = get_codex_home()
         return {
