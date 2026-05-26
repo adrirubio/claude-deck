@@ -1,7 +1,7 @@
 # Codex History and Model Cache Investigation
 
-**Date:** 2026-05-26  
-**Status:** Decision recorded  
+**Date:** 2026-05-26
+**Status:** Decision recorded
 **Scope:** Codex CLI generated `history.jsonl` and `models_cache.json`
 
 ## Decision
