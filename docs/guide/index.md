@@ -12,6 +12,7 @@ Claude Code stores configuration across multiple JSON files and directories (`~/
 - **Track usage** — monitor token costs, billing blocks, and daily/monthly trends
 - **Browse sessions** — view conversation transcripts with tool use details
 - **Monitor live sessions** — attach to running Claude Code terminals via CC Bridge
+- **Switch providers intentionally** — use shared surfaces for Claude Code and Codex CLI while unsupported provider-specific pages stay hidden or disabled
 
 ## Features
 
@@ -24,6 +25,12 @@ Claude Deck covers Claude Code configuration and the shared local-agent operatio
 | **Monitoring** | Sessions, usage tracking, context window, Agent Bridge |
 | **Customization** | Output styles, status line, memory |
 | **Management** | Projects, plans, backup & restore |
+
+## Provider Support
+
+Claude Deck exposes provider capabilities and status through the Providers API. Claude Code remains the full-featured provider for usage, context, transcripts, plugins, hooks, agents, skills, memory, backup, and restore. Codex CLI support focuses on mixed tmux sessions, safe TOML configuration, diagnostics, MCP/plugin inventory and safe CLI-backed mutations, and redacted export-only backups.
+
+See [Multi-Provider and Codex v2](/guide/multi-provider-codex-v2) for the supported, diagnostics-only, and unsupported Codex surfaces.
 
 ## Tech Stack
 
