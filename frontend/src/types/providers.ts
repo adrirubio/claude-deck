@@ -17,6 +17,14 @@ export interface AgentProviderCapabilities {
   doctor: boolean
 }
 
+export type AgentProviderCapabilityState = 'supported' | 'read_only' | 'write_capable' | 'unsupported' | 'unknown'
+
+export interface AgentProviderCapabilityDetail {
+  state: AgentProviderCapabilityState
+  label?: string
+  reason?: string
+}
+
 export interface AgentProviderStatus {
   id: AgentProviderId
   display_name: string
@@ -25,6 +33,7 @@ export interface AgentProviderStatus {
   binary_path: string | null
   version: string | null
   capabilities: AgentProviderCapabilities
+  capability_details?: Partial<Record<keyof AgentProviderCapabilities, AgentProviderCapabilityDetail>>
   config_paths: Record<string, string>
 }
 
