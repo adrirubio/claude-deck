@@ -1,4 +1,4 @@
-import { Terminal, Radio } from "lucide-react";
+import { Terminal, Radio, AlertCircle } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -29,12 +29,21 @@ export function Header() {
         <div className="flex items-center gap-2">
           {status && (
             <>
-              {selectedStatus?.version && (
-                <Badge variant="outline" className="gap-1 font-mono text-xs">
+              <Badge
+                variant="outline"
+                className={cn(
+                  "gap-1 text-xs",
+                  selectedStatus?.installed ? "font-mono" : "border-destructive/40 text-destructive"
+                )}
+              >
+                {selectedStatus?.installed ? (
                   <Terminal className="h-3 w-3" />
-                  {selectedStatus.display_name} v{selectedStatus.version}
-                </Badge>
-              )}
+                ) : (
+                  <AlertCircle className="h-3 w-3" />
+                )}
+                {selectedStatus?.display_name ?? selectedProvider?.display_name ?? "Provider"}
+                {selectedStatus?.version ? ` v${selectedStatus.version}` : selectedStatus?.installed ? " ready" : " missing"}
+              </Badge>
               <Badge
                 variant="secondary"
                 className={cn(
