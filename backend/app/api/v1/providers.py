@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
+from app.services.codex_history_service import CodexHistoryService
+from app.services.codex_usage_context_service import CodexUsageContextService
 from app.services.providers import get_provider, get_providers
 
 router = APIRouter()
@@ -26,6 +28,29 @@ ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_MCP_ARGS = 64
 MAX_MCP_ENV_VARS = 64
 MAX_MCP_STRING_LENGTH = 4096
+PLUGIN_SELECTOR_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}(?:@[A-Za-z0-9][A-Za-z0-9_.-]{0,127})?$")
+
+
+CODEX_PLUGIN_MUTATION_CAPABILITIES = {
+    "install": {
+        "state": "supported",
+        "command": "codex plugin add",
+        "reason": "Supported by the installed Codex CLI plugin command surface.",
+    },
+    "remove": {
+        "state": "supported",
+        "command": "codex plugin remove",
+        "reason": "Supported by the installed Codex CLI plugin command surface.",
+    },
+    "enable": {
+        "state": "unsupported",
+        "reason": "The installed Codex CLI does not expose plugin enable commands.",
+    },
+    "disable": {
+        "state": "unsupported",
+        "reason": "The installed Codex CLI does not expose plugin disable commands.",
+    },
+}
 
 
 def _provider_error(
@@ -89,6 +114,23 @@ class CodexMcpAddRequest(BaseModel):
         return safe_env
 
 
+class CodexPluginMutationRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    marketplace: str | None = Field(default=None, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return _validate_plugin_selector(value)
+
+    @field_validator("marketplace")
+    @classmethod
+    def validate_marketplace(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_plugin_marketplace(value)
+
+
 @router.get("/providers")
 def list_providers():
     providers = [provider.get_status() for provider in get_providers()]
@@ -98,6 +140,17 @@ def list_providers():
 @router.get("/providers/{provider_id}/status")
 def get_provider_status(provider_id: str):
     return _get_provider_or_404(provider_id).get_status()
+
+
+@router.get("/providers/{provider_id}/capabilities")
+def get_provider_capabilities(provider_id: str):
+    provider = _get_provider_or_404(provider_id)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "capabilities": provider.get_capabilities(),
+        "capability_matrix": provider.get_capability_matrix(),
+    }
 
 
 def _get_provider_or_404(provider_id: str):
@@ -170,6 +223,20 @@ def _validate_cli_string(value: str) -> str:
     return value
 
 
+def _validate_plugin_selector(value: str) -> str:
+    value = value.strip()
+    if not PLUGIN_SELECTOR_PATTERN.fullmatch(value):
+        raise ValueError("Plugin selector must be PLUGIN or PLUGIN@MARKETPLACE using letters, numbers, '.', '_', or '-'")
+    return value
+
+
+def _validate_plugin_marketplace(value: str) -> str:
+    value = value.strip()
+    if not value or "@" in value or not PLUGIN_SELECTOR_PATTERN.fullmatch(value):
+        raise ValueError("Marketplace must use letters, numbers, '.', '_', or '-'")
+    return value
+
+
 def _redact_cli_result(result: CLIResult) -> dict[str, Any]:
     return {
         "stdout": _redact_value(result.stdout),
@@ -210,6 +277,24 @@ def _build_codex_mcp_add_args(request: CodexMcpAddRequest) -> list[str]:
     args.extend([request.name, "--", request.command or ""])
     args.extend(request.args)
     return args
+
+
+def _build_codex_plugin_args(action: str, name: str, marketplace: str | None = None) -> list[str]:
+    if action not in {"add", "remove"}:
+        raise HTTPException(status_code=400, detail="Codex plugin action is not supported")
+    try:
+        safe_name = _validate_plugin_selector(name)
+        safe_marketplace = _validate_plugin_marketplace(marketplace) if marketplace else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if marketplace:
+        if "@" in safe_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide marketplace either in the plugin selector or marketplace field, not both",
+            )
+        return [action, safe_name, "--marketplace", safe_marketplace]
+    return [action, safe_name]
 
 
 def _redact_value(value: Any, parent_key: str = "") -> Any:
@@ -421,6 +506,89 @@ def get_provider_plugin_inventory(provider_id: str):
         "provider_display_name": provider.display_name,
         "exit_code": result.exit_code,
         "plugins": _redact_value(_parse_plugin_rows(result.stdout)),
+        "mutation_capabilities": CODEX_PLUGIN_MUTATION_CAPABILITIES,
         "stderr": _redact_value(result.stderr),
         "raw_stdout": safe_stdout,
+    }
+
+
+@router.post("/providers/{provider_id}/plugins")
+def install_provider_plugin(provider_id: str, request: CodexPluginMutationRequest):
+    plugin_args = _build_codex_plugin_args("add", request.name, request.marketplace)
+    provider = _require_codex_provider(provider_id, "plugin mutation")
+    executor = ProviderCLIExecutor(provider.id)
+    _require_provider_binary(executor, "plugin mutation")
+
+    result = executor.execute("plugin", plugin_args, timeout=60)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "name": request.name,
+        "action": "install",
+        **_redact_cli_result(result),
+    }
+
+
+@router.delete("/providers/{provider_id}/plugins/{plugin_name}")
+def remove_provider_plugin(provider_id: str, plugin_name: str, marketplace: str | None = None):
+    plugin_args = _build_codex_plugin_args("remove", plugin_name, marketplace)
+    provider = _require_codex_provider(provider_id, "plugin mutation")
+    executor = ProviderCLIExecutor(provider.id)
+    _require_provider_binary(executor, "plugin mutation")
+
+    result = executor.execute("plugin", plugin_args, timeout=60)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "name": plugin_name,
+        "action": "remove",
+        **_redact_cli_result(result),
+    }
+
+
+@router.post("/providers/{provider_id}/plugins/{plugin_name}/enable")
+def enable_provider_plugin(provider_id: str, plugin_name: str):
+    _require_codex_provider(provider_id, "plugin mutation")
+    try:
+        _validate_plugin_selector(plugin_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=400,
+        detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["enable"]["reason"],
+    )
+
+
+@router.post("/providers/{provider_id}/plugins/{plugin_name}/disable")
+def disable_provider_plugin(provider_id: str, plugin_name: str):
+    _require_codex_provider(provider_id, "plugin mutation")
+    try:
+        _validate_plugin_selector(plugin_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=400,
+        detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["disable"]["reason"],
+    )
+
+
+@router.get("/providers/{provider_id}/history-diagnostics")
+def get_provider_history_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id, "history diagnostics")
+    diagnostics = CodexHistoryService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
+    }
+
+
+@router.get("/providers/{provider_id}/usage-context-diagnostics")
+def get_provider_usage_context_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id, "usage context diagnostics")
+    diagnostics = CodexUsageContextService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
     }

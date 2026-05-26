@@ -44,9 +44,14 @@ from app.utils.path_utils import (
     get_project_claude_md_file,
 )
 from app.services.cli_executor import ProviderCLIExecutor
+from app.services.providers import get_provider
 from app.services.providers.codex_cli import get_codex_home
 
 
+CODEX_RESTORE_REFUSAL_MESSAGE = (
+    "Codex backups are export-only; automatic restore is not supported because "
+    "exports intentionally exclude auth, history, cache, and local SQLite state."
+)
 SENSITIVE_KEY_PATTERN = re.compile(r"(token|secret|password|credential|api[_-]?key|auth|cookie|session)", re.I)
 SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
     r"(?P<key>[A-Za-z0-9_.-]*(?:token|secret|password|credential|api[_-]?key|auth|cookie|session)[A-Za-z0-9_.-]*)"
@@ -175,6 +180,36 @@ class BackupService:
 
         return paths
 
+    def _get_codex_backup_policy(self) -> Dict[str, Any]:
+        """Return the Codex export/restore policy used in manifests and status."""
+        try:
+            provider_policy = get_provider("codex-cli").get_backup_policy()
+        except Exception:
+            provider_policy = None
+        return dict(provider_policy or {
+            "provider": "codex-cli",
+            "export_supported": True,
+            "automatic_restore_supported": False,
+            "restore_mode": "manual_review",
+            "included": [
+                "config.toml with secret-like assignments redacted",
+                "*.config.toml profile files with secret-like assignments redacted",
+                "rules/*.rules files with secret-like assignments redacted",
+                "redacted provider inventory metadata",
+            ],
+            "excluded": [
+                "auth.json",
+                "history.jsonl",
+                "models_cache.json",
+                "*.sqlite and related SQLite sidecar files",
+                "raw cache payloads and prompt text",
+            ],
+            "restore_refusal_reasons": [
+                "Codex auth, history, cache, and local state are intentionally excluded from exports.",
+                "Automatic restore could overwrite active Codex state without a stable provider-owned restore API.",
+            ],
+        })
+
     def _redact_value(self, value: Any, parent_key: str = "") -> Any:
         """Redact sensitive values from generated backup metadata."""
         if value is None:
@@ -212,6 +247,7 @@ class BackupService:
         inventory: Dict[str, Any] = {
             "provider": "codex-cli",
             "codex_home": str(self.codex_home),
+            "backup_policy": self._get_codex_backup_policy(),
             "files": [
                 {
                     "path": str(path),
@@ -388,6 +424,7 @@ class BackupService:
             contents.files.extend(extra_files.keys())
         if provider_inventory:
             contents.provider_inventory = provider_inventory
+            contents.backup_policy = provider_inventory.get("backup_policy", {})
 
         # Detect skills
         if scope != "codex":
@@ -671,14 +708,19 @@ class BackupService:
             platform_compatible=True,
         )
         if backup.scope == "codex":
+            policy = self._get_codex_backup_policy()
             plan.warnings.append(
                 RestorePlanWarning(
-                    type="version",
-                    message="Codex backups are export-only in this version. Download the archive and restore files manually.",
-                    severity="warning",
+                    type="unsupported_restore",
+                    message=CODEX_RESTORE_REFUSAL_MESSAGE,
+                    severity="error",
                 )
             )
-            plan.manual_steps.append("Review the redacted Codex export before manually copying files into CODEX_HOME.")
+            for reason in policy.get("restore_refusal_reasons", []):
+                plan.manual_steps.append(reason)
+            plan.manual_steps.append(
+                "Download and review the redacted Codex export before manually copying files into CODEX_HOME."
+            )
 
         # Check platform compatibility
         if manifest and manifest.platform != current_platform:
@@ -896,7 +938,7 @@ class BackupService:
         if backup.scope == "codex":
             return RestoreResult(
                 success=False,
-                message="Codex backups are export-only; automatic restore is not supported",
+                message=CODEX_RESTORE_REFUSAL_MESSAGE,
             )
 
         archive_path = Path(backup.file_path)
