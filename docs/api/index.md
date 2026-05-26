@@ -55,7 +55,8 @@ FastAPI generates interactive API docs at:
 
 | Module | Prefix | Description |
 |--------|--------|-------------|
-| [Config](/api/config) | `/config` | Configuration management |
+| [Config](/api/config) | `/config` and `/codex-config` | Configuration management |
+| [Providers](/api/providers) | `/providers` | Provider metadata, status, diagnostics, and inventory |
 | [MCP Servers](/api/mcp) | `/mcp` | MCP server management |
 | [Commands](/api/commands) | `/commands` | Slash commands |
 | [Plugins](/api/plugins) | `/plugins` | Plugin management |
@@ -67,7 +68,8 @@ FastAPI generates interactive API docs at:
 | [Plans](/api/plans) | `/plans` | Implementation plans |
 | [Output Styles](/api/output-styles) | `/output-styles` | Response formatting |
 | [Status Line](/api/statusline) | `/statusline` | Terminal status bar |
-| [CC Bridge](/api/cc-bridge) | `/cc-bridge` | Live terminal monitoring |
+| [Agent Bridge](/api/agent-bridge) | `/agent-bridge` | Provider-aware live terminal monitoring |
+| [CC Bridge](/api/cc-bridge) | `/cc-bridge` | Legacy Claude Code terminal monitoring route |
 | [Usage](/api/usage) | `/usage` | Token usage tracking |
 | [Memory](/api/memory) | `/memory` | Memory hierarchy |
 | [Backup](/api/backup) | `/backup` | Configuration backups |

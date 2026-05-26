@@ -1,10 +1,10 @@
 # Config
 
-The Config page lets you view, edit, and understand Claude Code settings across all configuration scopes.
+The Config page lets you view, edit, and understand provider configuration. Claude Code uses JSON settings across multiple scopes; Codex CLI uses TOML files under `$CODEX_HOME`.
 
 ## Overview
 
-Claude Code stores settings in multiple files at different scopes. The Config page provides three views:
+Claude Code stores settings in multiple files at different scopes. The Claude Code config page provides three views:
 
 - **Settings Editor** — form-based editor for common settings
 - **Scope Resolver** — shows how settings merge from different scopes
@@ -56,6 +56,22 @@ Sensitive values (tokens, secrets, passwords, API keys) are automatically masked
 ## Configuration
 
 The Config page reads and writes to the standard Claude Code configuration files. No additional Claude Deck configuration is needed.
+
+## Codex CLI
+
+When the selected provider is Codex CLI, the Config page switches to Codex-specific cards:
+
+- General settings such as model, reasoning effort, and profile
+- Runtime settings such as sandbox, approval policy, search, strict config, and alternate screen behavior
+- Project trust entries
+- Profile v2 files
+- Rules files
+- MCP and plugin inventory
+- Diagnostics from `codex doctor`
+
+Codex config writes are intentionally narrower than Claude Code settings. Claude Deck only updates whitelisted TOML keys, creates a backup before saving, and refuses unsafe paths. Auth, history, model cache, and log files are not shown in the raw viewer.
+
+Codex backups are export-only in this version. They include redacted config, profile files, rules, and provider inventory metadata, but automatic restore is disabled.
 
 ## Tips
 

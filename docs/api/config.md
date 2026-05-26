@@ -1,6 +1,6 @@
 # Config API
 
-Manage Claude Code configuration across all scopes.
+Manage Claude Code configuration across all scopes. Codex CLI uses a separate TOML-backed config API because its file format and safety rules differ from Claude Code JSON settings.
 
 ## Endpoints
 
@@ -96,3 +96,37 @@ Validates permission patterns without saving.
   "settings": { "permissions": { "allow": ["Bash(npm run *)"] } }
 }
 ```
+
+## Codex Config Endpoints
+
+### Get Codex Config Summary
+
+```http
+GET /api/v1/codex-config
+```
+
+Returns safe Codex config metadata, file list, summary values, and parse errors. The full parsed TOML config is not returned automatically.
+
+### List Codex Config Files
+
+```http
+GET /api/v1/codex-config/files
+```
+
+Returns `$CODEX_HOME/config.toml`, profile config files, and rules files. Auth, history, cache, and log files are not exposed as raw config files.
+
+### Get Raw Codex File
+
+```http
+GET /api/v1/codex-config/raw?path={file_path}
+```
+
+Returns raw content only for safe files under `$CODEX_HOME`.
+
+### Update Codex Settings
+
+```http
+PUT /api/v1/codex-config/settings
+```
+
+Updates whitelisted Codex settings using a TOML writer that preserves formatting where possible. A backup is created before writing and the file is parsed before save.
