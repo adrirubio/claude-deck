@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
+from app.services.codex_history_service import CodexHistoryService
 from app.services.providers import get_provider, get_providers
 
 router = APIRouter()
@@ -379,4 +380,15 @@ def get_provider_plugin_inventory(provider_id: str):
         "plugins": _redact_value(_parse_plugin_rows(result.stdout)),
         "stderr": _redact_value(result.stderr),
         "raw_stdout": safe_stdout,
+    }
+
+
+@router.get("/providers/{provider_id}/history-diagnostics")
+def get_provider_history_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id)
+    diagnostics = CodexHistoryService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
     }
