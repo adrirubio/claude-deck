@@ -34,6 +34,16 @@ class ClaudeCodeProvider(AgentProvider):
             "usage": True,
             "context": True,
             "doctor": False,
+            "backup": True,
+            "restore": True,
+        }
+
+    def get_backup_policy(self) -> dict:
+        return {
+            "provider": self.id,
+            "export_supported": True,
+            "automatic_restore_supported": True,
+            "restore_mode": "automatic",
         }
 
     def get_config_paths(self, project_path: str | None = None) -> dict:
