@@ -66,6 +66,7 @@ export interface CodexConfigSummary {
   model?: string
   model_reasoning_effort?: string
   profile?: string
+  profile_v2?: string
   sandbox_mode?: string
   approval_policy?: string
   search?: boolean
@@ -76,12 +77,53 @@ export interface CodexConfigSummary {
   features: Record<string, boolean>
 }
 
+export interface CodexProfileOverride {
+  key: string
+  base?: unknown
+  value: unknown
+}
+
+export interface CodexProfileSource {
+  name: string
+  source: 'inline' | 'file' | string
+  path: string | null
+  exists: boolean
+  parse_error: string | null
+  summary: Record<string, unknown>
+  overrides: CodexProfileOverride[]
+}
+
+export interface CodexMissingProfileReference {
+  name: string
+  reference: 'profile' | 'profile_v2' | string
+  expected_file: string
+}
+
+export interface CodexMalformedProfile {
+  name: string
+  path: string | null
+  parse_error: string
+}
+
+export interface CodexProfileResolution {
+  active_profile: string | null
+  active_profile_v2: string | null
+  resolution_order: string[]
+  base_summary: Record<string, unknown>
+  profiles: CodexProfileSource[]
+  active_sources: CodexProfileSource[]
+  missing_references: CodexMissingProfileReference[]
+  malformed_profiles: CodexMalformedProfile[]
+  effective_summary: Record<string, unknown>
+}
+
 export interface CodexConfigResponse {
   provider: 'codex-cli'
   path: string
   exists: boolean
   parse_error: string | null
   summary: CodexConfigSummary
+  profile_resolution: CodexProfileResolution | null
 }
 
 export interface CodexConfigUpdateRequest {
