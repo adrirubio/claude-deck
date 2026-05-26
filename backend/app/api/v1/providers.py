@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
 from app.services.codex_history_service import CodexHistoryService
+from app.services.codex_usage_context_service import CodexUsageContextService
 from app.services.providers import get_provider, get_providers
 
 router = APIRouter()
@@ -139,7 +140,7 @@ def _require_codex_provider(provider_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     if provider.id != "codex-cli":
-        raise HTTPException(status_code=400, detail="Inventory endpoints are currently Codex-only")
+        raise HTTPException(status_code=400, detail="This provider endpoint is currently Codex-only")
     return provider
 
 
@@ -536,6 +537,17 @@ def disable_provider_plugin(provider_id: str, plugin_name: str):
 def get_provider_history_diagnostics(provider_id: str):
     provider = _require_codex_provider(provider_id)
     diagnostics = CodexHistoryService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
+    }
+
+
+@router.get("/providers/{provider_id}/usage-context-diagnostics")
+def get_provider_usage_context_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id)
+    diagnostics = CodexUsageContextService().get_diagnostics()
     return {
         "provider": provider.id,
         "provider_display_name": provider.display_name,
