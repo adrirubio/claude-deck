@@ -2,6 +2,7 @@
 
 import subprocess
 import shutil
+import re
 from typing import List, Optional, Dict
 from ..models.schemas import CLIResult
 from .providers import get_provider
@@ -12,6 +13,7 @@ class ProviderCLIExecutor:
     """Execute whitelisted provider CLI commands with security constraints."""
 
     DEFAULT_PROVIDER = "claude-code"
+    SAFE_ARG_PATTERN = re.compile(r"^[A-Za-z0-9_./@:+,=%?#&-]{0,4096}$")
 
     def __init__(self, provider_id: str = DEFAULT_PROVIDER):
         self.provider = get_provider(provider_id)
@@ -35,6 +37,18 @@ class ProviderCLIExecutor:
             True if command is allowed, False otherwise
         """
         return command in self.provider.get_allowed_cli_commands()
+
+    def _validate_args(self, args: List[str]) -> List[str]:
+        safe_args = []
+        for arg in args:
+            if not isinstance(arg, str):
+                raise ValueError("CLI arguments must be strings")
+            if "\x00" in arg or any(ord(char) < 32 for char in arg):
+                raise ValueError("CLI arguments cannot contain control characters")
+            if not self.SAFE_ARG_PATTERN.fullmatch(arg):
+                raise ValueError("CLI argument contains unsupported characters")
+            safe_args.append(arg)
+        return safe_args
 
     def execute(
         self,
@@ -72,12 +86,10 @@ class ProviderCLIExecutor:
                 f"Please ensure {self.provider.display_name} is installed and accessible."
             )
 
-        full_command = [self.binary_path, command] + args
+        safe_args = self._validate_args(args)
+        full_command = [self.binary_path, command] + safe_args
 
         try:
-            # codeql[py/command-line-injection]
-            # Provider commands use a resolved fixed binary, a provider-owned subcommand whitelist,
-            # shell=False, and endpoint-specific validation for user-controlled arguments.
             result = subprocess.run(
                 full_command,
                 capture_output=True,
