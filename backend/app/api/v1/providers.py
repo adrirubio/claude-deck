@@ -28,6 +28,31 @@ MAX_MCP_ENV_VARS = 64
 MAX_MCP_STRING_LENGTH = 4096
 
 
+def _provider_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    provider_id: str | None = None,
+    operation: str | None = None,
+    capability: str | None = None,
+    supported_providers: list[str] | None = None,
+) -> HTTPException:
+    detail: dict[str, Any] = {
+        "code": code,
+        "message": message,
+    }
+    if provider_id:
+        detail["provider"] = provider_id
+    if operation:
+        detail["operation"] = operation
+    if capability:
+        detail["capability"] = capability
+    if supported_providers is not None:
+        detail["supported_providers"] = supported_providers
+    return HTTPException(status_code=status_code, detail=detail)
+
+
 class CodexMcpAddRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     command: str | None = Field(default=None, max_length=MAX_MCP_STRING_LENGTH)
@@ -72,19 +97,57 @@ def list_providers():
 
 @router.get("/providers/{provider_id}/status")
 def get_provider_status(provider_id: str):
-    try:
-        return get_provider(provider_id).get_status()
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    return _get_provider_or_404(provider_id).get_status()
 
 
-def _require_codex_provider(provider_id: str):
+def _get_provider_or_404(provider_id: str):
     try:
-        provider = get_provider(provider_id)
+        return get_provider(provider_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise _provider_error(
+            404,
+            "unknown_provider",
+            str(exc),
+            provider_id=provider_id,
+        )
+
+
+def _require_capability(provider, capability: str, operation: str) -> None:
+    if provider.get_capabilities().get(capability):
+        return
+    raise _provider_error(
+        400,
+        "unsupported_operation",
+        f"{provider.display_name} does not support {operation}",
+        provider_id=provider.id,
+        operation=operation,
+        capability=capability,
+    )
+
+
+def _require_provider_binary(executor: ProviderCLIExecutor, operation: str) -> None:
+    if executor.binary_path:
+        return
+    raise _provider_error(
+        500,
+        "provider_binary_missing",
+        f"{executor.provider.display_name} binary not found in PATH.",
+        provider_id=executor.provider_id,
+        operation=operation,
+    )
+
+
+def _require_codex_provider(provider_id: str, operation: str):
+    provider = _get_provider_or_404(provider_id)
     if provider.id != "codex-cli":
-        raise HTTPException(status_code=400, detail="Inventory endpoints are currently Codex-only")
+        raise _provider_error(
+            400,
+            "unsupported_provider_operation",
+            f"{operation} is currently supported only for Codex CLI",
+            provider_id=provider.id,
+            operation=operation,
+            supported_providers=["codex-cli"],
+        )
     return provider
 
 
@@ -234,25 +297,22 @@ def _parse_plugin_rows(stdout: str) -> list[dict[str, str]]:
 
 @router.post("/providers/{provider_id}/cli", response_model=CLIResult)
 def execute_provider_cli(provider_id: str, request: CLIExecuteRequest):
-    try:
-        executor = ProviderCLIExecutor(provider_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    provider = _get_provider_or_404(provider_id)
+    executor = ProviderCLIExecutor(provider.id)
 
     if not executor.validate_command(request.command):
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        raise _provider_error(
+            400,
+            "command_not_allowed",
+            (
                 f"Command '{request.command}' is not allowed. "
                 f"Allowed commands: {', '.join(executor.ALLOWED_COMMANDS)}"
             ),
+            provider_id=provider.id,
+            operation=f"cli:{request.command}",
         )
 
-    if not executor.binary_path:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{executor.provider.display_name} binary not found in PATH.",
-        )
+    _require_provider_binary(executor, f"cli:{request.command}")
 
     result = executor.execute(request.command, request.args)
     return CLIResult(**_redact_cli_result(result))
@@ -260,22 +320,10 @@ def execute_provider_cli(provider_id: str, request: CLIExecuteRequest):
 
 @router.get("/providers/{provider_id}/doctor")
 def get_provider_doctor(provider_id: str):
-    try:
-        provider = get_provider(provider_id)
-        executor = ProviderCLIExecutor(provider_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    if not provider.get_capabilities().get("doctor"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{provider.display_name} does not expose doctor diagnostics",
-        )
-    if not executor.binary_path:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{provider.display_name} binary not found in PATH.",
-        )
+    provider = _get_provider_or_404(provider_id)
+    executor = ProviderCLIExecutor(provider.id)
+    _require_capability(provider, "doctor", "doctor diagnostics")
+    _require_provider_binary(executor, "doctor diagnostics")
 
     result = executor.execute("doctor", ["--json"], timeout=30)
     report = None
@@ -298,10 +346,9 @@ def get_provider_doctor(provider_id: str):
 
 @router.get("/providers/{provider_id}/mcp")
 def get_provider_mcp_inventory(provider_id: str):
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "MCP inventory")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "MCP inventory")
 
     result = executor.execute("mcp", ["list", "--json"], timeout=30)
     servers = None
@@ -328,10 +375,9 @@ def get_provider_mcp_inventory(provider_id: str):
 @router.post("/providers/{provider_id}/mcp")
 def add_provider_mcp_server(provider_id: str, request: CodexMcpAddRequest):
     mcp_args = _build_codex_mcp_add_args(request)
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "MCP server mutation")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "MCP server mutation")
 
     result = executor.execute("mcp", mcp_args, timeout=30)
     return {
@@ -349,10 +395,9 @@ def remove_provider_mcp_server(provider_id: str, server_name: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "MCP server mutation")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "MCP server mutation")
 
     result = executor.execute("mcp", ["remove", safe_name], timeout=30)
     return {
@@ -365,10 +410,9 @@ def remove_provider_mcp_server(provider_id: str, server_name: str):
 
 @router.get("/providers/{provider_id}/plugins")
 def get_provider_plugin_inventory(provider_id: str):
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "plugin inventory")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "plugin inventory")
 
     result = executor.execute("plugin", ["list"], timeout=30)
     safe_stdout = _redact_value(result.stdout)
