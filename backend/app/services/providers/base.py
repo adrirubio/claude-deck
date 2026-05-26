@@ -127,6 +127,10 @@ class AgentProvider(ABC):
     def get_allowed_cli_commands(self) -> list[str]:
         """Return safe command names exposed by a provider CLI API."""
 
+    def get_backup_policy(self) -> dict[str, Any] | None:
+        """Return provider backup/export/restore policy metadata, if defined."""
+        return None
+
     def get_version(self) -> str | None:
         """Read the installed CLI version, if available."""
         binary_path = shutil.which(self.binary_name)
@@ -162,4 +166,5 @@ class AgentProvider(ABC):
             "capability_matrix": self.get_capability_matrix(),
             "capability_details": self.get_capability_details(),
             "config_paths": self.get_config_paths(),
+            "backup_policy": self.get_backup_policy(),
         }

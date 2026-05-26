@@ -25,6 +25,7 @@ CAPABILITY_KEYS = (
     "context",
     "doctor",
     "backup",
+    "restore",
 )
 SUPPORTED_STATES = {"supported", "read_only", "write_capable"}
 
@@ -57,6 +58,7 @@ PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
         "context": capability("read_only", "Context", "Claude Code context diagnostics are available read-only."),
         "doctor": capability("unsupported", "Doctor", "Claude Code does not expose provider doctor diagnostics."),
         "backup": capability("write_capable", "Backup", "Claude Code backup and restore workflows are available."),
+        "restore": capability("write_capable", "Restore", "Claude Code backup restore workflows are available."),
     },
     "codex-cli": {
         "config": capability("write_capable", "Configuration", "Safe Codex TOML settings can be viewed and edited."),
@@ -78,6 +80,7 @@ PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
         "context": capability("unsupported", "Context", "Codex context diagnostics are not available with stable local semantics."),
         "doctor": capability("read_only", "Doctor", "Codex doctor diagnostics are available read-only."),
         "backup": capability("read_only", "Backup", "Codex export-only backups are available."),
+        "restore": capability("unsupported", "Restore", "Automatic Codex restore is refused without a stable provider-owned restore API."),
     },
 }
 

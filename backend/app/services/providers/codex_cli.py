@@ -23,6 +23,31 @@ class CodexCliProvider(AgentProvider):
     binary_name = "codex"
     version_args = ("--version",)
 
+    def get_backup_policy(self) -> dict:
+        return {
+            "provider": self.id,
+            "export_supported": True,
+            "automatic_restore_supported": False,
+            "restore_mode": "manual_review",
+            "included": [
+                "config.toml with secret-like assignments redacted",
+                "*.config.toml profile files with secret-like assignments redacted",
+                "rules/*.rules files with secret-like assignments redacted",
+                "redacted provider inventory metadata",
+            ],
+            "excluded": [
+                "auth.json",
+                "history.jsonl",
+                "models_cache.json",
+                "*.sqlite and related SQLite sidecar files",
+                "raw cache payloads and prompt text",
+            ],
+            "restore_refusal_reasons": [
+                "Codex auth, history, cache, and local state are intentionally excluded from exports.",
+                "Automatic restore could overwrite active Codex state without a stable provider-owned restore API.",
+            ],
+        }
+
     def get_config_paths(self, project_path: str | None = None) -> dict:
         home = get_codex_home()
         return {
