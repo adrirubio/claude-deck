@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { AgentProviderId } from '@/types/providers'
+import type { AgentProviderCapabilities, AgentProviderId, AgentProviderStatus } from '@/types/providers'
 import {
   LayoutDashboard,
   Settings,
@@ -41,7 +41,7 @@ type NavItem = {
   name: string
   href: string
   icon: LucideIcon
-  providerSupport?: AgentProviderId[]
+  capability?: keyof AgentProviderCapabilities
 }
 
 type NavGroup = {
@@ -55,7 +55,7 @@ const commonNavigation: NavGroup[] = [
     items: [
       { name: 'Dashboard', href: '/', icon: LayoutDashboard },
       { name: 'Projects', href: '/projects', icon: FolderOpen },
-      { name: 'Agent Bridge', href: '/agent-bridge', icon: MonitorPlay },
+      { name: 'Agent Bridge', href: '/agent-bridge', icon: MonitorPlay, capability: 'sessions' },
     ],
   },
   {
@@ -63,7 +63,7 @@ const commonNavigation: NavGroup[] = [
     items: [
       { name: 'Presence', href: '/presence', icon: Radio },
       { name: 'Plans', href: '/plans', icon: ClipboardList },
-      { name: 'Backup', href: '/backup', icon: Archive },
+      { name: 'Backup', href: '/backup', icon: Archive, capability: 'backup' },
     ],
   },
 ]
@@ -73,30 +73,30 @@ const providerNavigation: Record<AgentProviderId, NavGroup[]> = {
     {
       name: 'Claude Code',
       items: [
-        { name: 'Config', href: '/config', icon: Settings },
-        { name: 'Sessions', href: '/sessions', icon: MessageSquare },
-        { name: 'MCP Servers', href: '/mcp', icon: Server },
-        { name: 'Plugins', href: '/plugins', icon: Package },
-        { name: 'Permissions / Trust', href: '/permissions', icon: Shield },
+        { name: 'Config', href: '/config', icon: Settings, capability: 'config' },
+        { name: 'Sessions', href: '/sessions', icon: MessageSquare, capability: 'sessions' },
+        { name: 'MCP Servers', href: '/mcp', icon: Server, capability: 'mcp' },
+        { name: 'Plugins', href: '/plugins', icon: Package, capability: 'plugins' },
+        { name: 'Permissions / Trust', href: '/permissions', icon: Shield, capability: 'permissions' },
       ],
     },
     {
       name: 'Claude Tools',
       items: [
-        { name: 'Commands', href: '/commands', icon: Terminal },
-        { name: 'Hooks', href: '/hooks', icon: Webhook },
-        { name: 'Agents', href: '/agents', icon: Bot },
-        { name: 'Skills', href: '/skills', icon: Sparkles },
-        { name: 'Memory', href: '/memory', icon: Brain },
-        { name: 'Output Styles', href: '/output-styles', icon: Paintbrush },
-        { name: 'Status Line', href: '/statusline', icon: Activity },
+        { name: 'Commands', href: '/commands', icon: Terminal, capability: 'commands' },
+        { name: 'Hooks', href: '/hooks', icon: Webhook, capability: 'hooks' },
+        { name: 'Agents', href: '/agents', icon: Bot, capability: 'agents' },
+        { name: 'Skills', href: '/skills', icon: Sparkles, capability: 'skills' },
+        { name: 'Memory', href: '/memory', icon: Brain, capability: 'memory' },
+        { name: 'Output Styles', href: '/output-styles', icon: Paintbrush, capability: 'output_styles' },
+        { name: 'Status Line', href: '/statusline', icon: Activity, capability: 'statusline' },
       ],
     },
     {
       name: 'Claude Metrics',
       items: [
-        { name: 'Context', href: '/context', icon: Gauge },
-        { name: 'Usage', href: '/usage', icon: BarChart3 },
+        { name: 'Context', href: '/context', icon: Gauge, capability: 'context' },
+        { name: 'Usage', href: '/usage', icon: BarChart3, capability: 'usage' },
       ],
     },
   ],
@@ -104,7 +104,7 @@ const providerNavigation: Record<AgentProviderId, NavGroup[]> = {
     {
       name: 'Codex',
       items: [
-        { name: 'Config', href: '/config', icon: Settings },
+        { name: 'Config', href: '/config', icon: Settings, capability: 'config' },
       ],
     },
   ],
@@ -117,16 +117,21 @@ function getNavigation(providerId: AgentProviderId): NavGroup[] {
   ]
 }
 
-function supportsProvider(item: NavItem, providerId: AgentProviderId) {
-  return !item.providerSupport || item.providerSupport.includes(providerId)
+const visibleCapabilityStates = new Set(['supported', 'read_only', 'write_capable'])
+
+function supportsProvider(item: NavItem, provider: AgentProviderStatus | null) {
+  if (!item.capability || !provider) return true
+  const detail = provider.capability_matrix?.[item.capability]
+  if (detail) return visibleCapabilityStates.has(detail.state)
+  return Boolean(provider.capabilities?.[item.capability])
 }
 
-function NavGroupSection({ group, collapsed, selectedProviderId }: {
+function NavGroupSection({ group, collapsed, selectedProvider }: {
   group: NavGroup
   collapsed: boolean
-  selectedProviderId: AgentProviderId
+  selectedProvider: AgentProviderStatus | null
 }) {
-  const visibleItems = group.items.filter((item) => supportsProvider(item, selectedProviderId))
+  const visibleItems = group.items.filter((item) => supportsProvider(item, selectedProvider))
   if (visibleItems.length === 0) return null
 
   return (
@@ -162,7 +167,7 @@ function NavGroupSection({ group, collapsed, selectedProviderId }: {
 
 export function Sidebar() {
   const { collapsed, setCollapsed } = useSidebar()
-  const { providers, selectedProviderId, setSelectedProviderId } = useProviderContext()
+  const { providers, selectedProviderId, selectedProvider, setSelectedProviderId } = useProviderContext()
   const visibleGroups = getNavigation(selectedProviderId)
 
   return (
@@ -199,7 +204,7 @@ export function Sidebar() {
             key={group.name}
             group={group}
             collapsed={collapsed}
-            selectedProviderId={selectedProviderId}
+            selectedProvider={selectedProvider}
           />
         ))}
       </nav>

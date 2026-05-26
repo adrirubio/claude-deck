@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.services.providers.capabilities import capability_flags, normalize_capability_matrix
+
 
 _MAX_TREE_DEPTH = 4
 
@@ -97,9 +99,17 @@ class AgentProvider(ABC):
     binary_name: str
     version_args: tuple[str, ...] = ("--version",)
 
-    @abstractmethod
     def get_capabilities(self) -> dict[str, bool]:
-        """Return provider feature support flags."""
+        """Return backward-compatible provider feature support flags."""
+        return capability_flags(self.id)
+
+    def get_capability_matrix(self) -> dict[str, dict[str, Any]]:
+        """Return detailed provider capability metadata."""
+        return normalize_capability_matrix(self.id)
+
+    def get_capability_details(self) -> dict[str, dict[str, str]]:
+        """Return richer capability metadata for UI/action state."""
+        return self.get_capability_matrix()
 
     @abstractmethod
     def get_config_paths(self, project_path: str | None = None) -> dict[str, Any]:
@@ -116,6 +126,10 @@ class AgentProvider(ABC):
     @abstractmethod
     def get_allowed_cli_commands(self) -> list[str]:
         """Return safe command names exposed by a provider CLI API."""
+
+    def get_backup_policy(self) -> dict[str, Any] | None:
+        """Return provider backup/export/restore policy metadata, if defined."""
+        return None
 
     def get_version(self) -> str | None:
         """Read the installed CLI version, if available."""
@@ -149,6 +163,8 @@ class AgentProvider(ABC):
             "binary_path": binary_path,
             "version": version,
             "capabilities": self.get_capabilities(),
+            "capability_matrix": self.get_capability_matrix(),
+            "capability_details": self.get_capability_details(),
             "config_paths": self.get_config_paths(),
+            "backup_policy": self.get_backup_policy(),
         }
-

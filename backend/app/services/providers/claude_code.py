@@ -18,22 +18,12 @@ class ClaudeCodeProvider(AgentProvider):
     display_name = "Claude Code"
     binary_name = "claude"
 
-    def get_capabilities(self) -> dict[str, bool]:
+    def get_backup_policy(self) -> dict:
         return {
-            "sessions": True,
-            "spawn": True,
-            "resume": True,
-            "fork": False,
-            "mcp": True,
-            "plugins": True,
-            "commands": True,
-            "agents": True,
-            "skills": True,
-            "hooks": True,
-            "memory": True,
-            "usage": True,
-            "context": True,
-            "doctor": False,
+            "provider": self.id,
+            "export_supported": True,
+            "automatic_restore_supported": True,
+            "restore_mode": "automatic",
         }
 
     def get_config_paths(self, project_path: str | None = None) -> dict:

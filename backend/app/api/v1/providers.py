@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
+from app.services.codex_history_service import CodexHistoryService
+from app.services.codex_usage_context_service import CodexUsageContextService
 from app.services.providers import get_provider, get_providers
 
 router = APIRouter()
@@ -26,6 +28,54 @@ ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_MCP_ARGS = 64
 MAX_MCP_ENV_VARS = 64
 MAX_MCP_STRING_LENGTH = 4096
+PLUGIN_SELECTOR_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}(?:@[A-Za-z0-9][A-Za-z0-9_.-]{0,127})?$")
+
+
+CODEX_PLUGIN_MUTATION_CAPABILITIES = {
+    "install": {
+        "state": "supported",
+        "command": "codex plugin add",
+        "reason": "Supported by the installed Codex CLI plugin command surface.",
+    },
+    "remove": {
+        "state": "supported",
+        "command": "codex plugin remove",
+        "reason": "Supported by the installed Codex CLI plugin command surface.",
+    },
+    "enable": {
+        "state": "unsupported",
+        "reason": "The installed Codex CLI does not expose plugin enable commands.",
+    },
+    "disable": {
+        "state": "unsupported",
+        "reason": "The installed Codex CLI does not expose plugin disable commands.",
+    },
+}
+
+
+def _provider_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    provider_id: str | None = None,
+    operation: str | None = None,
+    capability: str | None = None,
+    supported_providers: list[str] | None = None,
+) -> HTTPException:
+    detail: dict[str, Any] = {
+        "code": code,
+        "message": message,
+    }
+    if provider_id:
+        detail["provider"] = provider_id
+    if operation:
+        detail["operation"] = operation
+    if capability:
+        detail["capability"] = capability
+    if supported_providers is not None:
+        detail["supported_providers"] = supported_providers
+    return HTTPException(status_code=status_code, detail=detail)
 
 
 class CodexMcpAddRequest(BaseModel):
@@ -64,6 +114,23 @@ class CodexMcpAddRequest(BaseModel):
         return safe_env
 
 
+class CodexPluginMutationRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    marketplace: str | None = Field(default=None, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return _validate_plugin_selector(value)
+
+    @field_validator("marketplace")
+    @classmethod
+    def validate_marketplace(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_plugin_marketplace(value)
+
+
 @router.get("/providers")
 def list_providers():
     providers = [provider.get_status() for provider in get_providers()]
@@ -72,19 +139,68 @@ def list_providers():
 
 @router.get("/providers/{provider_id}/status")
 def get_provider_status(provider_id: str):
-    try:
-        return get_provider(provider_id).get_status()
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    return _get_provider_or_404(provider_id).get_status()
 
 
-def _require_codex_provider(provider_id: str):
+@router.get("/providers/{provider_id}/capabilities")
+def get_provider_capabilities(provider_id: str):
+    provider = _get_provider_or_404(provider_id)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "capabilities": provider.get_capabilities(),
+        "capability_matrix": provider.get_capability_matrix(),
+    }
+
+
+def _get_provider_or_404(provider_id: str):
     try:
-        provider = get_provider(provider_id)
+        return get_provider(provider_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise _provider_error(
+            404,
+            "unknown_provider",
+            str(exc),
+            provider_id=provider_id,
+        )
+
+
+def _require_capability(provider, capability: str, operation: str) -> None:
+    if provider.get_capabilities().get(capability):
+        return
+    raise _provider_error(
+        400,
+        "unsupported_operation",
+        f"{provider.display_name} does not support {operation}",
+        provider_id=provider.id,
+        operation=operation,
+        capability=capability,
+    )
+
+
+def _require_provider_binary(executor: ProviderCLIExecutor, operation: str) -> None:
+    if executor.binary_path:
+        return
+    raise _provider_error(
+        500,
+        "provider_binary_missing",
+        f"{executor.provider.display_name} binary not found in PATH.",
+        provider_id=executor.provider_id,
+        operation=operation,
+    )
+
+
+def _require_codex_provider(provider_id: str, operation: str):
+    provider = _get_provider_or_404(provider_id)
     if provider.id != "codex-cli":
-        raise HTTPException(status_code=400, detail="Inventory endpoints are currently Codex-only")
+        raise _provider_error(
+            400,
+            "unsupported_provider_operation",
+            f"{operation} is currently supported only for Codex CLI",
+            provider_id=provider.id,
+            operation=operation,
+            supported_providers=["codex-cli"],
+        )
     return provider
 
 
@@ -104,6 +220,20 @@ def _validate_cli_string(value: str) -> str:
         raise ValueError("Value contains control characters")
     if len(value) > MAX_MCP_STRING_LENGTH:
         raise ValueError(f"Value cannot exceed {MAX_MCP_STRING_LENGTH} characters")
+    return value
+
+
+def _validate_plugin_selector(value: str) -> str:
+    value = value.strip()
+    if not PLUGIN_SELECTOR_PATTERN.fullmatch(value):
+        raise ValueError("Plugin selector must be PLUGIN or PLUGIN@MARKETPLACE using letters, numbers, '.', '_', or '-'")
+    return value
+
+
+def _validate_plugin_marketplace(value: str) -> str:
+    value = value.strip()
+    if not value or "@" in value or not PLUGIN_SELECTOR_PATTERN.fullmatch(value):
+        raise ValueError("Marketplace must use letters, numbers, '.', '_', or '-'")
     return value
 
 
@@ -147,6 +277,24 @@ def _build_codex_mcp_add_args(request: CodexMcpAddRequest) -> list[str]:
     args.extend([request.name, "--", request.command or ""])
     args.extend(request.args)
     return args
+
+
+def _build_codex_plugin_args(action: str, name: str, marketplace: str | None = None) -> list[str]:
+    if action not in {"add", "remove"}:
+        raise HTTPException(status_code=400, detail="Codex plugin action is not supported")
+    try:
+        safe_name = _validate_plugin_selector(name)
+        safe_marketplace = _validate_plugin_marketplace(marketplace) if marketplace else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if marketplace:
+        if "@" in safe_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide marketplace either in the plugin selector or marketplace field, not both",
+            )
+        return [action, safe_name, "--marketplace", safe_marketplace]
+    return [action, safe_name]
 
 
 def _redact_value(value: Any, parent_key: str = "") -> Any:
@@ -234,25 +382,22 @@ def _parse_plugin_rows(stdout: str) -> list[dict[str, str]]:
 
 @router.post("/providers/{provider_id}/cli", response_model=CLIResult)
 def execute_provider_cli(provider_id: str, request: CLIExecuteRequest):
-    try:
-        executor = ProviderCLIExecutor(provider_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    provider = _get_provider_or_404(provider_id)
+    executor = ProviderCLIExecutor(provider.id)
 
     if not executor.validate_command(request.command):
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        raise _provider_error(
+            400,
+            "command_not_allowed",
+            (
                 f"Command '{request.command}' is not allowed. "
                 f"Allowed commands: {', '.join(executor.ALLOWED_COMMANDS)}"
             ),
+            provider_id=provider.id,
+            operation=f"cli:{request.command}",
         )
 
-    if not executor.binary_path:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{executor.provider.display_name} binary not found in PATH.",
-        )
+    _require_provider_binary(executor, f"cli:{request.command}")
 
     result = executor.execute(request.command, request.args)
     return CLIResult(**_redact_cli_result(result))
@@ -260,22 +405,10 @@ def execute_provider_cli(provider_id: str, request: CLIExecuteRequest):
 
 @router.get("/providers/{provider_id}/doctor")
 def get_provider_doctor(provider_id: str):
-    try:
-        provider = get_provider(provider_id)
-        executor = ProviderCLIExecutor(provider_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    if not provider.get_capabilities().get("doctor"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{provider.display_name} does not expose doctor diagnostics",
-        )
-    if not executor.binary_path:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{provider.display_name} binary not found in PATH.",
-        )
+    provider = _get_provider_or_404(provider_id)
+    executor = ProviderCLIExecutor(provider.id)
+    _require_capability(provider, "doctor", "doctor diagnostics")
+    _require_provider_binary(executor, "doctor diagnostics")
 
     result = executor.execute("doctor", ["--json"], timeout=30)
     report = None
@@ -298,10 +431,9 @@ def get_provider_doctor(provider_id: str):
 
 @router.get("/providers/{provider_id}/mcp")
 def get_provider_mcp_inventory(provider_id: str):
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "MCP inventory")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "MCP inventory")
 
     result = executor.execute("mcp", ["list", "--json"], timeout=30)
     servers = None
@@ -328,10 +460,9 @@ def get_provider_mcp_inventory(provider_id: str):
 @router.post("/providers/{provider_id}/mcp")
 def add_provider_mcp_server(provider_id: str, request: CodexMcpAddRequest):
     mcp_args = _build_codex_mcp_add_args(request)
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "MCP server mutation")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "MCP server mutation")
 
     result = executor.execute("mcp", mcp_args, timeout=30)
     return {
@@ -349,10 +480,9 @@ def remove_provider_mcp_server(provider_id: str, server_name: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "MCP server mutation")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "MCP server mutation")
 
     result = executor.execute("mcp", ["remove", safe_name], timeout=30)
     return {
@@ -365,10 +495,9 @@ def remove_provider_mcp_server(provider_id: str, server_name: str):
 
 @router.get("/providers/{provider_id}/plugins")
 def get_provider_plugin_inventory(provider_id: str):
-    provider = _require_codex_provider(provider_id)
+    provider = _require_codex_provider(provider_id, "plugin inventory")
     executor = ProviderCLIExecutor(provider.id)
-    if not executor.binary_path:
-        raise HTTPException(status_code=500, detail=f"{provider.display_name} binary not found in PATH.")
+    _require_provider_binary(executor, "plugin inventory")
 
     result = executor.execute("plugin", ["list"], timeout=30)
     safe_stdout = _redact_value(result.stdout)
@@ -377,6 +506,89 @@ def get_provider_plugin_inventory(provider_id: str):
         "provider_display_name": provider.display_name,
         "exit_code": result.exit_code,
         "plugins": _redact_value(_parse_plugin_rows(result.stdout)),
+        "mutation_capabilities": CODEX_PLUGIN_MUTATION_CAPABILITIES,
         "stderr": _redact_value(result.stderr),
         "raw_stdout": safe_stdout,
+    }
+
+
+@router.post("/providers/{provider_id}/plugins")
+def install_provider_plugin(provider_id: str, request: CodexPluginMutationRequest):
+    plugin_args = _build_codex_plugin_args("add", request.name, request.marketplace)
+    provider = _require_codex_provider(provider_id, "plugin mutation")
+    executor = ProviderCLIExecutor(provider.id)
+    _require_provider_binary(executor, "plugin mutation")
+
+    result = executor.execute("plugin", plugin_args, timeout=60)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "name": request.name,
+        "action": "install",
+        **_redact_cli_result(result),
+    }
+
+
+@router.delete("/providers/{provider_id}/plugins/{plugin_name}")
+def remove_provider_plugin(provider_id: str, plugin_name: str, marketplace: str | None = None):
+    plugin_args = _build_codex_plugin_args("remove", plugin_name, marketplace)
+    provider = _require_codex_provider(provider_id, "plugin mutation")
+    executor = ProviderCLIExecutor(provider.id)
+    _require_provider_binary(executor, "plugin mutation")
+
+    result = executor.execute("plugin", plugin_args, timeout=60)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "name": plugin_name,
+        "action": "remove",
+        **_redact_cli_result(result),
+    }
+
+
+@router.post("/providers/{provider_id}/plugins/{plugin_name}/enable")
+def enable_provider_plugin(provider_id: str, plugin_name: str):
+    _require_codex_provider(provider_id, "plugin mutation")
+    try:
+        _validate_plugin_selector(plugin_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=400,
+        detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["enable"]["reason"],
+    )
+
+
+@router.post("/providers/{provider_id}/plugins/{plugin_name}/disable")
+def disable_provider_plugin(provider_id: str, plugin_name: str):
+    _require_codex_provider(provider_id, "plugin mutation")
+    try:
+        _validate_plugin_selector(plugin_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=400,
+        detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["disable"]["reason"],
+    )
+
+
+@router.get("/providers/{provider_id}/history-diagnostics")
+def get_provider_history_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id, "history diagnostics")
+    diagnostics = CodexHistoryService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
+    }
+
+
+@router.get("/providers/{provider_id}/usage-context-diagnostics")
+def get_provider_usage_context_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id, "usage context diagnostics")
+    diagnostics = CodexUsageContextService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
     }

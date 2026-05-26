@@ -35,6 +35,7 @@ interface NewSessionDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSpawned: (tmuxTarget: string) => void
+  initialProvider?: AgentProviderId
 }
 
 const MODE_OPTIONS: { value: Mode; label: string }[] = [
@@ -49,9 +50,10 @@ const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: 'fork', label: 'Fork' },
 ]
 
-export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDialogProps) {
+export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvider }: NewSessionDialogProps) {
   const { providers, selectedProviderId } = useProviderContext()
-  const [provider, setProvider] = useState<AgentProviderId>(selectedProviderId)
+  const defaultProvider = initialProvider ?? selectedProviderId
+  const [provider, setProvider] = useState<AgentProviderId>(defaultProvider)
   const [directory, setDirectory] = useState('')
   const [mode, setMode] = useState<Mode>('plain')
   const [worktreeName, setWorktreeName] = useState('')
@@ -94,7 +96,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
   useEffect(() => {
     if (!open) {
       setDirectory('')
-      setProvider(selectedProviderId)
+      setProvider(defaultProvider)
       setMode('plain')
       setWorktreeName('')
       setSkipPermissions(false)
@@ -113,7 +115,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
       setRecentSessions([])
       setSubmitting(false)
     }
-  }, [open, selectedProviderId])
+  }, [open, defaultProvider])
 
   const canLaunch = (() => {
     if (submitting) return false
