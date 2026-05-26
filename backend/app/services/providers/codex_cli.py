@@ -23,26 +23,6 @@ class CodexCliProvider(AgentProvider):
     binary_name = "codex"
     version_args = ("--version",)
 
-    def get_capabilities(self) -> dict[str, bool]:
-        return {
-            "sessions": True,
-            "spawn": True,
-            "resume": True,
-            "fork": True,
-            "mcp": True,
-            "plugins": True,
-            "commands": False,
-            "agents": False,
-            "skills": False,
-            "hooks": False,
-            "memory": False,
-            "usage": False,
-            "context": False,
-            "doctor": True,
-            "backup": True,
-            "restore": False,
-        }
-
     def get_backup_policy(self) -> dict:
         return {
             "provider": self.id,
