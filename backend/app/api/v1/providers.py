@@ -254,7 +254,8 @@ def execute_provider_cli(provider_id: str, request: CLIExecuteRequest):
             detail=f"{executor.provider.display_name} binary not found in PATH.",
         )
 
-    return executor.execute(request.command, request.args)
+    result = executor.execute(request.command, request.args)
+    return CLIResult(**_redact_cli_result(result))
 
 
 @router.get("/providers/{provider_id}/doctor")
@@ -281,7 +282,7 @@ def get_provider_doctor(provider_id: str):
     parse_error = None
     if result.stdout.strip():
         try:
-            report = json.loads(result.stdout)
+            report = _redact_value(json.loads(result.stdout))
         except json.JSONDecodeError as exc:
             parse_error = str(exc)
 
@@ -291,7 +292,7 @@ def get_provider_doctor(provider_id: str):
         "exit_code": result.exit_code,
         "report": report,
         "parse_error": parse_error,
-        "stderr": result.stderr,
+        "stderr": _redact_value(result.stderr),
     }
 
 

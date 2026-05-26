@@ -106,6 +106,16 @@ class CodexConfigService:
                     })
         return files
 
+    def _is_safe_raw_file(self, path: Path) -> bool:
+        root = self.codex_home.expanduser().resolve()
+        if path == root / "config.toml":
+            return True
+        if path.parent == root and path.name.endswith(".config.toml"):
+            return True
+        if path.parent == root / "rules" and path.suffix == ".rules":
+            return True
+        return False
+
     def get_config(self) -> dict[str, Any]:
         config, parse_error = self.parse_toml_file(self.config_file)
         projects = config.get("projects", {}) if isinstance(config.get("projects"), dict) else {}
@@ -137,6 +147,8 @@ class CodexConfigService:
         root = self.codex_home.expanduser().resolve()
         if path != root and root not in path.parents:
             raise ValueError("Path is outside CODEX_HOME")
+        if not self._is_safe_raw_file(path):
+            raise ValueError("Codex raw viewer only supports config.toml, *.config.toml, and rules/*.rules")
 
         if not path.exists():
             return {"path": str(path), "content": "", "exists": False}

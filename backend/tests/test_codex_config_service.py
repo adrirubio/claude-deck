@@ -75,6 +75,30 @@ def test_codex_config_summary_omits_full_config_and_secrets(tmp_path):
     assert "mcp_servers" not in serialized
 
 
+def test_codex_raw_view_rejects_auth_and_allows_safe_files(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    (tmp_path / "config.toml").write_text('model = "gpt-5"\n', encoding="utf-8")
+    (tmp_path / "work.config.toml").write_text('profile = "work"\n', encoding="utf-8")
+    (rules_dir / "team.rules").write_text("be careful\n", encoding="utf-8")
+    (tmp_path / "auth.json").write_text('{"token":"secret"}', encoding="utf-8")
+
+    service = CodexConfigService(codex_home=tmp_path)
+
+    assert service.get_file_content(str(tmp_path / "config.toml"))["exists"] is True
+    assert service.get_file_content(str(tmp_path / "work.config.toml"))["exists"] is True
+    assert service.get_file_content(str(rules_dir / "team.rules"))["exists"] is True
+
+    try:
+        service.get_file_content(str(tmp_path / "auth.json"))
+    except ValueError as exc:
+        assert "raw viewer only supports" in str(exc)
+    else:
+        raise AssertionError("Expected auth.json raw access to be rejected")
+
+
 def test_codex_update_preserves_comments_and_creates_backup(tmp_path):
     from app.services.codex_config_service import CodexConfigService
 

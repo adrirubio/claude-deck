@@ -16,6 +16,32 @@ def test_provider_cli_executor_uses_codex_binary_and_whitelist():
     assert result.exit_code == 0
 
 
+def test_provider_cli_api_redacts_sensitive_output(monkeypatch):
+    from app.api.v1 import providers as providers_api
+    from app.models.schemas import CLIExecuteRequest
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+        provider = SimpleNamespace(display_name="Codex")
+        ALLOWED_COMMANDS = ["doctor"]
+
+        def validate_command(self, command):
+            return command == "doctor"
+
+        def execute(self, command, args):
+            return SimpleNamespace(stdout="token=secret-token", stderr="api_key=secret-key", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.execute_provider_cli(
+        "codex-cli",
+        CLIExecuteRequest(command="doctor", args=[]),
+    )
+
+    assert response.stdout == "token=[redacted]"
+    assert response.stderr == "api_key=[redacted]"
+
+
 def test_provider_cli_executor_rejects_unsafe_codex_command():
     from app.services.cli_executor import ProviderCLIExecutor
 
@@ -34,4 +60,3 @@ def test_legacy_cli_executor_defaults_to_claude_code():
 
     assert executor.provider_id == "claude-code"
     assert executor.claude_binary == "/usr/bin/claude"
-

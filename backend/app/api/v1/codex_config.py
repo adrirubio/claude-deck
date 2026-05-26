@@ -34,6 +34,11 @@ def get_codex_config_file(path: str):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/codex-config/raw")
+def get_codex_config_raw(path: str):
+    return get_codex_config_file(path)
+
+
 @router.patch("/codex-config")
 def update_codex_config(request: CodexConfigUpdateRequest):
     try:
