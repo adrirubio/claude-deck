@@ -110,6 +110,10 @@ def test_codex_plugin_inventory_returns_text_and_best_effort_rows(monkeypatch):
     ]
     assert "version" not in response["plugins"][0]
     assert all("marketplace.json" not in plugin["name"] for plugin in response["plugins"])
+    assert response["mutation_capabilities"]["install"]["state"] == "supported"
+    assert response["mutation_capabilities"]["remove"]["state"] == "supported"
+    assert response["mutation_capabilities"]["enable"]["state"] == "unsupported"
+    assert response["mutation_capabilities"]["disable"]["state"] == "unsupported"
 
 
 def test_codex_mcp_add_uses_cli_command_args_and_env(monkeypatch):
@@ -212,3 +216,125 @@ def test_codex_mcp_remove_uses_cli_remove(monkeypatch):
 
     assert calls == [("mcp", ["remove", "linear"], 30)]
     assert response["exit_code"] == 0
+
+
+def test_codex_plugin_install_uses_cli_add_with_marketplace(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout="installed auth_token=secret-value", stderr="", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.install_provider_plugin(
+        "codex-cli",
+        providers_api.CodexPluginMutationRequest(name="linear", marketplace="openai-curated"),
+    )
+
+    assert calls == [("plugin", ["add", "linear", "--marketplace", "openai-curated"], 60)]
+    assert response["action"] == "install"
+    assert response["exit_code"] == 0
+    assert "secret-value" not in response["stdout"]
+
+
+def test_codex_plugin_install_accepts_selector(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout="installed", stderr="", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    providers_api.install_provider_plugin(
+        "codex-cli",
+        providers_api.CodexPluginMutationRequest(name="linear@openai-curated"),
+    )
+
+    assert calls == [("plugin", ["add", "linear@openai-curated"], 60)]
+
+
+def test_codex_plugin_remove_uses_cli_remove(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout="removed", stderr="token=secret-value", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.remove_provider_plugin(
+        "codex-cli",
+        "linear",
+        marketplace="openai-curated",
+    )
+
+    assert calls == [("plugin", ["remove", "linear", "--marketplace", "openai-curated"], 60)]
+    assert response["action"] == "remove"
+    assert "secret-value" not in response["stderr"]
+
+
+def test_codex_plugin_mutation_rejects_unsafe_selectors():
+    from app.api.v1 import providers as providers_api
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        providers_api.CodexPluginMutationRequest(name="../bad")
+
+    request = providers_api.CodexPluginMutationRequest(
+        name="linear@openai-curated",
+        marketplace="other",
+    )
+    with pytest.raises(providers_api.HTTPException) as exc_info:
+        providers_api.install_provider_plugin("codex-cli", request)
+
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(providers_api.HTTPException) as remove_exc:
+        providers_api.remove_provider_plugin("codex-cli", "..bad")
+
+    assert remove_exc.value.status_code == 400
+
+
+def test_codex_plugin_enable_disable_are_explicitly_unsupported():
+    from app.api.v1 import providers as providers_api
+
+    with pytest.raises(providers_api.HTTPException) as enable_exc:
+        providers_api.enable_provider_plugin("codex-cli", "linear@openai-curated")
+    with pytest.raises(providers_api.HTTPException) as disable_exc:
+        providers_api.disable_provider_plugin("codex-cli", "linear@openai-curated")
+
+    assert enable_exc.value.status_code == 400
+    assert "does not expose plugin enable" in enable_exc.value.detail
+    assert disable_exc.value.status_code == 400
+    assert "does not expose plugin disable" in disable_exc.value.detail
+
+
+def test_codex_plugin_enable_disable_reject_unsafe_selectors():
+    from app.api.v1 import providers as providers_api
+
+    with pytest.raises(providers_api.HTTPException) as enable_exc:
+        providers_api.enable_provider_plugin("codex-cli", "..bad")
+    with pytest.raises(providers_api.HTTPException) as disable_exc:
+        providers_api.disable_provider_plugin("codex-cli", "..bad")
+
+    assert enable_exc.value.status_code == 400
+    assert "Plugin selector" in enable_exc.value.detail
+    assert disable_exc.value.status_code == 400
+    assert "Plugin selector" in disable_exc.value.detail

@@ -133,11 +133,38 @@ export interface CodexPluginInventoryRow {
   path?: string
 }
 
+export interface CodexPluginMutationCapability {
+  state: 'supported' | 'unsupported'
+  command?: string
+  reason: string
+}
+
 export interface CodexPluginInventoryResponse {
   provider: 'codex-cli'
   provider_display_name: string
   exit_code: number
   plugins: CodexPluginInventoryRow[]
+  mutation_capabilities: {
+    install: CodexPluginMutationCapability
+    remove: CodexPluginMutationCapability
+    enable: CodexPluginMutationCapability
+    disable: CodexPluginMutationCapability
+  }
   stderr: string
   raw_stdout: string
+}
+
+export interface CodexPluginMutationRequest {
+  name: string
+  marketplace?: string
+}
+
+export interface CodexPluginMutationResponse {
+  provider: 'codex-cli'
+  provider_display_name: string
+  name: string
+  action: 'install' | 'remove'
+  stdout: string
+  stderr: string
+  exit_code: number
 }
