@@ -107,4 +107,7 @@ def test_provider_specific_inventory_smoke_rejects_wrong_provider():
         providers_api.get_provider_mcp_inventory("claude-code")
 
     assert exc_info.value.status_code == 400
-    assert "Codex-only" in exc_info.value.detail
+    assert exc_info.value.detail["code"] == "unsupported_provider_operation"
+    assert exc_info.value.detail["provider"] == "claude-code"
+    assert exc_info.value.detail["operation"] == "MCP inventory"
+    assert exc_info.value.detail["supported_providers"] == ["codex-cli"]
