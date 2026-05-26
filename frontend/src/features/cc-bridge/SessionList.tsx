@@ -17,6 +17,8 @@ interface SessionListProps {
   onNewSession: () => void
   onKillSession: (session: CCSession) => void
   providerFilter: ProviderFilter
+  canCreateSession: boolean
+  createDisabledReason: string | null
 }
 
 export function SessionList({
@@ -29,10 +31,16 @@ export function SessionList({
   onNewSession,
   onKillSession,
   providerFilter,
+  canCreateSession,
+  createDisabledReason,
 }: SessionListProps) {
   const emptyName = providerFilter === 'all'
     ? 'agent'
     : providerFilter === 'codex-cli' ? 'Codex' : 'Claude Code'
+  const emptyHint = createDisabledReason
+    ?? (providerFilter === 'all'
+      ? 'Launch or start a supported CLI in tmux.'
+      : `Launch ${emptyName} from Agent Bridge or start it in tmux.`)
 
   return (
     <div className="flex flex-col h-full">
@@ -41,7 +49,14 @@ export function SessionList({
           Sessions ({sessions.length})
         </span>
         <div className="flex items-center gap-0.5">
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onNewSession} title="New session">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onNewSession}
+            disabled={!canCreateSession}
+            title={createDisabledReason ?? 'New session'}
+          >
             <Plus className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onRefresh} title="Refresh">
@@ -65,7 +80,7 @@ export function SessionList({
           <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
             <MonitorX className="h-8 w-8 mb-2" />
             <p className="text-sm">No {emptyName} sessions found</p>
-            <p className="text-xs mt-1">Start a supported CLI in tmux</p>
+            <p className="text-xs mt-1 text-center px-3">{emptyHint}</p>
           </div>
         )}
 

@@ -8,6 +8,8 @@ import type {
   CodexMcpInventoryResponse,
   CodexMcpMutationResponse,
   CodexPluginInventoryResponse,
+  CodexPluginMutationRequest,
+  CodexPluginMutationResponse,
   ProviderDoctorResponse,
   ProvidersResponse,
 } from '@/types/providers'
@@ -70,4 +72,17 @@ export async function removeCodexMcpServer(name: string): Promise<CodexMcpMutati
 
 export async function fetchCodexPluginInventory(): Promise<CodexPluginInventoryResponse> {
   return apiClient<CodexPluginInventoryResponse>('providers/codex-cli/plugins')
+}
+
+export async function installCodexPlugin(request: CodexPluginMutationRequest): Promise<CodexPluginMutationResponse> {
+  return apiClient<CodexPluginMutationResponse>('providers/codex-cli/plugins', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  })
+}
+
+export async function removeCodexPlugin(name: string): Promise<CodexPluginMutationResponse> {
+  return apiClient<CodexPluginMutationResponse>(`providers/codex-cli/plugins/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
 }

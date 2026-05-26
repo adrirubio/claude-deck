@@ -107,6 +107,10 @@ class AgentProvider(ABC):
         """Return detailed provider capability metadata."""
         return normalize_capability_matrix(self.id)
 
+    def get_capability_details(self) -> dict[str, dict[str, str]]:
+        """Return richer capability metadata for UI/action state."""
+        return self.get_capability_matrix()
+
     @abstractmethod
     def get_config_paths(self, project_path: str | None = None) -> dict[str, Any]:
         """Return important config paths for this provider."""
@@ -156,5 +160,6 @@ class AgentProvider(ABC):
             "version": version,
             "capabilities": self.get_capabilities(),
             "capability_matrix": self.get_capability_matrix(),
+            "capability_details": self.get_capability_details(),
             "config_paths": self.get_config_paths(),
         }

@@ -22,9 +22,11 @@ def test_provider_status_includes_central_capability_matrix():
     assert claude["capabilities"]["plugins"] is True
     assert claude["capabilities"]["fork"] is False
     assert claude["capability_matrix"]["plugins"]["state"] == "write_capable"
+    assert claude["capability_details"]["plugins"]["state"] == "write_capable"
     assert claude["capability_matrix"]["doctor"]["state"] == "unsupported"
     assert codex["capabilities"]["plugins"] is True
-    assert codex["capability_matrix"]["plugins"]["state"] == "read_only"
+    assert codex["capability_matrix"]["plugins"]["state"] == "write_capable"
+    assert codex["capability_details"]["plugins"]["state"] == "write_capable"
     assert codex["capability_matrix"]["mcp"]["state"] == "write_capable"
     assert codex["capability_matrix"]["usage"]["state"] == "unsupported"
     assert codex["capability_matrix"]["doctor"]["state"] == "read_only"

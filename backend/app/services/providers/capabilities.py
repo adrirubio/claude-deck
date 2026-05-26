@@ -65,7 +65,7 @@ PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
         "resume": capability("write_capable", "Resume Sessions", "Codex resume is available."),
         "fork": capability("write_capable", "Fork Sessions", "Codex fork is available."),
         "mcp": capability("write_capable", "MCP Servers", "Codex MCP servers can be managed through the Codex CLI."),
-        "plugins": capability("read_only", "Plugins", "Codex plugin inventory is available read-only in this build."),
+        "plugins": capability("write_capable", "Plugins", "Codex plugin inventory and CLI-backed install/remove are available."),
         "permissions": capability("unsupported", "Permissions", "Codex trust and permissions use different config semantics."),
         "commands": capability("unsupported", "Commands", "Codex does not expose Claude Code slash commands."),
         "agents": capability("unsupported", "Agents", "Codex does not expose Claude Code agents."),
