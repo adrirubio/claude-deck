@@ -1,20 +1,33 @@
 export type AgentProviderId = 'claude-code' | 'codex-cli'
 
 export interface AgentProviderCapabilities {
+  config: boolean
   sessions: boolean
   spawn: boolean
   resume: boolean
   fork: boolean
   mcp: boolean
   plugins: boolean
+  permissions: boolean
   commands: boolean
   agents: boolean
   skills: boolean
   hooks: boolean
   memory: boolean
+  output_styles: boolean
+  statusline: boolean
   usage: boolean
   context: boolean
   doctor: boolean
+  backup: boolean
+}
+
+export type AgentProviderCapabilityState = 'supported' | 'read_only' | 'write_capable' | 'unsupported' | 'unknown'
+
+export interface AgentProviderCapabilityDetail {
+  state: AgentProviderCapabilityState
+  label: string
+  reason?: string
 }
 
 export interface AgentProviderStatus {
@@ -25,6 +38,7 @@ export interface AgentProviderStatus {
   binary_path: string | null
   version: string | null
   capabilities: AgentProviderCapabilities
+  capability_matrix: Partial<Record<keyof AgentProviderCapabilities, AgentProviderCapabilityDetail>>
   config_paths: Record<string, string>
 }
 

@@ -23,24 +23,6 @@ class CodexCliProvider(AgentProvider):
     binary_name = "codex"
     version_args = ("--version",)
 
-    def get_capabilities(self) -> dict[str, bool]:
-        return {
-            "sessions": True,
-            "spawn": True,
-            "resume": True,
-            "fork": True,
-            "mcp": True,
-            "plugins": True,
-            "commands": False,
-            "agents": False,
-            "skills": False,
-            "hooks": False,
-            "memory": False,
-            "usage": False,
-            "context": False,
-            "doctor": True,
-        }
-
     def get_config_paths(self, project_path: str | None = None) -> dict:
         home = get_codex_home()
         return {
