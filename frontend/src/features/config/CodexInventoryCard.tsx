@@ -18,7 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { addCodexMcpServer, removeCodexMcpServer } from '@/hooks/useProviders'
+import { addCodexMcpServer, installCodexPlugin, removeCodexMcpServer, removeCodexPlugin } from '@/hooks/useProviders'
 import { cn } from '@/lib/utils'
 import type { CodexMcpAddRequest, CodexMcpInventoryResponse, CodexPluginInventoryResponse } from '@/types/providers'
 
@@ -134,6 +134,8 @@ export function CodexInventoryCard({
   const [envText, setEnvText] = useState('')
   const [url, setUrl] = useState('')
   const [bearerTokenEnvVar, setBearerTokenEnvVar] = useState('')
+  const [pluginName, setPluginName] = useState('')
+  const [pluginMarketplace, setPluginMarketplace] = useState('')
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [mutationMessage, setMutationMessage] = useState<string | null>(null)
   const [mutating, setMutating] = useState(false)
@@ -141,6 +143,13 @@ export function CodexInventoryCard({
   const mcpRows = useMemo(() => getMcpServerRows(mcp?.servers), [mcp?.servers])
   const mcpCount = countMcpServers(mcp?.servers)
   const pluginCount = plugins?.plugins.length ?? null
+  const pluginCapabilities = plugins?.mutation_capabilities
+  const canInstallPlugins = pluginCapabilities?.install.state === 'supported'
+  const canRemovePlugins = pluginCapabilities?.remove.state === 'supported'
+  const pluginToggleUnsupported = [
+    pluginCapabilities?.enable.reason,
+    pluginCapabilities?.disable.reason,
+  ].filter(Boolean).join(' ')
 
   const resetForm = () => {
     setName('')
@@ -149,6 +158,11 @@ export function CodexInventoryCard({
     setEnvText('')
     setUrl('')
     setBearerTokenEnvVar('')
+  }
+
+  const resetPluginForm = () => {
+    setPluginName('')
+    setPluginMarketplace('')
   }
 
   const handleAddMcp = async () => {
@@ -213,6 +227,68 @@ export function CodexInventoryCard({
     }
   }
 
+  const handleInstallPlugin = async () => {
+    setMutationError(null)
+    setMutationMessage(null)
+    try {
+      const trimmedName = pluginName.trim()
+      const trimmedMarketplace = pluginMarketplace.trim()
+      if (!trimmedName) throw new Error('Plugin name is required')
+      if (!canInstallPlugins) {
+        throw new Error(pluginCapabilities?.install.reason || 'Codex plugin install is not supported')
+      }
+
+      setMutating(true)
+      const result = await installCodexPlugin({
+        name: trimmedName,
+        ...(trimmedMarketplace && { marketplace: trimmedMarketplace }),
+      })
+      if (result.exit_code !== 0) {
+        throw new Error(result.stderr || result.stdout || `codex plugin add exited with ${result.exit_code}`)
+      }
+      const message = `Plugin "${trimmedName}" installed`
+      setMutationMessage(message)
+      toast.success(message)
+      resetPluginForm()
+      await onRefresh()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to install Codex plugin'
+      setMutationError(message)
+      toast.error(message)
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  const handleRemovePlugin = async (nameToRemove: string) => {
+    setMutationError(null)
+    setMutationMessage(null)
+    if (!canRemovePlugins) {
+      const message = pluginCapabilities?.remove.reason || 'Codex plugin remove is not supported'
+      setMutationError(message)
+      toast.error(message)
+      return
+    }
+
+    setMutating(true)
+    try {
+      const result = await removeCodexPlugin(nameToRemove)
+      if (result.exit_code !== 0) {
+        throw new Error(result.stderr || result.stdout || `codex plugin remove exited with ${result.exit_code}`)
+      }
+      const message = `Plugin "${nameToRemove}" removed`
+      setMutationMessage(message)
+      toast.success(message)
+      await onRefresh()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to remove Codex plugin'
+      setMutationError(message)
+      toast.error(message)
+    } finally {
+      setMutating(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -254,6 +330,14 @@ export function CodexInventoryCard({
               </Badge>
             </div>
             <p className="mt-1 text-2xl font-semibold">{pluginCount ?? 'Unknown'}</p>
+            {pluginCapabilities && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <Badge variant={canInstallPlugins ? 'default' : 'outline'}>install</Badge>
+                <Badge variant={canRemovePlugins ? 'default' : 'outline'}>remove</Badge>
+                <Badge variant="outline">enable unsupported</Badge>
+                <Badge variant="outline">disable unsupported</Badge>
+              </div>
+            )}
             {plugins?.stderr && (
               <p className="mt-2 text-xs text-muted-foreground">{plugins.stderr}</p>
             )}
@@ -366,6 +450,48 @@ export function CodexInventoryCard({
           </div>
         </div>
 
+        <div className="rounded-md border p-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-sm font-medium">Install Plugin</p>
+              {pluginToggleUnsupported && (
+                <p className="mt-1 text-xs text-muted-foreground">{pluginToggleUnsupported}</p>
+              )}
+            </div>
+            {pluginCapabilities?.install.command && (
+              <Badge variant="outline">{pluginCapabilities.install.command}</Badge>
+            )}
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="codex-plugin-name">Plugin</Label>
+              <Input
+                id="codex-plugin-name"
+                value={pluginName}
+                onChange={(event) => setPluginName(event.target.value)}
+                placeholder="linear or linear@openai-curated"
+                disabled={mutating || !canInstallPlugins}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="codex-plugin-marketplace">Marketplace</Label>
+              <Input
+                id="codex-plugin-marketplace"
+                value={pluginMarketplace}
+                onChange={(event) => setPluginMarketplace(event.target.value)}
+                placeholder="openai-curated"
+                disabled={mutating || !canInstallPlugins}
+              />
+            </div>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button onClick={handleInstallPlugin} disabled={mutating || !canInstallPlugins} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Install Plugin
+            </Button>
+          </div>
+        </div>
+
         {mcpRows.length > 0 && (
           <div className="rounded-md border">
             {mcpRows.map((server) => (
@@ -415,20 +541,56 @@ export function CodexInventoryCard({
           <div className="rounded-md border">
             {plugins.plugins.map((plugin) => (
               <div key={`${plugin.status ?? 'unknown'}:${plugin.name}`} className="border-b p-3 last:border-b-0">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium">{plugin.name}</p>
-                  {plugin.status && <Badge variant="outline">{plugin.status}</Badge>}
-                </div>
-                {(plugin.version || plugin.path) && (
-                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    {plugin.version && <span>v{plugin.version}</span>}
-                    {plugin.path && (
-                      <code className="max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono">
-                        {plugin.path}
-                      </code>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-medium">{plugin.name}</p>
+                      {plugin.status && <Badge variant="outline">{plugin.status}</Badge>}
+                    </div>
+                    {(plugin.version || plugin.path) && (
+                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        {plugin.version && <span>v{plugin.version}</span>}
+                        {plugin.path && (
+                          <code className="max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono">
+                            {plugin.path}
+                          </code>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
+                  {plugin.status === 'installed' && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+                          disabled={mutating || !canRemovePlugins}
+                          title={`Remove ${plugin.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Remove Codex Plugin</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Remove "{plugin.name}" using codex plugin remove? This updates Codex local plugin config and cache.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => handleRemovePlugin(plugin.name)}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          >
+                            Remove
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </div>
               </div>
             ))}
           </div>

@@ -7,10 +7,17 @@ import { TerminalView } from './TerminalView'
 import { NewSessionDialog } from './NewSessionDialog'
 import { KillSessionDialog } from './KillSessionDialog'
 import type { CCSession } from './types'
-import type { AgentProviderId } from '@/types/providers'
+import { useProviderContext } from '@/contexts/ProviderContext'
+import type { AgentProviderId, AgentProviderStatus } from '@/types/providers'
 
 const MAX_GRID_PANES = 4
 type ProviderFilter = 'all' | AgentProviderId
+
+const PROVIDER_FILTERS: { value: ProviderFilter; label: string }[] = [
+  { value: 'all', label: 'All agents' },
+  { value: 'claude-code', label: 'Claude Code' },
+  { value: 'codex-cli', label: 'Codex' },
+]
 
 function addTarget(prev: string[], target: string): string[] {
   if (prev.includes(target)) return prev
@@ -20,9 +27,8 @@ function addTarget(prev: string[], target: string): string[] {
 
 export function CCBridgePage() {
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all')
-  const { sessions, loading, error, refresh } = useCCSessions(
-    providerFilter === 'all' ? undefined : providerFilter,
-  )
+  const { providers, selectedProviderId } = useProviderContext()
+  const { sessions, loading, error, refresh } = useCCSessions()
   const [activeTargets, setActiveTargets] = useState<string[]>([])
   const [fullscreenTarget, setFullscreenTarget] = useState<string | null>(null)
   const [focusedTarget, setFocusedTarget] = useState<string | null>(null)
@@ -30,6 +36,42 @@ export function CCBridgePage() {
   const [killSession, setKillSession] = useState<CCSession | null>(null)
 
   const isFullscreen = fullscreenTarget !== null
+  const visibleSessions = providerFilter === 'all'
+    ? sessions
+    : sessions.filter((session) => session.provider === providerFilter)
+
+  const providersById = providers.reduce<Partial<Record<AgentProviderId, AgentProviderStatus>>>((acc, provider) => {
+    acc[provider.id] = provider
+    return acc
+  }, {})
+
+  const canProviderSpawn = (provider: AgentProviderStatus | undefined) => (
+    Boolean(provider?.installed)
+    && provider?.capability_details?.spawn?.state !== 'unsupported'
+    && provider?.capability_details?.spawn?.state !== 'read_only'
+    && provider?.capabilities.spawn === true
+  )
+
+  const selectedFilterProvider = providerFilter === 'all' ? null : providersById[providerFilter]
+  const canCreateSession = providerFilter === 'all'
+    ? providers.some(canProviderSpawn)
+    : canProviderSpawn(selectedFilterProvider ?? undefined)
+  const createDisabledReason = providerFilter === 'all'
+    ? 'No installed provider can launch sessions.'
+    : !selectedFilterProvider
+      ? 'Provider metadata is not available.'
+      : !selectedFilterProvider.installed
+        ? `${selectedFilterProvider.display_name} is not installed.`
+        : selectedFilterProvider.capability_details?.spawn?.reason
+          ?? `${selectedFilterProvider.display_name} cannot launch sessions from Agent Bridge.`
+
+  const filterCounts: Record<ProviderFilter, number> = {
+    all: sessions.length,
+    'claude-code': sessions.filter((session) => session.provider === 'claude-code').length,
+    'codex-cli': sessions.filter((session) => session.provider === 'codex-cli').length,
+  }
+
+  const initialDialogProvider = providerFilter === 'all' ? selectedProviderId : providerFilter
 
   useEffect(() => {
     if (!isFullscreen) return
@@ -84,11 +126,7 @@ export function CCBridgePage() {
             </span>
           </div>
           <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">
-            {[
-              ['all', 'All agents'],
-              ['claude-code', 'Claude Code'],
-              ['codex-cli', 'Codex'],
-            ].map(([value, label]) => (
+            {PROVIDER_FILTERS.map(({ value, label }) => (
               <button
                 key={value}
                 type="button"
@@ -98,9 +136,9 @@ export function CCBridgePage() {
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:text-foreground'
                 )}
-                onClick={() => setProviderFilter(value as ProviderFilter)}
+                onClick={() => setProviderFilter(value)}
               >
-                {label}
+                {label} <span className="opacity-70">({filterCounts[value]})</span>
               </button>
             ))}
           </div>
@@ -111,7 +149,7 @@ export function CCBridgePage() {
         {!isFullscreen && (
           <div className="w-52 border-r shrink-0">
             <SessionList
-              sessions={sessions}
+              sessions={visibleSessions}
               loading={loading}
               error={error}
               activeTargets={activeTargets}
@@ -120,6 +158,8 @@ export function CCBridgePage() {
               onNewSession={() => setNewSessionOpen(true)}
               onKillSession={setKillSession}
               providerFilter={providerFilter}
+              canCreateSession={canCreateSession}
+              createDisabledReason={canCreateSession ? null : createDisabledReason}
             />
           </div>
         )}
@@ -176,6 +216,7 @@ export function CCBridgePage() {
         open={newSessionOpen}
         onOpenChange={setNewSessionOpen}
         onSpawned={handleSpawned}
+        initialProvider={initialDialogProvider}
       />
 
       <KillSessionDialog

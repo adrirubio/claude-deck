@@ -894,7 +894,7 @@ class BackupBase(BaseModel):
 
     name: str
     description: Optional[str] = None
-    scope: str  # "full", "user", "project"
+    scope: str  # "full", "user", "project", "codex"
 
 
 class BackupCreate(BackupBase):
@@ -1401,6 +1401,7 @@ class BackupManifestContents(BaseModel):
     agents: List[str] = []
     commands: List[str] = []
     provider_inventory: Dict[str, Any] = {}
+    backup_policy: Dict[str, Any] = {}
 
 
 class BackupManifest(BaseModel):
