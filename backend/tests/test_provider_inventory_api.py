@@ -1,0 +1,214 @@
+"""Tests for read-only Codex MCP and plugin inventory endpoints."""
+from types import SimpleNamespace
+
+import pytest
+
+
+def test_codex_mcp_inventory_parses_json_and_redacts(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            assert command == "mcp"
+            assert args == ["list", "--json"]
+            return SimpleNamespace(
+                stdout='{"servers":{"local":{"command":"node","authToken":"abc123"}}}',
+                stderr="",
+                exit_code=0,
+            )
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.get_provider_mcp_inventory("codex-cli")
+
+    assert response["exit_code"] == 0
+    assert response["parse_error"] is None
+    assert response["servers"]["servers"]["local"]["authToken"] == "[redacted]"
+    assert "abc123" not in response["raw_stdout"]
+    assert '"authToken": "[redacted]"' in response["raw_stdout"]
+
+
+def test_codex_mcp_inventory_surfaces_errors(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            return SimpleNamespace(
+                stdout="{not-json",
+                stderr="auth_token=secret-value failed",
+                exit_code=2,
+            )
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.get_provider_mcp_inventory("codex-cli")
+
+    assert response["exit_code"] == 2
+    assert response["servers"] is None
+    assert response["parse_error"]
+    assert "auth_token=[redacted]" in response["stderr"]
+
+
+def test_codex_plugin_inventory_returns_text_and_best_effort_rows(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    header = f"{'PLUGIN':<28}{'STATUS':<16}{'VERSION':<12}PATH"
+    blank_version_row = (
+        f"{'linear@openai-curated':<28}"
+        f"{'not installed':<16}"
+        f"{'':<12}"
+        "/home/user/.codex/plugins/linear"
+    )
+    version_row = (
+        f"{'review@openai-curated':<28}"
+        f"{'installed':<16}"
+        f"{'0.4.0':<12}"
+        "/tmp/review plugin"
+    )
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            assert command == "plugin"
+            assert args == ["list"]
+            return SimpleNamespace(
+                stdout=(
+                    "Marketplace `openai-curated`\n"
+                    "/home/user/.codex/marketplaces/openai-curated/marketplace.json\n"
+                    "\n"
+                    f"{header}\n"
+                    f"{blank_version_row}\n"
+                    f"{version_row}\n"
+                ),
+                stderr="",
+                exit_code=0,
+            )
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.get_provider_plugin_inventory("codex-cli")
+
+    assert response["exit_code"] == 0
+    assert response["raw_stdout"].startswith("Marketplace")
+    assert response["plugins"] == [
+        {
+            "name": "linear@openai-curated",
+            "status": "not installed",
+            "path": "/home/user/.codex/plugins/linear",
+        },
+        {
+            "name": "review@openai-curated",
+            "status": "installed",
+            "version": "0.4.0",
+            "path": "/tmp/review plugin",
+        },
+    ]
+    assert "version" not in response["plugins"][0]
+    assert all("marketplace.json" not in plugin["name"] for plugin in response["plugins"])
+
+
+def test_codex_mcp_add_uses_cli_command_args_and_env(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout="added auth_token=secret-value", stderr="", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.add_provider_mcp_server(
+        "codex-cli",
+        providers_api.CodexMcpAddRequest(
+            name="linear",
+            command="npx",
+            args=["-y", "@linear/mcp"],
+            env={"LINEAR_API_KEY": "secret-value"},
+        ),
+    )
+
+    assert calls == [
+        (
+            "mcp",
+            ["add", "--env", "LINEAR_API_KEY=secret-value", "linear", "--", "npx", "-y", "@linear/mcp"],
+            30,
+        )
+    ]
+    assert response["exit_code"] == 0
+    assert "secret-value" not in response["stdout"]
+
+
+def test_codex_mcp_add_uses_url_cli_args(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout="added", stderr="", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    providers_api.add_provider_mcp_server(
+        "codex-cli",
+        providers_api.CodexMcpAddRequest(
+            name="remote-server",
+            url="https://example.com/mcp",
+            bearer_token_env_var="MCP_TOKEN",
+        ),
+    )
+
+    assert calls == [
+        (
+            "mcp",
+            ["add", "--url", "https://example.com/mcp", "--bearer-token-env-var", "MCP_TOKEN", "remote-server"],
+            30,
+        )
+    ]
+
+
+def test_codex_mcp_add_rejects_ambiguous_payload():
+    from app.api.v1 import providers as providers_api
+
+    request = providers_api.CodexMcpAddRequest(
+        name="bad-server",
+        command="npx",
+        url="https://example.com/mcp",
+    )
+
+    with pytest.raises(providers_api.HTTPException) as exc_info:
+        providers_api.add_provider_mcp_server("codex-cli", request)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_codex_mcp_remove_uses_cli_remove(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout="removed", stderr="", exit_code=0)
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.remove_provider_mcp_server("codex-cli", "linear")
+
+    assert calls == [("mcp", ["remove", "linear"], 30)]
+    assert response["exit_code"] == 0

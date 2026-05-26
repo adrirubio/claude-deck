@@ -63,6 +63,13 @@ class UsageService:
         self.pricing = PricingService()
         self.projects_dir = get_claude_projects_dir()
 
+    @staticmethod
+    def _as_utc(dt: datetime) -> datetime:
+        """Treat naive datetimes as UTC and normalize aware datetimes to UTC."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
     # === Cache Management ===
 
     async def get_cache_key(
@@ -517,10 +524,13 @@ class UsageService:
 
         last_entry = entries[-1] if entries else None
         actual_end_time = last_entry.timestamp if last_entry else start_time
+        now_utc = self._as_utc(now)
+        end_time_utc = self._as_utc(end_time)
+        actual_end_time_utc = self._as_utc(actual_end_time)
 
         # Determine if block is active
         is_active = (
-            (now - actual_end_time) < session_duration and now < end_time
+            (now_utc - actual_end_time_utc) < session_duration and now_utc < end_time_utc
         )
 
         # Aggregate tokens
@@ -552,7 +562,7 @@ class UsageService:
                 burn_rate_cost = (cost_usd / duration_minutes) * 60  # Per hour
 
                 # Project remaining usage
-                remaining_ms = (end_time - now).total_seconds() * 1000
+                remaining_ms = (end_time_utc - now_utc).total_seconds() * 1000
                 remaining_minutes = max(0, int(remaining_ms / (1000 * 60)))
 
                 projected_additional_tokens = burn_rate_tokens * remaining_minutes
@@ -615,10 +625,14 @@ class UsageService:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(days=days)
 
+        def parse_block_start(block: SessionBlock) -> datetime:
+            start_time = datetime.fromisoformat(block.start_time)
+            return self._as_utc(start_time)
+
         return [
             block
             for block in blocks
-            if datetime.fromisoformat(block.start_time) >= cutoff or block.is_active
+            if parse_block_start(block) >= cutoff or block.is_active
         ]
 
     # === Public API Methods ===

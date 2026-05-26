@@ -1,6 +1,6 @@
 # Introduction
 
-Claude Deck is a self-hosted web application for visualizing and managing [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration. It provides a unified interface for managing MCP servers, plugins, slash commands, hooks, agents, permissions, usage tracking, and other Claude Code extensions.
+Claude Deck is a self-hosted web application for visualizing and managing local AI coding agents. It started with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration and now includes Codex CLI support for tmux sessions, TOML settings, diagnostics, MCP inventory, and redacted config exports.
 
 ## Why Claude Deck?
 
@@ -15,13 +15,13 @@ Claude Code stores configuration across multiple JSON files and directories (`~/
 
 ## Features
 
-Claude Deck covers all aspects of Claude Code configuration:
+Claude Deck covers Claude Code configuration and the shared local-agent operations layer:
 
 | Category | Features |
 |----------|----------|
-| **Core Config** | Settings editor, MCP servers, slash commands |
+| **Core Config** | Claude Code settings editor, Codex TOML settings editor, MCP servers, slash commands |
 | **Extensions** | Plugins, hooks, permissions, agents, skills |
-| **Monitoring** | Sessions, usage tracking, context window, CC Bridge |
+| **Monitoring** | Sessions, usage tracking, context window, Agent Bridge |
 | **Customization** | Output styles, status line, memory |
 | **Management** | Projects, plans, backup & restore |
 

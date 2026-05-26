@@ -42,7 +42,7 @@ backend/
 
 All routes live under `/api/v1/`. The frontend's Vite dev server proxies `/api` requests to the backend at `http://localhost:8000`.
 
-Route modules: `health`, `config`, `projects`, `cli`, `mcp`, `commands`, `plugins`, `hooks`, `permissions`, `agents`, `backup`, `output-styles`, `statusline`, `sessions`, `cc-bridge`, `usage`, `memory`
+Route modules: `health`, `config`, `codex-config`, `providers`, `projects`, `cli`, `mcp`, `commands`, `plugins`, `hooks`, `permissions`, `agents`, `backup`, `output-styles`, `statusline`, `sessions`, `agent-bridge`, `cc-bridge`, `usage`, `memory`
 
 ### Database
 

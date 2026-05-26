@@ -13,6 +13,7 @@ import {
   Loader2,
   Monitor,
   AlertTriangle,
+  Bot,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -87,6 +88,8 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
         return <User className="h-4 w-4" />;
       case "project":
         return <FolderOpen className="h-4 w-4" />;
+      case "codex":
+        return <Bot className="h-4 w-4" />;
     }
   };
 
@@ -98,6 +101,8 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
         return "secondary" as const;
       case "project":
         return "outline" as const;
+      case "codex":
+        return "default" as const;
     }
   };
 
@@ -131,7 +136,9 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
   return (
     <>
       <div className="space-y-4">
-        {backups.map((backup) => (
+        {backups.map((backup) => {
+          const isCodexBackup = backup.scope === "codex";
+          return (
             <Card key={backup.id} className="hover:bg-muted/50 transition-colors">
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between">
@@ -165,14 +172,16 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                       <Download className="h-4 w-4" />
                     </Button>
 
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => onRestore(backup)}
-                      title="Restore backup"
-                    >
-                      <RotateCcw className="h-4 w-4" />
-                    </Button>
+                    {!isCodexBackup && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => onRestore(backup)}
+                        title="Restore backup"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                    )}
 
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
@@ -259,7 +268,8 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                 </div>
               </CardContent>
             </Card>
-        ))}
+          );
+        })}
       </div>
 
       {/* View Plan Dialog */}
@@ -395,17 +405,19 @@ export function BackupList({ backups, onRestore, onDownload, onDelete }: BackupL
                 <Button variant="outline" onClick={() => setPlanDialogOpen(false)}>
                   Close
                 </Button>
-                <Button
-                  onClick={() => {
-                    setPlanDialogOpen(false);
-                    if (selectedBackup) {
-                      onRestore(selectedBackup);
-                    }
-                  }}
-                >
-                  <RotateCcw className="h-4 w-4 mr-2" />
-                  Restore Now
-                </Button>
+                {selectedBackup?.scope !== "codex" && (
+                  <Button
+                    onClick={() => {
+                      setPlanDialogOpen(false);
+                      if (selectedBackup) {
+                        onRestore(selectedBackup);
+                      }
+                    }}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Restore Now
+                  </Button>
+                )}
               </div>
             </div>
           ) : null}

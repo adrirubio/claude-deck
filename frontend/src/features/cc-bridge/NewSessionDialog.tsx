@@ -11,16 +11,25 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { MODAL_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import { spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
 import { useProjectContext } from '@/contexts/ProjectContext'
+import { useProviderContext } from '@/contexts/ProviderContext'
+import type { AgentProviderId } from '@/types/providers'
 import type { SpawnSessionRequest } from './types'
 import type { SessionSummary } from '@/types/sessions'
 
-type Mode = 'plain' | 'worktree' | 'resume'
+type Mode = 'plain' | 'worktree' | 'resume' | 'fork'
 
 interface NewSessionDialogProps {
   open: boolean
@@ -34,11 +43,29 @@ const MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: 'resume', label: 'Resume' },
 ]
 
+const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
+  { value: 'plain', label: 'New' },
+  { value: 'resume', label: 'Resume' },
+  { value: 'fork', label: 'Fork' },
+]
+
 export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDialogProps) {
+  const { providers, selectedProviderId } = useProviderContext()
+  const [provider, setProvider] = useState<AgentProviderId>(selectedProviderId)
   const [directory, setDirectory] = useState('')
   const [mode, setMode] = useState<Mode>('plain')
   const [worktreeName, setWorktreeName] = useState('')
   const [skipPermissions, setSkipPermissions] = useState(false)
+  const [prompt, setPrompt] = useState('')
+  const [model, setModel] = useState('')
+  const [profile, setProfile] = useState('')
+  const [sandbox, setSandbox] = useState('')
+  const [approvalPolicy, setApprovalPolicy] = useState('')
+  const [search, setSearch] = useState(false)
+  const [noAltScreen, setNoAltScreen] = useState(true)
+  const [dangerousBypass, setDangerousBypass] = useState(false)
+  const [codexSessionId, setCodexSessionId] = useState('')
+  const [useLast, setUseLast] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -48,10 +75,12 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
 
   const { listSessions } = useSessionsApi()
   const { projects } = useProjectContext()
+  const isCodex = provider === 'codex-cli'
+  const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
-    if (mode !== 'resume') return
+    if (mode !== 'resume' || isCodex) return
     let cancelled = false
     setLoadingSessions(true)
     listSessions({ limit: 20, sort_by: 'date', sort_order: 'desc' })
@@ -59,25 +88,39 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
       .catch(() => { if (!cancelled) setRecentSessions([]) })
       .finally(() => { if (!cancelled) setLoadingSessions(false) })
     return () => { cancelled = true }
-  }, [mode, listSessions])
+  }, [mode, isCodex, listSessions])
 
   // Reset state when dialog closes
   useEffect(() => {
     if (!open) {
       setDirectory('')
+      setProvider(selectedProviderId)
       setMode('plain')
       setWorktreeName('')
       setSkipPermissions(false)
+      setPrompt('')
+      setModel('')
+      setProfile('')
+      setSandbox('')
+      setApprovalPolicy('')
+      setSearch(false)
+      setNoAltScreen(true)
+      setDangerousBypass(false)
+      setCodexSessionId('')
+      setUseLast(true)
       setError(null)
       setSelectedSession(null)
       setRecentSessions([])
       setSubmitting(false)
     }
-  }, [open])
+  }, [open, selectedProviderId])
 
   const canLaunch = (() => {
     if (submitting) return false
-    if (mode === 'resume') return selectedSession !== null
+    if (isCodex && (mode === 'resume' || mode === 'fork')) {
+      return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
+    }
+    if (!isCodex && mode === 'resume') return selectedSession !== null
     return directory.trim().length > 0
   })()
 
@@ -87,14 +130,27 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
 
     try {
       const request: SpawnSessionRequest = {
-        directory: mode === 'resume' ? '' : directory.trim(),
+        provider,
+        directory: !isCodex && mode === 'resume' ? '' : directory.trim(),
         mode,
-        ...(mode === 'worktree' && worktreeName.trim() && { worktree_name: worktreeName.trim() }),
-        ...(mode === 'resume' && selectedSession && {
+        ...(provider === 'claude-code' && mode === 'worktree' && worktreeName.trim() && { worktree_name: worktreeName.trim() }),
+        ...(provider === 'claude-code' && mode === 'resume' && selectedSession && {
           session_id: selectedSession.id,
           project_folder: selectedSession.project_folder,
         }),
-        ...(skipPermissions && { skip_permissions: true }),
+        ...(provider === 'claude-code' && skipPermissions && { skip_permissions: true }),
+        ...(isCodex && prompt.trim() && { prompt: prompt.trim() }),
+        ...(isCodex && model.trim() && { model: model.trim() }),
+        ...(isCodex && profile.trim() && { profile: profile.trim() }),
+        ...(isCodex && sandbox && { sandbox }),
+        ...(isCodex && approvalPolicy && { approval_policy: approvalPolicy }),
+        ...(isCodex && search && { search: true }),
+        ...(isCodex && { no_alt_screen: noAltScreen }),
+        ...(isCodex && dangerousBypass && { dangerously_bypass_approvals_and_sandbox: true }),
+        ...(isCodex && (mode === 'resume' || mode === 'fork') && {
+          use_last: useLast,
+          ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
+        }),
       }
 
       const response = await spawnSession(request)
@@ -111,18 +167,42 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={MODAL_SIZES.MD}>
         <DialogHeader>
-          <DialogTitle>New Claude Code Session</DialogTitle>
+          <DialogTitle>New Agent Session</DialogTitle>
           <DialogDescription>
-            Launch a new Claude Code instance in a tmux session.
+            Launch a new agent CLI instance in a tmux session.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 min-w-0">
+          <div className="space-y-1.5">
+            <Label>Provider</Label>
+            <Select
+              value={provider}
+              onValueChange={(value) => {
+                setProvider(value as AgentProviderId)
+                setMode('plain')
+                setSelectedSession(null)
+                setError(null)
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.display_name}{!item.installed ? ' (missing)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
           {/* Mode selector */}
           <div className="space-y-1.5">
             <Label>Mode</Label>
             <div className="flex gap-1 rounded-md bg-muted p-1">
-              {MODE_OPTIONS.map((opt) => (
+              {modeOptions.map((opt) => (
                 <button
                   key={opt.value}
                   type="button"
@@ -145,7 +225,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
           </div>
 
           {/* Directory input (hidden in resume mode) */}
-          {mode !== 'resume' && (
+          {(isCodex || mode !== 'resume') && (
             <div className="space-y-1.5">
               <Label htmlFor="session-directory">Project Directory</Label>
               <Input
@@ -172,7 +252,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
           )}
 
           {/* Worktree name (only in worktree mode) */}
-          {mode === 'worktree' && (
+          {!isCodex && mode === 'worktree' && (
             <div className="space-y-1.5">
               <Label htmlFor="worktree-name">Worktree Name</Label>
               <Input
@@ -188,7 +268,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
           )}
 
           {/* Resume session picker */}
-          {mode === 'resume' && (
+          {!isCodex && mode === 'resume' && (
             <div className="space-y-1.5">
               <Label>Recent Sessions</Label>
               {loadingSessions ? (
@@ -233,22 +313,108 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
             </div>
           )}
 
-          {/* Skip permissions checkbox */}
-          <div className="space-y-1">
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="skip-permissions"
-                checked={skipPermissions}
-                onCheckedChange={(checked) => setSkipPermissions(checked === true)}
-              />
-              <Label htmlFor="skip-permissions" className="cursor-pointer">
-                Skip permission prompts
-              </Label>
+          {isCodex && (mode === 'resume' || mode === 'fork') && (
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="codex-use-last"
+                  checked={useLast}
+                  onCheckedChange={(checked) => setUseLast(checked === true)}
+                />
+                <Label htmlFor="codex-use-last" className="cursor-pointer">
+                  Use last Codex session
+                </Label>
+              </div>
+              {!useLast && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="codex-session-id">Codex Session ID</Label>
+                  <Input
+                    id="codex-session-id"
+                    value={codexSessionId}
+                    onChange={(e) => setCodexSessionId(e.target.value)}
+                    placeholder="session id"
+                  />
+                </div>
+              )}
             </div>
-            <p className="text-xs text-destructive/80 ml-6">
-              Allows Claude to run tools without asking for confirmation
-            </p>
-          </div>
+          )}
+
+          {isCodex && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="codex-model">Model</Label>
+                <Input id="codex-model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="default" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="codex-profile">Profile</Label>
+                <Input id="codex-profile" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Sandbox</Label>
+                <Select value={sandbox || 'default'} onValueChange={(value) => setSandbox(value === 'default' ? '' : value)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default</SelectItem>
+                    <SelectItem value="read-only">Read-only</SelectItem>
+                    <SelectItem value="workspace-write">Workspace write</SelectItem>
+                    <SelectItem value="danger-full-access">Full access</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Approval</Label>
+                <Select value={approvalPolicy || 'default'} onValueChange={(value) => setApprovalPolicy(value === 'default' ? '' : value)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default</SelectItem>
+                    <SelectItem value="untrusted">Untrusted</SelectItem>
+                    <SelectItem value="on-failure">On failure</SelectItem>
+                    <SelectItem value="on-request">On request</SelectItem>
+                    <SelectItem value="never">Never</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="codex-prompt">Initial Prompt</Label>
+                <Input id="codex-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional prompt" />
+              </div>
+            </div>
+          )}
+
+          {!isCodex && (
+            <div className="space-y-1">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="skip-permissions"
+                  checked={skipPermissions}
+                  onCheckedChange={(checked) => setSkipPermissions(checked === true)}
+                />
+                <Label htmlFor="skip-permissions" className="cursor-pointer">
+                  Skip permission prompts
+                </Label>
+              </div>
+              <p className="text-xs text-destructive/80 ml-6">
+                Allows Claude to run tools without asking for confirmation
+              </p>
+            </div>
+          )}
+
+          {isCodex && (
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <Checkbox id="codex-search" checked={search} onCheckedChange={(checked) => setSearch(checked === true)} />
+                <Label htmlFor="codex-search" className="cursor-pointer">Enable web search</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox id="codex-no-alt-screen" checked={noAltScreen} onCheckedChange={(checked) => setNoAltScreen(checked === true)} />
+                <Label htmlFor="codex-no-alt-screen" className="cursor-pointer">Disable alternate screen</Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox id="codex-dangerous" checked={dangerousBypass} onCheckedChange={(checked) => setDangerousBypass(checked === true)} />
+                <Label htmlFor="codex-dangerous" className="cursor-pointer text-destructive">Bypass approvals and sandbox</Label>
+              </div>
+            </div>
+          )}
 
           {/* Error message */}
           {error && (

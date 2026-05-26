@@ -7,8 +7,10 @@ import { TerminalView } from './TerminalView'
 import { NewSessionDialog } from './NewSessionDialog'
 import { KillSessionDialog } from './KillSessionDialog'
 import type { CCSession } from './types'
+import type { AgentProviderId } from '@/types/providers'
 
 const MAX_GRID_PANES = 4
+type ProviderFilter = 'all' | AgentProviderId
 
 function addTarget(prev: string[], target: string): string[] {
   if (prev.includes(target)) return prev
@@ -17,7 +19,10 @@ function addTarget(prev: string[], target: string): string[] {
 }
 
 export function CCBridgePage() {
-  const { sessions, loading, error, refresh } = useCCSessions()
+  const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all')
+  const { sessions, loading, error, refresh } = useCCSessions(
+    providerFilter === 'all' ? undefined : providerFilter,
+  )
   const [activeTargets, setActiveTargets] = useState<string[]>([])
   const [fullscreenTarget, setFullscreenTarget] = useState<string | null>(null)
   const [focusedTarget, setFocusedTarget] = useState<string | null>(null)
@@ -72,11 +77,32 @@ export function CCBridgePage() {
       {!isFullscreen && (
         <div className="flex items-center gap-3 px-4 py-3 border-b shrink-0 bg-muted/30">
           <MonitorPlay className="h-5 w-5 shrink-0" />
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <h1 className="text-base font-semibold">CC Bridge</h1>
+          <div className="flex items-baseline gap-2 flex-wrap min-w-0">
+            <h1 className="text-base font-semibold">Agent Bridge</h1>
             <span className="text-xs text-muted-foreground">
-              Discover and observe Claude Code sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
+              Discover and observe Claude Code and Codex sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
             </span>
+          </div>
+          <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">
+            {[
+              ['all', 'All agents'],
+              ['claude-code', 'Claude Code'],
+              ['codex-cli', 'Codex'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={cn(
+                  'px-2.5 py-1 text-xs rounded-sm transition-colors',
+                  providerFilter === value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+                onClick={() => setProviderFilter(value as ProviderFilter)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -93,6 +119,7 @@ export function CCBridgePage() {
               onRefresh={refresh}
               onNewSession={() => setNewSessionOpen(true)}
               onKillSession={setKillSession}
+              providerFilter={providerFilter}
             />
           </div>
         )}

@@ -10,8 +10,14 @@ interface ConfigFileListProps {
 }
 
 export function ConfigFileList({ files, selectedFile, onSelectFile }: ConfigFileListProps) {
-  const userFiles = files.filter(f => f.scope === 'user' && f.exists)
-  const projectFiles = files.filter(f => f.scope === 'project' && f.exists)
+  const existingFiles = files.filter((file) => file.exists)
+  const groups = [
+    { scope: 'user', title: 'User Config Files' },
+    { scope: 'project', title: 'Project Config Files' },
+    { scope: 'profile', title: 'Profile Config Files' },
+    { scope: 'rules', title: 'Rules Files' },
+    { scope: 'managed', title: 'Managed Config Files' },
+  ] as const
 
   const FileItem = ({ file }: { file: ConfigFile }) => (
     <button
@@ -37,29 +43,22 @@ export function ConfigFileList({ files, selectedFile, onSelectFile }: ConfigFile
 
   return (
     <div className="space-y-4">
-      {userFiles.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold mb-2">User Config Files</h3>
-          <div className="space-y-1">
-            {userFiles.map(file => (
-              <FileItem key={file.path} file={file} />
-            ))}
+      {groups.map(({ scope, title }) => {
+        const scopedFiles = existingFiles.filter((file) => file.scope === scope)
+        if (scopedFiles.length === 0) return null
+        return (
+          <div key={scope}>
+            <h3 className="text-sm font-semibold mb-2">{title}</h3>
+            <div className="space-y-1">
+              {scopedFiles.map((file) => (
+                <FileItem key={file.path} file={file} />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })}
 
-      {projectFiles.length > 0 && (
-        <div>
-          <h3 className="text-sm font-semibold mb-2">Project Config Files</h3>
-          <div className="space-y-1">
-            {projectFiles.map(file => (
-              <FileItem key={file.path} file={file} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {files.length === 0 && (
+      {existingFiles.length === 0 && (
         <Card className="p-4">
           <p className="text-sm text-muted-foreground text-center">
             No configuration files found

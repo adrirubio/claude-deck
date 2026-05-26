@@ -1,6 +1,6 @@
 """Pydantic schemas for API models."""
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ConfigFile(BaseModel):
@@ -105,6 +105,7 @@ class CLIExecuteRequest(BaseModel):
 
     command: str
     args: List[str] = []
+    provider: str = "claude-code"
 
 
 class CLIResult(BaseModel):
@@ -1399,6 +1400,7 @@ class BackupManifestContents(BaseModel):
     mcp_servers: List[BackupMCPServerInfo] = []
     agents: List[str] = []
     commands: List[str] = []
+    provider_inventory: Dict[str, Any] = {}
 
 
 class BackupManifest(BaseModel):
@@ -1816,3 +1818,4 @@ class SystemStatusResponse(BaseModel):
 
     claude_code_version: Optional[str] = None
     active_sessions: int = 0
+    providers: Dict[str, Any] = Field(default_factory=dict)
