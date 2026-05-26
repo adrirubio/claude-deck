@@ -44,6 +44,8 @@ Error responses return JSON with a `detail` field:
 }
 ```
 
+Provider-aware endpoints may also map failures into normalized states such as unsupported capability, missing binary, unavailable CLI command, CLI failure, parse failure, or validation failure. Sensitive CLI stdout/stderr and raw provider payloads should be redacted or omitted before they are returned.
+
 ## API Documentation
 
 FastAPI generates interactive API docs at:

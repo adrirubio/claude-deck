@@ -25,6 +25,8 @@ POST /api/v1/backup/create
 }
 ```
 
+Use `"scope": "codex"` for a Codex export. Codex exports are redacted and export-only.
+
 ### Get Backup
 
 ```http
@@ -74,6 +76,8 @@ Returns the ZIP archive file.
 ```http
 POST /api/v1/backup/{backup_id}/restore?project_path={path}
 ```
+
+Claude Code backups can be restored according to the restore plan. Codex backups refuse automatic restore and return an explicit failure because the archive excludes auth, history, cache, SQLite state, raw prompt text, and raw cache payloads.
 
 ### Install Dependencies
 

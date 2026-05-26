@@ -32,6 +32,7 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
             { text: 'Architecture', link: '/guide/architecture' },
+            { text: 'Multi-Provider & Codex v2', link: '/guide/multi-provider-codex-v2' },
             { text: 'Contributing', link: '/guide/contributing' },
           ],
         },

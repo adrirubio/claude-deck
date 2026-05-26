@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Claude Deck
   text: Documentation
-  tagline: Visual configuration and live session control for Claude Code
+  tagline: Visual configuration and live session control for Claude Code and Codex CLI
   actions:
     - theme: brand
       text: Get Started
@@ -15,11 +15,11 @@ hero:
 
 features:
   - icon: 🌉
-    title: CC Bridge
-    details: Monitor and interact with live Claude Code tmux sessions from the browser in a multi-terminal grid.
+    title: Agent Bridge
+    details: Monitor and interact with live Claude Code and Codex CLI tmux sessions from the browser in a multi-terminal grid.
   - icon: 🎛️
-    title: Visual Configuration
-    details: Manage Claude Code settings, MCP servers, commands, hooks, and permissions without a command-line-only workflow.
+    title: Provider-Aware Configuration
+    details: Manage Claude Code JSON settings and safe Codex TOML settings with clear provider capability states.
   - icon: 📊
     title: Dashboard & Usage
     details: See configuration status, context windows, session activity, and token usage in one place.
@@ -30,6 +30,6 @@ features:
     title: Agents & Skills
     details: Create custom agent configurations and discover skills from the community.
   - icon: 💾
-    title: Backup & Restore
-    details: Protect real Claude Code setups with full backup and restore before major changes.
+    title: Backup & Export
+    details: Protect Claude Code setups with backup and restore, and create redacted export-only Codex backups.
 ---

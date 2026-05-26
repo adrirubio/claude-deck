@@ -8,7 +8,7 @@ A self-hosted web application for visualizing and managing local AI coding agent
 
 Claude Code starts simple, then slowly sprawls across config files and directories: `~/.claude.json`, `~/.claude/settings.json`, `.mcp.json`, slash commands, agents, skills, project settings, transcripts, and usage data. That works fine at small scale, but once your setup gets serious it becomes hard to see the whole picture, change things confidently, or understand what is actually configured.
 
-Claude Deck gives you one local interface for that sprawl. It also has first-class Codex CLI support for tmux sessions, TOML configuration, diagnostics, MCP inventory, and export-only backups.
+Claude Deck gives you one local interface for that sprawl. It also has provider-aware Codex CLI support for tmux sessions, safe TOML configuration, diagnostics, MCP/plugin inventory and supported CLI-backed mutations, and redacted export-only backups.
 
 ## Best For
 
@@ -47,6 +47,8 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Plan History** — Browse and review Claude Code implementation plans
 - **Backup & Restore** — Create and manage Claude Code backups with selective restore, plus redacted export-only Codex backups
 - **Projects** — Discover and manage project directories
+
+Codex support is explicit about provider boundaries: usage/context parity and session transcript browsing are not supported for Codex yet; history and model-cache diagnostics avoid prompt text and raw cache payloads; Codex automatic restore is refused because exports intentionally exclude auth, history, cache, and local state.
 
 ## Screenshots
 

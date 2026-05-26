@@ -16,6 +16,12 @@ Session cards include:
 
 The terminal grid is shared across providers. Read-only and interactive modes work the same way whether the pane is Claude Code or Codex.
 
+Provider filters are explicit:
+
+- **All** — mixed Claude Code and Codex sessions
+- **Claude Code** — Claude Code panes only
+- **Codex** — Codex panes only
+
 ## New Sessions
 
 The new session dialog starts with a provider choice.
@@ -40,3 +46,7 @@ Dangerous Codex bypass mode is exposed as an explicit advanced option because it
 The frontend route `/agent-bridge` is the primary route. `/cc-bridge` remains as a compatibility alias.
 
 The backend keeps `/api/v1/cc-bridge/*` for existing callers and adds `/api/v1/agent-bridge/*` for provider-aware clients.
+
+## Smoke Coverage
+
+Multi-provider smoke checks should cover mixed discovery, provider filters, attach/read-only/interactive terminal behavior, Codex spawn/resume/fork options, and the legacy `/cc-bridge` compatibility route. Claude-only transcript, usage, context, plugin, permission, hook, agent, skill, and memory pages should stay hidden or disabled when Codex is the selected provider until provider-aware equivalents exist.
