@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import tomllib
 import re
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ SAFE_SCALAR_FIELDS = {
     "no_alt_screen": bool,
 }
 SENSITIVE_KEY_PATTERN = re.compile(r"(token|secret|password|credential|api[_-]?key|auth|cookie|session)", re.I)
+PROFILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+PROFILE_V2_KEYS = ("profile-v2", "profile_v2")
 
 
 class CodexConfigService:
@@ -73,6 +76,191 @@ class CodexConfigService:
             return "[redacted]"
         return value
 
+    def _profile_name_from_file(self, path: Path) -> str:
+        suffix = ".config.toml"
+        return path.name[:-len(suffix)] if path.name.endswith(suffix) else path.stem
+
+    def _is_safe_profile_name(self, name: str) -> bool:
+        return bool(PROFILE_NAME_PATTERN.fullmatch(name))
+
+    def _get_profile_files(self) -> list[Path]:
+        if not self.codex_home.exists():
+            return []
+        return sorted(self.codex_home.glob("*.config.toml"))
+
+    def _get_profile_v2_reference(self, config: dict[str, Any]) -> str | None:
+        for key in PROFILE_V2_KEYS:
+            value = config.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _summarize_config(self, config: dict[str, Any]) -> dict[str, Any]:
+        projects = config.get("projects", {}) if isinstance(config.get("projects"), dict) else {}
+        profiles = config.get("profiles", {}) if isinstance(config.get("profiles"), dict) else {}
+        features = config.get("features", {}) if isinstance(config.get("features"), dict) else {}
+        summary = {
+            "model": config.get("model"),
+            "model_reasoning_effort": config.get("model_reasoning_effort"),
+            "profile": config.get("profile"),
+            "profile_v2": self._get_profile_v2_reference(config),
+            "sandbox_mode": config.get("sandbox_mode"),
+            "approval_policy": config.get("approval_policy"),
+            "search": config.get("search"),
+            "strict_config": config.get("strict_config"),
+            "no_alt_screen": config.get("no_alt_screen"),
+            "projects": self._redact_summary_value(projects),
+            "profiles": self._redact_summary_value(profiles),
+            "features": self._redact_summary_value(features),
+        }
+        return {key: value for key, value in summary.items() if value is not None}
+
+    def _safe_overlay_summary(self, config: dict[str, Any]) -> dict[str, Any]:
+        summary: dict[str, Any] = {}
+        for key in SAFE_SCALAR_FIELDS:
+            if key in config:
+                summary[key] = self._redact_summary_value(config[key], key)
+        profile_v2 = self._get_profile_v2_reference(config)
+        if profile_v2 is not None:
+            summary["profile_v2"] = self._redact_summary_value(profile_v2, "profile_v2")
+        features = config.get("features")
+        if isinstance(features, dict):
+            summary["features"] = self._redact_summary_value(features, "features")
+        return summary
+
+    def _flatten_safe_summary(self, summary: dict[str, Any]) -> dict[str, Any]:
+        flattened: dict[str, Any] = {}
+        for key, value in summary.items():
+            if key == "features" and isinstance(value, dict):
+                for feature_key, feature_value in value.items():
+                    flattened[f"features.{feature_key}"] = feature_value
+            elif key not in {"projects", "profiles"}:
+                flattened[key] = value
+        return flattened
+
+    def _get_overrides(self, base: dict[str, Any], overlay: dict[str, Any]) -> list[dict[str, Any]]:
+        base_flat = self._flatten_safe_summary(base)
+        overlay_flat = self._flatten_safe_summary(overlay)
+        overrides: list[dict[str, Any]] = []
+        for key, value in sorted(overlay_flat.items()):
+            base_value = base_flat.get(key)
+            if base_value != value:
+                overrides.append({
+                    "key": key,
+                    "base": base_value,
+                    "value": value,
+                })
+        return overrides
+
+    def _merge_safe_summary(self, base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+        merged = copy.deepcopy(base)
+        for key, value in overlay.items():
+            if key == "features" and isinstance(value, dict):
+                current = merged.get("features") if isinstance(merged.get("features"), dict) else {}
+                merged["features"] = {**current, **value}
+            elif key not in {"projects", "profiles"}:
+                merged[key] = value
+        return merged
+
+    def _build_profile_source(
+        self,
+        *,
+        name: str,
+        source: str,
+        path: Path | None,
+        exists: bool,
+        config: dict[str, Any],
+        parse_error: str | None,
+        base_summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        summary = self._safe_overlay_summary(config) if not parse_error else {}
+        return {
+            "name": name,
+            "source": source,
+            "path": str(path) if path else None,
+            "exists": exists,
+            "parse_error": parse_error,
+            "summary": summary,
+            "overrides": self._get_overrides(base_summary, summary),
+        }
+
+    def resolve_profiles(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Resolve Codex profile references without exposing raw TOML or secrets."""
+        config = config if config is not None else self.parse_toml_file(self.config_file)[0]
+        base_summary = self._safe_overlay_summary(config)
+        active_profile = config.get("profile") if isinstance(config.get("profile"), str) else None
+        active_profile_v2 = self._get_profile_v2_reference(config)
+        inline_profiles = config.get("profiles", {}) if isinstance(config.get("profiles"), dict) else {}
+
+        sources: list[dict[str, Any]] = []
+        for name, profile_config in sorted(inline_profiles.items()):
+            if not isinstance(name, str) or not isinstance(profile_config, dict):
+                continue
+            sources.append(self._build_profile_source(
+                name=name,
+                source="inline",
+                path=self.config_file,
+                exists=True,
+                config=profile_config,
+                parse_error=None,
+                base_summary=base_summary,
+            ))
+
+        for profile_file in self._get_profile_files():
+            profile_config, parse_error = self.parse_toml_file(profile_file)
+            sources.append(self._build_profile_source(
+                name=self._profile_name_from_file(profile_file),
+                source="file",
+                path=profile_file,
+                exists=profile_file.exists(),
+                config=profile_config,
+                parse_error=parse_error,
+                base_summary=base_summary,
+            ))
+
+        source_names = {(source["name"], source["source"]) for source in sources}
+        missing: list[dict[str, Any]] = []
+        for reference_type, reference in (("profile", active_profile), ("profile_v2", active_profile_v2)):
+            if not reference:
+                continue
+            if (reference, "inline") not in source_names and (reference, "file") not in source_names:
+                entry = {
+                    "name": reference,
+                    "reference": reference_type,
+                    "expected_file": None,
+                    "unsafe_reference": not self._is_safe_profile_name(reference),
+                }
+                if self._is_safe_profile_name(reference):
+                    entry["expected_file"] = str(self.codex_home / f"{reference}.config.toml")
+                missing.append(entry)
+
+        active_sources = [
+            source for source in sources
+            if source["name"] in {active_profile, active_profile_v2} and not source["parse_error"]
+        ]
+        effective_summary = copy.deepcopy(base_summary)
+        for source in active_sources:
+            effective_summary = self._merge_safe_summary(effective_summary, source["summary"])
+
+        return {
+            "active_profile": active_profile,
+            "active_profile_v2": active_profile_v2,
+            "resolution_order": ["config.toml", "inline profile", "*.config.toml profile file"],
+            "base_summary": base_summary,
+            "profiles": sources,
+            "active_sources": active_sources,
+            "missing_references": missing,
+            "malformed_profiles": [
+                {
+                    "name": source["name"],
+                    "path": source["path"],
+                    "parse_error": source["parse_error"],
+                }
+                for source in sources if source["parse_error"]
+            ],
+            "effective_summary": effective_summary,
+        }
+
     def get_all_config_files(self) -> list[dict[str, Any]]:
         files: list[dict[str, Any]] = []
         user_config = self.config_file
@@ -85,7 +273,7 @@ class CodexConfigService:
         })
 
         if self.codex_home.exists():
-            for profile in sorted(self.codex_home.glob("*.config.toml")):
+            for profile in self._get_profile_files():
                 files.append({
                     "path": str(profile),
                     "scope": "profile",
@@ -118,28 +306,14 @@ class CodexConfigService:
 
     def get_config(self) -> dict[str, Any]:
         config, parse_error = self.parse_toml_file(self.config_file)
-        projects = config.get("projects", {}) if isinstance(config.get("projects"), dict) else {}
-        profiles = config.get("profiles", {}) if isinstance(config.get("profiles"), dict) else {}
-        features = config.get("features", {}) if isinstance(config.get("features"), dict) else {}
 
         return {
             "provider": "codex-cli",
             "path": str(self.config_file),
             "exists": self.config_file.exists(),
             "parse_error": parse_error,
-            "summary": {
-                "model": config.get("model"),
-                "model_reasoning_effort": config.get("model_reasoning_effort"),
-                "profile": config.get("profile"),
-                "sandbox_mode": config.get("sandbox_mode"),
-                "approval_policy": config.get("approval_policy"),
-                "search": config.get("search"),
-                "strict_config": config.get("strict_config"),
-                "no_alt_screen": config.get("no_alt_screen"),
-                "projects": self._redact_summary_value(projects),
-                "profiles": self._redact_summary_value(profiles),
-                "features": self._redact_summary_value(features),
-            },
+            "summary": self._summarize_config(config),
+            "profile_resolution": self.resolve_profiles(config) if not parse_error else None,
         }
 
     def get_file_content(self, file_path: str) -> dict[str, Any]:
