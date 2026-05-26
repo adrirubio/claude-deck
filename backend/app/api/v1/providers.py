@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
+from app.services.codex_history_service import CodexHistoryService
 from app.services.providers import get_provider, get_providers
 
 router = APIRouter()
@@ -515,3 +516,14 @@ def disable_provider_plugin(provider_id: str, plugin_name: str):
         status_code=400,
         detail=CODEX_PLUGIN_MUTATION_CAPABILITIES["disable"]["reason"],
     )
+
+
+@router.get("/providers/{provider_id}/history-diagnostics")
+def get_provider_history_diagnostics(provider_id: str):
+    provider = _require_codex_provider(provider_id)
+    diagnostics = CodexHistoryService().get_diagnostics()
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        **diagnostics,
+    }
