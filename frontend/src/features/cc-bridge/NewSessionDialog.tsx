@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { MODAL_SIZES } from '@/lib/constants'
-import { cn } from '@/lib/utils'
+import { claudeProjectFolderFromPath, cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import { spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
@@ -76,21 +76,31 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [loadingSessions, setLoadingSessions] = useState(false)
 
   const { listSessions } = useSessionsApi()
-  const { projects } = useProjectContext()
+  const { projects, activeProject } = useProjectContext()
   const isCodex = provider === 'codex-cli'
   const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
+  const activeProjectFolder = activeProject?.path
+    ? claudeProjectFolderFromPath(activeProject.path)
+    : undefined
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
     if (mode !== 'resume' || isCodex) return
     let cancelled = false
+    setSelectedSession(null)
+    setRecentSessions([])
     setLoadingSessions(true)
-    listSessions({ limit: 20, sort_by: 'date', sort_order: 'desc' })
+    listSessions({
+      project_folder: activeProjectFolder,
+      limit: 20,
+      sort_by: 'date',
+      sort_order: 'desc',
+    })
       .then((data) => { if (!cancelled) setRecentSessions(data.sessions) })
       .catch(() => { if (!cancelled) setRecentSessions([]) })
       .finally(() => { if (!cancelled) setLoadingSessions(false) })
     return () => { cancelled = true }
-  }, [mode, isCodex, listSessions])
+  }, [mode, isCodex, listSessions, activeProjectFolder])
 
   // Reset state when dialog closes
   useEffect(() => {

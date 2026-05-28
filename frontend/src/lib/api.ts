@@ -22,8 +22,21 @@ export function buildEndpoint(
 }
 
 export interface ApiError {
-  message: string
-  detail?: string
+  message?: string
+  detail?: string | { msg?: string } | Array<{ msg?: string }>
+}
+
+function apiErrorMessage(error: ApiError, fallback = 'An error occurred'): string {
+  if (error.message) return error.message
+  if (typeof error.detail === 'string') return error.detail
+  if (Array.isArray(error.detail)) {
+    const messages = error.detail.map((item) => item.msg).filter(Boolean)
+    if (messages.length > 0) return messages.join(', ')
+  }
+  if (error.detail && typeof error.detail === 'object' && 'msg' in error.detail && error.detail.msg) {
+    return error.detail.msg
+  }
+  return fallback
 }
 
 export class ApiClient {
@@ -46,7 +59,7 @@ export class ApiClient {
         const error: ApiError = await response.json().catch(() => ({
           message: `HTTP ${response.status}: ${response.statusText}`,
         }))
-        throw new Error(error.message || 'An error occurred')
+        throw new Error(apiErrorMessage(error))
       }
 
       return response.json()
@@ -105,7 +118,7 @@ export async function apiClient<T>(endpoint: string, options?: RequestInit): Pro
       const error: ApiError = await response.json().catch(() => ({
         message: `HTTP ${response.status}: ${response.statusText}`,
       }))
-      throw new Error(error.message || 'An error occurred')
+      throw new Error(apiErrorMessage(error))
     }
 
     return response.json()
