@@ -79,9 +79,16 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const { projects, activeProject } = useProjectContext()
   const isCodex = provider === 'codex-cli'
   const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
-  const activeProjectFolder = activeProject?.path
-    ? claudeProjectFolderFromPath(activeProject.path)
+  const resumeProjectPath = directory.trim() || activeProject?.path || ''
+  const resumeProjectFolder = resumeProjectPath
+    ? claudeProjectFolderFromPath(resumeProjectPath)
     : undefined
+
+  useEffect(() => {
+    if (open && !directory.trim() && activeProject?.path) {
+      setDirectory(activeProject.path)
+    }
+  }, [open, activeProject?.path, directory])
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
@@ -91,7 +98,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     setRecentSessions([])
     setLoadingSessions(true)
     listSessions({
-      project_folder: activeProjectFolder,
+      project_folder: resumeProjectFolder,
       limit: 20,
       sort_by: 'date',
       sort_order: 'desc',
@@ -100,7 +107,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       .catch(() => { if (!cancelled) setRecentSessions([]) })
       .finally(() => { if (!cancelled) setLoadingSessions(false) })
     return () => { cancelled = true }
-  }, [mode, isCodex, listSessions, activeProjectFolder])
+  }, [mode, isCodex, listSessions, resumeProjectFolder])
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -143,7 +150,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     try {
       const request: SpawnSessionRequest = {
         provider,
-        directory: !isCodex && mode === 'resume' ? '' : directory.trim(),
+        directory: directory.trim(),
         mode,
         ...(provider === 'claude-code' && mode === 'worktree' && worktreeName.trim() && { worktree_name: worktreeName.trim() }),
         ...(provider === 'claude-code' && mode === 'resume' && selectedSession && {
@@ -236,32 +243,30 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           </div>
 
-          {/* Directory input (hidden in resume mode) */}
-          {(isCodex || mode !== 'resume') && (
-            <div className="space-y-1.5">
-              <Label htmlFor="session-directory">Project Directory</Label>
-              <Input
-                id="session-directory"
-                list="session-directory-projects"
-                value={directory}
-                onChange={(e) => setDirectory(e.target.value)}
-                placeholder="/home/user/project"
-                autoComplete="off"
-              />
-              {projects.length > 0 && (
-                <>
-                  <datalist id="session-directory-projects">
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.path} label={p.name} />
-                    ))}
-                  </datalist>
-                  <p className="text-xs text-muted-foreground">
-                    Pick from configured projects or type any path.
-                  </p>
-                </>
-              )}
-            </div>
-          )}
+          {/* Directory input */}
+          <div className="space-y-1.5">
+            <Label htmlFor="session-directory">Project Directory</Label>
+            <Input
+              id="session-directory"
+              list="session-directory-projects"
+              value={directory}
+              onChange={(e) => setDirectory(e.target.value)}
+              placeholder="/home/user/project"
+              autoComplete="off"
+            />
+            {projects.length > 0 && (
+              <>
+                <datalist id="session-directory-projects">
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.path} label={p.name} />
+                  ))}
+                </datalist>
+                <p className="text-xs text-muted-foreground">
+                  Pick from configured projects or type any path.
+                </p>
+              </>
+            )}
+          </div>
 
           {/* Worktree name (only in worktree mode) */}
           {!isCodex && mode === 'worktree' && (
