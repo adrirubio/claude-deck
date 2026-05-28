@@ -76,7 +76,7 @@ class ClaudeCodeProvider(AgentProvider):
 
     def resolve_directory(self, options: SpawnCommandOptions) -> str:
         if options.mode == "resume" and not options.directory.strip() and options.project_folder:
-            return _resolve_project_directory(options.project_folder)
+            return _resolve_project_directory(options.project_folder, options.session_id)
         return options.directory
 
     def get_allowed_cli_commands(self) -> list[str]:
