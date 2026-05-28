@@ -9,8 +9,14 @@ import { cn } from "@/lib/utils";
 export function Header() {
   const { theme } = useTheme();
   const status = useSystemStatus();
-  const { selectedProviderId, selectedProvider } = useProviderContext();
-  const selectedStatus = status?.providers?.[selectedProviderId] ?? selectedProvider;
+  const { providers, selectedProviderId, selectedProvider } = useProviderContext();
+  const providerStatuses = providers
+    .map((provider) => status?.providers?.[provider.id] ?? provider)
+    .filter((provider) => provider.installed || provider.id === selectedProviderId);
+
+  if (providerStatuses.length === 0 && selectedProvider) {
+    providerStatuses.push(status?.providers?.[selectedProviderId] ?? selectedProvider);
+  }
 
   return (
     <header className="border-b bg-background">
@@ -29,21 +35,24 @@ export function Header() {
         <div className="flex items-center gap-2">
           {status && (
             <>
-              <Badge
-                variant="outline"
-                className={cn(
-                  "gap-1 text-xs",
-                  selectedStatus?.installed ? "font-mono" : "border-destructive/40 text-destructive"
-                )}
-              >
-                {selectedStatus?.installed ? (
-                  <Terminal className="h-3 w-3" />
-                ) : (
-                  <AlertCircle className="h-3 w-3" />
-                )}
-                {selectedStatus?.display_name ?? selectedProvider?.display_name ?? "Provider"}
-                {selectedStatus?.version ? ` v${selectedStatus.version}` : selectedStatus?.installed ? " ready" : " missing"}
-              </Badge>
+              {providerStatuses.map((provider) => (
+                <Badge
+                  key={provider.id}
+                  variant="outline"
+                  className={cn(
+                    "gap-1 text-xs",
+                    provider.installed ? "font-mono" : "border-destructive/40 text-destructive"
+                  )}
+                >
+                  {provider.installed ? (
+                    <Terminal className="h-3 w-3" />
+                  ) : (
+                    <AlertCircle className="h-3 w-3" />
+                  )}
+                  {provider.display_name}
+                  {provider.version ? ` v${provider.version}` : provider.installed ? " ready" : " missing"}
+                </Badge>
+              ))}
               <Badge
                 variant="secondary"
                 className={cn(
