@@ -50,6 +50,8 @@ const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: 'fork', label: 'Fork' },
 ]
 
+const CUSTOM_PROJECT_VALUE = '__custom__'
+
 export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvider }: NewSessionDialogProps) {
   const { providers, selectedProviderId } = useProviderContext()
   const defaultProvider = initialProvider ?? selectedProviderId
@@ -79,7 +81,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const { projects, activeProject } = useProjectContext()
   const isCodex = provider === 'codex-cli'
   const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
-  const resumeProjectPath = directory.trim() || activeProject?.path || ''
+  const selectedProjectPath = projects.some((project) => project.path === directory.trim())
+    ? directory.trim()
+    : CUSTOM_PROJECT_VALUE
+  const resumeProjectPath = directory.trim()
   const resumeProjectFolder = resumeProjectPath
     ? claudeProjectFolderFromPath(resumeProjectPath)
     : undefined
@@ -96,6 +101,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     let cancelled = false
     setSelectedSession(null)
     setRecentSessions([])
+    if (!resumeProjectFolder) {
+      setLoadingSessions(false)
+      return () => { cancelled = true }
+    }
     setLoadingSessions(true)
     listSessions({
       project_folder: resumeProjectFolder,
@@ -139,7 +148,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (isCodex && (mode === 'resume' || mode === 'fork')) {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
-    if (!isCodex && mode === 'resume') return selectedSession !== null
+    if (!isCodex && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
     return directory.trim().length > 0
   })()
 
@@ -244,28 +253,48 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           </div>
 
           {/* Directory input */}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
+            {projects.length > 0 && (
+              <div className="space-y-1.5">
+                <Label>Project</Label>
+                <Select
+                  value={selectedProjectPath}
+                  onValueChange={(value) => {
+                    if (value === CUSTOM_PROJECT_VALUE) {
+                      setDirectory('')
+                    } else {
+                      setDirectory(value)
+                    }
+                    setSelectedSession(null)
+                    setError(null)
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.path}>
+                        {project.name}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={CUSTOM_PROJECT_VALUE}>Custom path</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <Label htmlFor="session-directory">Project Directory</Label>
             <Input
               id="session-directory"
-              list="session-directory-projects"
               value={directory}
-              onChange={(e) => setDirectory(e.target.value)}
+              onChange={(e) => {
+                setDirectory(e.target.value)
+                setSelectedSession(null)
+                setError(null)
+              }}
               placeholder="/home/user/project"
               autoComplete="off"
             />
-            {projects.length > 0 && (
-              <>
-                <datalist id="session-directory-projects">
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.path} label={p.name} />
-                  ))}
-                </datalist>
-                <p className="text-xs text-muted-foreground">
-                  Pick from configured projects or type any path.
-                </p>
-              </>
-            )}
           </div>
 
           {/* Worktree name (only in worktree mode) */}
