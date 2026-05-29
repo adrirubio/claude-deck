@@ -35,6 +35,10 @@ class SpawnCommandOptions:
     no_alt_screen: bool = False
     dangerously_bypass_approvals_and_sandbox: bool = False
     use_last: bool = False
+    platform: str = "anthropic"
+    aws_region: str | None = None
+    aws_profile: str | None = None
+    bedrock_model: str | None = None
 
 
 def argv0_name(command: str) -> str:
