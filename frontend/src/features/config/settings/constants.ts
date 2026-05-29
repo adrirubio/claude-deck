@@ -1,4 +1,5 @@
 export const MODEL_OPTIONS = [
+  { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
   { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
   { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
   { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
@@ -79,6 +80,16 @@ export const SPINNER_VERBS_MODE_OPTIONS = [
   { value: 'default', label: 'Default' },
   { value: 'append', label: 'Append to defaults' },
   { value: 'replace', label: 'Replace defaults' },
+]
+
+export const WORKTREE_BASE_REF_OPTIONS = [
+  { value: 'fresh', label: 'Fresh (origin/<default-branch>)' },
+  { value: 'head', label: 'HEAD (current local branch)' },
+]
+
+export const WORKTREE_BG_ISOLATION_OPTIONS = [
+  { value: 'worktree', label: 'Worktree (block edits until EnterWorktree)' },
+  { value: 'none', label: 'None (edit working copy directly)' },
 ]
 
 export const HOOK_EVENT_GROUPS = [

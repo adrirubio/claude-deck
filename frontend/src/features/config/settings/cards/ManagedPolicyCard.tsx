@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { ListEditor, SwitchSetting } from '../field-components'
+import { ListEditor, SwitchSetting, TextSetting } from '../field-components'
 import type { SettingsCardProps } from '../types'
 
 /**
@@ -21,6 +21,14 @@ export function ManagedPolicyCard({ getSetting, scope }: SettingsCardProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <TextSetting
+          id="claudeMd"
+          label="Managed CLAUDE.md"
+          description="CLAUDE.md-style instructions injected as organization-managed memory. Only honored in managed/policy settings."
+          value={getSetting<string>('claudeMd', '')}
+          onChange={() => {}}
+        />
+
         <SwitchSetting
           label="Allow Managed Hooks Only"
           description="Reject user/project hooks — only hooks defined in managed settings run."

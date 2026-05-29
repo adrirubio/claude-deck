@@ -1,6 +1,7 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { ListEditor, SwitchSetting } from '../field-components'
+import { ListEditor, SelectSetting, SwitchSetting } from '../field-components'
+import { WORKTREE_BASE_REF_OPTIONS, WORKTREE_BG_ISOLATION_OPTIONS } from '../constants'
 import type { SettingsCardProps } from '../types'
 
 export function WorktreeCard({ getSetting, updateSetting }: SettingsCardProps) {
@@ -11,6 +12,26 @@ export function WorktreeCard({ getSetting, updateSetting }: SettingsCardProps) {
         <CardDescription>Behavior when creating git worktrees from Claude Code</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <SelectSetting
+          id="worktreeBaseRef"
+          label="Base Ref"
+          description="Which ref new worktrees branch from. Fresh branches from origin/<default-branch>; HEAD branches from your current local HEAD."
+          value={getSetting<string>('worktree.baseRef', '')}
+          onValueChange={(v) => updateSetting('worktree.baseRef', v)}
+          placeholder="Fresh (default)"
+          options={WORKTREE_BASE_REF_OPTIONS}
+        />
+
+        <SelectSetting
+          id="worktreeBgIsolation"
+          label="Background Isolation"
+          description="Isolation mode for background sessions. Worktree blocks Edit/Write in the main checkout until EnterWorktree; None edits the working copy directly. Requires Claude Code v2.1.143+."
+          value={getSetting<string>('worktree.bgIsolation', '')}
+          onValueChange={(v) => updateSetting('worktree.bgIsolation', v)}
+          placeholder="Worktree (default)"
+          options={WORKTREE_BG_ISOLATION_OPTIONS}
+        />
+
         <SwitchSetting
           label="Symlink Directories"
           description="Symlink ignored/untracked directories (e.g., node_modules, venv) into new worktrees to save time and disk."

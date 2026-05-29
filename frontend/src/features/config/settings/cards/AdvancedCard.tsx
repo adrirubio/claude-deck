@@ -109,6 +109,32 @@ export function AdvancedCard({ getSetting, updateSetting }: SettingsCardProps) {
           onCheckedChange={(v) => updateSetting('disableDeepLinkRegistration', v)}
         />
 
+        <SwitchSetting
+          label="Disable Workflows"
+          description="Disable dynamic workflows and the bundled workflow commands."
+          checked={getSetting<boolean>('disableWorkflows', false)}
+          onCheckedChange={(v) => updateSetting('disableWorkflows', v)}
+        />
+
+        <SwitchSetting
+          label="Disable Agent View"
+          description="Turn off background agents and agent view (claude agents, --bg, /background, and the on-demand supervisor)."
+          checked={getSetting<boolean>('disableAgentView', false)}
+          onCheckedChange={(v) => updateSetting('disableAgentView', v)}
+        />
+
+        <div className="grid gap-2">
+          <Label>CLAUDE.md Excludes</Label>
+          <p className="text-sm text-muted-foreground">
+            Glob patterns or absolute paths of CLAUDE.md files to skip when loading memory. Does not apply to managed policy files.
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('claudeMdExcludes', [])}
+            onChange={(v) => updateSetting('claudeMdExcludes', v)}
+            placeholder="e.g., **/vendor/**/CLAUDE.md"
+          />
+        </div>
+
         <div className="grid gap-2 rounded border p-3">
           <Label>Spinner Tips Override</Label>
           <p className="text-sm text-muted-foreground">

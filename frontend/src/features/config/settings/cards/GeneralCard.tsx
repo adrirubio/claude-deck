@@ -40,7 +40,7 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
         <SelectSetting
           id="effortLevel"
           label="Effort Level"
-          description="Persist the effort level across sessions. Supported on Opus 4.6 and Sonnet 4.6."
+          description="Persist the effort level across sessions. Supported on Opus 4.6+ and Sonnet 4.6. Note: Opus 4.8 defaults to high."
           value={getSetting<string>('effortLevel', '')}
           onValueChange={(v) => updateSetting('effortLevel', v)}
           placeholder="Select effort level"
