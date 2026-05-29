@@ -58,7 +58,7 @@ A `platform` enum plus a provider-side env builder.
 
 - **`backend/app/services/agent_bridge/spawn.py`** — in `spawn_session`:
   - Call `build_platform_env(...)` from the options.
-  - Insert `-e KEY=VALUE` argv elements into the `tmux new-session` call (after `-d`, before `-s`). Empty env → unchanged command.
+  - Insert `-e KEY=VALUE` argv elements into the `tmux new-session` call (after `-c <dir>`, before the shell command, so the fixed `-d -s <name> -c <dir>` prefix is unchanged). Empty env → unchanged command.
   - Store `platform` in `_spawned_sessions[name]` metadata for visibility. Never log AWS values.
 
 - **`backend/app/api/v1/agent_bridge/router.py`** — add the four fields to `SpawnRequest` and pass them through when constructing `SpawnCommandOptions`.
