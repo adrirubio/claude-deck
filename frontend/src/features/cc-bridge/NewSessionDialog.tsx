@@ -52,6 +52,34 @@ const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
 
 const CUSTOM_PROJECT_VALUE = '__custom__'
 
+const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
+
+type Platform = 'anthropic' | 'bedrock'
+
+interface RememberedPlatform {
+  platform: Platform
+  aws_region: string
+  aws_profile: string
+  bedrock_model: string
+}
+
+function loadRememberedPlatform(): RememberedPlatform {
+  const fallback: RememberedPlatform = { platform: 'anthropic', aws_region: '', aws_profile: '', bedrock_model: '' }
+  try {
+    const raw = localStorage.getItem(PLATFORM_STORAGE_KEY)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as Partial<RememberedPlatform>
+    return {
+      platform: parsed.platform === 'bedrock' ? 'bedrock' : 'anthropic',
+      aws_region: typeof parsed.aws_region === 'string' ? parsed.aws_region : '',
+      aws_profile: typeof parsed.aws_profile === 'string' ? parsed.aws_profile : '',
+      bedrock_model: typeof parsed.bedrock_model === 'string' ? parsed.bedrock_model : '',
+    }
+  } catch {
+    return fallback
+  }
+}
+
 export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvider }: NewSessionDialogProps) {
   const { providers, selectedProviderId } = useProviderContext()
   const defaultProvider = initialProvider ?? selectedProviderId
@@ -70,6 +98,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [dangerousBypass, setDangerousBypass] = useState(false)
   const [codexSessionId, setCodexSessionId] = useState('')
   const [useLast, setUseLast] = useState(true)
+  const [platform, setPlatform] = useState<Platform>('anthropic')
+  const [awsRegion, setAwsRegion] = useState('')
+  const [awsProfile, setAwsProfile] = useState('')
+  const [bedrockModel, setBedrockModel] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -94,6 +126,16 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       setDirectory(activeProject.path)
     }
   }, [open, activeProject?.path, directory])
+
+  // Prefill the remembered platform selection when the dialog opens.
+  useEffect(() => {
+    if (!open) return
+    const remembered = loadRememberedPlatform()
+    setPlatform(remembered.platform)
+    setAwsRegion(remembered.aws_region)
+    setAwsProfile(remembered.aws_profile)
+    setBedrockModel(remembered.bedrock_model)
+  }, [open])
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
@@ -157,6 +199,16 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     setSubmitting(true)
 
     try {
+      const isBedrock = !isCodex && platform === 'bedrock'
+      localStorage.setItem(
+        PLATFORM_STORAGE_KEY,
+        JSON.stringify({
+          platform: isCodex ? 'anthropic' : platform,
+          aws_region: awsRegion,
+          aws_profile: awsProfile,
+          bedrock_model: bedrockModel,
+        }),
+      )
       const request: SpawnSessionRequest = {
         provider,
         directory: directory.trim(),
@@ -179,6 +231,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
+        ...(isBedrock && { platform: 'bedrock' as const }),
+        ...(isBedrock && awsRegion.trim() && { aws_region: awsRegion.trim() }),
+        ...(isBedrock && awsProfile.trim() && { aws_profile: awsProfile.trim() }),
+        ...(isBedrock && bedrockModel.trim() && { bedrock_model: bedrockModel.trim() }),
       }
 
       const response = await spawnSession(request)
@@ -423,6 +479,41 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="codex-prompt">Initial Prompt</Label>
                 <Input id="codex-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional prompt" />
+              </div>
+            </div>
+          )}
+
+          {!isCodex && (
+            <div className="space-y-1.5">
+              <Label>Platform</Label>
+              <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="anthropic">Anthropic (default)</SelectItem>
+                  <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {!isCodex && platform === 'bedrock' && (
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <p className="text-xs text-muted-foreground">
+                Uses AWS credentials from the server environment. Region is usually required.
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="aws-region">AWS Region</Label>
+                <Input id="aws-region" value={awsRegion} onChange={(e) => setAwsRegion(e.target.value)} placeholder="e.g. us-east-1" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="aws-profile">AWS Profile (optional)</Label>
+                <Input id="aws-profile" value={awsProfile} onChange={(e) => setAwsProfile(e.target.value)} placeholder="e.g. bedrock-prod" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="bedrock-model">Model ARN / ID (optional)</Label>
+                <Input id="bedrock-model" value={bedrockModel} onChange={(e) => setBedrockModel(e.target.value)} placeholder="arn:aws:bedrock:..." />
               </div>
             </div>
           )}
