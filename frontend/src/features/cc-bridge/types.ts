@@ -48,6 +48,10 @@ export interface SpawnSessionRequest {
   no_alt_screen?: boolean
   dangerously_bypass_approvals_and_sandbox?: boolean
   use_last?: boolean
+  platform?: 'anthropic' | 'bedrock'
+  aws_region?: string
+  aws_profile?: string
+  bedrock_model?: string
 }
 
 export interface SpawnSessionResponse {
