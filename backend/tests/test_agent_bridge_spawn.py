@@ -66,3 +66,65 @@ def test_claude_resume_resolves_directory_from_transcript_cwd(monkeypatch, tmp_p
     assert result["session_name"] == "claude-deck-abcd"
     assert calls[0][:7] == ["tmux", "new-session", "-d", "-s", "claude-deck-abcd", "-c", str(project_dir)]
     assert "--resume session-123" in calls[0][7]
+
+
+def test_bedrock_platform_injects_env_flags(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(
+            directory=str(tmp_path),
+            mode="plain",
+            platform="bedrock",
+            aws_region="us-east-1",
+            aws_profile="bedrock-prod",
+        ),
+    )
+
+    argv = calls[0]
+    # Fixed prefix stays identical to the no-env command.
+    assert argv[:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
+    # Env flags are injected as -e KEY=VALUE pairs before the shell command.
+    assert "-e" in argv
+    assert "CLAUDE_CODE_USE_BEDROCK=1" in argv
+    assert "AWS_REGION=us-east-1" in argv
+    assert "AWS_PROFILE=bedrock-prod" in argv
+    assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "bedrock"
+
+
+def test_anthropic_platform_adds_no_env_flags(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+    )
+
+    argv = calls[0]
+    assert "-e" not in argv
+    assert argv[:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
+    assert len(argv) == 8
+    assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "anthropic"

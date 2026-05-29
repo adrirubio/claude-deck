@@ -42,6 +42,10 @@ class SpawnRequest(BaseModel):
     no_alt_screen: bool = False
     dangerously_bypass_approvals_and_sandbox: bool = False
     use_last: bool = False
+    platform: str = "anthropic"
+    aws_region: str | None = None
+    aws_profile: str | None = None
+    bedrock_model: str | None = None
 
 
 @router.get("/sessions")
@@ -133,6 +137,10 @@ def spawn_session_endpoint(request: SpawnRequest):
             no_alt_screen=request.no_alt_screen,
             dangerously_bypass_approvals_and_sandbox=request.dangerously_bypass_approvals_and_sandbox,
             use_last=request.use_last,
+            platform=request.platform,
+            aws_region=request.aws_region,
+            aws_profile=request.aws_profile,
+            bedrock_model=request.bedrock_model,
         )
         return spawn_session(request.provider, options)
     except ValueError as exc:
