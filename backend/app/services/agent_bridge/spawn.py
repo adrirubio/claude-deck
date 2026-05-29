@@ -11,6 +11,7 @@ from pathlib import Path
 from app.services.providers import get_provider
 from app.services.providers.base import SpawnCommandOptions
 from app.services.providers.claude_code import ClaudeCodeProvider
+from app.services.providers.platform_env import build_platform_env
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,19 @@ def spawn_session(provider_id: str, options: SpawnCommandOptions) -> dict:
     command = provider.build_spawn_command(options)
     shell_command = " ".join(shlex.quote(part) for part in command)
 
+    platform_env = build_platform_env(
+        options.platform,
+        region=options.aws_region,
+        aws_profile=options.aws_profile,
+        model=options.bedrock_model,
+    )
+    env_flags: list[str] = []
+    for key, value in platform_env.items():
+        env_flags += ["-e", f"{key}={value}"]
+
     try:
         result = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", name, "-c", directory, shell_command],
+            ["tmux", "new-session", "-d", "-s", name, "-c", directory, *env_flags, shell_command],
             capture_output=True,
             text=True,
             timeout=10,
@@ -68,6 +79,7 @@ def spawn_session(provider_id: str, options: SpawnCommandOptions) -> dict:
         "mode": options.mode,
         "directory": directory,
         "worktree_name": options.worktree_name or (name if options.mode == "worktree" else None),
+        "platform": options.platform,
     }
 
     logger.info("Spawned %s session %s in %s (mode=%s)", provider.id, name, directory, options.mode)
