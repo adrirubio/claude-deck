@@ -253,7 +253,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={MODAL_SIZES.MD}>
+      <DialogContent className={cn(MODAL_SIZES.MD, 'overflow-y-auto')}>
         <DialogHeader>
           <DialogTitle>New Agent Session</DialogTitle>
           <DialogDescription>
