@@ -200,15 +200,19 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
 
     try {
       const isBedrock = !isCodex && platform === 'bedrock'
-      localStorage.setItem(
-        PLATFORM_STORAGE_KEY,
-        JSON.stringify({
-          platform: isCodex ? 'anthropic' : platform,
-          aws_region: awsRegion,
-          aws_profile: awsProfile,
-          bedrock_model: bedrockModel,
-        }),
-      )
+      try {
+        localStorage.setItem(
+          PLATFORM_STORAGE_KEY,
+          JSON.stringify({
+            platform: isCodex ? 'anthropic' : platform,
+            aws_region: awsRegion,
+            aws_profile: awsProfile,
+            bedrock_model: bedrockModel,
+          }),
+        )
+      } catch {
+        // Persisting the platform preference is best-effort; ignore storage failures.
+      }
       const request: SpawnSessionRequest = {
         provider,
         directory: directory.trim(),
