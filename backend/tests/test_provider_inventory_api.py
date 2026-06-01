@@ -116,6 +116,38 @@ def test_codex_plugin_inventory_returns_text_and_best_effort_rows(monkeypatch):
     assert response["mutation_capabilities"]["disable"]["state"] == "unsupported"
 
 
+def test_codex_feature_inventory_parses_known_features(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/codex"
+
+        def execute(self, command, args, timeout=30):
+            assert command == "features"
+            assert args == ["list"]
+            return SimpleNamespace(
+                stdout=(
+                    "goals                                   stable             true\n"
+                    "memories                                experimental       false\n"
+                    "default_mode_request_user_input         under development  false\n"
+                    "bad line that should be ignored\n"
+                ),
+                stderr="",
+                exit_code=0,
+            )
+
+    monkeypatch.setattr(providers_api, "ProviderCLIExecutor", lambda provider_id: FakeExecutor())
+
+    response = providers_api.get_provider_feature_inventory("codex-cli")
+
+    assert response["exit_code"] == 0
+    assert response["features"] == [
+        {"name": "goals", "stage": "stable", "enabled": True},
+        {"name": "memories", "stage": "experimental", "enabled": False},
+        {"name": "default_mode_request_user_input", "stage": "under development", "enabled": False},
+    ]
+
+
 def test_codex_mcp_add_uses_cli_command_args_and_env(monkeypatch):
     from app.api.v1 import providers as providers_api
 

@@ -89,7 +89,7 @@ export interface CodexConfigSummary {
   no_alt_screen?: boolean
   projects: Record<string, { trust_level?: string }>
   profiles: Record<string, unknown>
-  features: Record<string, boolean>
+  features: Record<string, unknown>
 }
 
 export interface CodexProfileOverride {
@@ -216,4 +216,19 @@ export interface CodexPluginMutationResponse {
   stdout: string
   stderr: string
   exit_code: number
+}
+
+export interface CodexFeatureInventoryRow {
+  name: string
+  stage: string
+  enabled: boolean
+}
+
+export interface CodexFeatureInventoryResponse {
+  provider: 'codex-cli'
+  provider_display_name: string
+  exit_code: number
+  features: CodexFeatureInventoryRow[]
+  stderr: string
+  raw_stdout: string
 }

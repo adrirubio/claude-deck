@@ -4,6 +4,7 @@ import type {
   AgentProviderId,
   AgentProviderStatus,
   CodexConfigUpdateRequest,
+  CodexFeatureInventoryResponse,
   CodexMcpAddRequest,
   CodexMcpInventoryResponse,
   CodexMcpMutationResponse,
@@ -72,6 +73,10 @@ export async function removeCodexMcpServer(name: string): Promise<CodexMcpMutati
 
 export async function fetchCodexPluginInventory(): Promise<CodexPluginInventoryResponse> {
   return apiClient<CodexPluginInventoryResponse>('providers/codex-cli/plugins')
+}
+
+export async function fetchCodexFeatureInventory(): Promise<CodexFeatureInventoryResponse> {
+  return apiClient<CodexFeatureInventoryResponse>('providers/codex-cli/features')
 }
 
 export async function installCodexPlugin(request: CodexPluginMutationRequest): Promise<CodexPluginMutationResponse> {

@@ -15,9 +15,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
-import { fetchCodexMcpInventory, fetchCodexPluginInventory, fetchProviderDoctor } from '@/hooks/useProviders'
+import {
+  fetchCodexFeatureInventory,
+  fetchCodexMcpInventory,
+  fetchCodexPluginInventory,
+  fetchProviderDoctor,
+} from '@/hooks/useProviders'
 import type {
   CodexConfigResponse,
+  CodexFeatureInventoryResponse,
   CodexMcpInventoryResponse,
   CodexPluginInventoryResponse,
   ProviderDoctorResponse,
@@ -31,6 +37,8 @@ export function ConfigViewerPage() {
   const [codexConfig, setCodexConfig] = useState<CodexConfigResponse | null>(null)
   const [codexDoctor, setCodexDoctor] = useState<ProviderDoctorResponse | null>(null)
   const [codexDoctorError, setCodexDoctorError] = useState<string | null>(null)
+  const [codexFeatureInventory, setCodexFeatureInventory] = useState<CodexFeatureInventoryResponse | null>(null)
+  const [codexFeatureError, setCodexFeatureError] = useState<string | null>(null)
   const [codexMcpInventory, setCodexMcpInventory] = useState<CodexMcpInventoryResponse | null>(null)
   const [codexPluginInventory, setCodexPluginInventory] = useState<CodexPluginInventoryResponse | null>(null)
   const [codexMcpError, setCodexMcpError] = useState<string | null>(null)
@@ -53,6 +61,12 @@ export function ConfigViewerPage() {
             doctor: null,
             error: err instanceof Error ? err.message : 'Failed to load Codex diagnostics',
           }))
+        const featuresPromise = fetchCodexFeatureInventory()
+          .then((inventory) => ({ inventory, error: null }))
+          .catch((err) => ({
+            inventory: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex feature inventory',
+          }))
         const mcpPromise = fetchCodexMcpInventory()
           .then((inventory) => ({ inventory, error: null }))
           .catch((err) => ({
@@ -66,10 +80,11 @@ export function ConfigViewerPage() {
             error: err instanceof Error ? err.message : 'Failed to load Codex plugin inventory',
           }))
 
-        const [files, config, doctorResult, mcpResult, pluginResult] = await Promise.all([
+        const [files, config, doctorResult, featuresResult, mcpResult, pluginResult] = await Promise.all([
           filesPromise,
           configPromise,
           doctorPromise,
+          featuresPromise,
           mcpPromise,
           pluginsPromise,
         ])
@@ -77,6 +92,8 @@ export function ConfigViewerPage() {
         setCodexConfig(config)
         setCodexDoctor(doctorResult.doctor)
         setCodexDoctorError(doctorResult.error)
+        setCodexFeatureInventory(featuresResult.inventory)
+        setCodexFeatureError(featuresResult.error)
         setCodexMcpInventory(mcpResult.inventory)
         setCodexMcpError(mcpResult.error)
         setCodexPluginInventory(pluginResult.inventory)
@@ -89,6 +106,8 @@ export function ConfigViewerPage() {
         setCodexConfig(null)
         setCodexDoctor(null)
         setCodexDoctorError(null)
+        setCodexFeatureInventory(null)
+        setCodexFeatureError(null)
         setCodexMcpInventory(null)
         setCodexPluginInventory(null)
         setCodexMcpError(null)
@@ -184,6 +203,8 @@ export function ConfigViewerPage() {
               <CodexSettingsEditor
                 key={JSON.stringify(codexConfig?.summary ?? {})}
                 config={codexConfig}
+                featureInventory={codexFeatureInventory}
+                featureInventoryError={codexFeatureError}
                 onSaved={fetchData}
               />
               <CodexProfileResolverCard resolution={codexConfig?.profile_resolution} />

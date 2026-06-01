@@ -380,6 +380,30 @@ def _parse_plugin_rows(stdout: str) -> list[dict[str, str]]:
     return rows
 
 
+def _parse_codex_feature_rows(stdout: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line or set(line) <= {"-", " "}:
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        enabled_token = parts[-1].lower()
+        if enabled_token not in {"true", "false"}:
+            continue
+        name = parts[0]
+        stage = " ".join(parts[1:-1])
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*", name):
+            continue
+        rows.append({
+            "name": name,
+            "stage": stage,
+            "enabled": enabled_token == "true",
+        })
+    return rows
+
+
 @router.post("/providers/{provider_id}/cli", response_model=CLIResult)
 def execute_provider_cli(provider_id: str, request: CLIExecuteRequest):
     provider = _get_provider_or_404(provider_id)
@@ -507,6 +531,24 @@ def get_provider_plugin_inventory(provider_id: str):
         "exit_code": result.exit_code,
         "plugins": _redact_value(_parse_plugin_rows(result.stdout)),
         "mutation_capabilities": CODEX_PLUGIN_MUTATION_CAPABILITIES,
+        "stderr": _redact_value(result.stderr),
+        "raw_stdout": safe_stdout,
+    }
+
+
+@router.get("/providers/{provider_id}/features")
+def get_provider_feature_inventory(provider_id: str):
+    provider = _require_codex_provider(provider_id, "feature inventory")
+    executor = ProviderCLIExecutor(provider.id)
+    _require_provider_binary(executor, "feature inventory")
+
+    result = executor.execute("features", ["list"], timeout=30)
+    safe_stdout = _redact_value(result.stdout)
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "exit_code": result.exit_code,
+        "features": _parse_codex_feature_rows(result.stdout),
         "stderr": _redact_value(result.stderr),
         "raw_stdout": safe_stdout,
     }
