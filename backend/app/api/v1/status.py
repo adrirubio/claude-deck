@@ -1,9 +1,7 @@
 """System status endpoint for header indicators."""
 import asyncio
-import re
-import shutil
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +10,7 @@ from app.database import get_db
 from app.models.constants import SessionStatus
 from app.models.schemas import SystemStatusResponse
 from app.services.presence_service import PresenceService
+from app.services.providers import get_provider, get_providers
 
 router = APIRouter()
 
@@ -33,22 +32,7 @@ async def _get_claude_code_version() -> Optional[str]:
         if time.time() - cached_at < _CACHE_TTL:
             return cached_version
 
-        claude_bin = await asyncio.to_thread(shutil.which, "claude")
-        if not claude_bin:
-            _version_cache = (None, time.time())
-            return None
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                claude_bin, "--version",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-            match = re.search(r"(\d+\.\d+\.\d+)", stdout.decode())
-            version = match.group(1) if match else None
-        except (OSError, asyncio.TimeoutError):
-            version = None
+        version = await asyncio.to_thread(get_provider("claude-code").get_version)
 
         _version_cache = (version, time.time())
         return version
@@ -60,15 +44,24 @@ async def _get_active_count(db: AsyncSession) -> int:
     return sum(1 for s in sessions if s.status == SessionStatus.ACTIVE)
 
 
+async def _get_provider_statuses() -> dict[str, Any]:
+    statuses = await asyncio.gather(
+        *(asyncio.to_thread(provider.get_status) for provider in get_providers())
+    )
+    return {status["id"]: status for status in statuses}
+
+
 @router.get("/status", response_model=SystemStatusResponse)
 async def get_system_status(db: AsyncSession = Depends(get_db)):
     """Return system status for header indicators."""
-    version, active_count = await asyncio.gather(
+    version, active_count, provider_statuses = await asyncio.gather(
         _get_claude_code_version(),
         _get_active_count(db),
+        _get_provider_statuses(),
     )
 
     return SystemStatusResponse(
         claude_code_version=version,
         active_sessions=active_count,
+        providers=provider_statuses,
     )

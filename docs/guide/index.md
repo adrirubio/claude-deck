@@ -1,6 +1,6 @@
 # Introduction
 
-Claude Deck is a self-hosted web application for visualizing and managing [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration. It provides a unified interface for managing MCP servers, plugins, slash commands, hooks, agents, permissions, usage tracking, and other Claude Code extensions.
+Claude Deck is a self-hosted web application for visualizing and managing local AI coding agents. It started with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration and now includes Codex CLI support for tmux sessions, TOML settings, diagnostics, MCP inventory, and redacted config exports.
 
 ## Why Claude Deck?
 
@@ -12,18 +12,25 @@ Claude Code stores configuration across multiple JSON files and directories (`~/
 - **Track usage** — monitor token costs, billing blocks, and daily/monthly trends
 - **Browse sessions** — view conversation transcripts with tool use details
 - **Monitor live sessions** — attach to running Claude Code terminals via CC Bridge
+- **Switch providers intentionally** — use shared surfaces for Claude Code and Codex CLI while unsupported provider-specific pages stay hidden or disabled
 
 ## Features
 
-Claude Deck covers all aspects of Claude Code configuration:
+Claude Deck covers Claude Code configuration and the shared local-agent operations layer:
 
 | Category | Features |
 |----------|----------|
-| **Core Config** | Settings editor, MCP servers, slash commands |
+| **Core Config** | Claude Code settings editor, Codex TOML settings editor, MCP servers, slash commands |
 | **Extensions** | Plugins, hooks, permissions, agents, skills |
-| **Monitoring** | Sessions, usage tracking, context window, CC Bridge |
+| **Monitoring** | Sessions, usage tracking, context window, Agent Bridge |
 | **Customization** | Output styles, status line, memory |
 | **Management** | Projects, plans, backup & restore |
+
+## Provider Support
+
+Claude Deck exposes provider capabilities and status through the Providers API. Claude Code remains the full-featured provider for usage, context, transcripts, plugins, hooks, agents, skills, memory, backup, and restore. Codex CLI support focuses on mixed tmux sessions, safe TOML configuration, diagnostics, MCP/plugin inventory and safe CLI-backed mutations, and redacted export-only backups.
+
+See [Multi-Provider and Codex v2](/guide/multi-provider-codex-v2) for the supported, diagnostics-only, and unsupported Codex surfaces.
 
 ## Tech Stack
 

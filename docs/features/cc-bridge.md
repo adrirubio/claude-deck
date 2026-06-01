@@ -1,5 +1,9 @@
 # CC Bridge
 
+::: warning Legacy name
+The provider-aware feature is now Agent Bridge. This page describes the original Claude Code-only bridge naming; use [Agent Bridge](/features/agent-bridge) for mixed Claude Code and Codex CLI sessions.
+:::
+
 Discover and monitor live Claude Code sessions running in tmux with a multi-terminal grid view.
 
 ## Overview

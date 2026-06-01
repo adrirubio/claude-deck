@@ -1,13 +1,22 @@
-import { Terminal, Radio } from "lucide-react";
+import { Terminal, Radio, AlertCircle } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { useProviderContext } from "@/contexts/ProviderContext";
 import { cn } from "@/lib/utils";
 
 export function Header() {
   const { theme } = useTheme();
   const status = useSystemStatus();
+  const { providers, selectedProviderId, selectedProvider } = useProviderContext();
+  const providerStatuses = providers
+    .map((provider) => status?.providers?.[provider.id] ?? provider)
+    .filter((provider) => provider.installed || provider.id === selectedProviderId);
+
+  if (providerStatuses.length === 0 && selectedProvider) {
+    providerStatuses.push(status?.providers?.[selectedProviderId] ?? selectedProvider);
+  }
 
   return (
     <header className="border-b bg-background">
@@ -20,18 +29,30 @@ export function Header() {
           />
           <div>
             <h1 className="text-2xl font-bold text-primary leading-tight">Claude Deck</h1>
-            <p className="text-xs text-muted-foreground">Your Claude Code command centre</p>
+            <p className="text-xs text-muted-foreground">Your local agent command centre</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           {status && (
             <>
-              {status.claudeCodeVersion && (
-                <Badge variant="outline" className="gap-1 font-mono text-xs">
-                  <Terminal className="h-3 w-3" />
-                  Claude Code v{status.claudeCodeVersion}
+              {providerStatuses.map((provider) => (
+                <Badge
+                  key={provider.id}
+                  variant="outline"
+                  className={cn(
+                    "gap-1 text-xs",
+                    provider.installed ? "font-mono" : "border-destructive/40 text-destructive"
+                  )}
+                >
+                  {provider.installed ? (
+                    <Terminal className="h-3 w-3" />
+                  ) : (
+                    <AlertCircle className="h-3 w-3" />
+                  )}
+                  {provider.display_name}
+                  {provider.version ? ` v${provider.version}` : provider.installed ? " ready" : " missing"}
                 </Badge>
-              )}
+              ))}
               <Badge
                 variant="secondary"
                 className={cn(

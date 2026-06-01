@@ -6,9 +6,10 @@ import { JsonViewer } from '@/components/shared/JsonViewer'
 
 interface ConfigFileViewerProps {
   filePath: string | null
+  rawEndpoint?: string
 }
 
-export function ConfigFileViewer({ filePath }: ConfigFileViewerProps) {
+export function ConfigFileViewer({ filePath, rawEndpoint = 'config/raw' }: ConfigFileViewerProps) {
   const [content, setContent] = useState<RawFileContent | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -24,7 +25,7 @@ export function ConfigFileViewer({ filePath }: ConfigFileViewerProps) {
       setError(null)
 
       try {
-        const result = await api.get<RawFileContent>(`config/raw?path=${encodeURIComponent(filePath)}`)
+        const result = await api.get<RawFileContent>(`${rawEndpoint}?path=${encodeURIComponent(filePath)}`)
         setContent(result)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load file')
@@ -34,7 +35,7 @@ export function ConfigFileViewer({ filePath }: ConfigFileViewerProps) {
     }
 
     fetchContent()
-  }, [filePath])
+  }, [filePath, rawEndpoint])
 
   if (!filePath) {
     return (

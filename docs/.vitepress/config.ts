@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'Claude Deck',
-  description: 'Documentation for Claude Deck — Web Dashboard for Claude Code',
+  description: 'Documentation for Claude Deck — Web dashboard for local AI coding agents',
   appearance: 'force-dark',
   base: '/docs/',
   head: [
@@ -32,6 +32,7 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
             { text: 'Architecture', link: '/guide/architecture' },
+            { text: 'Multi-Provider & Codex v2', link: '/guide/multi-provider-codex-v2' },
             { text: 'Contributing', link: '/guide/contributing' },
           ],
         },
@@ -52,6 +53,7 @@ export default defineConfig({
             { text: 'Output Styles', link: '/features/output-styles' },
             { text: 'Status Line', link: '/features/statusline' },
             { text: 'Sessions', link: '/features/sessions' },
+            { text: 'Agent Bridge', link: '/features/agent-bridge' },
             { text: 'CC Bridge', link: '/features/cc-bridge' },
             { text: 'Usage Tracking', link: '/features/usage' },
             { text: 'Backup & Restore', link: '/features/backup' },
@@ -64,6 +66,7 @@ export default defineConfig({
           items: [
             { text: 'Overview', link: '/api/' },
             { text: 'Config', link: '/api/config' },
+            { text: 'Providers', link: '/api/providers' },
             { text: 'MCP Servers', link: '/api/mcp' },
             { text: 'Commands', link: '/api/commands' },
             { text: 'Plugins', link: '/api/plugins' },
@@ -75,6 +78,7 @@ export default defineConfig({
             { text: 'Plans', link: '/api/plans' },
             { text: 'Output Styles', link: '/api/output-styles' },
             { text: 'Status Line', link: '/api/statusline' },
+            { text: 'Agent Bridge', link: '/api/agent-bridge' },
             { text: 'CC Bridge', link: '/api/cc-bridge' },
             { text: 'Usage', link: '/api/usage' },
             { text: 'Memory', link: '/api/memory' },

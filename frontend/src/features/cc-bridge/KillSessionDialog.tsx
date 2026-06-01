@@ -69,7 +69,7 @@ export function KillSessionDialog({
           <DialogDescription>
             Are you sure you want to kill session{' '}
             <strong>{session?.session_name}</strong>? This will terminate the
-            Claude Code process.
+            {session?.provider_display_name ?? 'agent'} process.
           </DialogDescription>
         </DialogHeader>
 
