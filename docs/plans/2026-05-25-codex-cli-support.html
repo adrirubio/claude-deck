@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Codex CLI Support Across Claude Deck</title>
+<style>
+:root{color-scheme:light dark;--bg:#f7f4ed;--panel:#fffdfa;--text:#171717;--muted:#64615b;--border:#ddd5c8;--accent:#155e75;--accent2:#7c2d12;--code:#f0ebe2;--shadow:0 18px 50px rgba(20,18,14,.10)}
+@media (prefers-color-scheme: dark){:root{--bg:#151412;--panel:#201f1c;--text:#f4f0e8;--muted:#b8b0a3;--border:#3a352e;--accent:#67e8f9;--accent2:#fdba74;--code:#2b2925;--shadow:0 18px 50px rgba(0,0,0,.35)}}
+*{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.62 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif} .wrap{max-width:900px;margin:0 auto;padding:22px 16px 56px}.hero{padding:28px 0 18px;border-bottom:1px solid var(--border);margin-bottom:18px}.eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--accent2);font-weight:700}.hero h1{font-size:clamp(30px,8vw,54px);line-height:1.02;margin:8px 0 12px}.meta{display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--border);border-radius:999px;padding:5px 10px;background:var(--panel);color:var(--muted);font-size:13px}.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}.toc{position:sticky;top:0;z-index:2;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:18px;box-shadow:var(--shadow)}.toc-title{font-size:13px;font-weight:800;color:var(--muted);margin-bottom:8px}.toc-links{display:flex;gap:8px;overflow:auto;padding-bottom:2px}.toc a{white-space:nowrap;text-decoration:none;color:var(--accent);font-size:13px;border:1px solid var(--border);border-radius:999px;padding:5px 10px;background:var(--panel)}main{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;box-shadow:var(--shadow)}h1,h2,h3,h4{line-height:1.18;letter-spacing:0;margin:1.4em 0 .55em}main>h1:first-child{display:none}h2{font-size:1.45rem;border-top:1px solid var(--border);padding-top:1.1em}h2:first-of-type{border-top:0;padding-top:0}h3{font-size:1.12rem;color:var(--accent2)}p{margin:.8em 0}ul,ol{padding-left:1.25rem;margin:.65em 0}li{margin:.35em 0}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);border:1px solid var(--border);border-radius:5px;padding:.1em .32em;font-size:.92em}pre{overflow:auto;background:var(--code);border:1px solid var(--border);border-radius:10px;padding:14px;-webkit-overflow-scrolling:touch}pre code{border:0;padding:0;background:transparent;white-space:pre;font-size:.86rem}a{color:var(--accent)}@media(min-width:960px){.wrap{padding-top:34px}.layout{grid-template-columns:220px minmax(0,1fr);align-items:start}.toc{top:18px;margin-bottom:0}.toc-links{display:block;overflow:visible}.toc a{display:block;margin:0 0 7px;white-space:normal}main{padding:34px}}
+</style>
+</head>
+<body>
+<div class="wrap"><section class="hero"><div class="eyebrow">Claude Deck plan</div><h1>Codex CLI Support</h1><div class="meta"><span class="pill">2026-05-25</span><span class="pill">Initial plan</span><span class="pill">Phone review</span></div></section><div class="layout"><nav class="toc" aria-label="Plan sections"><div class="toc-title">Sections</div><div class="toc-links"><a href="#goal">Goal</a><a href="#product-shape">Product</a><a href="#mixed-provider-sessions">Mixed Sessions</a><a href="#architecture-decision">Architecture</a><a href="#backend-plan">Backend</a><a href="#frontend-plan">Frontend</a><a href="#testing-plan">Testing</a><a href="#implementation-order">Order</a><a href="#open-questions">Questions</a></div></nav><main><h1>Codex CLI Support Across Claude Deck</h1>
+<p><strong>Date:</strong> 2026-05-25 <strong>Status:</strong> Initial plan for iteration <strong>Scope:</strong> Backend provider abstraction, tmux bridge, configuration surfaces, navigation/UI layout, docs, tests</p>
+<h2>Goal</h2>
+<p>Add first-class Codex CLI support to Claude Deck so the app can manage Claude Code and Codex side by side:</p>
+<ul>
+<li>Discover, spawn, attach to, and kill tmux sessions for both CLIs.</li>
+<li>View and edit Codex configuration with parity to the existing Claude Code configuration experience.</li>
+<li>Keep Claude-specific features intact while moving shared concepts into provider-neutral surfaces.</li>
+<li>Rework the left sidebar so the app can grow beyond a single Claude Code toolchain without becoming a long flat menu.</li>
+</ul>
+<p>This should make Claude Deck behave like a local agent operations console. Public branding can stay Claude Deck for now, but the internal architecture should become multi-agent.</p>
+<h2>Current State</h2>
+<p>The repo is now up to date with <code>origin/master</code> as of 2026-05-25.</p>
+<p>Relevant existing surfaces:</p>
+<ul>
+<li>Backend config service: <code>backend/app/services/config_service.py</code></li>
+<li>Claude path helpers: <code>backend/app/utils/path_utils.py</code></li>
+<li>Claude CLI executor: <code>backend/app/services/cli_executor.py</code></li>
+<li>CC Bridge discovery/spawn/relay:</li>
+<li><code>backend/app/services/cc_bridge/discovery.py</code></li>
+<li><code>backend/app/services/cc_bridge/spawn.py</code></li>
+<li><code>backend/app/services/cc_bridge/pty_relay.py</code></li>
+<li><code>backend/app/api/v1/cc_bridge/router.py</code></li>
+<li>Frontend config page:</li>
+<li><code>frontend/src/features/config/ConfigViewerPage.tsx</code></li>
+<li><code>frontend/src/features/config/settings/SettingsEditor.tsx</code></li>
+<li><code>frontend/src/features/config/settings/cards/*</code></li>
+<li>Frontend bridge page:</li>
+<li><code>frontend/src/features/cc-bridge/CCBridgePage.tsx</code></li>
+<li><code>frontend/src/features/cc-bridge/*</code></li>
+<li>Current sidebar: <code>frontend/src/components/layout/Sidebar.tsx</code></li>
+<li>Routes: <code>frontend/src/App.tsx</code></li>
+<li>Header/status: <code>backend/app/api/v1/status.py</code>, <code>frontend/src/components/layout/Header.tsx</code></li>
+</ul>
+<p>Local Codex CLI snapshot used for this plan:</p>
+<ul>
+<li>Installed binary: <code>codex-cli 0.133.0</code></li>
+<li>Main config file: <code>~/.codex/config.toml</code></li>
+<li>Relevant commands: <code>codex</code>, <code>codex exec</code>, <code>codex review</code>, <code>codex login/logout</code>, <code>codex mcp</code>, <code>codex plugin</code>, <code>codex doctor</code>, <code>codex resume</code>, <code>codex fork</code></li>
+<li>Important CLI flags: <code>--model</code>, <code>--profile</code>, <code>--profile-v2</code>, <code>--sandbox</code>, <code>--ask-for-approval</code>, <code>--search</code>, <code>--cd</code>, <code>--add-dir</code>, <code>--no-alt-screen</code>, <code>--strict-config</code>, <code>--config key=value</code></li>
+<li>Observed config examples: <code>model</code>, <code>model_reasoning_effort</code>, <code>[projects."&lt;path&gt;"].trust_level</code>, <code>[notice.model_migrations]</code>, <code>[tui.model_availability_nux]</code></li>
+</ul>
+<h2>Product Shape</h2>
+<p>The target product model:</p>
+<ul>
+<li><strong>Agents</strong> are provider-backed local CLIs: Claude Code, Codex CLI, later others.</li>
+<li><strong>Sessions</strong> are tmux panes/windows running one provider.</li>
+<li><strong>Configuration</strong> is provider-specific, but the app presents shared patterns consistently:</li>
+<li>user/global config</li>
+<li>project config</li>
+<li>profiles</li>
+<li>permissions/sandbox/trust</li>
+<li>MCP</li>
+<li>plugins/skills/extensions where supported</li>
+<li>diagnostics</li>
+<li><strong>Bridge</strong> becomes provider-neutral: one terminal/tmux experience with provider filtering.</li>
+</ul>
+<p>Avoid building a separate Codex-only duplicate of every Claude page. Use provider-aware building blocks and keep provider-specific cards where the config model genuinely differs.</p>
+<h2>Mixed Provider Sessions</h2>
+<p>Claude Code and Codex sessions should be visible together in the same Agent Bridge.</p>
+<p>The backend should run one tmux discovery pass across all panes, classify each matching pane with a provider id, and return a mixed session list. The frontend should default to an <strong>All agents</strong> view and offer provider filters for <strong>Claude Code</strong> and <strong>Codex</strong>.</p>
+<p>Example mixed response:</p>
+<pre><code>{
+  "sessions": [
+    { "provider": "claude-code", "tmux_target": "snazzy-1234:0.0", "cwd": "/home/joni/repos/snazzyemail" },
+    { "provider": "codex-cli", "tmux_target": "deck-5678:0.0", "cwd": "/home/joni/repos/claude-deck" },
+    { "provider": "claude-code", "tmux_target": "sam-9012:0.0", "cwd": "/home/joni/repos/linode-migration" },
+    { "provider": "codex-cli", "tmux_target": "stocks-3456:0.0", "cwd": "/home/joni/repos/stocks-dashboard" }
+  ]
+}</code></pre>
+<p>In the UI:</p>
+<ul>
+<li>Session cards show a provider badge.</li>
+<li>The bridge grid can display mixed sessions side by side.</li>
+<li>A user can attach to, watch, and interact with Claude Code and Codex panes at the same time.</li>
+<li>Provider-specific behavior is limited to discovery, spawn/resume/fork options, prompt-state handling, and configuration/diagnostics.</li>
+<li>Terminal rendering, WebSocket relay, fullscreen mode, multi-pane layout, and kill/preview mechanics stay shared.</li>
+</ul>
+<h2>Architecture Decision</h2>
+<p>Introduce an <code>AgentProvider</code> abstraction in the backend and mirror it in the frontend.</p>
+<p>Initial provider ids:</p>
+<ul>
+<li><code>claude-code</code></li>
+<li><code>codex-cli</code></li>
+</ul>
+<p>Provider metadata should include:</p>
+<ul>
+<li>display name</li>
+<li>binary name</li>
+<li>version command</li>
+<li>config root paths</li>
+<li>supported capabilities</li>
+<li>tmux process detection rules</li>
+<li>spawn command builder</li>
+<li>resume/fork support</li>
+<li>allowed CLI subcommands</li>
+<li>config schema/editor card list</li>
+</ul>
+<p>Example capability flags:</p>
+<pre><code>{
+  "sessions": true,
+  "spawn": true,
+  "resume": true,
+  "fork": true,
+  "mcp": true,
+  "plugins": true,
+  "commands": false,
+  "agents": false,
+  "skills": false,
+  "hooks": false,
+  "memory": false,
+  "usage": false,
+  "context": false,
+  "doctor": true
+}</code></pre>
+<p>Claude Code will expose the current richer Claude-specific feature set. Codex starts with tmux, config, MCP, plugins, doctor/status, and project trust.</p>
+<h2>Backend Plan</h2>
+<h3>Phase 1: Provider Registry</h3>
+<p>Create a small provider layer:</p>
+<ul>
+<li><code>backend/app/services/providers/__init__.py</code></li>
+<li><code>backend/app/services/providers/base.py</code></li>
+<li><code>backend/app/services/providers/claude_code.py</code></li>
+<li><code>backend/app/services/providers/codex_cli.py</code></li>
+<li><code>backend/app/api/v1/providers.py</code></li>
+</ul>
+<p>Provider interface:</p>
+<ul>
+<li><code>id</code></li>
+<li><code>display_name</code></li>
+<li><code>binary_name</code></li>
+<li><code>get_version()</code></li>
+<li><code>get_status()</code></li>
+<li><code>get_config_paths(project_path?: str)</code></li>
+<li><code>get_capabilities()</code></li>
+<li><code>is_process_match(command: str, pid: str) -&gt; bool</code></li>
+<li><code>build_spawn_command(request) -&gt; list[str]</code></li>
+<li><code>get_allowed_cli_commands() -&gt; list[str]</code></li>
+</ul>
+<p>Expose:</p>
+<ul>
+<li><code>GET /api/v1/providers</code></li>
+<li><code>GET /api/v1/providers/{provider_id}/status</code></li>
+<li><code>GET /api/v1/status</code> should eventually return both Claude and Codex versions.</li>
+</ul>
+<p>Migration rule: keep the existing <code>/cc-bridge</code> and <code>/config</code> routes during the transition. New routes can run in parallel until frontend migration is complete.</p>
+<h3>Phase 2: Generalize CC Bridge Into Agent Bridge</h3>
+<p>Keep the relay implementation, but rename the surrounding service concept from <code>cc_bridge</code> to <code>agent_bridge</code>.</p>
+<p>New backend files:</p>
+<ul>
+<li><code>backend/app/services/agent_bridge/discovery.py</code></li>
+<li><code>backend/app/services/agent_bridge/spawn.py</code></li>
+<li><code>backend/app/services/agent_bridge/pty_relay.py</code> or re-export existing relay</li>
+<li><code>backend/app/api/v1/agent_bridge/router.py</code></li>
+</ul>
+<p>New endpoints:</p>
+<ul>
+<li><code>GET /api/v1/agent-bridge/sessions</code></li>
+<li><code>GET /api/v1/agent-bridge/sessions?provider=codex-cli</code></li>
+<li><code>GET /api/v1/agent-bridge/sessions/{target:path}/preview</code></li>
+<li><code>GET /api/v1/agent-bridge/token</code></li>
+<li><code>WS /api/v1/agent-bridge/sessions/{target:path}/terminal</code></li>
+<li><code>POST /api/v1/agent-bridge/sessions</code></li>
+<li><code>DELETE /api/v1/agent-bridge/sessions/{target}</code></li>
+</ul>
+<p>Session response should add:</p>
+<pre><code>{
+  "provider": "codex-cli",
+  "provider_display_name": "Codex",
+  "tmux_target": "repo-1234:0.0",
+  "session_name": "repo-1234",
+  "window_name": "main",
+  "pane_id": "%1",
+  "cwd": "/home/joni/repos/foo",
+  "pid": "12345",
+  "status": "active"
+}</code></pre>
+<p>Codex detection:</p>
+<ul>
+<li>Match direct pane command <code>codex</code>.</li>
+<li>Match node wrapper descendants where argv0 basename is <code>codex</code>, mirroring the existing Claude descendant walk.</li>
+<li>Avoid matching <code>codex-exec-server</code> or unrelated helper processes unless a real interactive Codex TUI descendant is present.</li>
+</ul>
+<p>Claude detection:</p>
+<ul>
+<li>Move the existing <code>claude</code> and node-wrapper logic into <code>ClaudeCodeProvider</code>.</li>
+</ul>
+<p>Spawn behavior:</p>
+<ul>
+<li>Claude Code keeps existing modes: <code>plain</code>, <code>worktree</code>, <code>resume</code>.</li>
+<li>Codex should support:</li>
+<li><code>plain</code>: <code>codex --cd &lt;directory&gt;</code></li>
+<li><code>resume</code>: <code>codex resume &lt;session_id&gt;</code> or <code>codex resume --last</code>, with <code>--cd &lt;directory&gt;</code> when applicable</li>
+<li><code>fork</code>: <code>codex fork &lt;session_id&gt;</code> or <code>codex fork --last</code></li>
+<li>prompt seed: optional initial prompt argument</li>
+<li>options: <code>--model</code>, <code>--profile</code>, <code>--profile-v2</code>, <code>--sandbox</code>, <code>--ask-for-approval</code>, <code>--search</code>, <code>--no-alt-screen</code>, <code>--dangerously-bypass-approvals-and-sandbox</code></li>
+</ul>
+<p>Important tmux input rule:</p>
+<ul>
+<li>Preserve and formalize the defensive Enter behavior learned from Claude Code and Codex:</li>
+<li>paste/send prompt</li>
+<li>send explicit Enter</li>
+<li>capture pane</li>
+<li>if the prompt is still visibly sitting at the prompt, send Enter again</li>
+<li>This belongs in the shared bridge layer, not inside one provider.</li>
+</ul>
+<h3>Phase 3: Provider-Aware CLI Executor</h3>
+<p>Replace <code>CLIExecutor</code> with a provider-aware executor:</p>
+<ul>
+<li><code>backend/app/services/cli_executor.py</code> can become <code>ProviderCLIExecutor</code>.</li>
+<li>Existing <code>/cli/execute</code> can gain a <code>provider</code> field or be superseded by <code>POST /providers/{provider_id}/cli</code>.</li>
+</ul>
+<p>Codex whitelist:</p>
+<ul>
+<li><code>doctor</code></li>
+<li><code>mcp</code></li>
+<li><code>plugin</code></li>
+<li><code>features</code></li>
+<li><code>completion</code> only if needed later</li>
+</ul>
+<p>Do not expose:</p>
+<ul>
+<li><code>logout</code></li>
+<li><code>update</code></li>
+<li><code>apply</code></li>
+<li><code>sandbox</code></li>
+<li><code>exec</code></li>
+<li><code>review</code></li>
+<li><code>cloud</code></li>
+</ul>
+<p>Those can change user state, run commands, or perform broad external actions and should only be added with explicit UX and safety review.</p>
+<h3>Phase 4: Codex Configuration Service</h3>
+<p>Codex uses TOML, not Claude's JSON settings model. Add a separate service rather than forcing it through <code>ConfigService</code>.</p>
+<p>New files:</p>
+<ul>
+<li><code>backend/app/services/codex_config_service.py</code></li>
+<li><code>backend/app/utils/codex_path_utils.py</code></li>
+<li><code>backend/app/api/v1/codex_config.py</code> or provider-scoped config routes</li>
+</ul>
+<p>Paths:</p>
+<ul>
+<li>User config: <code>$CODEX_HOME/config.toml</code>, defaulting to <code>~/.codex/config.toml</code></li>
+<li>Auth file: <code>$CODEX_HOME/auth.json</code>, display status only, never raw content</li>
+<li>History: <code>$CODEX_HOME/history.jsonl</code>, future read-only surface</li>
+<li>Models cache: <code>$CODEX_HOME/models_cache.json</code>, future read-only surface</li>
+<li>Rules: <code>$CODEX_HOME/rules/*.rules</code></li>
+<li>Profiles v2: <code>$CODEX_HOME/&lt;name&gt;.config.toml</code></li>
+</ul>
+<p>Use a TOML parser/writer, not regex editing. Python 3.11+ has <code>tomllib</code> for reading only, so add a write-capable TOML dependency if the backend does not already have one. Candidates:</p>
+<ul>
+<li><code>tomlkit</code> preferred because it preserves comments/formatting.</li>
+<li><code>tomli-w</code> acceptable if formatting preservation is not required.</li>
+</ul>
+<p>Initial editable Codex config cards:</p>
+<ul>
+<li>General:</li>
+<li><code>model</code></li>
+<li><code>model_reasoning_effort</code></li>
+<li><code>profile</code></li>
+<li><code>profile-v2</code> references, if present</li>
+<li>Runtime:</li>
+<li><code>sandbox_mode</code> or equivalent persisted key if present</li>
+<li><code>approval_policy</code> or equivalent persisted key if present</li>
+<li><code>search</code></li>
+<li><code>strict_config</code></li>
+<li><code>no_alt_screen</code></li>
+<li>Projects:</li>
+<li><code>[projects."&lt;path&gt;"].trust_level</code></li>
+<li>add/remove trusted project paths</li>
+<li>show invalid/missing paths</li>
+<li>Profiles:</li>
+<li><code>[profiles.&lt;name&gt;]</code> entries in <code>config.toml</code></li>
+<li>v2 profile files under <code>$CODEX_HOME/*.config.toml</code></li>
+<li>MCP:</li>
+<li>read via TOML config and/or <code>codex mcp list</code></li>
+<li>add/remove via <code>codex mcp</code> where safer than direct TOML writes</li>
+<li>Plugins:</li>
+<li>read installed/marketplace state via <code>codex plugin list</code> and local config where possible</li>
+<li>add/remove through explicit command workflows later</li>
+<li>Features:</li>
+<li><code>[features]</code> booleans</li>
+<li><code>codex features</code> read-only diagnostics if useful</li>
+</ul>
+<p>Read-only Codex status cards:</p>
+<ul>
+<li><code>codex doctor --json</code></li>
+<li>installed version</li>
+<li>auth present/missing</li>
+<li>config parse errors</li>
+<li>unknown fields when <code>--strict-config</code> would fail</li>
+</ul>
+<h3>Phase 5: Backup Support</h3>
+<p>Extend backup/export to include provider-specific files.</p>
+<p>Current backup service is Claude-specific. Add provider options:</p>
+<ul>
+<li><code>claude-code</code> files:</li>
+<li>current behavior</li>
+<li><code>codex-cli</code> files:</li>
+<li><code>~/.codex/config.toml</code></li>
+<li><code>~/.codex/*.config.toml</code></li>
+<li><code>~/.codex/rules/*.rules</code></li>
+<li>exclude <code>auth.json</code> by default</li>
+<li>exclude SQLite/log/history files by default unless a later explicit export mode is added</li>
+</ul>
+<p>UI backup wizard should allow:</p>
+<ul>
+<li>provider selection</li>
+<li>include/exclude auth-sensitive files</li>
+<li>clear warning when exporting Codex auth is not included</li>
+</ul>
+<h2>Frontend Plan</h2>
+<h3>Phase 1: Provider Context</h3>
+<p>Add a provider selector independent of project selection:</p>
+<ul>
+<li><code>frontend/src/contexts/ProviderContext.tsx</code></li>
+<li><code>frontend/src/types/providers.ts</code></li>
+<li><code>frontend/src/hooks/useProviders.ts</code></li>
+</ul>
+<p>Provider state:</p>
+<ul>
+<li>selected provider</li>
+<li>provider capabilities</li>
+<li>installed/missing status</li>
+<li>versions</li>
+</ul>
+<p>Default behavior:</p>
+<ul>
+<li>If both are installed, keep last selected provider.</li>
+<li>If only one is installed, select it automatically.</li>
+<li>If Codex is missing, show install/status guidance but keep Claude pages usable.</li>
+</ul>
+<h3>Phase 2: Sidebar Rework</h3>
+<p>Replace the flat sidebar array with grouped navigation and provider-aware filtering.</p>
+<p>Recommended left sidebar structure:</p>
+<ul>
+<li>Top area:</li>
+<li>Project switcher</li>
+<li>Agent provider switcher: Claude Code / Codex</li>
+<li>Primary:</li>
+<li>Dashboard</li>
+<li>Agent Bridge</li>
+<li>Sessions</li>
+<li>Configuration:</li>
+<li>Overview</li>
+<li>Settings</li>
+<li>MCP</li>
+<li>Plugins</li>
+<li>Permissions / Trust</li>
+<li>Hooks</li>
+<li>Commands</li>
+<li>Agents</li>
+<li>Skills</li>
+<li>Memory</li>
+<li>Output Styles</li>
+<li>Status Line</li>
+<li>Operations:</li>
+<li>Presence</li>
+<li>Plans</li>
+<li>Context</li>
+<li>Usage</li>
+<li>Backup</li>
+<li>Diagnostics</li>
+</ul>
+<p>Hide items unsupported by the selected provider by default, with a small "Claude-only" or "Unsupported for Codex" affordance in search/overflow if needed. Do not show a dead Codex page for Claude-only concepts like Claude agents unless we intentionally build a Codex equivalent.</p>
+<p>Implementation approach:</p>
+<ul>
+<li>Convert <code>navigation</code> in <code>Sidebar.tsx</code> into a grouped <code>NavGroup[]</code>.</li>
+<li>Add collapsible groups using the existing <code>Collapsible</code> UI primitive.</li>
+<li>Keep collapsed-icon mode working.</li>
+<li>Add route metadata with <code>providerSupport</code>.</li>
+<li>Rename visible "CC Bridge" to "Agent Bridge".</li>
+</ul>
+<h3>Phase 3: Agent Bridge UI</h3>
+<p>Move frontend bridge feature:</p>
+<ul>
+<li>from <code>frontend/src/features/cc-bridge/*</code></li>
+<li>to <code>frontend/src/features/agent-bridge/*</code></li>
+</ul>
+<p>Page changes:</p>
+<ul>
+<li>Provider filter tabs or segmented control: All / Claude Code / Codex</li>
+<li>Session cards show provider badge.</li>
+<li>New session dialog starts with provider choice and then shows provider-specific fields.</li>
+<li>Codex spawn options:</li>
+<li>directory</li>
+<li>mode: new / resume / fork</li>
+<li>resume/fork id or <code>--last</code></li>
+<li>model</li>
+<li>profile</li>
+<li>profile v2</li>
+<li>sandbox mode</li>
+<li>approval policy</li>
+<li>search toggle</li>
+<li>no-alt-screen toggle</li>
+<li>optional initial prompt</li>
+<li>dangerous bypass toggle with explicit warning</li>
+<li>Claude spawn options keep current fields.</li>
+</ul>
+<p>Keep the current terminal grid behavior, fullscreen behavior, and tokenized WebSocket flow.</p>
+<h3>Phase 4: Configuration UI</h3>
+<p>Current <code>ConfigViewerPage</code> assumes Claude Code. Evolve it into provider-aware configuration.</p>
+<p>Recommended route shape:</p>
+<ul>
+<li><code>/config</code> stays as provider-selected config overview.</li>
+<li>Optional explicit routes:</li>
+<li><code>/config/claude-code</code></li>
+<li><code>/config/codex-cli</code></li>
+</ul>
+<p>UI layout:</p>
+<ul>
+<li>Provider header with version/status.</li>
+<li>Tabs:</li>
+<li>Settings Editor</li>
+<li>Scope/Profile Resolver</li>
+<li>Raw Viewer</li>
+<li>Diagnostics</li>
+</ul>
+<p>Claude path:</p>
+<ul>
+<li>Reuse existing <code>SettingsEditor</code>, <code>ScopeResolver</code>, <code>ConfigFileList</code>, and <code>ConfigFileViewer</code>.</li>
+</ul>
+<p>Codex path:</p>
+<ul>
+<li>New <code>CodexSettingsEditor</code>.</li>
+<li>New <code>CodexProfileResolver</code>.</li>
+<li>New <code>CodexConfigFileList</code>.</li>
+<li>New <code>CodexDiagnosticsPanel</code>.</li>
+</ul>
+<p>Codex config cards:</p>
+<ul>
+<li><code>CodexGeneralCard</code></li>
+<li><code>CodexRuntimeCard</code></li>
+<li><code>CodexProjectsCard</code></li>
+<li><code>CodexProfilesCard</code></li>
+<li><code>CodexMcpCard</code></li>
+<li><code>CodexPluginsCard</code></li>
+<li><code>CodexFeaturesCard</code></li>
+<li><code>CodexRulesCard</code></li>
+<li><code>CodexDiagnosticsCard</code></li>
+</ul>
+<p>Raw viewer:</p>
+<ul>
+<li>TOML syntax display/edit for <code>config.toml</code>.</li>
+<li>Warn before saving raw TOML.</li>
+<li>Validate by parsing TOML before write.</li>
+<li>Offer <code>codex doctor --json</code> after save.</li>
+</ul>
+<h3>Phase 5: Header and Dashboard</h3>
+<p>Header currently shows only Claude Code version. Update status payload and UI:</p>
+<ul>
+<li>show selected provider version</li>
+<li>show both provider install statuses in a compact popover later</li>
+<li>active sessions should be provider-count aware</li>
+</ul>
+<p>Dashboard:</p>
+<ul>
+<li>add provider status summary</li>
+<li>split active sessions by provider</li>
+<li>keep Claude-only metrics clearly labeled where Codex has no equivalent yet</li>
+</ul>
+<h3>Phase 6: Docs</h3>
+<p>Docs to add/update:</p>
+<ul>
+<li><code>docs/features/agent-bridge.md</code></li>
+<li><code>docs/features/config.md</code></li>
+<li><code>docs/api/providers.md</code></li>
+<li><code>docs/api/agent-bridge.md</code></li>
+<li><code>docs/api/config.md</code></li>
+<li><code>docs/guide/architecture.md</code></li>
+<li>README feature list</li>
+</ul>
+<p>Keep old <code>cc-bridge</code> docs as compatibility notes until routes/components are fully migrated.</p>
+<h2>Route/API Migration</h2>
+<p>Compatibility period:</p>
+<ul>
+<li>Keep <code>/cc-bridge</code> frontend route as a redirect or alias to <code>/agent-bridge?provider=claude-code</code>.</li>
+<li>Keep backend <code>/api/v1/cc-bridge/*</code> until the UI no longer calls it.</li>
+<li>New code should call <code>/api/v1/agent-bridge/*</code>.</li>
+</ul>
+<p>Final cleanup later:</p>
+<ul>
+<li>Remove old CC Bridge route names after one release cycle.</li>
+<li>Update screenshots and docs.</li>
+</ul>
+<h2>Data Model Notes</h2>
+<p>No database migration is required for the initial plan unless we decide to persist provider preferences server-side.</p>
+<p>If persisted preferences are needed:</p>
+<ul>
+<li>selected provider</li>
+<li>last bridge filters</li>
+<li>default spawn options per provider</li>
+</ul>
+<p>Prefer local browser storage first for UI preferences. Use backend persistence only for shared machine-level preferences.</p>
+<h2>Testing Plan</h2>
+<p>Backend tests:</p>
+<ul>
+<li>Provider registry returns Claude and Codex providers.</li>
+<li>Missing Codex binary reports installed=false without failing.</li>
+<li>Codex version parsing handles <code>codex-cli 0.133.0</code>.</li>
+<li>Codex tmux discovery matches direct <code>codex</code>.</li>
+<li>Codex tmux discovery matches node wrapper descendant.</li>
+<li>Codex tmux discovery rejects helper processes.</li>
+<li>Codex spawn command builder validates directory and modes.</li>
+<li>Codex config service reads TOML.</li>
+<li>Codex config service writes TOML without dropping unrelated keys.</li>
+<li>Codex config service masks secrets and never returns <code>auth.json</code>.</li>
+<li>Provider-aware CLI executor enforces per-provider whitelist.</li>
+</ul>
+<p>Frontend tests:</p>
+<ul>
+<li>Sidebar groups render and collapse.</li>
+<li>Provider switcher hides unsupported nav items.</li>
+<li>Agent Bridge lists mixed provider sessions.</li>
+<li>New session dialog renders Codex fields when Codex is selected.</li>
+<li>Config page renders Claude editor for Claude provider.</li>
+<li>Config page renders Codex editor for Codex provider.</li>
+<li>Raw TOML validation blocks invalid saves.</li>
+</ul>
+<p>Manual verification:</p>
+<ul>
+<li>Start existing Claude Code tmux session and confirm discovery.</li>
+<li>Start existing Codex tmux session and confirm discovery.</li>
+<li>Spawn Codex from a repo and attach terminal.</li>
+<li>Send prompt through interactive bridge and verify Enter handling.</li>
+<li>Edit a harmless Codex setting in a temp <code>$CODEX_HOME</code>.</li>
+<li>Run <code>codex doctor --json</code> from diagnostics with redacted output.</li>
+</ul>
+<h2>Implementation Order</h2>
+<ol>
+<li>Add backend provider registry and status endpoint.</li>
+<li>Add Codex provider with version/status/config path detection.</li>
+<li>Generalize bridge backend into <code>agent_bridge</code> while keeping <code>/cc-bridge</code>.</li>
+<li>Add Codex discovery and spawn command building.</li>
+<li>Add frontend provider context and provider selector.</li>
+<li>Rework sidebar into grouped provider-aware navigation.</li>
+<li>Rename/migrate CC Bridge frontend to Agent Bridge with provider filtering.</li>
+<li>Add Codex new-session dialog fields.</li>
+<li>Add Codex TOML config service and read-only config files endpoint.</li>
+<li>Add Codex settings editor cards for general/runtime/projects/profiles.</li>
+<li>Add Codex MCP/plugins/diagnostics surfaces.</li>
+<li>Extend backup/export for Codex config.</li>
+<li>Update docs and screenshots.</li>
+<li>Remove or alias old naming after compatibility is verified.</li>
+</ol>
+<h2>Open Questions</h2>
+<ul>
+<li>Should the public product name remain Claude Deck, or should the UI start using a broader label like "Agent Deck" while the repo remains <code>claude-deck</code>?</li>
+<li>Should provider selection be global, per page, or per project?</li>
+<li>Should Codex project trust be edited directly in TOML, only via CLI if Codex adds commands for it, or both?</li>
+<li>Should Codex <code>auth.json</code> ever be included in backups behind an explicit advanced option?</li>
+<li>Do we want OpenAI account/model usage metrics in Claude Deck, or keep Codex usage out of scope until the CLI exposes stable local usage data?</li>
+<li>Should non-interactive <code>codex exec</code> and <code>codex review</code> be exposed as task actions later, or should v1 stay strictly interactive/tmux plus config?</li>
+</ul>
+<h2>Risks</h2>
+<ul>
+<li>Codex CLI config shape may evolve quickly. Use permissive TOML read/write and avoid hardcoding too much schema.</li>
+<li>Raw TOML writing can damage comments/formatting unless we use <code>tomlkit</code>.</li>
+<li>Naming migration from CC Bridge to Agent Bridge touches docs, routes, screenshots, and mental model.</li>
+<li>Sidebar grouping can become a UX project by itself. Keep the first version functional and restrained.</li>
+<li>Provider-specific config can drift. Tests should use temp homes and fixture configs for both providers.</li>
+</ul>
+<h2>Definition of Done for v1</h2>
+<ul>
+<li>Claude Code behavior is unchanged.</li>
+<li>Codex sessions are discoverable in tmux.</li>
+<li>Claude and Codex sessions can be viewed in the same Agent Bridge grid.</li>
+<li>Codex sessions can be spawned from the UI with core runtime options.</li>
+<li>Codex <code>~/.codex/config.toml</code> can be viewed and safely edited through structured cards.</li>
+<li>Codex project trust and profiles are visible and manageable.</li>
+<li>Codex doctor output is available as a redacted diagnostics panel.</li>
+<li>Sidebar is grouped and provider-aware.</li>
+<li>Tests cover provider detection, bridge discovery/spawn, TOML config editing, and core UI routing.</li>
+</ul>
+</main></div></div>
+<script>document.querySelectorAll('main h2, main h3').forEach(h=>{if(!h.id){h.id=h.textContent.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}});</script>
+</body></html>

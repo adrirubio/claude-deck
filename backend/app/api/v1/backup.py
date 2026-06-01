@@ -113,10 +113,10 @@ async def create_backup(
         Created backup with manifest summary
     """
     # Validate scope
-    if backup.scope not in ["full", "user", "project"]:
+    if backup.scope not in ["full", "user", "project", "codex"]:
         raise HTTPException(
             status_code=400,
-            detail="Scope must be 'full', 'user', or 'project'"
+            detail="Scope must be 'full', 'user', 'project', or 'codex'"
         )
 
     # Validate project_path for project/full scope

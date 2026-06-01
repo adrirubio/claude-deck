@@ -1,4 +1,5 @@
 """Spawn and kill Claude Code sessions in tmux."""
+import json
 import logging
 import shlex
 import subprocess
@@ -10,13 +11,35 @@ logger = logging.getLogger(__name__)
 _spawned_sessions: dict[str, dict] = {}
 
 
-def _resolve_project_directory(project_folder: str) -> str:
+def _resolve_project_directory(project_folder: str, session_id: str | None = None) -> str:
     """Resolve a Claude project folder name to the actual project directory.
 
-    Reconstructs the path from the folder name encoding (slashes → dashes).
-    This is inherently ambiguous for paths with actual hyphens, but works
-    for the common case.
+    Prefer the selected transcript's recorded cwd. Reconstructing the path from
+    Claude's folder name is lossy because both slashes and hyphens are encoded as
+    hyphens.
     """
+    folder_path = Path(project_folder)
+    if folder_path.name != project_folder or ".." in folder_path.parts:
+        raise ValueError(f"Invalid project folder: '{project_folder}'")
+
+    if session_id:
+        transcript = Path.home() / ".claude" / "projects" / project_folder / f"{session_id}.jsonl"
+        if transcript.is_file():
+            try:
+                with transcript.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        try:
+                            cwd = json.loads(line).get("cwd")
+                        except json.JSONDecodeError:
+                            continue
+                        if not cwd:
+                            continue
+                        resolved = Path(cwd).resolve()
+                        if resolved.is_absolute() and ".." not in Path(cwd).parts and resolved.is_dir():
+                            return str(resolved)
+            except OSError:
+                logger.warning("Could not read Claude transcript for directory resolution: %s", transcript)
+
     decoded = "/" + project_folder.lstrip("-").replace("-", "/")
     resolved = Path(decoded).resolve()
     # Guard against path traversal — must be an existing absolute directory
@@ -57,7 +80,7 @@ def spawn_session(
     """
     # For resume mode, derive directory from project_folder if not provided
     if mode == "resume" and (not directory or not directory.strip()) and project_folder:
-        directory = _resolve_project_directory(project_folder)
+        directory = _resolve_project_directory(project_folder, session_id)
 
     # Validate directory — resolve to canonical path to prevent traversal attacks
     dir_path = Path(directory).resolve()

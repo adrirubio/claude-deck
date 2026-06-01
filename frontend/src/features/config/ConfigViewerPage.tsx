@@ -4,17 +4,37 @@ import type { ConfigFileListResponse, ConfigValue } from '@/types/config'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
+import { CodexDiagnosticsCard } from './CodexDiagnosticsCard'
+import { CodexInventoryCard } from './CodexInventoryCard'
+import { CodexProfileResolverCard } from './CodexProfileResolverCard'
+import { CodexSettingsEditor } from './CodexSettingsEditor'
 import { SettingsEditor } from './settings'
 import { ScopeResolver } from './ScopeResolver'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiClient, buildEndpoint } from '@/lib/api'
 import { useProjectContext } from '@/contexts/ProjectContext'
+import { useProviderContext } from '@/contexts/ProviderContext'
+import { fetchCodexMcpInventory, fetchCodexPluginInventory, fetchProviderDoctor } from '@/hooks/useProviders'
+import type {
+  CodexConfigResponse,
+  CodexMcpInventoryResponse,
+  CodexPluginInventoryResponse,
+  ProviderDoctorResponse,
+} from '@/types/providers'
 import { toast } from 'sonner'
 
 export function ConfigViewerPage() {
   const { activeProject } = useProjectContext()
+  const { selectedProviderId, selectedProvider } = useProviderContext()
   const [data, setData] = useState<ConfigFileListResponse | null>(null)
+  const [codexConfig, setCodexConfig] = useState<CodexConfigResponse | null>(null)
+  const [codexDoctor, setCodexDoctor] = useState<ProviderDoctorResponse | null>(null)
+  const [codexDoctorError, setCodexDoctorError] = useState<string | null>(null)
+  const [codexMcpInventory, setCodexMcpInventory] = useState<CodexMcpInventoryResponse | null>(null)
+  const [codexPluginInventory, setCodexPluginInventory] = useState<CodexPluginInventoryResponse | null>(null)
+  const [codexMcpError, setCodexMcpError] = useState<string | null>(null)
+  const [codexPluginError, setCodexPluginError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
@@ -24,9 +44,56 @@ export function ConfigViewerPage() {
     setLoading(true)
     setError(null)
     try {
-      const endpoint = buildEndpoint('config/files', { project_path: activeProject?.path })
-      const response = await apiClient<ConfigFileListResponse>(endpoint)
-      setData(response)
+      if (selectedProviderId === 'codex-cli') {
+        const filesPromise = apiClient<ConfigFileListResponse>('codex-config/files')
+        const configPromise = apiClient<CodexConfigResponse>('codex-config')
+        const doctorPromise = fetchProviderDoctor('codex-cli')
+          .then((doctor) => ({ doctor, error: null }))
+          .catch((err) => ({
+            doctor: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex diagnostics',
+          }))
+        const mcpPromise = fetchCodexMcpInventory()
+          .then((inventory) => ({ inventory, error: null }))
+          .catch((err) => ({
+            inventory: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex MCP inventory',
+          }))
+        const pluginsPromise = fetchCodexPluginInventory()
+          .then((inventory) => ({ inventory, error: null }))
+          .catch((err) => ({
+            inventory: null,
+            error: err instanceof Error ? err.message : 'Failed to load Codex plugin inventory',
+          }))
+
+        const [files, config, doctorResult, mcpResult, pluginResult] = await Promise.all([
+          filesPromise,
+          configPromise,
+          doctorPromise,
+          mcpPromise,
+          pluginsPromise,
+        ])
+        setData(files)
+        setCodexConfig(config)
+        setCodexDoctor(doctorResult.doctor)
+        setCodexDoctorError(doctorResult.error)
+        setCodexMcpInventory(mcpResult.inventory)
+        setCodexMcpError(mcpResult.error)
+        setCodexPluginInventory(pluginResult.inventory)
+        setCodexPluginError(pluginResult.error)
+        if (activeTab === 'scopes') setActiveTab('editor')
+      } else {
+        const endpoint = buildEndpoint('config/files', { project_path: activeProject?.path })
+        const response = await apiClient<ConfigFileListResponse>(endpoint)
+        setData(response)
+        setCodexConfig(null)
+        setCodexDoctor(null)
+        setCodexDoctorError(null)
+        setCodexMcpInventory(null)
+        setCodexPluginInventory(null)
+        setCodexMcpError(null)
+        setCodexPluginError(null)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load config files'
       setError(message)
@@ -34,11 +101,15 @@ export function ConfigViewerPage() {
     } finally {
       setLoading(false)
     }
-  }, [activeProject?.path])
+  }, [activeProject?.path, selectedProviderId, activeTab])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  useEffect(() => {
+    setSelectedFile(null)
+  }, [selectedProviderId])
 
   const handleOverrideInLocal = async (key: string, value: ConfigValue) => {
     const parts = key.split('.')
@@ -76,7 +147,7 @@ export function ConfigViewerPage() {
             Configuration
           </h1>
           <p className="text-muted-foreground">
-            View and edit Claude Code configuration
+            View {selectedProvider?.display_name ?? 'agent'} configuration
           </p>
         </div>
         <RefreshButton onClick={fetchData} loading={loading} />
@@ -86,12 +157,14 @@ export function ConfigViewerPage() {
         <TabsList className="w-fit">
           <TabsTrigger value="editor" className="flex items-center gap-2">
             <Edit className="h-4 w-4" />
-            Settings Editor
+            {selectedProviderId === 'codex-cli' ? 'Overview' : 'Settings Editor'}
           </TabsTrigger>
-          <TabsTrigger value="scopes" className="flex items-center gap-2">
-            <Shield className="h-4 w-4" />
-            Scope Resolver
-          </TabsTrigger>
+          {selectedProviderId === 'claude-code' && (
+            <TabsTrigger value="scopes" className="flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              Scope Resolver
+            </TabsTrigger>
+          )}
           <TabsTrigger value="viewer" className="flex items-center gap-2">
             <Eye className="h-4 w-4" />
             Raw Viewer
@@ -99,7 +172,39 @@ export function ConfigViewerPage() {
         </TabsList>
 
         <TabsContent value="editor" className="flex-1 overflow-auto mt-4">
-          <SettingsEditor onSave={fetchData} />
+          {selectedProviderId === 'codex-cli' ? (
+            <div className="space-y-4">
+              {!codexConfig?.exists && (
+                <Card>
+                  <CardContent className="pt-6">
+                    <p className="text-sm text-muted-foreground">No ~/.codex/config.toml file found. Saving will create it.</p>
+                  </CardContent>
+                </Card>
+              )}
+              <CodexSettingsEditor
+                key={JSON.stringify(codexConfig?.summary ?? {})}
+                config={codexConfig}
+                onSaved={fetchData}
+              />
+              <CodexProfileResolverCard resolution={codexConfig?.profile_resolution} />
+              <CodexDiagnosticsCard
+                doctor={codexDoctor}
+                loading={loading}
+                error={codexDoctorError}
+                onRefresh={fetchData}
+              />
+              <CodexInventoryCard
+                mcp={codexMcpInventory}
+                plugins={codexPluginInventory}
+                mcpError={codexMcpError}
+                pluginError={codexPluginError}
+                loading={loading}
+                onRefresh={fetchData}
+              />
+            </div>
+          ) : (
+            <SettingsEditor onSave={fetchData} />
+          )}
         </TabsContent>
 
         <TabsContent value="scopes" className="flex-1 overflow-auto mt-4">
@@ -140,7 +245,10 @@ export function ConfigViewerPage() {
             </div>
 
             <div className="col-span-8 overflow-y-auto">
-              <ConfigFileViewer filePath={selectedFile} />
+              <ConfigFileViewer
+                filePath={selectedFile}
+                rawEndpoint={selectedProviderId === 'codex-cli' ? 'codex-config/file' : 'config/raw'}
+              />
             </div>
           </div>
         </TabsContent>

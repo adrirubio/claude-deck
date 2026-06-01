@@ -1,6 +1,6 @@
 // Backup TypeScript types matching backend schemas
 
-export type BackupScope = "full" | "user" | "project";
+export type BackupScope = "full" | "user" | "project" | "codex";
 
 export interface Backup {
   id: number;
@@ -76,6 +76,7 @@ export interface BackupManifestContents {
   mcp_servers: BackupMCPServerInfo[];
   agents: string[];
   commands: string[];
+  provider_inventory?: Record<string, unknown>;
 }
 
 export interface BackupManifest {
@@ -222,6 +223,11 @@ export const BACKUP_SCOPES = [
     value: "project" as BackupScope,
     label: "Project",
     description: "Settings in .claude/",
+  },
+  {
+    value: "codex" as BackupScope,
+    label: "Codex",
+    description: "Redacted Codex config, profiles, rules, and inventory",
   },
 ];
 

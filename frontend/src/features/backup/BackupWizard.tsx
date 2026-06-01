@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +27,7 @@ import {
   FileCode,
   Download,
   Info,
+  Bot,
 } from "lucide-react";
 import {
   type Backup,
@@ -41,6 +42,7 @@ interface BackupWizardProps {
   onOpenChange: (open: boolean) => void;
   onCreate: (backup: BackupCreate) => Promise<Backup>;
   currentProjectPath?: string;
+  providerId?: "claude-code" | "codex-cli";
 }
 
 const STEPS = [
@@ -55,23 +57,35 @@ export function BackupWizard({
   onOpenChange,
   onCreate,
   currentProjectPath,
+  providerId = "claude-code",
 }: BackupWizardProps) {
+  const defaultScope: BackupScope = providerId === "codex-cli" ? "codex" : "user";
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [scope, setScope] = useState<BackupScope>("user");
+  const [scope, setScope] = useState<BackupScope>(defaultScope);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdBackup, setCreatedBackup] = useState<Backup | null>(null);
+  const availableScopes = useMemo(
+    () => BACKUP_SCOPES.filter((backupScope) => (
+      providerId === "codex-cli" ? backupScope.value === "codex" : backupScope.value !== "codex"
+    )),
+    [providerId],
+  );
 
   const resetForm = () => {
     setStep(0);
     setName("");
     setDescription("");
-    setScope("user");
+    setScope(defaultScope);
     setError(null);
     setCreatedBackup(null);
   };
+
+  useEffect(() => {
+    if (open) setScope(defaultScope);
+  }, [defaultScope, open]);
 
   const handleOpenChange = (open: boolean) => {
     if (!open) {
@@ -126,7 +140,7 @@ export function BackupWizard({
         name: name.trim() || generateDefaultName(),
         description: description.trim() || undefined,
         scope,
-        project_path: scope !== "user" ? currentProjectPath : undefined,
+        project_path: scope === "full" || scope === "project" ? currentProjectPath : undefined,
       });
       setCreatedBackup(backup);
       setStep(3); // Go to completion step
@@ -145,6 +159,8 @@ export function BackupWizard({
         return <User className="h-5 w-5" />;
       case "project":
         return <FolderOpen className="h-5 w-5" />;
+      case "codex":
+        return <Bot className="h-5 w-5" />;
     }
   };
 
@@ -189,7 +205,7 @@ export function BackupWizard({
               value={scope}
               onValueChange={(v) => setScope(v as BackupScope)}
             >
-              {BACKUP_SCOPES.map((s) => {
+              {availableScopes.map((s) => {
                 const isDisabled =
                   (s.value === "full" || s.value === "project") && !currentProjectPath;
                 return (
@@ -247,6 +263,14 @@ export function BackupWizard({
                     <li>CLAUDE.md file</li>
                   </>
                 )}
+                {scope === "codex" && (
+                  <>
+                    <li>Redacted ~/.codex/config.toml</li>
+                    <li>Codex profile config files</li>
+                    <li>Codex rules files</li>
+                    <li>Redacted provider inventory metadata</li>
+                  </>
+                )}
               </ul>
             </div>
           </div>
@@ -286,11 +310,12 @@ export function BackupWizard({
             <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
               <h4 className="font-medium text-blue-800 flex items-center gap-2">
                 <Download className="h-4 w-4" />
-                Dependency Tracking
+                {scope === "codex" ? "Export Only" : "Dependency Tracking"}
               </h4>
               <p className="text-blue-700 mt-1">
-                The backup will include a manifest tracking all skill dependencies
-                (npm, pip) and plugin install commands for easy restoration.
+                {scope === "codex"
+                  ? "The backup will include redacted Codex files and provider inventory metadata. Automatic restore is not enabled for Codex exports."
+                  : "The backup will include a manifest tracking all skill dependencies (npm, pip) and plugin install commands for easy restoration."}
               </p>
             </div>
           </div>

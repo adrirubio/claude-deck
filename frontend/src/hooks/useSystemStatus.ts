@@ -5,12 +5,14 @@ import type { SystemStatusResponse } from '@/types/status'
 interface SystemStatus {
   claudeCodeVersion: string | null
   activeSessions: number
+  providers: SystemStatusResponse['providers']
 }
 
 function parseStatus(res: SystemStatusResponse): SystemStatus {
   return {
     claudeCodeVersion: res.claude_code_version,
     activeSessions: res.active_sessions,
+    providers: res.providers ?? {},
   }
 }
 
