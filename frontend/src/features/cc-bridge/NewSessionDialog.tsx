@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { MODAL_SIZES } from '@/lib/constants'
-import { cn } from '@/lib/utils'
+import { claudeProjectFolderFromPath, cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import { spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
@@ -35,6 +35,7 @@ interface NewSessionDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSpawned: (tmuxTarget: string) => void
+  initialProvider?: AgentProviderId
 }
 
 const MODE_OPTIONS: { value: Mode; label: string }[] = [
@@ -49,9 +50,40 @@ const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: 'fork', label: 'Fork' },
 ]
 
-export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDialogProps) {
+const CUSTOM_PROJECT_VALUE = '__custom__'
+
+const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
+
+type Platform = 'anthropic' | 'bedrock'
+
+interface RememberedPlatform {
+  platform: Platform
+  aws_region: string
+  aws_profile: string
+  bedrock_model: string
+}
+
+function loadRememberedPlatform(): RememberedPlatform {
+  const fallback: RememberedPlatform = { platform: 'anthropic', aws_region: '', aws_profile: '', bedrock_model: '' }
+  try {
+    const raw = localStorage.getItem(PLATFORM_STORAGE_KEY)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as Partial<RememberedPlatform>
+    return {
+      platform: parsed.platform === 'bedrock' ? 'bedrock' : 'anthropic',
+      aws_region: typeof parsed.aws_region === 'string' ? parsed.aws_region : '',
+      aws_profile: typeof parsed.aws_profile === 'string' ? parsed.aws_profile : '',
+      bedrock_model: typeof parsed.bedrock_model === 'string' ? parsed.bedrock_model : '',
+    }
+  } catch {
+    return fallback
+  }
+}
+
+export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvider }: NewSessionDialogProps) {
   const { providers, selectedProviderId } = useProviderContext()
-  const [provider, setProvider] = useState<AgentProviderId>(selectedProviderId)
+  const defaultProvider = initialProvider ?? selectedProviderId
+  const [provider, setProvider] = useState<AgentProviderId>(defaultProvider)
   const [directory, setDirectory] = useState('')
   const [mode, setMode] = useState<Mode>('plain')
   const [worktreeName, setWorktreeName] = useState('')
@@ -66,6 +98,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
   const [dangerousBypass, setDangerousBypass] = useState(false)
   const [codexSessionId, setCodexSessionId] = useState('')
   const [useLast, setUseLast] = useState(true)
+  const [platform, setPlatform] = useState<Platform>('anthropic')
+  const [awsRegion, setAwsRegion] = useState('')
+  const [awsProfile, setAwsProfile] = useState('')
+  const [bedrockModel, setBedrockModel] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -74,27 +110,61 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
   const [loadingSessions, setLoadingSessions] = useState(false)
 
   const { listSessions } = useSessionsApi()
-  const { projects } = useProjectContext()
+  const { projects, activeProject } = useProjectContext()
   const isCodex = provider === 'codex-cli'
   const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
+  const selectedProjectPath = projects.some((project) => project.path === directory.trim())
+    ? directory.trim()
+    : CUSTOM_PROJECT_VALUE
+  const resumeProjectPath = directory.trim()
+  const resumeProjectFolder = resumeProjectPath
+    ? claudeProjectFolderFromPath(resumeProjectPath)
+    : undefined
+
+  useEffect(() => {
+    if (open && !directory.trim() && activeProject?.path) {
+      setDirectory(activeProject.path)
+    }
+  }, [open, activeProject?.path, directory])
+
+  // Prefill the remembered platform selection when the dialog opens.
+  useEffect(() => {
+    if (!open) return
+    const remembered = loadRememberedPlatform()
+    setPlatform(remembered.platform)
+    setAwsRegion(remembered.aws_region)
+    setAwsProfile(remembered.aws_profile)
+    setBedrockModel(remembered.bedrock_model)
+  }, [open])
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
     if (mode !== 'resume' || isCodex) return
     let cancelled = false
+    setSelectedSession(null)
+    setRecentSessions([])
+    if (!resumeProjectFolder) {
+      setLoadingSessions(false)
+      return () => { cancelled = true }
+    }
     setLoadingSessions(true)
-    listSessions({ limit: 20, sort_by: 'date', sort_order: 'desc' })
+    listSessions({
+      project_folder: resumeProjectFolder,
+      limit: 20,
+      sort_by: 'date',
+      sort_order: 'desc',
+    })
       .then((data) => { if (!cancelled) setRecentSessions(data.sessions) })
       .catch(() => { if (!cancelled) setRecentSessions([]) })
       .finally(() => { if (!cancelled) setLoadingSessions(false) })
     return () => { cancelled = true }
-  }, [mode, isCodex, listSessions])
+  }, [mode, isCodex, listSessions, resumeProjectFolder])
 
   // Reset state when dialog closes
   useEffect(() => {
     if (!open) {
       setDirectory('')
-      setProvider(selectedProviderId)
+      setProvider(defaultProvider)
       setMode('plain')
       setWorktreeName('')
       setSkipPermissions(false)
@@ -113,14 +183,14 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
       setRecentSessions([])
       setSubmitting(false)
     }
-  }, [open, selectedProviderId])
+  }, [open, defaultProvider])
 
   const canLaunch = (() => {
     if (submitting) return false
     if (isCodex && (mode === 'resume' || mode === 'fork')) {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
-    if (!isCodex && mode === 'resume') return selectedSession !== null
+    if (!isCodex && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
     return directory.trim().length > 0
   })()
 
@@ -129,9 +199,23 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
     setSubmitting(true)
 
     try {
+      const isBedrock = !isCodex && platform === 'bedrock'
+      try {
+        localStorage.setItem(
+          PLATFORM_STORAGE_KEY,
+          JSON.stringify({
+            platform: isCodex ? 'anthropic' : platform,
+            aws_region: awsRegion,
+            aws_profile: awsProfile,
+            bedrock_model: bedrockModel,
+          }),
+        )
+      } catch {
+        // Persisting the platform preference is best-effort; ignore storage failures.
+      }
       const request: SpawnSessionRequest = {
         provider,
-        directory: !isCodex && mode === 'resume' ? '' : directory.trim(),
+        directory: directory.trim(),
         mode,
         ...(provider === 'claude-code' && mode === 'worktree' && worktreeName.trim() && { worktree_name: worktreeName.trim() }),
         ...(provider === 'claude-code' && mode === 'resume' && selectedSession && {
@@ -151,6 +235,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
+        ...(isBedrock && { platform: 'bedrock' as const }),
+        ...(isBedrock && awsRegion.trim() && { aws_region: awsRegion.trim() }),
+        ...(isBedrock && awsProfile.trim() && { aws_profile: awsProfile.trim() }),
+        ...(isBedrock && bedrockModel.trim() && { bedrock_model: bedrockModel.trim() }),
       }
 
       const response = await spawnSession(request)
@@ -165,7 +253,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={MODAL_SIZES.MD}>
+      <DialogContent className={cn(MODAL_SIZES.MD, 'overflow-y-auto')}>
         <DialogHeader>
           <DialogTitle>New Agent Session</DialogTitle>
           <DialogDescription>
@@ -224,32 +312,50 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
             </div>
           </div>
 
-          {/* Directory input (hidden in resume mode) */}
-          {(isCodex || mode !== 'resume') && (
-            <div className="space-y-1.5">
-              <Label htmlFor="session-directory">Project Directory</Label>
-              <Input
-                id="session-directory"
-                list="session-directory-projects"
-                value={directory}
-                onChange={(e) => setDirectory(e.target.value)}
-                placeholder="/home/user/project"
-                autoComplete="off"
-              />
-              {projects.length > 0 && (
-                <>
-                  <datalist id="session-directory-projects">
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.path} label={p.name} />
+          {/* Directory input */}
+          <div className="space-y-2">
+            {projects.length > 0 && (
+              <div className="space-y-1.5">
+                <Label>Project</Label>
+                <Select
+                  value={selectedProjectPath}
+                  onValueChange={(value) => {
+                    if (value === CUSTOM_PROJECT_VALUE) {
+                      setDirectory('')
+                    } else {
+                      setDirectory(value)
+                    }
+                    setSelectedSession(null)
+                    setError(null)
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.path}>
+                        {project.name}
+                      </SelectItem>
                     ))}
-                  </datalist>
-                  <p className="text-xs text-muted-foreground">
-                    Pick from configured projects or type any path.
-                  </p>
-                </>
-              )}
-            </div>
-          )}
+                    <SelectItem value={CUSTOM_PROJECT_VALUE}>Custom path</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <Label htmlFor="session-directory">Project Directory</Label>
+            <Input
+              id="session-directory"
+              value={directory}
+              onChange={(e) => {
+                setDirectory(e.target.value)
+                setSelectedSession(null)
+                setError(null)
+              }}
+              placeholder="/home/user/project"
+              autoComplete="off"
+            />
+          </div>
 
           {/* Worktree name (only in worktree mode) */}
           {!isCodex && mode === 'worktree' && (
@@ -377,6 +483,41 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned }: NewSessionDi
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="codex-prompt">Initial Prompt</Label>
                 <Input id="codex-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional prompt" />
+              </div>
+            </div>
+          )}
+
+          {!isCodex && (
+            <div className="space-y-1.5">
+              <Label>Platform</Label>
+              <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="anthropic">Anthropic (default)</SelectItem>
+                  <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {!isCodex && platform === 'bedrock' && (
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <p className="text-xs text-muted-foreground">
+                Uses AWS credentials from the server environment. Region is usually required.
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="aws-region">AWS Region</Label>
+                <Input id="aws-region" value={awsRegion} onChange={(e) => setAwsRegion(e.target.value)} placeholder="e.g. us-east-1" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="aws-profile">AWS Profile (optional)</Label>
+                <Input id="aws-profile" value={awsProfile} onChange={(e) => setAwsProfile(e.target.value)} placeholder="e.g. bedrock-prod" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="bedrock-model">Model ARN / ID (optional)</Label>
+                <Input id="bedrock-model" value={bedrockModel} onChange={(e) => setBedrockModel(e.target.value)} placeholder="arn:aws:bedrock:..." />
               </div>
             </div>
           )}

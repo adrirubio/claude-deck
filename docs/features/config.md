@@ -71,6 +71,12 @@ When the selected provider is Codex CLI, the Config page switches to Codex-speci
 
 Codex config writes are intentionally narrower than Claude Code settings. Claude Deck only updates whitelisted TOML keys, creates a backup before saving, and refuses unsafe paths. Auth, history, model cache, and log files are not shown in the raw viewer.
 
+Profile diagnostics resolve default and active profiles, profile files, inherited and overridden settings, and missing or malformed profile files. Summaries redact secret-like values and avoid exposing auth, history, or cache data.
+
+History and model-cache diagnostics are privacy-bounded. They may report file existence, size, parse state, root keys, row counts, and metric-like key names, but they do not return prompt text, session ids, raw history rows, model ids, raw model cache payloads, or SQLite contents.
+
+Usage and context parity are not supported for Codex. Claude Code usage and context pages remain Claude-specific until Codex exposes a stable metric source that can be read without sensitive prompt or cache data.
+
 Codex backups are export-only in this version. They include redacted config, profile files, rules, and provider inventory metadata, but automatic restore is disabled.
 
 ## Tips

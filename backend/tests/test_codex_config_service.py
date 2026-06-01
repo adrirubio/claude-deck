@@ -75,6 +75,148 @@ def test_codex_config_summary_omits_full_config_and_secrets(tmp_path):
     assert "mcp_servers" not in serialized
 
 
+def test_codex_profile_resolution_merges_active_inline_and_file_profiles(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'model = "base-model"',
+            'profile = "work"',
+            'profile-v2 = "work"',
+            'approval_policy = "ask"',
+            '',
+            '[features]',
+            'search = false',
+            '',
+            '[profiles.work]',
+            'approval_policy = "on-request"',
+            '',
+            '[profiles.work.features]',
+            'search = true',
+            '',
+            '[profiles.work.env]',
+            'API_TOKEN = "secret-inline-token"',
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "work.config.toml").write_text(
+        '\n'.join([
+            'model = "profile-model"',
+            'sandbox_mode = "workspace-write"',
+            'authToken = "secret-file-token"',
+            '',
+            '[features]',
+            'shell_tool = true',
+        ]),
+        encoding="utf-8",
+    )
+
+    data = CodexConfigService(codex_home=tmp_path).get_config()
+    resolution = data["profile_resolution"]
+    serialized = str(resolution)
+
+    assert data["summary"]["profile"] == "work"
+    assert data["summary"]["profile_v2"] == "work"
+    assert resolution["active_profile"] == "work"
+    assert resolution["active_profile_v2"] == "work"
+    assert [source["source"] for source in resolution["active_sources"]] == ["inline", "file"]
+    assert resolution["effective_summary"]["model"] == "profile-model"
+    assert resolution["effective_summary"]["approval_policy"] == "on-request"
+    assert resolution["effective_summary"]["sandbox_mode"] == "workspace-write"
+    assert resolution["effective_summary"]["features"]["search"] is True
+    assert resolution["effective_summary"]["features"]["shell_tool"] is True
+    assert any(
+        override["key"] == "approval_policy"
+        for source in resolution["profiles"]
+        if source["source"] == "inline"
+        for override in source["overrides"]
+    )
+    assert "secret-inline-token" not in serialized
+    assert "secret-file-token" not in serialized
+    assert "authToken" not in serialized
+
+
+def test_codex_profile_resolution_reports_missing_and_malformed_profiles(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'model = "base-model"',
+            'profile = "missing"',
+            'profile_v2 = "broken"',
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "broken.config.toml").write_text("model = [", encoding="utf-8")
+
+    data = CodexConfigService(codex_home=tmp_path).get_config()
+    resolution = data["profile_resolution"]
+
+    assert resolution["active_profile"] == "missing"
+    assert resolution["active_profile_v2"] == "broken"
+    assert resolution["missing_references"] == [
+        {
+            "name": "missing",
+            "reference": "profile",
+            "expected_file": str(tmp_path / "missing.config.toml"),
+            "unsafe_reference": False,
+        }
+    ]
+    assert resolution["malformed_profiles"][0]["name"] == "broken"
+    assert resolution["malformed_profiles"][0]["parse_error"]
+    assert resolution["effective_summary"]["model"] == "base-model"
+
+
+def test_codex_profile_resolution_handles_default_config_without_profile(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'model = "base-model"',
+            '',
+            '[features]',
+            'search = true',
+        ]),
+        encoding="utf-8",
+    )
+
+    resolution = CodexConfigService(codex_home=tmp_path).get_config()["profile_resolution"]
+
+    assert resolution["active_profile"] is None
+    assert resolution["active_profile_v2"] is None
+    assert resolution["profiles"] == []
+    assert resolution["missing_references"] == []
+    assert resolution["effective_summary"]["model"] == "base-model"
+    assert resolution["effective_summary"]["features"]["search"] is True
+
+
+def test_codex_profile_resolution_does_not_build_paths_for_unsafe_references(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'profile = "../outside"',
+            'profile_v2 = "safe-profile"',
+        ]),
+        encoding="utf-8",
+    )
+
+    missing = CodexConfigService(codex_home=tmp_path).get_config()["profile_resolution"]["missing_references"]
+
+    assert missing[0] == {
+        "name": "../outside",
+        "reference": "profile",
+        "expected_file": None,
+        "unsafe_reference": True,
+    }
+    assert missing[1] == {
+        "name": "safe-profile",
+        "reference": "profile_v2",
+        "expected_file": str(tmp_path / "safe-profile.config.toml"),
+        "unsafe_reference": False,
+    }
+
+
 def test_codex_raw_view_rejects_auth_and_allows_safe_files(tmp_path):
     from app.services.codex_config_service import CodexConfigService
 

@@ -13,9 +13,9 @@ Claude Deck is a full-stack application with a Python backend and React frontend
 └─────────────────────────┘     └──────────┬──────────────┘
                                            │
                                     ┌──────▼──────┐
-                                    │  ~/.claude/  │
-                                    │  Claude Code │
-                                    │  config files│
+                                    │ ~/.claude/   │
+                                    │ $CODEX_HOME  │
+                                    │ provider CLI │
                                     └─────────────┘
 ```
 
@@ -43,6 +43,12 @@ backend/
 All routes live under `/api/v1/`. The frontend's Vite dev server proxies `/api` requests to the backend at `http://localhost:8000`.
 
 Route modules: `health`, `config`, `codex-config`, `providers`, `projects`, `cli`, `mcp`, `commands`, `plugins`, `hooks`, `permissions`, `agents`, `backup`, `output-styles`, `statusline`, `sessions`, `agent-bridge`, `cc-bridge`, `usage`, `memory`
+
+### Provider Boundaries
+
+Claude Deck keeps shared terminal viewing in Agent Bridge and pushes provider-specific behavior into provider modules, config services, diagnostics, and backup policy. The UI reads provider capabilities before showing controls so Codex users do not land on Claude-only mutation pages.
+
+Codex diagnostics are intentionally privacy-conservative. History, model cache, and SQLite files are not product data sources; diagnostics may summarize shape and parse state but must not expose prompt text, raw cache payloads, or SQLite contents.
 
 ### Database
 

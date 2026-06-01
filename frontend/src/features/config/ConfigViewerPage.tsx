@@ -6,6 +6,7 @@ import { ConfigFileList } from './ConfigFileList'
 import { ConfigFileViewer } from './ConfigFileViewer'
 import { CodexDiagnosticsCard } from './CodexDiagnosticsCard'
 import { CodexInventoryCard } from './CodexInventoryCard'
+import { CodexProfileResolverCard } from './CodexProfileResolverCard'
 import { CodexSettingsEditor } from './CodexSettingsEditor'
 import { SettingsEditor } from './settings'
 import { ScopeResolver } from './ScopeResolver'
@@ -185,6 +186,7 @@ export function ConfigViewerPage() {
                 config={codexConfig}
                 onSaved={fetchData}
               />
+              <CodexProfileResolverCard resolution={codexConfig?.profile_resolution} />
               <CodexDiagnosticsCard
                 doctor={codexDoctor}
                 loading={loading}
