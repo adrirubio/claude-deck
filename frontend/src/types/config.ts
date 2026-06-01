@@ -2,9 +2,10 @@ export type ConfigValue = string | number | boolean | null | ConfigValue[] | { [
 
 export interface ConfigFile {
   path: string
-  scope: 'user' | 'project' | 'managed'
+  scope: 'user' | 'project' | 'managed' | 'profile' | 'rules'
   exists: boolean
   content?: Record<string, ConfigValue>
+  provider?: string
 }
 
 export interface ConfigFileListResponse {

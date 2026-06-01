@@ -1,5 +1,6 @@
 import { Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { CLICKABLE_CARD } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import type { CCSession } from './types'
@@ -52,6 +53,9 @@ export function SessionCard({ session, gridPosition, onClick, onKill }: SessionC
             )}
           </div>
         </div>
+        <Badge variant="outline" className="mt-2 max-w-full truncate">
+          {session.provider_display_name}
+        </Badge>
         <p className="text-xs text-muted-foreground truncate mt-1" title={session.cwd}>
           {projectName}
         </p>

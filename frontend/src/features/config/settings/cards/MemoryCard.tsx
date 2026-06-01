@@ -12,9 +12,9 @@ export function MemoryCard({ getSetting, updateSetting }: SettingsCardProps) {
       <CardContent className="space-y-4">
         <SwitchSetting
           label="Auto Memory"
-          description="Claude automatically takes notes on your project — build commands, preferences, architectural decisions — and loads them at the start of every session"
-          checked={getSetting<boolean>('autoMemory', false)}
-          onCheckedChange={(v) => updateSetting('autoMemory', v)}
+          description="Claude automatically takes notes on your project — build commands, preferences, architectural decisions — and loads them at the start of every session. Enabled by default; turn off to stop reading from and writing to the auto memory directory."
+          checked={getSetting<boolean>('autoMemoryEnabled', true)}
+          onCheckedChange={(v) => updateSetting('autoMemoryEnabled', v)}
         />
         <TextSetting
           id="autoMemoryDirectory"

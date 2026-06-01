@@ -4,18 +4,18 @@ CLI execution API endpoints.
 
 from fastapi import APIRouter, HTTPException
 from ...models.schemas import CLIExecuteRequest, CLIResult
-from ...services.cli_executor import CLIExecutor
+from ...services.cli_executor import CLIExecutor, ProviderCLIExecutor
 
 router = APIRouter(prefix="/cli", tags=["CLI"])
 
-# Initialize CLI executor
+# Initialize default Claude executor for compatibility checks.
 cli_executor = CLIExecutor()
 
 
 @router.post("/execute", response_model=CLIResult)
 async def execute_cli_command(request: CLIExecuteRequest) -> CLIResult:
     """
-    Execute a whitelisted Claude CLI command.
+    Execute a whitelisted provider CLI command.
 
     Args:
         request: CLI execution request with command and args
@@ -26,25 +26,27 @@ async def execute_cli_command(request: CLIExecuteRequest) -> CLIResult:
     Raises:
         HTTPException: If command is not whitelisted or execution fails
     """
-    # Validate command against whitelist
-    if not cli_executor.validate_command(request.command):
+    try:
+        executor = ProviderCLIExecutor(request.provider)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    if not executor.validate_command(request.command):
         raise HTTPException(
             status_code=400,
             detail=f"Command '{request.command}' is not allowed. "
-                   f"Allowed commands: {', '.join(cli_executor.ALLOWED_COMMANDS)}"
+                   f"Allowed commands: {', '.join(executor.ALLOWED_COMMANDS)}"
         )
 
-    # Check if claude binary is available
-    if not cli_executor.claude_binary:
+    if not executor.binary_path:
         raise HTTPException(
             status_code=500,
-            detail="Claude CLI binary not found in PATH. "
-                   "Please ensure Claude Code is installed."
+            detail=f"{executor.provider.display_name} binary not found in PATH. "
+                   f"Please ensure {executor.provider.display_name} is installed."
         )
 
     try:
-        # Execute the command
-        result = cli_executor.execute(
+        result = executor.execute(
             command=request.command,
             args=request.args
         )

@@ -14,6 +14,7 @@ import { RestoreWizard } from "./RestoreWizard";
 import { RefreshButton } from "@/components/shared/RefreshButton";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
+import { useProviderContext } from "@/contexts/ProviderContext";
 import { toast } from "sonner";
 import {
   type Backup,
@@ -24,6 +25,7 @@ import {
 
 export function BackupPage() {
   const { activeProject } = useProjectContext();
+  const { selectedProviderId, selectedProvider } = useProviderContext();
   const [backups, setBackups] = useState<Backup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +84,10 @@ export function BackupPage() {
   };
 
   const handleRestore = (backup: Backup) => {
+    if (backup.scope === "codex") {
+      toast.error("Codex backups are export-only; automatic restore is not supported");
+      return;
+    }
     setSelectedBackup(backup);
     setShowRestoreWizard(true);
   };
@@ -132,8 +138,15 @@ export function BackupPage() {
             Backup & Restore
           </h1>
           <p className="text-muted-foreground mt-1">
-            Create and manage configuration backups with dependency tracking
+            {selectedProviderId === "codex-cli"
+              ? "Create redacted Codex config exports for download"
+              : "Create and manage configuration backups with dependency tracking"}
           </p>
+          {selectedProviderId === "codex-cli" && selectedProvider && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Provider: {selectedProvider.display_name}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <RefreshButton onClick={fetchBackups} loading={loading} />
@@ -208,6 +221,7 @@ export function BackupPage() {
         onOpenChange={setShowCreateWizard}
         onCreate={handleCreate}
         currentProjectPath={activeProject?.path}
+        providerId={selectedProviderId}
       />
 
       {/* Restore Wizard */}

@@ -57,6 +57,17 @@ The actions bar supports:
 
 Marketplace URLs are configured in Claude Code settings.
 
+## Codex CLI
+
+When Codex is selected, plugin handling is provider-aware:
+
+- Inventory comes from `codex plugin list`
+- Install/remove operations use the Codex CLI when the installed CLI exposes safe commands
+- Enable/disable is unsupported until Codex exposes a stable safe contract for it
+- Raw plugin output is retained only after redacting secret-like values
+
+Claude Code plugin pages remain the source of truth for Claude plugin enable/disable, marketplace browsing, updates, and settings-backed plugin state.
+
 ## Tips
 
 - **Local plugins** can be uninstalled; marketplace plugins use enable/disable.

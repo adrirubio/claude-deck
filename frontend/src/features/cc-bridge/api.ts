@@ -1,10 +1,11 @@
-import { apiClient } from '@/lib/api'
+import { apiClient, buildEndpoint } from '@/lib/api'
+import type { AgentProviderId } from '@/types/providers'
 import type { CCSessionsResponse, CCPreviewResponse, CCTokenResponse, SpawnSessionRequest, SpawnSessionResponse, KillSessionResponse } from './types'
 
-const BASE = 'cc-bridge'
+const BASE = 'agent-bridge'
 
-export async function fetchCCSessions(): Promise<CCSessionsResponse> {
-  return apiClient<CCSessionsResponse>(BASE + '/sessions')
+export async function fetchCCSessions(provider?: AgentProviderId): Promise<CCSessionsResponse> {
+  return apiClient<CCSessionsResponse>(buildEndpoint(BASE + '/sessions', { provider }))
 }
 
 export async function fetchSessionPreview(target: string): Promise<CCPreviewResponse> {

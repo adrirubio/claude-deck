@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import type { AgentProviderId } from '@/types/providers'
 import type { CCSession } from './types'
 import { fetchCCSessions } from './api'
 
 const POLL_INTERVAL = 5000
 
-export function useCCSessions() {
+export function useCCSessions(provider?: AgentProviderId) {
   const [sessions, setSessions] = useState<CCSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -12,7 +13,7 @@ export function useCCSessions() {
 
   const refresh = useCallback(async () => {
     try {
-      const data = await fetchCCSessions()
+      const data = await fetchCCSessions(provider)
       setSessions(data.sessions)
       setError(null)
     } catch (err) {
@@ -20,7 +21,7 @@ export function useCCSessions() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [provider])
 
   useEffect(() => {
     refresh()

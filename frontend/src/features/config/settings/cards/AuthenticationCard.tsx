@@ -11,7 +11,7 @@ export function AuthenticationCard({ getSetting, updateSetting, scope }: Setting
       <CardHeader>
         <CardTitle>Authentication</CardTitle>
         <CardDescription>
-          Login restrictions (managed) and AWS/OTel credential helpers (Bedrock)
+          Login restrictions (managed) and AWS/GCP/OTel credential helpers (Bedrock, Vertex AI)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -53,6 +53,15 @@ export function AuthenticationCard({ getSetting, updateSetting, scope }: Setting
           value={getSetting<string>('awsCredentialExport', '')}
           onChange={(v) => updateSetting('awsCredentialExport', v)}
           placeholder="/bin/aws-credentials.sh"
+        />
+
+        <TextSetting
+          id="gcpAuthRefresh"
+          label="GCP Auth Refresh Script"
+          description="Script that refreshes GCP Application Default Credentials when they expire or cannot be loaded. Used for Vertex AI."
+          value={getSetting<string>('gcpAuthRefresh', '')}
+          onChange={(v) => updateSetting('gcpAuthRefresh', v)}
+          placeholder="gcloud auth application-default login"
         />
 
         <TextSetting

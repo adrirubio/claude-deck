@@ -44,6 +44,8 @@ Error responses return JSON with a `detail` field:
 }
 ```
 
+Provider-aware endpoints may also map failures into normalized states such as unsupported capability, missing binary, unavailable CLI command, CLI failure, parse failure, or validation failure. Sensitive CLI stdout/stderr and raw provider payloads should be redacted or omitted before they are returned.
+
 ## API Documentation
 
 FastAPI generates interactive API docs at:
@@ -55,7 +57,8 @@ FastAPI generates interactive API docs at:
 
 | Module | Prefix | Description |
 |--------|--------|-------------|
-| [Config](/api/config) | `/config` | Configuration management |
+| [Config](/api/config) | `/config` and `/codex-config` | Configuration management |
+| [Providers](/api/providers) | `/providers` | Provider metadata, status, diagnostics, and inventory |
 | [MCP Servers](/api/mcp) | `/mcp` | MCP server management |
 | [Commands](/api/commands) | `/commands` | Slash commands |
 | [Plugins](/api/plugins) | `/plugins` | Plugin management |
@@ -67,7 +70,8 @@ FastAPI generates interactive API docs at:
 | [Plans](/api/plans) | `/plans` | Implementation plans |
 | [Output Styles](/api/output-styles) | `/output-styles` | Response formatting |
 | [Status Line](/api/statusline) | `/statusline` | Terminal status bar |
-| [CC Bridge](/api/cc-bridge) | `/cc-bridge` | Live terminal monitoring |
+| [Agent Bridge](/api/agent-bridge) | `/agent-bridge` | Provider-aware live terminal monitoring |
+| [CC Bridge](/api/cc-bridge) | `/cc-bridge` | Legacy Claude Code terminal monitoring route |
 | [Usage](/api/usage) | `/usage` | Token usage tracking |
 | [Memory](/api/memory) | `/memory` | Memory hierarchy |
 | [Backup](/api/backup) | `/backup` | Configuration backups |

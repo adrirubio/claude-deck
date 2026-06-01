@@ -3,6 +3,9 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { SessionCard } from './SessionCard'
 import type { CCSession } from './types'
+import type { AgentProviderId } from '@/types/providers'
+
+type ProviderFilter = 'all' | AgentProviderId
 
 interface SessionListProps {
   sessions: CCSession[]
@@ -13,6 +16,9 @@ interface SessionListProps {
   onRefresh: () => void
   onNewSession: () => void
   onKillSession: (session: CCSession) => void
+  providerFilter: ProviderFilter
+  canCreateSession: boolean
+  createDisabledReason: string | null
 }
 
 export function SessionList({
@@ -24,7 +30,18 @@ export function SessionList({
   onRefresh,
   onNewSession,
   onKillSession,
+  providerFilter,
+  canCreateSession,
+  createDisabledReason,
 }: SessionListProps) {
+  const emptyName = providerFilter === 'all'
+    ? 'agent'
+    : providerFilter === 'codex-cli' ? 'Codex' : 'Claude Code'
+  const emptyHint = createDisabledReason
+    ?? (providerFilter === 'all'
+      ? 'Launch or start a supported CLI in tmux.'
+      : `Launch ${emptyName} from Agent Bridge or start it in tmux.`)
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between p-3 border-b">
@@ -32,7 +49,14 @@ export function SessionList({
           Sessions ({sessions.length})
         </span>
         <div className="flex items-center gap-0.5">
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onNewSession} title="New session">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={onNewSession}
+            disabled={!canCreateSession}
+            title={createDisabledReason ?? 'New session'}
+          >
             <Plus className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onRefresh} title="Refresh">
@@ -55,8 +79,8 @@ export function SessionList({
         {!loading && !error && sessions.length === 0 && (
           <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
             <MonitorX className="h-8 w-8 mb-2" />
-            <p className="text-sm">No CC sessions found</p>
-            <p className="text-xs mt-1">Start Claude Code in a tmux session</p>
+            <p className="text-sm">No {emptyName} sessions found</p>
+            <p className="text-xs mt-1 text-center px-3">{emptyHint}</p>
           </div>
         )}
 

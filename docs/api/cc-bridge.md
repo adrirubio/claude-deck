@@ -1,5 +1,9 @@
 # CC Bridge API
 
+::: warning Legacy route
+Use `/api/v1/agent-bridge/*` for new provider-aware clients. `/api/v1/cc-bridge/*` remains for compatibility with Claude Code-only integrations.
+:::
+
 Monitor and manage live Claude Code terminal sessions.
 
 ## REST Endpoints
