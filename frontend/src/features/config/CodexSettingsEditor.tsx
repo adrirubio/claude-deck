@@ -1,12 +1,19 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Plus, RotateCcw, Save } from 'lucide-react'
+import { HelpCircle, Plus, RotateCcw, Save } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { updateCodexConfig } from '@/hooks/useProviders'
 import type {
@@ -24,6 +31,51 @@ interface CodexSettingsEditorProps {
 }
 
 const FEATURE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/
+const DEFAULT_SELECT_VALUE = '__default__'
+const REASONING_EFFORT_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
+]
+const SANDBOX_MODE_OPTIONS = [
+  { value: 'read-only', label: 'Read Only' },
+  { value: 'workspace-write', label: 'Workspace Write' },
+  { value: 'danger-full-access', label: 'Danger Full Access' },
+]
+const APPROVAL_POLICY_OPTIONS = [
+  { value: 'untrusted', label: 'Untrusted' },
+  { value: 'on-request', label: 'On Request' },
+  { value: 'never', label: 'Never' },
+  { value: 'on-failure', label: 'On Failure (deprecated)' },
+]
+const SETTING_HELP = {
+  model: 'Model the agent should use. This is open-ended; enter any Codex-supported model id.',
+  reasoning: 'Controls reasoning depth for models that support it.',
+  profile: 'Layers a named Codex profile config on top of the base user config.',
+  sandboxMode: 'Sandbox policy for filesystem and network access during command execution.',
+  approvalPolicy: 'Controls when Codex requires human approval before executing a command.',
+  search: 'Enables live web search. Codex can use the native web search tool without per-call approval.',
+  strictConfig: 'Errors out when config.toml contains fields this Codex version does not recognize.',
+  noAltScreen: 'Runs the TUI inline instead of in an alternate screen, preserving terminal scrollback history.',
+} satisfies Record<string, string>
+const FEATURE_HELP: Record<string, string> = {
+  apps: 'Enable ChatGPT Apps/connectors support.',
+  enable_request_compression: 'Compress streaming request bodies with zstd when supported.',
+  fast_mode: 'Enable model-catalog service tier selection in the TUI, including Fast-tier commands when the active model advertises them.',
+  goals: 'Enable persistent objectives that keep a Codex thread working toward a defined outcome across turns.',
+  hooks: 'Enable lifecycle hooks loaded from hooks.json or inline hooks config.',
+  memories: 'Enable Codex Memories.',
+  multi_agent: 'Enable multi-agent collaboration tools such as spawn_agent, send_input, resume_agent, wait_agent, and close_agent.',
+  network_proxy: 'Enable sandboxed networking. Table-form config can set network policy options such as allowed domains.',
+  personality: 'Enable personality selection controls.',
+  prevent_idle_sleep: 'Prevent the machine from sleeping while a turn is actively running.',
+  shell_snapshot: 'Snapshot the shell environment to speed up repeated commands.',
+  shell_tool: 'Enable the default shell tool for running commands.',
+  skill_mcp_dependency_install: 'Allow prompting and installing missing MCP dependencies for skills.',
+  undo: 'Enable undo support.',
+  unified_exec: 'Use the unified PTY-backed exec tool.',
+}
 const FEATURE_ORDER = [
   'goals',
   'memories',
@@ -56,28 +108,138 @@ function booleanFeatureOverrides(features: Record<string, unknown> | undefined):
   )
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value))))
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
+function withCurrentOption(
+  options: { value: string; label: string }[],
+  current: string,
+): { value: string; label: string }[] {
+  if (!current || options.some((option) => option.value === current)) return options
+  return [...options, { value: current, label: `${current} (custom)` }]
+}
+
+function formatKnownValues(values: string[], emptyMessage: string): string {
+  if (values.length === 0) return emptyMessage
+  return `Known in this config: ${values.join(', ')}.`
+}
+
+function featureHelp(feature: CodexFeatureInventoryRow): string {
+  return FEATURE_HELP[feature.name]
+    ?? (
+      `No official description found. Codex reports this flag as ${feature.stage || 'unknown stage'} `
+      + `and currently ${feature.enabled ? 'enabled' : 'disabled'}.`
+    )
+}
+
+function HelpIcon({ text }: { text: string }) {
+  return (
+    <span
+      className="inline-flex cursor-help text-muted-foreground"
+      title={text}
+      aria-label={text}
+      tabIndex={0}
+    >
+      <HelpCircle className="h-3.5 w-3.5" />
+    </span>
+  )
+}
+
+function LabelWithHelp({
+  htmlFor,
+  children,
+  help,
+  className,
+}: {
+  htmlFor?: string
+  children: ReactNode
+  help?: string
+  className?: string
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Label htmlFor={htmlFor} className={className}>
+        {children}
+      </Label>
+      {help && <HelpIcon text={help} />}
+    </div>
+  )
+}
+
 function Field({
   id,
   label,
   value,
   placeholder,
   onChange,
+  description,
+  help,
 }: {
   id: string
   label: string
   value: string
   placeholder?: string
   onChange: (value: string) => void
+  description?: string
+  help?: string
 }) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={id}>{label}</Label>
+      <LabelWithHelp htmlFor={id} help={help}>
+        {label}
+      </LabelWithHelp>
       <Input
         id={id}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
+      {description && <p className="text-xs text-muted-foreground">{description}</p>}
+    </div>
+  )
+}
+
+function SelectField({
+  id,
+  label,
+  value,
+  options,
+  onChange,
+  help,
+}: {
+  id: string
+  label: string
+  value: string
+  options: { value: string; label: string }[]
+  onChange: (value: string) => void
+  help?: string
+}) {
+  return (
+    <div className="space-y-1.5">
+      <LabelWithHelp htmlFor={id} help={help}>
+        {label}
+      </LabelWithHelp>
+      <Select
+        value={value || DEFAULT_SELECT_VALUE}
+        onValueChange={(nextValue) => onChange(nextValue === DEFAULT_SELECT_VALUE ? '' : nextValue)}
+      >
+        <SelectTrigger id={id}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={DEFAULT_SELECT_VALUE}>Default</SelectItem>
+          {withCurrentOption(options, value).map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }
@@ -88,18 +250,20 @@ function ToggleRow({
   checked,
   onChange,
   trailing,
+  help,
 }: {
   id: string
   label: string
   checked: boolean
   onChange: (checked: boolean) => void
   trailing?: ReactNode
+  help?: string
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
-      <Label htmlFor={id} className="text-sm font-medium">
+      <LabelWithHelp htmlFor={id} help={help} className="text-sm font-medium">
         {label}
-      </Label>
+      </LabelWithHelp>
       <div className="flex items-center gap-2">
         {trailing}
         <Switch id={id} checked={checked} onCheckedChange={onChange} />
@@ -114,19 +278,21 @@ function FeatureToggleRow({
   explicit,
   onChange,
   onReset,
+  help,
 }: {
   feature: CodexFeatureInventoryRow
   checked: boolean
   explicit: boolean
   onChange: (checked: boolean) => void
   onReset: () => void
+  help: string
 }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
       <div className="min-w-0">
-        <Label htmlFor={`codex-feature-${feature.name}`} className="block truncate text-sm font-medium">
+        <LabelWithHelp htmlFor={`codex-feature-${feature.name}`} help={help} className="block truncate text-sm font-medium">
           {feature.name}
-        </Label>
+        </LabelWithHelp>
         <div className="mt-1 flex flex-wrap gap-1.5">
           <Badge variant="outline" className="text-xs">
             {feature.stage || 'unknown'}
@@ -193,6 +359,18 @@ export function CodexSettingsEditor({
   const [newFeature, setNewFeature] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  const knownModels = uniqueStrings([
+    summary?.model,
+    stringValue(config?.profile_resolution?.base_summary.model),
+    stringValue(config?.profile_resolution?.effective_summary.model),
+    ...(config?.profile_resolution?.profiles ?? []).map((profile) => stringValue(profile.summary.model)),
+  ])
+  const knownProfiles = uniqueStrings([
+    summary?.profile,
+    summary?.profile_v2,
+    ...Object.keys(summary?.profiles ?? {}),
+    ...(config?.profile_resolution?.profiles ?? []).map((profile) => profile.name),
+  ])
   const featureEntries = Object.entries(features).sort(([a], [b]) => a.localeCompare(b))
   const unknownFeatureEntries = featureEntries.filter(([name]) => !knownFeatureNames.has(name))
   const canAddFeature = FEATURE_NAME_PATTERN.test(newFeature.trim()) && !(newFeature.trim() in features)
@@ -287,15 +465,32 @@ export function CodexSettingsEditor({
             <CardTitle>General</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Field id="codex-model" label="Model" value={model} placeholder="default" onChange={setModel} />
             <Field
+              id="codex-model"
+              label="Model"
+              value={model}
+              placeholder="default"
+              onChange={setModel}
+              help={SETTING_HELP.model}
+              description={`${formatKnownValues(knownModels, 'No model ids detected in this config.')} You can enter any Codex-supported model id.`}
+            />
+            <SelectField
               id="codex-reasoning"
               label="Reasoning Effort"
               value={reasoning}
-              placeholder="default"
+              options={REASONING_EFFORT_OPTIONS}
               onChange={setReasoning}
+              help={SETTING_HELP.reasoning}
             />
-            <Field id="codex-profile" label="Profile" value={profile} placeholder="default" onChange={setProfile} />
+            <Field
+              id="codex-profile"
+              label="Profile"
+              value={profile}
+              placeholder="default"
+              onChange={setProfile}
+              help={SETTING_HELP.profile}
+              description={`${formatKnownValues(knownProfiles, 'No named profiles detected in this config.')} You can enter any Codex profile name.`}
+            />
           </CardContent>
         </Card>
 
@@ -304,23 +499,43 @@ export function CodexSettingsEditor({
             <CardTitle>Runtime</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <Field
+            <SelectField
               id="codex-sandbox"
               label="Sandbox Mode"
               value={sandboxMode}
-              placeholder="default"
+              options={SANDBOX_MODE_OPTIONS}
               onChange={setSandboxMode}
+              help={SETTING_HELP.sandboxMode}
             />
-            <Field
+            <SelectField
               id="codex-approval"
               label="Approval Policy"
               value={approvalPolicy}
-              placeholder="default"
+              options={APPROVAL_POLICY_OPTIONS}
               onChange={setApprovalPolicy}
+              help={SETTING_HELP.approvalPolicy}
             />
-            <ToggleRow id="codex-search" label="Search" checked={search} onChange={setSearch} />
-            <ToggleRow id="codex-strict-config" label="Strict Config" checked={strictConfig} onChange={setStrictConfig} />
-            <ToggleRow id="codex-no-alt-screen" label="No Alt Screen" checked={noAltScreen} onChange={setNoAltScreen} />
+            <ToggleRow
+              id="codex-search"
+              label="Search"
+              checked={search}
+              onChange={setSearch}
+              help={SETTING_HELP.search}
+            />
+            <ToggleRow
+              id="codex-strict-config"
+              label="Strict Config"
+              checked={strictConfig}
+              onChange={setStrictConfig}
+              help={SETTING_HELP.strictConfig}
+            />
+            <ToggleRow
+              id="codex-no-alt-screen"
+              label="No Alt Screen"
+              checked={noAltScreen}
+              onChange={setNoAltScreen}
+              help={SETTING_HELP.noAltScreen}
+            />
           </CardContent>
         </Card>
 
@@ -361,6 +576,7 @@ export function CodexSettingsEditor({
                     explicit={explicit}
                     onChange={(checked) => setFeature(feature.name, checked)}
                     onReset={() => resetFeature(feature.name)}
+                    help={featureHelp(feature)}
                   />
                 )
               })}
@@ -374,6 +590,7 @@ export function CodexSettingsEditor({
                     label={name}
                     checked={enabled}
                     onChange={(checked) => setFeature(name, checked)}
+                    help="This feature flag is configured in config.toml but is not present in the active Codex feature inventory."
                     trailing={
                       <Button type="button" variant="ghost" size="icon" onClick={() => resetFeature(name)} title="Use Codex default">
                         <RotateCcw className="h-4 w-4" />
