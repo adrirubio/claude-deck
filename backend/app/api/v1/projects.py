@@ -1,5 +1,8 @@
 """Project management API endpoints."""
-from fastapi import APIRouter, Depends, HTTPException
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -44,6 +47,29 @@ async def discover_projects(
     service = ProjectService(db)
     discovered = service.discover_projects(request.base_path)
     return ProjectDiscoveryResponse(discovered=discovered)
+
+
+@router.get("/projects/browse")
+async def browse_directory(path: str = Query(default="~")):
+    """Return subdirectories of the given path for the directory browser."""
+    try:
+        resolved = Path(os.path.expanduser(path)).resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not resolved.is_dir():
+        raise HTTPException(status_code=404, detail="Path is not a directory")
+
+    try:
+        subdirs = sorted(
+            [e.name for e in resolved.iterdir() if e.is_dir() and not e.name.startswith(".")],
+            key=str.lower,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    parent = str(resolved.parent) if resolved != resolved.parent else None
+    return {"path": str(resolved), "parent": parent, "directories": subdirs}
 
 
 # Active project routes - MUST be before /projects/{project_id} routes
