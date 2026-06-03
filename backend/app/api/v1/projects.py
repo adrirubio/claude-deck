@@ -51,11 +51,22 @@ async def discover_projects(
 
 @router.get("/projects/browse")
 async def browse_directory(path: str = Query(default="~")):
-    """Return subdirectories of the given path for the directory browser."""
+    """Return subdirectories of the given path for the directory browser.
+
+    Restricted to paths within the current user's home directory to prevent
+    unintended exposure of arbitrary filesystem locations.
+    """
+    home = Path.home().resolve()
     try:
         resolved = Path(os.path.expanduser(path)).resolve()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid path")
+
+    # Constrain to home directory tree
+    try:
+        resolved.relative_to(home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path must be within your home directory")
 
     if not resolved.is_dir():
         raise HTTPException(status_code=404, detail="Path is not a directory")
@@ -68,7 +79,14 @@ async def browse_directory(path: str = Query(default="~")):
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
 
-    parent = str(resolved.parent) if resolved != resolved.parent else None
+    # Only expose parent if it stays within the home directory
+    try:
+        parent_path = resolved.parent
+        parent_path.relative_to(home)
+        parent = str(parent_path)
+    except ValueError:
+        parent = None  # resolved is home itself, no parent to expose
+
     return {"path": str(resolved), "parent": parent, "directories": subdirs}
 
 
