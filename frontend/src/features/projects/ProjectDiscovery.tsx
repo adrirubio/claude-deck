@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useProjectContext } from '@/contexts/ProjectContext';
 import type { ProjectBase } from '@/types/projects';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,6 +28,13 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addingProjects, setAddingProjects] = useState<Set<string>>(new Set());
+
+  // Pre-populate with the real home path on mount
+  useEffect(() => {
+    apiClient<BrowseResult>('projects/browse?path=~')
+      .then((r) => setSearchPath(r.path))
+      .catch(() => { /* leave empty if backend not ready */ });
+  }, []);
 
   // Directory browser state
   const [browserOpen, setBrowserOpen] = useState(false);
@@ -115,7 +122,7 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
             type="text"
             value={searchPath}
             onChange={(e) => setSearchPath(e.target.value)}
-            placeholder="/home/user/projects"
+            placeholder="~/projects"
             onKeyDown={(e) => { if (e.key === 'Enter') handleDiscover(); }}
           />
           <Button variant="outline" onClick={openBrowser} title="Browse directories">
