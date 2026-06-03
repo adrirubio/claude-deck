@@ -1,12 +1,21 @@
-/**
- * Project discovery wizard component
- */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useProjectContext } from '@/contexts/ProjectContext';
 import type { ProjectBase } from '@/types/projects';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Folder, FolderOpen, ChevronRight, ArrowLeft } from 'lucide-react';
+import { apiClient } from '@/lib/api';
+import { MODAL_SIZES } from '@/lib/constants';
+
+interface BrowseResult {
+  path: string;
+  parent: string | null;
+  directories: string[];
+}
 
 interface ProjectDiscoveryProps {
   onProjectsDiscovered: () => void;
@@ -20,12 +29,24 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
   const [error, setError] = useState<string | null>(null);
   const [addingProjects, setAddingProjects] = useState<Set<string>>(new Set());
 
+  // Pre-populate with the real home path on mount
+  useEffect(() => {
+    apiClient<BrowseResult>('projects/browse?path=~')
+      .then((r) => setSearchPath(r.path))
+      .catch(() => { /* leave empty if backend not ready */ });
+  }, []);
+
+  // Directory browser state
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browseResult, setBrowseResult] = useState<BrowseResult | null>(null);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
+
   const handleDiscover = async () => {
     if (!searchPath.trim()) {
       setError('Please enter a path to search');
       return;
     }
-
     setLoading(true);
     setError(null);
     try {
@@ -60,6 +81,33 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
     }
   };
 
+  const browseTo = async (path: string) => {
+    setBrowseLoading(true);
+    setBrowseError(null);
+    try {
+      const result = await apiClient<BrowseResult>(
+        `projects/browse?path=${encodeURIComponent(path)}`
+      );
+      setBrowseResult(result);
+    } catch (err) {
+      setBrowseError(err instanceof Error ? err.message : 'Failed to read directory');
+    } finally {
+      setBrowseLoading(false);
+    }
+  };
+
+  const openBrowser = () => {
+    setBrowserOpen(true);
+    browseTo(searchPath.trim() || '~');
+  };
+
+  const handleSelectDirectory = () => {
+    if (browseResult) {
+      setSearchPath(browseResult.path);
+    }
+    setBrowserOpen(false);
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -70,27 +118,23 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex gap-2">
-          <input
+          <Input
             type="text"
             value={searchPath}
             onChange={(e) => setSearchPath(e.target.value)}
-            placeholder="/home/user/projects"
-            className="flex-1 px-3 py-2 border rounded-md"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                handleDiscover();
-              }
-            }}
+            placeholder="~/projects"
+            onKeyDown={(e) => { if (e.key === 'Enter') handleDiscover(); }}
           />
+          <Button variant="outline" onClick={openBrowser} title="Browse directories">
+            <Folder className="h-4 w-4" />
+          </Button>
           <Button onClick={handleDiscover} disabled={loading}>
             {loading ? 'Searching...' : 'Search'}
           </Button>
         </div>
 
         {error && (
-          <div className="text-sm text-destructive">
-            {error}
-          </div>
+          <div className="text-sm text-destructive">{error}</div>
         )}
 
         {discoveredProjects.length > 0 && (
@@ -111,7 +155,6 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
                 Add All
               </Button>
             </div>
-
             <div className="space-y-2">
               {discoveredProjects.map((project) => (
                 <Card key={project.path}>
@@ -128,9 +171,7 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
                             <Badge variant="outline">Discovered</Badge>
                           )}
                         </div>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {project.path}
-                        </p>
+                        <p className="text-sm text-muted-foreground mt-1">{project.path}</p>
                       </div>
                       <Button
                         size="sm"
@@ -147,6 +188,81 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
           </div>
         )}
       </CardContent>
+
+      {/* Directory browser dialog */}
+      <Dialog open={browserOpen} onOpenChange={setBrowserOpen}>
+        <DialogContent className={MODAL_SIZES.SM}>
+          <DialogHeader>
+            <DialogTitle>Browse Directories</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {/* Current path breadcrumb */}
+            {browseResult && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground bg-muted px-3 py-2 rounded-md min-w-0">
+                <FolderOpen className="h-4 w-4 shrink-0" />
+                <span className="truncate">{browseResult.path}</span>
+              </div>
+            )}
+
+            {/* Up / parent button */}
+            {browseResult?.parent && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 text-muted-foreground"
+                onClick={() => browseTo(browseResult.parent!)}
+              >
+                <ArrowLeft className="h-4 w-4" />
+                <span className="truncate">.. (up to {browseResult.parent})</span>
+              </Button>
+            )}
+
+            {browseError && (
+              <p className="text-sm text-destructive">{browseError}</p>
+            )}
+
+            {browseLoading && (
+              <p className="text-sm text-muted-foreground text-center py-4">Loading…</p>
+            )}
+
+            {/* Directory list */}
+            {!browseLoading && browseResult && (
+              browseResult.directories.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No subdirectories
+                </p>
+              ) : (
+                <ScrollArea className="h-64 rounded-md border">
+                  <div className="p-1">
+                    {browseResult.directories.map((dir) => (
+                      <button
+                        key={dir}
+                        type="button"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left"
+                        onClick={() => browseTo(`${browseResult.path}/${dir}`)}
+                      >
+                        <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{dir}</span>
+                        <ChevronRight className="h-4 w-4 shrink-0 ml-auto text-muted-foreground" />
+                      </button>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBrowserOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSelectDirectory} disabled={!browseResult}>
+              Use this directory
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
