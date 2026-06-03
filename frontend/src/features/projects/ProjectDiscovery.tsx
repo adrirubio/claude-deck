@@ -79,7 +79,7 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
     setBrowseError(null);
     try {
       const result = await apiClient<BrowseResult>(
-        `/projects/browse?path=${encodeURIComponent(path)}`
+        `projects/browse?path=${encodeURIComponent(path)}`
       );
       setBrowseResult(result);
     } catch (err) {
