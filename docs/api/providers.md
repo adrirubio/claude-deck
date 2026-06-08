@@ -35,9 +35,12 @@ Runs Codex diagnostics and returns redacted output.
 ```http
 GET /api/v1/providers/codex-cli/mcp
 GET /api/v1/providers/codex-cli/plugins
+GET /api/v1/providers/codex-cli/features
 ```
 
-Returns Codex MCP and plugin inventory. Secret-like values are redacted. MCP JSON output is parsed and redacted before any raw output is returned. Plugin text output is treated as read-only text with best-effort row parsing.
+Returns Codex MCP, plugin, and feature inventory. Secret-like values are redacted. MCP JSON output is parsed and redacted before any raw output is returned. Plugin text output is treated as read-only text with best-effort row parsing.
+
+Feature inventory is parsed from `codex features list` and returns the feature name, stage, and effective enabled state. Removed and deprecated flags may still be present in raw CLI output; the frontend hides those from the main toggle list unless they already exist as explicit config overrides.
 
 ### Codex MCP Mutation
 
@@ -51,7 +54,7 @@ Adds or removes Codex MCP servers through the Codex CLI with strict validation.
 ### Codex Plugin Mutation
 
 ```http
-POST /api/v1/providers/codex-cli/plugins/install
+POST /api/v1/providers/codex-cli/plugins
 DELETE /api/v1/providers/codex-cli/plugins/{name}
 ```
 

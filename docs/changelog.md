@@ -2,6 +2,40 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.3.0 — 2026-06-08
+
+### Added
+
+- **Codex CLI support** is now stable enough for daily use:
+  - Mixed Claude Code and Codex tmux sessions in Agent Bridge
+  - Codex spawn, resume, fork, attach, and kill actions
+  - Provider-aware navigation so Codex users do not land on unsupported Claude-only pages
+- **Codex Config**:
+  - Safe TOML editing for whitelisted scalar settings and feature flags
+  - Dropdowns for known Codex runtime values
+  - Help tooltips for documented settings and feature flags
+  - Feature inventory from `codex features list`, including goals and other enable-flag features
+  - Profile diagnostics for active/default profiles, profile files, overrides, missing references, and malformed profiles
+- **Codex MCP and Plugins**:
+  - MCP inventory from `codex mcp list --json`
+  - MCP add/remove through the Codex CLI with validation
+  - Plugin inventory from `codex plugin list`
+  - Plugin install/remove where the installed Codex CLI exposes safe commands
+- **Codex Backup Export**:
+  - Redacted export-only backups for config, profile files, rules, and provider inventory metadata
+- **Projects**:
+  - Easier project discovery and directory browsing when adding project paths
+
+### Changed
+
+- Provider status, capabilities, diagnostics, and normalized provider errors now drive more of the UI.
+- The frontend toolchain now uses TypeScript 6, `@vitejs/plugin-react` 6, updated ESLint tooling, React DOM, PostCSS, Tailwind Merge, and Node types.
+
+### Security
+
+- Codex auth, history, model cache, SQLite state, prompt text, and raw cache payloads are still excluded from raw viewers and backups.
+- Automatic Codex restore remains disabled because exports intentionally omit provider-owned local state.
+
 ## 1.2.0 — 2026-04-22
 
 ### Added

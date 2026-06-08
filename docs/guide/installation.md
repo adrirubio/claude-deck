@@ -42,16 +42,17 @@ This script:
 - Creates a Python virtual environment in `backend/venv/`
 - Installs Python dependencies from `backend/requirements.txt`
 - Installs Node.js dependencies in `frontend/`
+- Installs documentation dependencies in `docs/`
 - Creates required directories
 
 3. Verify the installation:
 
 ```bash
 # Check backend
-cd backend && source venv/bin/activate && python -c "import fastapi; print('Backend OK')"
+(cd backend && source venv/bin/activate && python -c "import fastapi; print('Backend OK')")
 
-# Check frontend
-cd frontend && npm run build
+# Check frontend and docs
+./scripts/build.sh
 ```
 
 ## Configuration

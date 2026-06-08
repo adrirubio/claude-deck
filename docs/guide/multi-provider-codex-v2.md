@@ -1,6 +1,6 @@
-# Multi-Provider and Codex v2
+# Multi-Provider and Codex CLI
 
-Claude Deck is moving from a Claude Code-only control surface to a provider-aware local agent dashboard. Claude Code remains the most complete provider. Codex CLI support is explicit about what is supported, what is diagnostics-only, and what is intentionally unavailable.
+Claude Deck has moved from a Claude Code-only control surface to a provider-aware local agent dashboard. Claude Code remains the most complete provider. Codex CLI support is stable for sessions, safe configuration, diagnostics, MCP/plugin inventory, supported CLI-backed mutations, feature flags, and redacted exports. The UI is explicit about what is diagnostics-only and what is intentionally unavailable.
 
 ## Provider Model
 
@@ -40,6 +40,7 @@ Codex CLI support is productized for:
 - mixed-provider Agent Bridge sessions with provider filters
 - provider status, version, config paths, and capability metadata
 - safe TOML settings edits for whitelisted scalar and feature fields
+- feature flag inventory and explicit overrides from `codex features list`
 - config/profile diagnostics, including active/default profile resolution and malformed profile reporting
 - MCP inventory and CLI-backed MCP add/remove
 - plugin inventory and CLI-backed plugin install/remove where the local Codex CLI supports those commands

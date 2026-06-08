@@ -8,7 +8,7 @@ A self-hosted web application for visualizing and managing local AI coding agent
 
 Claude Code starts simple, then slowly sprawls across config files and directories: `~/.claude.json`, `~/.claude/settings.json`, `.mcp.json`, slash commands, agents, skills, project settings, transcripts, and usage data. That works fine at small scale, but once your setup gets serious it becomes hard to see the whole picture, change things confidently, or understand what is actually configured.
 
-Claude Deck gives you one local interface for that sprawl. It also has provider-aware Codex CLI support for tmux sessions, safe TOML configuration, diagnostics, MCP/plugin inventory and supported CLI-backed mutations, and redacted export-only backups.
+Claude Deck gives you one local interface for that sprawl. It also has provider-aware Codex CLI support for tmux sessions, safe TOML configuration, feature flags, diagnostics, MCP/plugin inventory and supported CLI-backed mutations, and redacted export-only backups.
 
 ## Best For
 
@@ -30,10 +30,10 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 
 - **Dashboard** — Overview of local agent configuration with Claude Code context window visualizer
 - **Provider Switcher** — Move between Claude Code and Codex CLI surfaces without leaving the app
-- **Config Editor** — Browse, inspect, and edit Claude Code JSON settings or Codex TOML settings
+- **Config Editor** — Browse, inspect, and edit Claude Code JSON settings or Codex TOML settings, including Codex profiles, runtime options, and feature flags
 - **MCP Servers** — Add, edit, test, and manage MCP server connections with OAuth support. Browse and install servers from the [MCP Registry](https://registry.modelcontextprotocol.io). View tools, resources, and prompts. Supports stdio, HTTP, and SSE transports
 - **Slash Commands** — Browse, create, and edit custom commands (user and project scope)
-- **Plugins** — Browse installed plugins with detail views and enable/disable toggles
+- **Plugins** — Browse installed plugins with detail views and enable/disable toggles; Codex plugins support CLI-backed inventory, install, and remove where the installed Codex CLI exposes safe commands
 - **Hooks** — Configure automation hooks by event type (PreToolUse, PostToolUse, etc.)
 - **Permissions** — Visual allow/deny rule builder for tool access control
 - **Agents** — Create and manage custom agent configurations
@@ -47,6 +47,17 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Plan History** — Browse and review Claude Code implementation plans
 - **Backup & Restore** — Create and manage Claude Code backups with selective restore, plus redacted export-only Codex backups
 - **Projects** — Discover and manage project directories
+
+## What's New for the Next Release
+
+Codex CLI support has moved from experimental plumbing to a usable provider surface:
+
+- Provider-aware Agent Bridge can discover, spawn, resume, fork, attach to, and kill Codex tmux sessions.
+- The Codex config editor now handles safe TOML settings, profiles, runtime controls, and feature flags from `codex features list`.
+- Codex settings include dropdowns for known enum values and help tooltips for settings and feature flags where official descriptions are available.
+- Codex MCP and plugin inventory are visible, with supported CLI-backed add/remove or install/remove actions.
+- Codex exports are redacted and export-only by design.
+- Project discovery is now easier from the UI, including directory browsing when adding projects.
 
 Codex support is explicit about provider boundaries: usage/context parity and session transcript browsing are not supported for Codex yet; history and model-cache diagnostics avoid prompt text and raw cache payloads; Codex automatic restore is refused because exports intentionally exclude auth, history, cache, and local state.
 
@@ -64,7 +75,7 @@ Codex support is explicit about provider boundaries: usage/context parity and se
 
 | Agent Bridge | Skills |
 |-----------|--------|
-| ![CC Bridge](screenshots/cc-bridge.png) | ![Skills](screenshots/skills.png) |
+| ![Agent Bridge](screenshots/cc-bridge.png) | ![Skills](screenshots/skills.png) |
 | Monitor and interact with Claude Code and Codex tmux sessions | Browse installed skills and discover new ones |
 
 ## Tech Stack
@@ -72,7 +83,7 @@ Codex support is explicit about provider boundaries: usage/context parity and se
 | Layer | Technology |
 |-------|------------|
 | Backend | Python 3.11+ with FastAPI |
-| Frontend | React 19 + TypeScript + Vite 7 |
+| Frontend | React 19 + TypeScript 6 + Vite 7 |
 | UI Components | shadcn/ui + Tailwind CSS |
 | Charts | Recharts (via shadcn/ui) |
 | Database | SQLite (async via SQLAlchemy + aiosqlite) |
@@ -121,6 +132,16 @@ To make the dev environment reachable from another machine on your LAN or tailne
 ```
 
 Both servers will then bind to all interfaces.
+
+To preview the documentation site:
+
+```bash
+./scripts/docs-dev.sh
+```
+
+This starts VitePress at http://localhost:5174/docs/. Use `--host 0.0.0.0` if you need to reach it from another machine.
+
+For a release check, `./scripts/build.sh` builds both the app frontend and the documentation site.
 
 ## Configuration Files
 

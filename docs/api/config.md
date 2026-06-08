@@ -129,4 +129,17 @@ Returns raw content only for safe files under `$CODEX_HOME`.
 PUT /api/v1/codex-config/settings
 ```
 
-Updates whitelisted Codex settings using a TOML writer that preserves formatting where possible. A backup is created before writing and the file is parsed before save.
+Updates whitelisted Codex settings and feature overrides using a TOML writer that preserves formatting where possible. A backup is created before writing and the file is parsed before save.
+
+Supported scalar settings include:
+
+- `model`
+- `model_reasoning_effort`
+- `profile`
+- `sandbox_mode`
+- `approval_policy`
+- `search`
+- `strict_config`
+- `no_alt_screen`
+
+Feature updates are written under `[features]`. Boolean values add or update overrides. `null` removes an explicit override so Codex can fall back to its default.

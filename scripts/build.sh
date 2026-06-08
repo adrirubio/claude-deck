@@ -15,10 +15,17 @@ echo "Building frontend..."
 cd "$PROJECT_ROOT/frontend"
 npm run build
 
+# Build documentation site
+echo ""
+echo "Building documentation..."
+cd "$PROJECT_ROOT/docs"
+npm run build
+
 # The built files will be in frontend/dist
 echo ""
 echo "Build complete!"
 echo "Frontend assets are in: frontend/dist"
+echo "Documentation assets are in: docs/.vitepress/dist"
 echo ""
 echo "To deploy:"
 echo "  1. Serve frontend/dist with a static file server"

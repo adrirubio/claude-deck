@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-08
+
+### Added
+- **Codex CLI support**: Provider-aware Codex support is now stable enough for everyday use
+  - Agent Bridge discovers mixed Claude Code and Codex tmux sessions
+  - Codex sessions can be spawned, resumed, forked, attached to, and killed from the UI
+  - Provider switcher keeps Claude Code and Codex surfaces separate instead of showing unsupported pages
+- **Codex Config**: Safe TOML editor for Codex settings
+  - Structured General and Runtime cards for model, profile, reasoning effort, sandbox mode, approval policy, search, strict config, and alternate screen behavior
+  - Dropdowns for known Codex enum values while keeping open-ended fields editable
+  - Help tooltips for documented settings and feature flags
+  - Feature flag inventory from `codex features list`, including editable overrides for flags such as goals, memories, hooks, multi-agent, shell tool, and network proxy
+  - Profile diagnostics for active/default profile resolution, profile files, overrides, missing references, and malformed profiles
+- **Codex MCP and Plugins**: Provider inventory and safe CLI-backed mutations
+  - MCP inventory from `codex mcp list --json`
+  - MCP add/remove through the Codex CLI with validation
+  - Plugin inventory from `codex plugin list`
+  - Plugin install/remove where the installed Codex CLI exposes safe commands
+- **Codex Backup Export**: Redacted export-only backups for Codex config, profile files, rules, and provider inventory metadata
+- **Projects**: Project discovery is easier, with directory browsing support when adding project paths
+
+### Changed
+- **Provider model**: Provider status, capabilities, diagnostics, and normalized errors now drive the UI for Claude Code and Codex CLI.
+- **Documentation**: README and VitePress docs now describe the stable Codex support surface, the remaining provider boundaries, and the release-ready dependency updates.
+- **Frontend toolchain**: Updated TypeScript to 6.0.3, `@vitejs/plugin-react` to 6.0.2, ESLint tooling, React DOM, PostCSS, Tailwind Merge, and Node types.
+
+### Security
+- **Codex privacy boundary**: Codex auth, history, model cache, SQLite state, prompt text, and raw cache payloads remain excluded from raw viewers and backups.
+- **Codex restore policy**: Automatic Codex restore is refused because exports intentionally omit provider-owned local state.
+
 ## [1.2.0] - 2026-04-22
 
 ### Added
@@ -66,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RESTful API at `/api/v1/`
 - CORS configured for local development
 
-[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/adrirubio/claude-deck/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/adrirubio/claude-deck/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/adrirubio/claude-deck/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/adrirubio/claude-deck/releases/tag/v1.0.0

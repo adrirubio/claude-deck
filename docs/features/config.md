@@ -63,6 +63,7 @@ When the selected provider is Codex CLI, the Config page switches to Codex-speci
 
 - General settings such as model, reasoning effort, and profile
 - Runtime settings such as sandbox, approval policy, search, strict config, and alternate screen behavior
+- Feature flags reported by `codex features list`
 - Project trust entries
 - Profile v2 files
 - Rules files
@@ -70,6 +71,41 @@ When the selected provider is Codex CLI, the Config page switches to Codex-speci
 - Diagnostics from `codex doctor`
 
 Codex config writes are intentionally narrower than Claude Code settings. Claude Deck only updates whitelisted TOML keys, creates a backup before saving, and refuses unsafe paths. Auth, history, model cache, and log files are not shown in the raw viewer.
+
+### Codex Settings Editor
+
+The Codex editor keeps open-ended fields editable and uses dropdowns where Codex has known values:
+
+| Setting | Control | Notes |
+|---------|---------|-------|
+| Model | Text input | Shows model ids already found in the loaded config/profile data, but allows any Codex-supported model id. |
+| Reasoning Effort | Dropdown | Default, low, medium, high, or extra high. Existing custom values remain selectable. |
+| Profile | Text input | Shows profile names found in config/profile diagnostics, but allows any Codex profile name. |
+| Sandbox Mode | Dropdown | Default, read-only, workspace-write, or danger-full-access. |
+| Approval Policy | Dropdown | Default, untrusted, on-request, never, or deprecated on-failure. |
+| Search | Toggle | Enables live web search for Codex. |
+| Strict Config | Toggle | Makes Codex reject unrecognized config fields. |
+| No Alt Screen | Toggle | Runs the Codex TUI inline so terminal scrollback is preserved. |
+
+Settings and feature labels include help icons. When an official description is known, the tooltip explains the setting. When a Codex feature flag has no public description, Claude Deck says so and still shows the stage and current effective state reported by the installed CLI.
+
+### Codex Feature Flags
+
+The Features card lists active, non-deprecated flags from `codex features list`. The value shown is the effective value from Codex unless you explicitly override it in `config.toml`.
+
+Common documented flags include:
+
+- `goals`
+- `memories`
+- `hooks`
+- `multi_agent`
+- `network_proxy`
+- `shell_tool`
+- `shell_snapshot`
+- `unified_exec`
+- `prevent_idle_sleep`
+
+Use the reset button next to a configured flag to remove the explicit override and return to the Codex default.
 
 Profile diagnostics resolve default and active profiles, profile files, inherited and overridden settings, and missing or malformed profile files. Summaries redact secret-like values and avoid exposing auth, history, or cache data.
 

@@ -57,6 +57,16 @@ npm install
 
 echo "Frontend setup complete!"
 
+# Setup documentation site
+echo ""
+echo "Setting up documentation site..."
+cd "$PROJECT_ROOT/docs"
+
+echo "Installing documentation dependencies..."
+npm install
+
+echo "Documentation setup complete!"
+
 # Create required directories
 echo ""
 echo "Creating required directories..."

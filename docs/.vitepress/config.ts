@@ -18,7 +18,7 @@ export default defineConfig({
       { text: 'Features', link: '/features/dashboard' },
       { text: 'API Reference', link: '/api/' },
       {
-        text: 'v1.2.0',
+        text: 'v1.3.0',
         link: 'https://github.com/adrirubio/claude-deck/blob/master/CHANGELOG.md',
       },
     ],
@@ -32,7 +32,7 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Quick Start', link: '/guide/quick-start' },
             { text: 'Architecture', link: '/guide/architecture' },
-            { text: 'Multi-Provider & Codex v2', link: '/guide/multi-provider-codex-v2' },
+            { text: 'Multi-Provider & Codex CLI', link: '/guide/multi-provider-codex-v2' },
             { text: 'Contributing', link: '/guide/contributing' },
           ],
         },
