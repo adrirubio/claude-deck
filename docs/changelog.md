@@ -29,7 +29,7 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 ### Changed
 
 - Provider status, capabilities, diagnostics, and normalized provider errors now drive more of the UI.
-- The frontend toolchain now uses TypeScript 6, `@vitejs/plugin-react` 6, updated ESLint tooling, React DOM, PostCSS, Tailwind Merge, and Node types.
+- The frontend toolchain now uses TypeScript 6, `@vitejs/plugin-react` 5, updated ESLint tooling, React DOM, PostCSS, Tailwind Merge, and Node types.
 
 ### Security
 
