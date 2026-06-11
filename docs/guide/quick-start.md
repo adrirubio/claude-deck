@@ -45,6 +45,19 @@ With Codex selected, start with:
 - **Config** — edit safe TOML settings, inspect profiles, and manage feature flags
 - **Backup** — create a redacted Codex export
 
+## Identify the Backend Instance
+
+When you run Claude Deck on more than one machine, or expose it over a LAN or tailnet, set an instance name so each browser window clearly shows the backend it controls:
+
+```bash
+CLAUDE_DECK_INSTANCE_NAME="Studio Mac" \
+CLAUDE_DECK_INSTANCE_ACCENT="blue" \
+CLAUDE_DECK_INSTANCE_ID="studio-mac" \
+./scripts/dev.sh --host 0.0.0.0
+```
+
+The instance name appears in the header, browser tab title, Agent Bridge terminal panes, and kill-session confirmations. Supported accents are `blue`, `green`, `purple`, `orange`, `red`, `pink`, `cyan`, and `slate`.
+
 ## Key Pages
 
 | Page | What You Can Do |
