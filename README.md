@@ -138,6 +138,18 @@ To make the dev environment reachable from another machine on your LAN or tailne
 
 Both servers will then bind to all interfaces.
 
+### Naming a Claude Deck instance
+
+When running Claude Deck on several machines, set a display name and accent color so each browser window clearly identifies the backend it controls:
+
+```bash
+CLAUDE_DECK_INSTANCE_NAME="Studio Mac" \
+CLAUDE_DECK_INSTANCE_ACCENT="blue" \
+./scripts/dev.sh --host 0.0.0.0
+```
+
+Supported accents are `blue`, `green`, `purple`, `orange`, `red`, `pink`, `cyan`, and `slate`. The name appears in the header, browser tab title, Agent Bridge terminal panes, and destructive confirmations.
+
 To preview the documentation site:
 
 ```bash

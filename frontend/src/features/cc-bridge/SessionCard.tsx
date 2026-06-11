@@ -4,15 +4,17 @@ import { Badge } from '@/components/ui/badge'
 import { CLICKABLE_CARD } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import type { CCSession } from './types'
+import type { InstanceIdentity } from '@/types/status'
 
 interface SessionCardProps {
   session: CCSession
   gridPosition: number | null
   onClick: () => void
   onKill: (session: CCSession) => void
+  instance?: InstanceIdentity | null
 }
 
-export function SessionCard({ session, gridPosition, onClick, onKill }: SessionCardProps) {
+export function SessionCard({ session, gridPosition, onClick, onKill, instance }: SessionCardProps) {
   const projectName = session.cwd.split('/').pop() || session.cwd
   const isActive = gridPosition !== null
 
@@ -59,8 +61,11 @@ export function SessionCard({ session, gridPosition, onClick, onKill }: SessionC
         <p className="text-xs text-muted-foreground truncate mt-1" title={session.cwd}>
           {projectName}
         </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          {session.tmux_target}
+        <p
+          className="text-xs text-muted-foreground mt-0.5 truncate"
+          title={instance ? `${instance.name} · tmux: ${session.tmux_target}` : session.tmux_target}
+        >
+          {instance ? `${instance.name} · ` : ''}tmux: {session.tmux_target}
         </p>
       </CardContent>
     </Card>

@@ -2,19 +2,24 @@ import { useRef, useEffect } from 'react'
 import { Monitor, Maximize2, Minimize2, X } from 'lucide-react'
 import { useTerminal } from './useTerminal'
 import { Button } from '@/components/ui/button'
+import { getInstanceAccentClasses } from '@/lib/instanceAccent'
 import { cn } from '@/lib/utils'
+import type { InstanceIdentity } from '@/types/status'
 
 interface TerminalViewProps {
   target: string | null
   fullscreen?: boolean
   onToggleFullscreen?: () => void
   onClose?: () => void
+  instance?: InstanceIdentity | null
 }
 
-export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose }: TerminalViewProps) {
+export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, instance }: TerminalViewProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef)
+  const accentClasses = getInstanceAccentClasses(instance?.accent)
+  const modeLabel = readOnly ? 'Read-only' : 'Interactive'
 
   useEffect(() => {
     if (target) {
@@ -43,8 +48,8 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose }
       </div>
 
       {target && (
-        <div className="flex items-center justify-between px-3 py-2 border-t bg-background">
-          <div className="flex items-center gap-3">
+        <div className={cn("flex items-center justify-between gap-3 px-3 py-2 border-t bg-background", accentClasses.terminal)}>
+          <div className="flex items-center gap-3 min-w-0">
             <div className="flex items-center gap-2 text-sm">
               <button
                 className={cn(
@@ -70,13 +75,19 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose }
               </button>
             </div>
             <span className={cn(
-              'text-xs',
+              'text-xs shrink-0',
               connected ? 'text-green-500' : 'text-muted-foreground'
             )}>
               {connected ? 'Connected' : 'Disconnected'}
             </span>
+            <span
+              className="text-xs text-muted-foreground truncate"
+              title={instance ? `${modeLabel} on ${instance.name} (${instance.hostname}) · ${target}` : target}
+            >
+              {instance ? `${modeLabel} on ${instance.name}` : target}
+            </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {onToggleFullscreen && (
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
                 {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}

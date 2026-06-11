@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { SessionCard } from './SessionCard'
 import type { CCSession } from './types'
 import type { AgentProviderId } from '@/types/providers'
+import type { InstanceIdentity } from '@/types/status'
 
 type ProviderFilter = 'all' | AgentProviderId
 
@@ -19,6 +20,7 @@ interface SessionListProps {
   providerFilter: ProviderFilter
   canCreateSession: boolean
   createDisabledReason: string | null
+  instance?: InstanceIdentity | null
 }
 
 export function SessionList({
@@ -33,6 +35,7 @@ export function SessionList({
   providerFilter,
   canCreateSession,
   createDisabledReason,
+  instance,
 }: SessionListProps) {
   const emptyName = providerFilter === 'all'
     ? 'agent'
@@ -93,6 +96,7 @@ export function SessionList({
               gridPosition={pos === -1 ? null : pos}
               onClick={() => onToggleTarget(session.tmux_target)}
               onKill={onKillSession}
+              instance={instance}
             />
           )
         })}

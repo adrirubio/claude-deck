@@ -1,5 +1,6 @@
 """Pydantic schemas for API models."""
-from typing import Any, Dict, List, Optional, Union
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -1814,9 +1815,24 @@ class PresenceConfigSnippet(BaseModel):
     instructions: str
 
 
+InstanceAccent = Literal["blue", "green", "purple", "orange", "red", "pink", "cyan", "slate"]
+
+
+class InstanceIdentity(BaseModel):
+    """Runtime identity for the Claude Deck backend instance."""
+
+    id: str
+    name: str
+    hostname: str
+    short_hostname: str
+    accent: InstanceAccent
+    started_at: datetime
+
+
 class SystemStatusResponse(BaseModel):
     """System status for header indicators."""
 
     claude_code_version: Optional[str] = None
     active_sessions: int = 0
     providers: Dict[str, Any] = Field(default_factory=dict)
+    instance: Optional[InstanceIdentity] = None

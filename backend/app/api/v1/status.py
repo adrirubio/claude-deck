@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.constants import SessionStatus
 from app.models.schemas import SystemStatusResponse
+from app.services.instance_identity import get_instance_identity
 from app.services.presence_service import PresenceService
 from app.services.providers import get_provider, get_providers
 
@@ -64,4 +65,5 @@ async def get_system_status(db: AsyncSession = Depends(get_db)):
         claude_code_version=version,
         active_sessions=active_count,
         providers=provider_statuses,
+        instance=get_instance_identity(),
     )

@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '@/lib/api'
-import type { SystemStatusResponse } from '@/types/status'
+import type { InstanceIdentity, SystemStatusResponse } from '@/types/status'
 
 interface SystemStatus {
   claudeCodeVersion: string | null
   activeSessions: number
   providers: SystemStatusResponse['providers']
+  instance: InstanceIdentity | null
 }
 
 function parseStatus(res: SystemStatusResponse): SystemStatus {
@@ -13,6 +14,7 @@ function parseStatus(res: SystemStatusResponse): SystemStatus {
     claudeCodeVersion: res.claude_code_version,
     activeSessions: res.active_sessions,
     providers: res.providers ?? {},
+    instance: res.instance ?? null,
   }
 }
 
