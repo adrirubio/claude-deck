@@ -1,25 +1,38 @@
-import { Terminal, Radio, AlertCircle } from "lucide-react";
+import { Terminal, Radio, AlertCircle, Server } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { useInstanceDocumentTitle } from "@/hooks/useInstanceDocumentTitle";
 import { useProviderContext } from "@/contexts/ProviderContext";
+import { getInstanceAccentClasses } from "@/lib/instanceAccent";
 import { cn } from "@/lib/utils";
 
 export function Header() {
   const { theme } = useTheme();
   const status = useSystemStatus();
+  const instance = status?.instance ?? null;
+  const accentClasses = getInstanceAccentClasses(instance?.accent);
   const { providers, selectedProviderId, selectedProvider } = useProviderContext();
   const providerStatuses = providers
     .map((provider) => status?.providers?.[provider.id] ?? provider)
     .filter((provider) => provider.installed || provider.id === selectedProviderId);
+  useInstanceDocumentTitle(instance);
+
+  const instanceTitle = instance
+    ? [
+        `Claude Deck instance: ${instance.name}`,
+        `Hostname: ${instance.hostname}`,
+        `Opened from: ${typeof window === "undefined" ? "unknown" : window.location.host}`,
+      ].join("\n")
+    : undefined;
 
   if (providerStatuses.length === 0 && selectedProvider) {
     providerStatuses.push(status?.providers?.[selectedProviderId] ?? selectedProvider);
   }
 
   return (
-    <header className="border-b bg-background">
+    <header className={cn("border-b bg-background", instance && "border-t-4", instance && accentClasses.headerBorder)}>
       <div className="flex h-16 items-center justify-between px-6">
         <div className="flex items-center gap-3">
           <img
@@ -35,6 +48,17 @@ export function Header() {
         <div className="flex items-center gap-2">
           {status && (
             <>
+              {instance && (
+                <Badge
+                  variant="outline"
+                  className={cn("gap-1 text-xs max-w-[12rem] truncate", accentClasses.badge)}
+                  title={instanceTitle}
+                >
+                  <Server className="h-3 w-3 shrink-0" />
+                  <span className={cn("h-2 w-2 rounded-full shrink-0", accentClasses.dot)} />
+                  <span className="truncate">{instance.name}</span>
+                </Badge>
+              )}
               {providerStatuses.map((provider) => (
                 <Badge
                   key={provider.id}

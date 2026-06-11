@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label'
 import { MODAL_SIZES } from '@/lib/constants'
 import { killSession } from './api'
 import type { CCSession } from './types'
+import type { InstanceIdentity } from '@/types/status'
 
 interface KillSessionDialogProps {
   open: boolean
@@ -20,6 +21,7 @@ interface KillSessionDialogProps {
   session: CCSession | null
   isWorktreeSession: boolean
   onKilled: () => void
+  instance?: InstanceIdentity | null
 }
 
 export function KillSessionDialog({
@@ -28,6 +30,7 @@ export function KillSessionDialog({
   session,
   isWorktreeSession,
   onKilled,
+  instance,
 }: KillSessionDialogProps) {
   const [cleanupWorktree, setCleanupWorktree] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -65,10 +68,12 @@ export function KillSessionDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className={MODAL_SIZES.SM}>
         <DialogHeader>
-          <DialogTitle>Kill Session</DialogTitle>
+          <DialogTitle>
+            Kill {session?.session_name ?? 'session'}{instance ? ` on ${instance.name}` : ''}?
+          </DialogTitle>
           <DialogDescription>
-            Are you sure you want to kill session{' '}
-            <strong>{session?.session_name}</strong>? This will terminate the
+            This will terminate tmux target <strong>{session?.tmux_target}</strong>
+            {instance ? ` on hostname ${instance.hostname}` : ''} and stop the{' '}
             {session?.provider_display_name ?? 'agent'} process.
           </DialogDescription>
         </DialogHeader>
