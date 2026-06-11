@@ -2,6 +2,16 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 1.3.1 — 2026-06-11
+
+### Fixed
+
+- Aligned `react` and `react-is` with the installed React DOM version to avoid production render failures from mixed React package versions.
+
+### Changed
+
+- Refreshed README screenshots, including the Agent Bridge mixed-provider view, dashboard, config, and MCP visuals used for the release.
+
 ## 1.3.0 — 2026-06-08
 
 ### Added

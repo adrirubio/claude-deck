@@ -18,7 +18,7 @@ export default defineConfig({
       { text: 'Features', link: '/features/dashboard' },
       { text: 'API Reference', link: '/api/' },
       {
-        text: 'v1.3.0',
+        text: 'v1.3.1',
         link: 'https://github.com/adrirubio/claude-deck/blob/master/CHANGELOG.md',
       },
     ],
