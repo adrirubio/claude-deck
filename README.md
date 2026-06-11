@@ -63,20 +63,25 @@ Codex support is explicit about provider boundaries: usage/context parity and se
 
 ## Screenshots
 
-| Dashboard | MCP Servers |
-|-----------|-------------|
-| ![Dashboard](screenshots/dashboard.png) | ![MCP Servers](screenshots/mcp-servers.png) |
-| High-level overview of your Claude Code setup | Manage MCP connections, status, and configuration |
+| Agent Bridge | Dashboard |
+|--------------|-----------|
+| ![Agent Bridge](screenshots/cc-bridge.png) | ![Dashboard](screenshots/dashboard.png) |
+| Monitor and interact with Claude Code and Codex tmux sessions | High-level overview of your local agent workspace |
+
+| Config | MCP Servers |
+|--------|-------------|
+| ![Config](screenshots/config.png) | ![MCP Servers](screenshots/mcp-servers.png) |
+| Edit safe Codex TOML settings and inspect provider diagnostics | Manage MCP connections, status, and configuration |
 
 | Usage Tracking | Session Transcripts |
 |----------------|---------------------|
 | ![Usage Tracking](screenshots/usage-tracking.png) | ![Session Transcripts](screenshots/sessions.png) |
 | Cost visibility, charts, and billing blocks | Browse conversation history and tool usage details |
 
-| Agent Bridge | Skills |
-|-----------|--------|
-| ![Agent Bridge](screenshots/cc-bridge.png) | ![Skills](screenshots/skills.png) |
-| Monitor and interact with Claude Code and Codex tmux sessions | Browse installed skills and discover new ones |
+| Skills |
+|--------|
+| ![Skills](screenshots/skills.png) |
+| Browse installed skills and discover new ones |
 
 ## Tech Stack
 
