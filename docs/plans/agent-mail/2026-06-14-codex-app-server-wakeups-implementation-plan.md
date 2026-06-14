@@ -1,7 +1,7 @@
 # Codex App-Server Wakeups For Agent Mail
 
 **Issue:** [#185](https://github.com/adrirubio/claude-deck/issues/185)  
-**Status:** Implementation in progress; spike completed
+**Status:** Spike completed; automatic app-server wakeups disabled after live validation
 **Depends on:** Agent Mail MVP merged via [#186](https://github.com/adrirubio/claude-deck/pull/186)  
 **Date:** 2026-06-14
 
@@ -95,7 +95,11 @@ Completed on 2026-06-14:
 - A custom `codex app-server proxy --sock ...` path was unreliable and timed out during `initialize`.
 - `turn/start` should omit optional analytics/source fields; `threadSource: {"kind": "local"}` was rejected by the local CLI.
 
-Implementation decision: Claude Deck owns one local app-server child process for the backend lifetime. Start/stop are runtime controls, not durable configuration mutation.
+Initial implementation decision: Claude Deck owned one local app-server child process for the backend lifetime. Start/stop were runtime controls, not durable configuration mutation.
+
+Live validation later showed that this path does not wake the visible Codex CLI session. It can run a separate app-server-controlled Codex runtime that calls `deck_check_inbox`, which marks the visible member's mailbox read without making the visible agent act on the message. That is not acceptable for Agent Mail delivery semantics.
+
+Corrected implementation decision: do not use app-server as an automatic Agent Mail wake path. Keep non-tmux Codex members in `delivered_waiting` unless a real visible wake path exists. App-server worker orchestration should be designed separately from Agent Mail delivery nudges.
 
 ## Proposed User Experience
 
@@ -107,7 +111,7 @@ Suggested member-level fields:
 
 ```python
 wake_state: Literal["wakeable", "delivered_waiting", "offline"]
-wake_methods: list[Literal["tmux", "codex_app_server"]]
+wake_methods: list[Literal["tmux"]]
 last_nudge_method: Optional[str]
 last_nudge_error: Optional[str]
 ```
@@ -116,8 +120,7 @@ Suggested UI labels:
 
 - `Connected`: this member has checked in recently through MCP/hooks.
 - `Wakeable via tmux`: Deck can inject an inbox check into an observed tmux Codex pane.
-- `Wakeable via Codex`: Deck can send an inbox-check turn through Codex app-server.
-- `Delivered, waiting`: mail is stored, but no active wake path is available.
+- `Delivered, waiting`: mail is stored, but no active visible wake path is available.
 - `Offline`: no recent check-in and no live observation.
 
 Keep the UI quiet:
@@ -133,25 +136,22 @@ Add a Codex app-server section under Codex CLI:
 
 - `Codex MCP`: installed/not installed.
 - `Codex hooks`: installed/not installed.
-- `Codex app-server`: running/stopped/unavailable.
+- `Codex app-server`: diagnostic/experimental worker status only, not a visible wake path.
 - `Codex remote control`: running/not running/unavailable as diagnostic status only.
 
 Actions:
 
-- `Start wakeups`
-  - Start the Deck-managed `codex app-server --stdio` child process if it is not already running.
-- `Stop wakeups`
-  - Stop the Deck-managed app-server child process.
+Do not expose app-server as "Start wakeups" unless Codex can target the visible CLI session.
 
-Copy should be explicit that this enables local Codex wakeups for Agent Mail and is separate from the one-off MCP/hooks install.
+Copy should be explicit that non-tmux Codex delivery waits for the agent to poll or reach a hook boundary.
 
 ### Daemon Lifetime And Idempotency
 
 Treat Codex Agent Mail install and Codex app-server runtime state as separate things:
 
 - Codex MCP/hooks install is durable user configuration and should remain a one-off install action.
-- Codex app-server availability is runtime state and may need to be started again after Deck backend restart, reboot, logout, or manual stop.
-- Claude Deck must never ask users to reinstall Codex Agent Mail just because the app-server process is stopped.
+- Codex app-server availability is runtime state, but it should not be treated as Agent Mail wakeability for visible Codex CLI sessions.
+- Claude Deck must never ask users to reinstall Codex Agent Mail just because an app-server process is stopped.
 
 The backend start path must be idempotent:
 
@@ -162,7 +162,9 @@ The backend start path must be idempotent:
 
 Install-tab copy should use "Start Codex wakeups" or "Enable Codex wakeups" rather than "Install" for this action, so users understand it is runtime availability, not repeated configuration mutation.
 
-## Architecture
+## Superseded Architecture
+
+The architecture below records the attempted app-server implementation. It is not the current Agent Mail wakeup plan because live validation showed it drives a separate app-server worker rather than the visible Codex CLI session.
 
 ### New Backend Service
 
@@ -423,9 +425,9 @@ Team tab:
 
 Install tab:
 
-- Add Codex app-server status.
-- Add start/stop actions.
-- Explain that this is a Claude Deck-managed runtime process required for non-tmux Codex wakeups.
+- Keep Codex MCP/hooks install status clear.
+- Do not expose app-server start/stop actions as Agent Mail wake controls.
+- Explain that non-tmux Codex delivery waits for polling or hook-boundary reminders.
 
 Help dialog/docs:
 
@@ -433,7 +435,7 @@ Help dialog/docs:
   - MCP means the agent can read/send mail.
   - Hooks mean the agent is reminded at turn boundaries.
   - Tmux wakeups wake visible tmux Codex sessions.
-  - Codex app-server wakeups wake non-tmux Codex through Codex's native local control plane.
+  - App-server worker turns are not equivalent to waking the visible Codex CLI session.
 
 ## Original Spike Plan
 
@@ -515,7 +517,9 @@ Decision:
 - If `turn/steer` is safe and reliable, add active-turn steering.
 - Otherwise, MVP app-server wakeups should target idle/notLoaded threads only.
 
-## Implementation Tasks
+## Superseded Implementation Tasks
+
+The task list below is retained for audit context. Do not implement app-server fallback as Agent Mail wakeability unless Codex exposes a control path that reaches the visible CLI session.
 
 ### Task 1: Codex app-server client
 
@@ -574,14 +578,14 @@ Add:
 - Wake result dataclass.
 - Method-aware `_wake_member`.
 - Tmux-first routing.
-- App-server fallback.
+- No app-server fallback unless it can target the visible Codex CLI session.
 - Manual queue endpoint method-aware response.
 - Per-member cooldown shared across wake methods.
 
 Acceptance:
 
 - Tmux path still works exactly as MVP.
-- App-server path is used when tmux is unavailable and Codex app-server is available.
+- Connected non-tmux Codex sessions remain delivered-waiting instead of being marked wakeable.
 - No wake path leaves mail delivered and does not fail `send_message`.
 - Manual queue returns 400 when no wake path exists.
 
@@ -598,7 +602,7 @@ Modify:
 Acceptance:
 
 - Members distinguish connected status from wakeability.
-- Queue button appears for tmux or app-server wakeable members.
+- Queue button appears only for members with a real visible wake path.
 - Delivered-but-not-wakeable pending mail is visible without looking like an error.
 - Existing Agent Mail flows still render when new fields are absent or empty.
 
@@ -656,8 +660,8 @@ Manual:
 3. Confirm Codex install status shows MCP/hooks/app-server status.
 4. Start one Codex session in tmux and one outside tmux.
 5. Send mail to tmux session; verify tmux wake path.
-6. Send mail to non-tmux session; verify app-server wake path.
-7. Stop Codex wakeups; verify UI changes to delivered-waiting and no automatic app-server wake is attempted.
+6. Send mail to non-tmux session; verify it remains delivered-waiting and unread until the visible agent checks inbox.
+7. Verify no app-server worker is launched as an automatic wake for Agent Mail delivery.
 
 ## Data Model Decision
 
@@ -665,7 +669,7 @@ Do not add database columns in the first pass unless spike results show the need
 
 Reason:
 
-- Wakeability can be derived from session data plus Codex app-server status.
+- Wakeability can be derived from session data plus Agent Bridge tmux visibility.
 - Last wake result can be kept in memory initially.
 - Persisting app-server thread ids before the semantics are proven risks stale or misleading routing.
 
@@ -688,12 +692,12 @@ Do not include that table in the first implementation unless required.
 
 ## Security Considerations
 
-- Use only local Codex app-server control paths.
+- Use only local Codex app-server control paths for future explicit worker orchestration.
 - Prefer local stdio app-server control over direct network listeners.
 - Do not configure `ws://0.0.0.0` or any non-loopback listener.
 - Do not store Codex auth tokens or app-server credentials in Claude Deck.
-- Start/stop actions should be explicit user actions from the Install tab.
-- Automatic wakeups should only use an already available local control plane.
+- Do not expose app-server start/stop as Agent Mail wakeup controls.
+- Automatic wakeups should only use a control plane that reaches the visible agent session.
 - Wake prompts should be fixed and minimal; do not include arbitrary sender-provided text in the wake prompt.
 
 ## Error Handling
@@ -708,24 +712,16 @@ Log wake failures at debug/info level with concise reason. Surface user-facing w
 Recommended wake result reasons:
 
 - `tmux_unavailable`
-- `app_server_not_running`
-- `app_server_start_failed`
-- `no_codex_thread_for_repo`
-- `thread_resume_failed`
-- `turn_start_failed`
 - `wake_throttled`
 
 ## Acceptance Criteria
 
-- A non-tmux Codex member with app-server wakeups running can be nudged from Agent Mail without terminal key injection.
 - Agent Mail still stores messages even when wakeup fails.
 - UI clearly distinguishes connected from wakeable.
-- UI clearly distinguishes Codex Agent Mail installed state from Codex wakeup runtime state.
-- Starting Codex wakeups is idempotent and does not spawn duplicate app-server processes.
-- Stopping Codex wakeups is idempotent and leaves durable MCP/hooks install intact.
+- Connected non-tmux Codex members show delivered-waiting, not wakeable.
 - Tmux wakeups continue to work.
-- Codex install/status UI explains and manages app-server wakeups.
-- Tests cover tmux-first routing, app-server fallback, and no-wake fallback.
+- Codex install/status UI does not imply app-server wakes visible CLI sessions.
+- Tests cover tmux-first routing and no-wake fallback for non-tmux Codex.
 - Documentation explains setup, limitations, and the security boundary.
 
 ## Review Questions
@@ -736,7 +732,9 @@ Recommended wake result reasons:
 4. Should a missing Codex thread create a new app-server thread automatically, or should that require a manual "Start worker" action?
 5. Should wake result history be persisted in SQLite, or is derived status plus current UI state enough for the first version?
 
-## Recommended Implementation Sequence
+## Superseded Implementation Sequence
+
+The sequence below was the original plan before live validation. The corrected path is to ship explicit `wakeable` vs `delivered_waiting` state and keep app-server worker orchestration out of Agent Mail delivery nudges.
 
 1. Run and document the four spike steps.
 2. Decide exact UX language based on spike results.

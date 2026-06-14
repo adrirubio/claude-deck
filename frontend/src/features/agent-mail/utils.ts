@@ -66,7 +66,6 @@ export function wakeStateBadgeClass(state: string): string {
 
 export function wakeMethodLabel(method: string): string {
   if (method === 'tmux') return 'tmux'
-  if (method === 'codex_app_server') return 'app-server'
   return method
 }
 

@@ -1950,11 +1950,6 @@ class AgentMailInstallStatus(BaseModel):
     codex_mcp_installed: bool
     codex_hooks: List[str] = Field(default_factory=list)
     codex_hooks_missing: List[str] = Field(default_factory=list)
-    codex_app_server_available: bool = False
-    codex_app_server_running: bool = False
-    codex_remote_control_running: bool = False
-    codex_app_server_error: Optional[str] = None
-    codex_remote_control_error: Optional[str] = None
     curl_available: bool
     shim_path: str
     python_path: str

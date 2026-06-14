@@ -20,7 +20,6 @@ from app.models.schemas import (
 )
 from app.services.hook_service import HookService
 from app.services.mcp_service import MCPService
-from app.services.codex_app_server_service import codex_app_server_service
 from app.services.providers.codex_cli import get_codex_home
 from app.utils.path_utils import get_claude_user_config_file, get_claude_user_settings_file
 
@@ -325,7 +324,6 @@ async def get_install_status() -> AgentMailInstallStatus:
     codex_hook_events = installed_codex_hooks()
     codex_missing = [event for event in CODEX_MAIL_HOOK_EVENTS if event not in codex_hook_events]
     server = await mcp_service.get_server(MCP_SERVER_NAME, "user")
-    app_server = codex_app_server_service.status()
     return AgentMailInstallStatus(
         claude_code_hooks=installed_events,
         claude_code_hooks_missing=missing,
@@ -334,11 +332,6 @@ async def get_install_status() -> AgentMailInstallStatus:
         codex_mcp_installed=codex_mcp_installed(),
         codex_hooks=codex_hook_events,
         codex_hooks_missing=codex_missing,
-        codex_app_server_available=app_server.app_server_available,
-        codex_app_server_running=app_server.app_server_running,
-        codex_remote_control_running=app_server.remote_control_running,
-        codex_app_server_error=app_server.app_server_error,
-        codex_remote_control_error=app_server.remote_control_error,
         curl_available=shutil.which("curl") is not None,
         shim_path=shim_path(),
         python_path=sys.executable,
@@ -435,16 +428,6 @@ async def uninstall_codex(db: AsyncSession) -> AgentMailInstallStatus:
     doc = _load_codex_hooks_doc()
     if _prune_codex_mail_hooks(doc):
         _write_codex_hooks_doc(doc)
-    return await get_install_status()
-
-
-async def start_codex_wakeups() -> AgentMailInstallStatus:
-    codex_app_server_service.start()
-    return await get_install_status()
-
-
-async def stop_codex_wakeups() -> AgentMailInstallStatus:
-    codex_app_server_service.stop()
     return await get_install_status()
 
 

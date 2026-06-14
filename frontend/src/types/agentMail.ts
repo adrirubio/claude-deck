@@ -2,7 +2,7 @@ export type MailMessageKind = 'message' | 'broadcast' | 'context_request' | 'han
 export type MailRequestStatus = 'pending' | 'answered' | 'acknowledged'
 export type MailMemberStatus = 'connected' | 'observed' | 'offline'
 export type MailSessionSource = 'hook' | 'mcp' | 'observed' | string
-export type MailWakeMethod = 'tmux' | 'codex_app_server' | string
+export type MailWakeMethod = 'tmux' | string
 export type MailWakeState = 'wakeable' | 'delivered_waiting' | 'offline' | string
 
 export interface MailSessionResponse {
@@ -94,11 +94,6 @@ export interface AgentMailInstallStatus {
   codex_mcp_installed: boolean
   codex_hooks: string[]
   codex_hooks_missing: string[]
-  codex_app_server_available: boolean
-  codex_app_server_running: boolean
-  codex_remote_control_running: boolean
-  codex_app_server_error?: string | null
-  codex_remote_control_error?: string | null
   curl_available: boolean
   shim_path: string
   python_path: string

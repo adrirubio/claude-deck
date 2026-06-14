@@ -1,4 +1,4 @@
-import { BellRing, BookOpen, CheckCircle2, Inbox, Plug, ShieldAlert } from 'lucide-react'
+import { BookOpen, CheckCircle2, Inbox, Plug, ShieldAlert, Terminal } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -59,11 +59,11 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
             </ol>
           </HelpSection>
 
-          <HelpSection icon={BellRing} title="Codex wakeups">
+          <HelpSection icon={Terminal} title="Non-tmux Codex delivery">
             <p>
-              The Codex install is persistent, but non-tmux wakeups need the Codex app-server
-              process that Claude Deck starts from the Install tab. When it is running, Deck can
-              send an inbox-check turn to connected Codex repos that are not visible through tmux.
+              Codex sessions outside tmux can receive mail through MCP, but Claude Deck cannot
+              wake their visible terminal session yet. Those messages stay unread until the agent
+              checks its inbox or reaches a hook boundary.
             </p>
           </HelpSection>
 

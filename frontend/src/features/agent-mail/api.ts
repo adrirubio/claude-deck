@@ -109,20 +109,6 @@ export function uninstallCodexAgentMail(): Promise<AgentMailInstallStatus> {
   })
 }
 
-export function startCodexAgentMailWakeups(): Promise<AgentMailInstallStatus> {
-  return apiClient<AgentMailInstallStatus>('agent-mail/install/codex/wakeups/start', {
-    method: 'POST',
-    body: JSON.stringify({ confirmed: true }),
-  })
-}
-
-export function stopCodexAgentMailWakeups(): Promise<AgentMailInstallStatus> {
-  return apiClient<AgentMailInstallStatus>('agent-mail/install/codex/wakeups/stop', {
-    method: 'POST',
-    body: JSON.stringify({ confirmed: true }),
-  })
-}
-
 export function fetchAgentMailSnippets(): Promise<AgentMailSnippets> {
   return apiClient<AgentMailSnippets>('agent-mail/install/snippets')
 }

@@ -317,18 +317,6 @@ async def uninstall_codex(
     return await agent_mail_install_service.uninstall_codex(db)
 
 
-@router.post("/install/codex/wakeups/start", response_model=AgentMailInstallStatus)
-async def start_codex_wakeups(body: dict[str, Any] | None = Body(default=None)):
-    _require_confirmed(body)
-    return await agent_mail_install_service.start_codex_wakeups()
-
-
-@router.post("/install/codex/wakeups/stop", response_model=AgentMailInstallStatus)
-async def stop_codex_wakeups(body: dict[str, Any] | None = Body(default=None)):
-    _require_confirmed(body)
-    return await agent_mail_install_service.stop_codex_wakeups()
-
-
 @router.get("/install/snippets", response_model=AgentMailSnippets)
 async def install_snippets():
     return agent_mail_install_service.get_snippets()

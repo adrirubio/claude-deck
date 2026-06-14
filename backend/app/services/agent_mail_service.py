@@ -22,7 +22,6 @@ from app.models.schemas import (
     MailThreadResponse,
 )
 from app.services.agent_bridge.discovery import discover_agent_sessions
-from app.services.codex_app_server_service import codex_app_server_service
 from app.utils.repo_utils import derive_repo_identity
 
 logger = logging.getLogger(__name__)
@@ -243,12 +242,6 @@ class AgentMailService:
             and self._effective_status(session, now) == "observed"
         )
 
-    def _session_can_app_server_wake(self, session: MailAgentSession, now: datetime) -> bool:
-        return bool(
-            session.provider == "codex-cli"
-            and self._effective_status(session, now) in {"connected", "observed"}
-        )
-
     def _pid_is_running(self, pid: Optional[int]) -> bool:
         if not pid:
             return False
@@ -295,7 +288,6 @@ class AgentMailService:
 
     async def list_team(self, db: AsyncSession) -> List[MailMemberResponse]:
         now = datetime.utcnow()
-        codex_app_server_running = codex_app_server_service.is_running()
         members = (await db.execute(select(MailTeamMember))).scalars().all()
         sessions = (await db.execute(select(MailAgentSession))).scalars().all()
         by_member: dict[int, list[MailAgentSession]] = {}
@@ -322,10 +314,6 @@ class AgentMailService:
             wake_methods = []
             if any(self._session_can_nudge(session, now) for session in member_sessions):
                 wake_methods.append("tmux")
-            if codex_app_server_running and any(
-                self._session_can_app_server_wake(session, now) for session in member_sessions
-            ):
-                wake_methods.append("codex_app_server")
             if status == "offline":
                 wake_state = "offline"
             elif wake_methods:
@@ -572,20 +560,6 @@ class AgentMailService:
             None,
         )
 
-    async def _has_app_server_wakeable_session(
-        self,
-        db: AsyncSession,
-        member_id: int,
-        now: datetime,
-    ) -> bool:
-        result = await db.execute(
-            select(MailAgentSession).where(
-                MailAgentSession.member_id == member_id,
-                MailAgentSession.provider == "codex-cli",
-            )
-        )
-        return any(self._session_can_app_server_wake(session, now) for session in result.scalars().all())
-
     def _send_tmux_inbox_check(self, session: MailAgentSession) -> dict[str, str]:
         if not session.tmux_target:
             raise ValueError("No live Codex tmux session is available for this member")
@@ -613,20 +587,6 @@ class AgentMailService:
             raise ValueError("tmux send-keys timed out") from exc
         return {"target": session.tmux_target, "prompt": INBOX_CHECK_PROMPT}
 
-    def _send_codex_app_server_inbox_check(self, member: MailTeamMember) -> dict[str, str]:
-        result = codex_app_server_service.wake_repo(member.repo_path, INBOX_CHECK_PROMPT)
-        if not result.ok:
-            raise ValueError(result.error or "Codex app-server wakeup failed")
-        target = f"thread:{result.thread_id}" if result.thread_id else member.repo_path
-        payload = {
-            "method": "codex_app_server",
-            "target": target,
-            "prompt": INBOX_CHECK_PROMPT,
-        }
-        if result.turn_id:
-            payload["turn_id"] = result.turn_id
-        return payload
-
     async def _wake_member(
         self,
         db: AsyncSession,
@@ -637,18 +597,10 @@ class AgentMailService:
         if session is not None:
             result = self._send_tmux_inbox_check(session)
             return {"method": "tmux", **result}
-
-        if not codex_app_server_service.is_running():
-            return None
-        if not await self._has_app_server_wakeable_session(db, member_id, now):
-            return None
-        member = await db.get(MailTeamMember, member_id)
-        if member is None:
-            return None
-        return self._send_codex_app_server_inbox_check(member)
+        return None
 
     async def auto_nudge_members(self, db: AsyncSession, member_ids: set[int]) -> list[dict[str, str | int]]:
-        """Best-effort delivery wakeup for reachable Codex recipients."""
+        """Best-effort delivery wakeup for visible tmux-observed Codex recipients."""
         if not member_ids:
             return []
         await self.sync_observed_sessions(db)

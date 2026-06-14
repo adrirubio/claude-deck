@@ -411,10 +411,9 @@ async def test_dead_mcp_process_reports_offline_even_before_ttl(db, svc, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_connected_codex_mcp_session_is_wakeable_with_app_server(db, svc, tmp_path, monkeypatch):
+async def test_connected_codex_mcp_session_without_tmux_is_delivered_waiting(db, svc, tmp_path):
     cwd = tmp_path / "r"
     cwd.mkdir()
-    monkeypatch.setattr("app.services.agent_mail_service.codex_app_server_service.is_running", lambda: True)
     await svc.register_session(
         db,
         _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
@@ -423,53 +422,33 @@ async def test_connected_codex_mcp_session_is_wakeable_with_app_server(db, svc, 
     members = await svc.list_team(db)
 
     assert members[0].status == "connected"
-    assert members[0].can_nudge is True
-    assert members[0].wake_methods == ["codex_app_server"]
-    assert members[0].wake_state == "wakeable"
+    assert members[0].can_nudge is False
+    assert members[0].wake_methods == []
+    assert members[0].wake_state == "delivered_waiting"
 
 
 @pytest.mark.asyncio
-async def test_queue_inbox_check_uses_app_server_for_connected_codex_mcp_session(
-    db, svc, tmp_path, monkeypatch
-):
+async def test_queue_inbox_check_does_not_use_app_server_for_connected_codex_mcp_session(db, svc, tmp_path, monkeypatch):
     cwd = tmp_path / "r"
     cwd.mkdir()
-    calls = []
     monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
-    monkeypatch.setattr("app.services.agent_mail_service.codex_app_server_service.is_running", lambda: True)
-
-    def fake_wake_repo(repo_path, prompt):
-        calls.append((repo_path, prompt))
-        return SimpleNamespace(ok=True, thread_id="thr_1", turn_id="turn_1")
-
-    monkeypatch.setattr("app.services.agent_mail_service.codex_app_server_service.wake_repo", fake_wake_repo)
     member, _ = await svc.register_session(
         db,
         _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
     )
 
-    result = await svc.queue_inbox_check(db, member.id)
+    with pytest.raises(ValueError, match="No Agent Mail wake path"):
+        await svc.queue_inbox_check(db, member.id)
 
-    assert result["method"] == "codex_app_server"
-    assert result["target"] == "thread:thr_1"
-    assert result["turn_id"] == "turn_1"
-    assert result["prompt"] == INBOX_CHECK_PROMPT
-    assert calls == [(str(cwd), INBOX_CHECK_PROMPT)]
+    inbox = await svc.get_inbox(db, member.id, unread_only=True)
+    assert inbox.unread_count == 0
 
 
 @pytest.mark.asyncio
-async def test_send_message_auto_nudges_app_server_codex_recipient(db, svc, tmp_path, monkeypatch):
+async def test_send_message_to_non_tmux_codex_stays_unread_until_agent_polls(db, svc, tmp_path, monkeypatch):
     cwd = tmp_path / "r"
     cwd.mkdir()
-    calls = []
     monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
-    monkeypatch.setattr("app.services.agent_mail_service.codex_app_server_service.is_running", lambda: True)
-
-    def fake_wake_repo(repo_path, prompt):
-        calls.append((repo_path, prompt))
-        return SimpleNamespace(ok=True, thread_id="thr_1", turn_id="turn_1")
-
-    monkeypatch.setattr("app.services.agent_mail_service.codex_app_server_service.wake_repo", fake_wake_repo)
     recipient, _ = await svc.register_session(
         db,
         _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
@@ -483,7 +462,9 @@ async def test_send_message_auto_nudges_app_server_codex_recipient(db, svc, tmp_
         ),
     )
 
-    assert calls == [(str(cwd), INBOX_CHECK_PROMPT)]
+    inbox = await svc.get_inbox(db, recipient.id, unread_only=True)
+    assert inbox.unread_count == 1
+    assert inbox.messages[0].body_markdown == "please check this"
 
 
 @pytest.mark.asyncio
