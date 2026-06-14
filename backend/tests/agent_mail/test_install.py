@@ -329,3 +329,48 @@ async def test_install_endpoints_require_confirmation(client, monkeypatch):
     )
     assert resp.status_code == 200
     install.apply_claude_code_install.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_codex_wakeup_endpoints_require_confirmation(client, monkeypatch):
+    status = AgentMailInstallStatus(
+        claude_code_hooks=[],
+        claude_code_hooks_missing=[],
+        claude_code_mcp_installed=False,
+        codex_cli_available=True,
+        codex_mcp_installed=True,
+        codex_app_server_available=True,
+        codex_app_server_running=True,
+        curl_available=True,
+        shim_path="/tmp/shim.py",
+        python_path="/usr/bin/python",
+        deck_url="http://127.0.0.1:8000",
+    )
+    start = AsyncMock(return_value=status)
+    stop = AsyncMock(return_value=status.model_copy(update={"codex_app_server_running": False}))
+    monkeypatch.setattr(install, "start_codex_wakeups", start)
+    monkeypatch.setattr(install, "stop_codex_wakeups", stop)
+
+    resp = await client.post("/api/v1/agent-mail/install/codex/wakeups/start", json={})
+    assert resp.status_code == 400
+    start.assert_not_awaited()
+
+    resp = await client.post(
+        "/api/v1/agent-mail/install/codex/wakeups/start",
+        json={"confirmed": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["codex_app_server_running"] is True
+    start.assert_awaited_once()
+
+    resp = await client.post("/api/v1/agent-mail/install/codex/wakeups/stop", json={})
+    assert resp.status_code == 400
+    stop.assert_not_awaited()
+
+    resp = await client.post(
+        "/api/v1/agent-mail/install/codex/wakeups/stop",
+        json={"confirmed": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["codex_app_server_running"] is False
+    stop.assert_awaited_once()

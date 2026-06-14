@@ -1,4 +1,4 @@
-import { BookOpen, CheckCircle2, Inbox, Plug, ShieldAlert } from 'lucide-react'
+import { BellRing, BookOpen, CheckCircle2, Inbox, Plug, ShieldAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -57,6 +57,14 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
               <li>Have each agent call <code>deck_whoami</code> once from its repo.</li>
               <li>Ask agents to check <code>deck_check_inbox</code> before and after major work.</li>
             </ol>
+          </HelpSection>
+
+          <HelpSection icon={BellRing} title="Codex wakeups">
+            <p>
+              The Codex install is persistent, but non-tmux wakeups need the Codex app-server
+              process that Claude Deck starts from the Install tab. When it is running, Deck can
+              send an inbox-check turn to connected Codex repos that are not visible through tmux.
+            </p>
           </HelpSection>
 
           <HelpSection icon={Inbox} title="What agents can do">

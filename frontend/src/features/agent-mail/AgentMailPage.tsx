@@ -25,6 +25,8 @@ import {
   fetchAgentMailTeam,
   queueAgentMailInboxCheck,
   sendAgentMailMessage,
+  startCodexAgentMailWakeups,
+  stopCodexAgentMailWakeups,
   uninstallClaudeCodeAgentMail,
   uninstallCodexAgentMail,
   updateAgentMailMember,
@@ -173,9 +175,10 @@ export function AgentMailPage() {
   const handleQueueInboxCheck = async (member: MailMemberResponse) => {
     setNudgingMemberId(member.id)
     try {
-      await queueAgentMailInboxCheck(member.id)
+      const result = await queueAgentMailInboxCheck(member.id)
       await loadOperationalData(false)
-      toast.success(`Queued inbox check for ${member.display_name}`)
+      const method = result.method === 'codex_app_server' ? 'via Codex app-server' : 'via tmux'
+      toast.success(`Queued inbox check for ${member.display_name} ${method}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to queue inbox check')
     } finally {
@@ -188,6 +191,7 @@ export function AgentMailPage() {
       const status = await action()
       setInstallStatus(status)
       await loadInstallData()
+      await loadOperationalData(false)
       toast.success(label)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Install action failed')
@@ -359,6 +363,8 @@ export function AgentMailPage() {
             onUninstallClaudeCode={() => runInstallAction(uninstallClaudeCodeAgentMail, 'Claude Code install removed')}
             onApplyCodex={() => runInstallAction(applyCodexAgentMailInstall, 'Codex MCP install updated')}
             onUninstallCodex={() => runInstallAction(uninstallCodexAgentMail, 'Codex MCP install removed')}
+            onStartCodexWakeups={() => runInstallAction(startCodexAgentMailWakeups, 'Codex wakeups started')}
+            onStopCodexWakeups={() => runInstallAction(stopCodexAgentMailWakeups, 'Codex wakeups stopped')}
           />
         </TabsContent>
       </Tabs>

@@ -1,7 +1,7 @@
 # Codex App-Server Wakeups For Agent Mail
 
 **Issue:** [#185](https://github.com/adrirubio/claude-deck/issues/185)  
-**Status:** Draft implementation plan for review  
+**Status:** Implementation in progress; spike completed
 **Depends on:** Agent Mail MVP merged via [#186](https://github.com/adrirubio/claude-deck/pull/186)  
 **Date:** 2026-06-14
 
@@ -63,7 +63,7 @@ From the current Codex manual and local CLI:
 - `codex app-server daemon version` reports local/running versions, but fails when no daemon socket exists.
 - `codex app-server proxy` proxies JSONL stdio bytes to the running app-server control socket.
 
-Important implication: use `codex app-server proxy` first. It avoids custom WebSocket-over-Unix-socket code in Claude Deck while still using the local app-server control socket.
+Spike result: the installed Codex CLI on this machine supports `codex app-server --stdio` directly, but `codex remote-control start --json` fails because it requires the managed standalone Codex install at `~/.codex/packages/standalone/current/codex`. A custom Unix socket plus `codex app-server proxy --sock ...` timed out during `initialize`. The implementation therefore uses a Deck-managed persistent `codex app-server --stdio` child process and reports remote-control daemon status only as diagnostic information.
 
 ## Non-Goals
 
@@ -76,13 +76,26 @@ Important implication: use `codex app-server proxy` first. It avoids custom WebS
 
 ## Key Uncertainty
 
-The main unanswered question is not whether Claude Deck can send a turn through app-server. It can, assuming the daemon is running and authenticated. The question is what that turn controls:
+The main unanswered question is not whether Claude Deck can send a turn through app-server. It can, assuming the Deck-managed app-server process is running. The question is what that turn controls:
 
 - Does `thread/resume` + `turn/start` wake the existing non-tmux CLI TUI session?
 - Does it resume the same Codex thread in a separate app-server-managed runtime?
 - Does it start a parallel worker for the repo when no thread is loaded?
 
 All three can be useful, but they have different UX wording and safety implications. The spike must answer this before broad implementation.
+
+## Spike Results
+
+Completed on 2026-06-14:
+
+- `codex remote-control start --json` is not usable on this install; it fails with "managed standalone Codex install not found".
+- `codex app-server --stdio` works as a direct JSON-RPC transport.
+- `initialize`, `thread/list`, `thread/start`, `thread/resume`, and `turn/start` work through the direct stdio process.
+- `turn/start` accepts the fixed inbox prompt and returns promptly enough to treat request acceptance as wake success.
+- A custom `codex app-server proxy --sock ...` path was unreliable and timed out during `initialize`.
+- `turn/start` should omit optional analytics/source fields; `threadSource: {"kind": "local"}` was rejected by the local CLI.
+
+Implementation decision: Claude Deck owns one local app-server child process for the backend lifetime. Start/stop are runtime controls, not durable configuration mutation.
 
 ## Proposed User Experience
 
@@ -120,34 +133,32 @@ Add a Codex app-server section under Codex CLI:
 
 - `Codex MCP`: installed/not installed.
 - `Codex hooks`: installed/not installed.
-- `Codex remote control`: running/not running/unavailable.
-- `Wakeups`: available/unavailable.
+- `Codex app-server`: running/stopped/unavailable.
+- `Codex remote control`: running/not running/unavailable as diagnostic status only.
 
 Actions:
 
-- `Enable remote control`
-  - Prefer `codex remote-control start --json` if it proves reliable in the spike.
-  - Otherwise use `codex app-server daemon start` followed by `codex app-server daemon enable-remote-control`.
-- `Stop remote control`
-  - Use `codex remote-control stop --json` or `codex app-server daemon stop`.
+- `Start wakeups`
+  - Start the Deck-managed `codex app-server --stdio` child process if it is not already running.
+- `Stop wakeups`
+  - Stop the Deck-managed app-server child process.
 
-Copy should be explicit that this enables local Codex wakeups for Agent Mail and uses Codex's local app-server daemon.
+Copy should be explicit that this enables local Codex wakeups for Agent Mail and is separate from the one-off MCP/hooks install.
 
 ### Daemon Lifetime And Idempotency
 
-Treat Codex Agent Mail install and Codex remote-control runtime state as separate things:
+Treat Codex Agent Mail install and Codex app-server runtime state as separate things:
 
 - Codex MCP/hooks install is durable user configuration and should remain a one-off install action.
-- Codex remote-control/app-server availability is runtime state and may need to be started again after reboot, logout, or manual stop.
-- Claude Deck must never ask users to reinstall Codex Agent Mail just because the app-server daemon is stopped.
+- Codex app-server availability is runtime state and may need to be started again after Deck backend restart, reboot, logout, or manual stop.
+- Claude Deck must never ask users to reinstall Codex Agent Mail just because the app-server process is stopped.
 
 The backend start path must be idempotent:
 
-- If remote control is already running, `start` returns success and refreshed status without launching a duplicate daemon.
-- If a managed daemon is running without remote control, `start` enables remote control for that daemon and returns success.
-- If no daemon is running, `start` starts one with remote control enabled and returns success.
-- If the daemon is half-started or the control socket exists but does not answer, `start` should retry once with the documented Codex command before surfacing an error.
-- `stop` should be idempotent: stopping an already-stopped daemon returns success with `remote_control_running=false`.
+- If the Deck-managed app-server child process is already running, `start` returns success and refreshed status without launching a duplicate process.
+- If no child process is running, `start` launches `codex app-server --stdio`, initializes JSON-RPC, and returns refreshed status.
+- If the child process is half-started or does not answer `initialize`, `start` should tear it down before surfacing an error.
+- `stop` should be idempotent: stopping an already-stopped app-server returns success with `codex_app_server_running=false`.
 
 Install-tab copy should use "Start Codex wakeups" or "Enable Codex wakeups" rather than "Install" for this action, so users understand it is runtime availability, not repeated configuration mutation.
 
@@ -160,9 +171,10 @@ Create `backend/app/services/codex_app_server_service.py`.
 Responsibilities:
 
 - Detect Codex CLI availability.
-- Detect app-server daemon status.
-- Start/stop or enable remote control through Codex CLI.
-- Create a short-lived JSON-RPC connection through `codex app-server proxy`.
+- Detect Deck-managed app-server process status.
+- Report remote-control daemon status as diagnostic information.
+- Start/stop a Deck-managed `codex app-server --stdio` child process.
+- Maintain a JSON-RPC connection to that process.
 - Initialize JSON-RPC with `clientInfo.name = "claude_deck"` and `capabilities.experimentalApi = true`.
 - List candidate threads for a repo cwd.
 - Choose the best thread.
@@ -176,10 +188,11 @@ Initial API sketch:
 @dataclass
 class CodexAppServerStatus:
     codex_cli_available: bool
-    daemon_available: bool
-    remote_control_available: bool
-    version: dict | None
-    error: str | None = None
+    app_server_available: bool
+    app_server_running: bool
+    remote_control_running: bool
+    remote_control_error: str | None = None
+    app_server_error: str | None = None
 
 @dataclass
 class CodexWakeResult:
@@ -193,8 +206,8 @@ class CodexWakeResult:
 
 class CodexAppServerService:
     def status(self) -> CodexAppServerStatus: ...
-    def enable_remote_control(self) -> CodexAppServerStatus: ...
-    def stop_remote_control(self) -> CodexAppServerStatus: ...
+    def start(self) -> CodexAppServerStatus: ...
+    def stop(self) -> CodexAppServerStatus: ...
     def wake_repo(self, repo_path: str, prompt: str) -> CodexWakeResult: ...
 ```
 
@@ -202,18 +215,19 @@ Keep this service isolated from Agent Mail business logic. Agent Mail should ask
 
 ### JSON-RPC Client Strategy
 
-Use `codex app-server proxy` as a child process per wake operation for the first implementation.
+Use one persistent `codex app-server --stdio` child process owned by the backend.
 
 Rationale:
 
-- No persistent socket lifecycle in Claude Deck.
 - No custom WebSocket-over-Unix-socket transport.
+- No dependency on the managed standalone remote-control install.
+- Shared initialized JSON-RPC state for repeated wakeups.
 - Easier to test by mocking subprocess stdin/stdout.
-- Failure mode is contained to one wake attempt.
+- Failure mode is contained to one Deck-owned child process that can be stopped/restarted.
 
 Flow:
 
-1. Spawn `codex app-server proxy`.
+1. Spawn `codex app-server --stdio` when the user starts Codex wakeups.
 2. Send:
 
 ```json
@@ -245,12 +259,12 @@ Flow:
 ```
 
 8. Wait only for the `turn/start` response, not the whole turn completion.
-9. Close the proxy process gracefully.
+9. Keep the app-server process running for future wakeups until the backend shuts down or the user stops wakeups.
 
 Timeouts:
 
 - App-server status command: 3 seconds.
-- Proxy initialize/list/resume/start sequence: 10 seconds total.
+- Initialize/list/resume/start requests: 10-20 seconds depending on operation.
 - Turn completion should not be awaited.
 
 ### Thread Selection
@@ -332,7 +346,7 @@ Change response from tmux-specific payload to method-aware payload:
 Possible error details:
 
 - `No wake path is available for this member`
-- `Codex app-server remote control is not running`
+- `Codex app-server wakeups are not running`
 - `No Codex thread found for this repo and thread start failed`
 - `Codex app-server rejected the wake request`
 
@@ -342,23 +356,24 @@ Extend `AgentMailInstallStatus`:
 
 ```python
 codex_app_server_available: bool = False
+codex_app_server_running: bool = False
 codex_remote_control_running: bool = False
-codex_app_server_version: Optional[dict] = None
 codex_app_server_error: Optional[str] = None
+codex_remote_control_error: Optional[str] = None
 ```
 
 Add endpoints:
 
 ```http
-POST /api/v1/agent-mail/install/codex/remote-control/start
-POST /api/v1/agent-mail/install/codex/remote-control/stop
+POST /api/v1/agent-mail/install/codex/wakeups/start
+POST /api/v1/agent-mail/install/codex/wakeups/stop
 ```
 
 Implementation:
 
-- Reuse provider CLI executor if it supports `codex app-server ...` and `codex remote-control ...` args safely.
-- If safe arg constraints block nested commands, add a narrow dedicated executor method in the install service instead of broadening generic CLI execution.
-- Back up Codex config only if commands mutate durable config. Starting/stopping a daemon likely does not need a config backup; enabling remote control for future starts may.
+- Delegate start/stop to `CodexAppServerService`.
+- Do not back up Codex config for wakeup start/stop because these endpoints do not mutate durable configuration.
+- Keep remote-control status as read-only diagnostic status.
 
 ### Schema Changes
 
@@ -408,9 +423,9 @@ Team tab:
 
 Install tab:
 
-- Add Codex remote-control status.
+- Add Codex app-server status.
 - Add start/stop actions.
-- Warn that this is local Codex app-server remote control and required for non-tmux Codex wakeups.
+- Explain that this is a Claude Deck-managed runtime process required for non-tmux Codex wakeups.
 
 Help dialog/docs:
 
@@ -420,9 +435,9 @@ Help dialog/docs:
   - Tmux wakeups wake visible tmux Codex sessions.
   - Codex app-server wakeups wake non-tmux Codex through Codex's native local control plane.
 
-## Spike Plan
+## Original Spike Plan
 
-Do this before implementation PR work.
+These were the investigation steps proposed before implementation. See **Spike Results** above for the decisions that supersede the remote-control/proxy path.
 
 ### Spike A: Daemon lifecycle
 
@@ -514,7 +529,7 @@ Coverage:
 - Sends initialize before other calls.
 - Handles notification interleaving.
 - Times out cleanly.
-- Reports daemon unavailable when proxy cannot connect.
+- Reports app-server unavailable when the Deck-managed child process cannot start or answer.
 - Lists threads by cwd.
 - Selects best thread from mixed statuses.
 - Sends `thread/resume` + `turn/start`.
@@ -531,18 +546,18 @@ Modify:
 
 Add:
 
-- Status fields for app-server/remote-control.
+- Status fields for app-server runtime and remote-control diagnostic state.
 - Start/stop endpoints.
 - Tests with mocked Codex executor.
 - Explicit idempotency tests for start and stop.
 
 Acceptance:
 
-- Install tab can report remote-control unavailable/running.
+- Install tab can report app-server stopped/running/unavailable.
 - Start/stop actions return refreshed install status.
-- Start action is safe to call repeatedly and does not create duplicate app-server daemon processes.
+- Start action is safe to call repeatedly and does not create duplicate app-server processes.
 - Stop action is safe to call repeatedly and reports stopped state.
-- Stopped daemon state does not mark Codex MCP/hooks install as missing.
+- Stopped app-server state does not mark Codex MCP/hooks install as missing.
 - Failures surface as concise UI errors.
 
 ### Task 3: Wake routing refactor
@@ -597,8 +612,8 @@ Modify:
 
 Acceptance:
 
-- User can see Codex remote-control status.
-- User can start/stop remote control.
+- User can see Codex app-server wakeup status.
+- User can start/stop Codex wakeups.
 - The UI distinguishes durable Codex Agent Mail install from runtime Codex wakeup availability.
 - The main action says `Start Codex wakeups` or `Enable Codex wakeups`, not `Install`, when MCP/hooks are already installed.
 - Copy explains why this matters for non-tmux Codex wakeups.
@@ -642,7 +657,7 @@ Manual:
 4. Start one Codex session in tmux and one outside tmux.
 5. Send mail to tmux session; verify tmux wake path.
 6. Send mail to non-tmux session; verify app-server wake path.
-7. Stop remote control; verify UI changes to delivered-waiting and no automatic wake is attempted.
+7. Stop Codex wakeups; verify UI changes to delivered-waiting and no automatic app-server wake is attempted.
 
 ## Data Model Decision
 
@@ -674,7 +689,7 @@ Do not include that table in the first implementation unless required.
 ## Security Considerations
 
 - Use only local Codex app-server control paths.
-- Prefer `codex app-server proxy` over direct network listeners.
+- Prefer local stdio app-server control over direct network listeners.
 - Do not configure `ws://0.0.0.0` or any non-loopback listener.
 - Do not store Codex auth tokens or app-server credentials in Claude Deck.
 - Start/stop actions should be explicit user actions from the Install tab.
@@ -694,7 +709,7 @@ Recommended wake result reasons:
 
 - `tmux_unavailable`
 - `app_server_not_running`
-- `app_server_proxy_failed`
+- `app_server_start_failed`
 - `no_codex_thread_for_repo`
 - `thread_resume_failed`
 - `turn_start_failed`
@@ -702,20 +717,20 @@ Recommended wake result reasons:
 
 ## Acceptance Criteria
 
-- A non-tmux Codex member with app-server remote control available can be nudged from Agent Mail without terminal key injection.
+- A non-tmux Codex member with app-server wakeups running can be nudged from Agent Mail without terminal key injection.
 - Agent Mail still stores messages even when wakeup fails.
 - UI clearly distinguishes connected from wakeable.
-- UI clearly distinguishes Codex Agent Mail installed state from Codex remote-control running state.
-- Starting Codex remote control is idempotent and does not spawn duplicate daemons.
-- Stopping Codex remote control is idempotent and leaves durable MCP/hooks install intact.
+- UI clearly distinguishes Codex Agent Mail installed state from Codex wakeup runtime state.
+- Starting Codex wakeups is idempotent and does not spawn duplicate app-server processes.
+- Stopping Codex wakeups is idempotent and leaves durable MCP/hooks install intact.
 - Tmux wakeups continue to work.
-- Codex install/status UI explains and manages app-server remote control.
+- Codex install/status UI explains and manages app-server wakeups.
 - Tests cover tmux-first routing, app-server fallback, and no-wake fallback.
 - Documentation explains setup, limitations, and the security boundary.
 
 ## Review Questions
 
-1. Should Claude Deck automatically start Codex remote-control after Codex Agent Mail install, or should the user start it explicitly?
+1. Should Claude Deck automatically start Codex wakeups after Codex Agent Mail install, or should the user start them explicitly?
 2. If app-server starts a separate Codex worker rather than waking the visible CLI session, is that acceptable for Agent Mail, and what should the UI call it?
 3. Should active Codex turns receive `turn/steer`, or should Agent Mail wait until they are idle?
 4. Should a missing Codex thread create a new app-server thread automatically, or should that require a manual "Start worker" action?

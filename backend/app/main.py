@@ -22,6 +22,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: Cleanup
     await close_all_relays()
+    from app.services.codex_app_server_service import codex_app_server_service
+    codex_app_server_service.stop()
 
 
 # Create FastAPI application

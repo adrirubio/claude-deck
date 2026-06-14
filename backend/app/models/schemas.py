@@ -1874,6 +1874,8 @@ class MailMemberResponse(BaseModel):
     unseen_pending_count: int = 0
     stale_pending_count: int = 0
     can_nudge: bool = False
+    wake_methods: List[str] = Field(default_factory=list)
+    wake_state: str = "delivered_waiting"
     last_inbox_checked_at: Optional[datetime] = None
     sessions: List[MailSessionResponse] = Field(default_factory=list)
 
@@ -1948,6 +1950,11 @@ class AgentMailInstallStatus(BaseModel):
     codex_mcp_installed: bool
     codex_hooks: List[str] = Field(default_factory=list)
     codex_hooks_missing: List[str] = Field(default_factory=list)
+    codex_app_server_available: bool = False
+    codex_app_server_running: bool = False
+    codex_remote_control_running: bool = False
+    codex_app_server_error: Optional[str] = None
+    codex_remote_control_error: Optional[str] = None
     curl_available: bool
     shim_path: str
     python_path: str

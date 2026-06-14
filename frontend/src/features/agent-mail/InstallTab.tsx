@@ -1,4 +1,4 @@
-import { CheckCircle2, Clipboard, Plug, RefreshCw, ShieldCheck, Terminal, Trash2, Unplug } from 'lucide-react'
+import { BellRing, CheckCircle2, Clipboard, Plug, RefreshCw, ShieldCheck, Terminal, Trash2, Unplug } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -22,6 +22,8 @@ type InstallActionKey =
   | 'claude-uninstall'
   | 'codex-apply'
   | 'codex-uninstall'
+  | 'codex-wakeups-start'
+  | 'codex-wakeups-stop'
 
 interface InstallTabProps {
   status: AgentMailInstallStatus | null
@@ -32,6 +34,8 @@ interface InstallTabProps {
   onUninstallClaudeCode: () => Promise<void>
   onApplyCodex: () => Promise<void>
   onUninstallCodex: () => Promise<void>
+  onStartCodexWakeups: () => Promise<void>
+  onStopCodexWakeups: () => Promise<void>
 }
 
 function InstalledBadge({
@@ -70,6 +74,8 @@ export function InstallTab({
   onUninstallClaudeCode,
   onApplyCodex,
   onUninstallCodex,
+  onStartCodexWakeups,
+  onStopCodexWakeups,
 }: InstallTabProps) {
   const [confirming, setConfirming] = useState<InstallActionKey | null>(null)
   const [running, setRunning] = useState(false)
@@ -115,14 +121,36 @@ export function InstallTab({
         run: onApplyCodex,
       }
     }
+    if (confirming === 'codex-uninstall') {
+      return {
+        title: 'Remove Agent Mail from Codex',
+        description: 'A backup is attempted before Claude Deck removes the managed MCP server and hooks.',
+        mutations: [
+          'Codex CLI: run `codex mcp remove claude-deck-mail`',
+          `${status.codex_hooks_path || '~/.codex/hooks.json'}: remove Agent Mail hook commands`,
+        ],
+        run: onUninstallCodex,
+      }
+    }
+    if (confirming === 'codex-wakeups-start') {
+      return {
+        title: 'Start Codex wakeups',
+        description: 'Starts a Claude Deck-managed local Codex app-server process for this backend run.',
+        mutations: [
+          'Backend process: start `codex app-server --stdio`',
+          'No Codex configuration files are changed',
+        ],
+        run: onStartCodexWakeups,
+      }
+    }
     return {
-      title: 'Remove Agent Mail from Codex',
-      description: 'A backup is attempted before Claude Deck removes the managed MCP server and hooks.',
+      title: 'Stop Codex wakeups',
+      description: 'Stops the Claude Deck-managed Codex app-server process.',
       mutations: [
-        'Codex CLI: run `codex mcp remove claude-deck-mail`',
-        `${status.codex_hooks_path || '~/.codex/hooks.json'}: remove Agent Mail hook commands`,
+        'Backend process: stop the local Codex app-server child process',
+        'Codex MCP and hook configuration are left installed',
       ],
-      run: onUninstallCodex,
+      run: onStopCodexWakeups,
     }
   })()
 
@@ -151,6 +179,7 @@ export function InstallTab({
   const claudeHooksInstalled = status.claude_code_hooks_missing.length === 0
   const codexHooksInstalled = status.codex_hooks_missing.length === 0
   const codexInstalled = status.codex_mcp_installed && codexHooksInstalled
+  const codexWakeupsReady = status.codex_cli_available && status.codex_mcp_installed
 
   return (
     <div className="space-y-4">
@@ -258,31 +287,63 @@ export function InstallTab({
                 </AlertDescription>
               </Alert>
             )}
+            {status.codex_app_server_running && (
+              <Alert className="border-emerald-300 bg-emerald-50/60 dark:bg-emerald-950/20">
+                <BellRing className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <AlertTitle>Codex wakeups running</AlertTitle>
+                <AlertDescription>
+                  Claude Deck can send inbox-check turns to connected Codex repos, including sessions that are not visible through tmux.
+                </AlertDescription>
+              </Alert>
+            )}
             <div className="space-y-2">
               <PathLine label="Hooks file" value={status.codex_hooks_path} />
               <PathLine label="Shim" value={status.shim_path} />
               <PathLine label="Python" value={status.python_path} />
               <PathLine label="Deck URL" value={status.deck_url} />
             </div>
-            <Badge variant={status.codex_cli_available ? 'secondary' : 'destructive'}>
-              Codex CLI {status.codex_cli_available ? 'available' : 'missing'}
-            </Badge>
-            <Badge
-              variant="outline"
-              className={status.codex_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
-            >
-              MCP {status.codex_mcp_installed ? 'installed' : 'not installed'}
-            </Badge>
-            <Badge
-              variant="outline"
-              className={codexHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
-            >
-              hooks {codexHooksInstalled ? 'installed' : `${status.codex_hooks.length}/2 installed`}
-            </Badge>
-            {status.codex_hooks_missing.length > 0 && (
-              <Badge variant="outline" className="border-amber-300 text-amber-700">
-                missing {status.codex_hooks_missing.length}
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={status.codex_cli_available ? 'secondary' : 'destructive'}>
+                Codex CLI {status.codex_cli_available ? 'available' : 'missing'}
               </Badge>
+              <Badge
+                variant="outline"
+                className={status.codex_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                MCP {status.codex_mcp_installed ? 'installed' : 'not installed'}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={codexHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                hooks {codexHooksInstalled ? 'installed' : `${status.codex_hooks.length}/2 installed`}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={status.codex_app_server_running ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                app-server{' '}
+                {status.codex_app_server_running
+                  ? 'running'
+                  : status.codex_app_server_available
+                    ? 'stopped'
+                    : 'unavailable'}
+              </Badge>
+              {status.codex_remote_control_running && (
+                <Badge variant="outline" className="border-blue-300 text-blue-700">
+                  remote control running
+                </Badge>
+              )}
+              {status.codex_hooks_missing.length > 0 && (
+                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                  missing {status.codex_hooks_missing.length}
+                </Badge>
+              )}
+            </div>
+            {status.codex_app_server_error && (
+              <div className="rounded-lg border border-amber-300/60 bg-amber-50/60 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-200">
+                Codex app-server: {status.codex_app_server_error}
+              </div>
             )}
             <div className="flex flex-wrap gap-2">
               <Button
@@ -301,6 +362,24 @@ export function InstallTab({
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 Remove
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirming('codex-wakeups-start')}
+                disabled={!codexWakeupsReady || status.codex_app_server_running}
+              >
+                <BellRing className="mr-2 h-4 w-4" />
+                Start wakeups
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirming('codex-wakeups-stop')}
+                disabled={!status.codex_app_server_running}
+              >
+                <Unplug className="mr-2 h-4 w-4" />
+                Stop wakeups
               </Button>
             </div>
           </CardContent>
