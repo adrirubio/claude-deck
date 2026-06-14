@@ -79,8 +79,20 @@ export function sessionSourceLabel(source: string): string {
 export function sessionSourceTitle(source: string): string {
   if (source === 'observed') return 'Discovered by Agent Bridge from a tmux pane.'
   if (source === 'mcp') return 'Registered by an Agent Mail MCP tool call.'
-  if (source === 'hook') return 'Registered by Claude Code Agent Mail hooks.'
+  if (source === 'hook') return 'Registered by Agent Mail lifecycle hooks.'
   return source
+}
+
+export function sessionStatusLabel(source: string, status: MailMemberStatus | string): string {
+  if (source === 'hook' && status === 'connected') return 'Recent event'
+  if (source === 'hook' && status === 'offline') return 'No recent event'
+  return statusLabel(status)
+}
+
+export function sessionStatusTitle(source: string, status: MailMemberStatus | string): string {
+  if (source === 'hook' && status === 'connected') return 'A lifecycle hook checked in recently.'
+  if (source === 'hook' && status === 'offline') return 'No recent lifecycle hook event has checked in. This does not mean the agent is disconnected.'
+  return statusTitle(status)
 }
 
 export function requestBadgeClass(status?: MailRequestStatus | null): string {

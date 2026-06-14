@@ -1,4 +1,6 @@
 """Standalone Agent Mail MCP shim behavior."""
+import json
+from io import StringIO
 from types import SimpleNamespace
 
 
@@ -157,3 +159,84 @@ def test_mcp_request_uses_short_timeout_and_offline_backoff(monkeypatch):
     assert len(calls) == 1
     assert calls[0].connect == 0.3
     assert calls[0].read == 2.0
+
+
+def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
+    import mcp_shim.agent_mail_hook as hook
+
+    body = {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "Check Agent Mail now.",
+        }
+    }
+    posts = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return body
+
+    def fake_post(url, **kwargs):
+        posts.append((url, kwargs["json"]))
+        return FakeResponse()
+
+    monkeypatch.setattr(hook.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        hook.sys,
+        "argv",
+        [
+            "agent_mail_hook.py",
+            "--deck-url",
+            "http://deck",
+            "--event",
+            "user-prompt-submit",
+            "--provider",
+            "codex-cli",
+        ],
+    )
+    monkeypatch.setattr(hook.sys, "stdin", StringIO('{"session_id":"s1","cwd":"/repo"}'))
+    monkeypatch.setattr(hook.os, "getcwd", lambda: "/fallback")
+    monkeypatch.setattr(hook.os, "getppid", lambda: 123)
+
+    assert hook.main() == 0
+
+    output = capsys.readouterr().out.strip()
+    assert json.loads(output) == body
+    assert posts == [
+        (
+            "http://deck/api/v1/agent-mail/hooks/user-prompt-submit",
+            {
+                "session_id": "s1",
+                "cwd": "/repo",
+                "provider": "codex-cli",
+                "pid": 123,
+            },
+        )
+    ]
+
+
+def test_codex_hook_shim_suppresses_empty_backend_response(monkeypatch, capsys):
+    import mcp_shim.agent_mail_hook as hook
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(hook.httpx, "post", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        hook.sys,
+        "argv",
+        ["agent_mail_hook.py", "--deck-url", "http://deck", "--event", "session-start"],
+    )
+    monkeypatch.setattr(hook.sys, "stdin", StringIO("{}"))
+    monkeypatch.setattr(hook.os, "getcwd", lambda: "/repo")
+    monkeypatch.setattr(hook.os, "getppid", lambda: 123)
+
+    assert hook.main() == 0
+    assert capsys.readouterr().out == ""

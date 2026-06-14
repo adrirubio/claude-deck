@@ -20,6 +20,8 @@ import {
   formatDateTime,
   sessionSourceLabel,
   sessionSourceTitle,
+  sessionStatusLabel,
+  sessionStatusTitle,
   statusBadgeClass,
   statusLabel,
   statusTitle,
@@ -275,9 +277,9 @@ export function TeamTab({
                             <Badge
                               variant="outline"
                               className={statusBadgeClass(session.mailbox_status)}
-                              title={statusTitle(session.mailbox_status)}
+                              title={sessionStatusTitle(session.source, session.mailbox_status)}
                             >
-                              {statusLabel(session.mailbox_status)}
+                              {sessionStatusLabel(session.source, session.mailbox_status)}
                             </Badge>
                           </div>
                         ))}
