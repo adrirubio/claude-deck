@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models.database import MailMessage
-from app.models.schemas import MailAgentRegisterRequest
+from app.models.database import MailMessage, MailTeamMember
+from app.models.schemas import MailAgentRegisterRequest, MailMessageCreate
 from app.services.agent_mail_service import (
     HEARTBEAT_TTL_SECONDS,
     INBOX_CHECK_PROMPT,
@@ -163,6 +163,100 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_codex(db, svc, tm
     assert result["prompt"] == INBOX_CHECK_PROMPT
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "w:0.1", "-l", INBOX_CHECK_PROMPT]
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "Enter"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_auto_nudges_tmux_observed_codex_recipient(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
+
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    sender = MailTeamMember(
+        repo_id="sender",
+        repo_path="/tmp/sender",
+        repo_name="sender",
+        display_name="sender",
+    )
+    db.add(sender)
+    await db.commit()
+    await db.refresh(sender)
+    calls.clear()
+
+    await svc.send_message(
+        db,
+        MailMessageCreate(
+            sender_member_id=sender.id,
+            recipient_member_id=recipient.id,
+            body_markdown="please check this",
+        ),
+    )
+
+    tmux_calls = [call for call in calls if call[0][0] == "tmux"]
+    assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "w:0.1", "-l", INBOX_CHECK_PROMPT]
+    assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "Enter"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_auto_nudge_is_throttled(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
+
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    calls.clear()
+
+    for body in ("first", "second"):
+        await svc.send_message(
+            db,
+            MailMessageCreate(
+                recipient_member_id=recipient.id,
+                body_markdown=body,
+            ),
+        )
+
+    tmux_calls = [call for call in calls if call[0][0] == "tmux"]
+    assert len(tmux_calls) == 2
 
 
 @pytest.mark.asyncio

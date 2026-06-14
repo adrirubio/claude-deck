@@ -29,6 +29,7 @@ HEARTBEAT_TTL_SECONDS = 180
 MCP_HEARTBEAT_TTL_SECONDS = 3600
 OBSERVED_TTL_SECONDS = 300
 STALE_REQUEST_MINUTES = 15
+AUTO_NUDGE_COOLDOWN_SECONDS = 30
 INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: please call `deck_check_inbox(unread_only=False)` now, "
     "then answer any pending context requests or handoffs before continuing."
@@ -37,6 +38,9 @@ INBOX_CHECK_PROMPT = (
 
 class AgentMailService:
     """Registry, messaging, and delivery-context behavior for Agent Mail."""
+
+    def __init__(self) -> None:
+        self._last_auto_nudge_at: dict[int, datetime] = {}
 
     async def _get_or_create_member(self, db: AsyncSession, cwd: str) -> MailTeamMember:
         ident = derive_repo_identity(cwd)
@@ -382,6 +386,7 @@ class AgentMailService:
 
         await db.commit()
         await db.refresh(message)
+        await self.auto_nudge_members(db, recipients)
         return await self._message_response(db, message, for_member_id=None)
 
     async def _sender_name(self, db: AsyncSession, sender_member_id: Optional[int]) -> str:
@@ -522,9 +527,12 @@ class AgentMailService:
             messages=messages,
         )
 
-    async def queue_inbox_check(self, db: AsyncSession, member_id: int) -> dict[str, str]:
-        await self.sync_observed_sessions(db)
-        now = datetime.utcnow()
+    async def _nudge_session_for_member(
+        self,
+        db: AsyncSession,
+        member_id: int,
+        now: datetime,
+    ) -> MailAgentSession | None:
         result = await db.execute(
             select(MailAgentSession)
             .where(
@@ -535,11 +543,13 @@ class AgentMailService:
             )
             .order_by(MailAgentSession.last_seen_at.desc())
         )
-        session = next(
+        return next(
             (candidate for candidate in result.scalars().all() if self._session_can_nudge(candidate, now)),
             None,
         )
-        if session is None or not session.tmux_target:
+
+    def _send_tmux_inbox_check(self, session: MailAgentSession) -> dict[str, str]:
+        if not session.tmux_target:
             raise ValueError("No live Codex tmux session is available for this member")
         try:
             subprocess.run(
@@ -563,6 +573,38 @@ class AgentMailService:
         except subprocess.TimeoutExpired as exc:
             raise ValueError("tmux send-keys timed out") from exc
         return {"target": session.tmux_target, "prompt": INBOX_CHECK_PROMPT}
+
+    async def auto_nudge_members(self, db: AsyncSession, member_ids: set[int]) -> list[dict[str, str | int]]:
+        """Best-effort delivery nudge for tmux-observed Codex recipients."""
+        if not member_ids:
+            return []
+        await self.sync_observed_sessions(db)
+        now = datetime.utcnow()
+        nudged: list[dict[str, str | int]] = []
+        cooldown_cutoff = now - timedelta(seconds=AUTO_NUDGE_COOLDOWN_SECONDS)
+        for member_id in sorted(member_ids):
+            last_nudge_at = self._last_auto_nudge_at.get(member_id)
+            if last_nudge_at is not None and last_nudge_at > cooldown_cutoff:
+                continue
+            session = await self._nudge_session_for_member(db, member_id, now)
+            if session is None:
+                continue
+            try:
+                result = self._send_tmux_inbox_check(session)
+            except ValueError as exc:
+                logger.debug("agent mail auto-nudge failed for member %s: %s", member_id, exc)
+                continue
+            self._last_auto_nudge_at[member_id] = now
+            nudged.append({"member_id": member_id, **result})
+        return nudged
+
+    async def queue_inbox_check(self, db: AsyncSession, member_id: int) -> dict[str, str]:
+        await self.sync_observed_sessions(db)
+        now = datetime.utcnow()
+        session = await self._nudge_session_for_member(db, member_id, now)
+        if session is None or not session.tmux_target:
+            raise ValueError("No live Codex tmux session is available for this member")
+        return self._send_tmux_inbox_check(session)
 
     async def mark_read(self, db: AsyncSession, message_id: int, member_id: int) -> None:
         result = await db.execute(
