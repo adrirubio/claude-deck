@@ -14,6 +14,13 @@ This starts:
 
 Open `http://localhost:5173` in your browser.
 
+To stop or restart the dev servers for this checkout:
+
+```bash
+./scripts/dev.sh stop
+./scripts/dev.sh restart
+```
+
 ## Explore the Dashboard
 
 The dashboard shows an overview of your selected provider and local project state. Claude Code still has the richest metrics; Codex surfaces focus on provider status, sessions, configuration, diagnostics, and inventory.

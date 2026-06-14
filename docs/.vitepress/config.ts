@@ -54,6 +54,7 @@ export default defineConfig({
             { text: 'Status Line', link: '/features/statusline' },
             { text: 'Sessions', link: '/features/sessions' },
             { text: 'Agent Bridge', link: '/features/agent-bridge' },
+            { text: 'Agent Mail', link: '/features/agent-mail' },
             { text: 'CC Bridge', link: '/features/cc-bridge' },
             { text: 'Usage Tracking', link: '/features/usage' },
             { text: 'Backup & Restore', link: '/features/backup' },

@@ -170,3 +170,90 @@ class PresenceSession(Base):
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_user_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class MailTeamMember(Base):
+    """Durable Agent Mail team identity, keyed by repository."""
+
+    __tablename__ = "mail_team_members"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    repo_path: Mapped[str] = mapped_column(String, nullable=False)
+    repo_name: Mapped[str] = mapped_column(String, nullable=False)
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str | None] = mapped_column(String, nullable=True)
+    charter: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_inbox_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MailAgentSession(Base):
+    """Ephemeral agent session attached to a durable team member."""
+
+    __tablename__ = "mail_agent_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    member_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    session_key: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    cwd: Mapped[str | None] = mapped_column(String, nullable=True)
+    tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    pane_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
+    activity: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MailMessage(Base):
+    """Agent Mail message with request lifecycle state where applicable."""
+
+    __tablename__ = "mail_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_root_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_messages.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String, default="message", nullable=False, index=True)
+    sender_member_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_team_members.id", ondelete="SET NULL"), nullable=True
+    )
+    recipient_member_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    subject: Mapped[str | None] = mapped_column(String, nullable=True)
+    body_markdown: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    request_status: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+
+class MailReceipt(Base):
+    """Per-recipient read/ack state for a message."""
+
+    __tablename__ = "mail_receipts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mail_messages.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    member_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "member_id", name="uix_mail_receipt_message_member"),
+    )

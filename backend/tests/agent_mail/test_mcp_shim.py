@@ -1,0 +1,159 @@
+"""Standalone Agent Mail MCP shim behavior."""
+from types import SimpleNamespace
+
+
+def test_mcp_shim_imports_without_app_package_dependency():
+    import mcp_shim.agent_mail_server as shim
+
+    assert shim.mcp is not None
+    assert callable(shim.deck_whoami)
+
+
+def test_ensure_registered_refreshes_cached_member(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setitem(shim._state, "member_id", 7)
+    monkeypatch.setitem(shim._state, "session_key", "mcp:test")
+    monkeypatch.setattr(shim.os, "getcwd", lambda: "/tmp/repo")
+    monkeypatch.setattr(shim.os, "getpid", lambda: 1234)
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        return {"ok": True, "data": {"member": {"id": 8}}}
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+
+    result = shim._ensure_registered()
+
+    assert result["ok"] is True
+    assert shim._state["member_id"] == 8
+    assert requests == [
+        (
+            "POST",
+            "/agent/register",
+            {
+                "json": {
+                    "source": "mcp",
+                    "provider": shim.PROVIDER,
+                    "cwd": "/tmp/repo",
+                    "session_key": "mcp:test",
+                    "pid": 1234,
+                }
+            },
+        )
+    ]
+
+
+def test_heartbeat_once_returns_normal_interval_when_registered(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+
+    assert shim._heartbeat_once() == shim.HEARTBEAT_INTERVAL_SECONDS
+
+
+def test_heartbeat_once_backs_off_when_deck_unavailable(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": False})
+
+    assert shim._heartbeat_once() == shim.HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS
+
+
+def test_start_heartbeat_thread_uses_daemon_thread(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append(self)
+
+    monkeypatch.setattr(shim.threading, "Thread", FakeThread)
+
+    thread = shim._start_heartbeat_thread()
+
+    assert started == [thread]
+    assert thread.target == shim._heartbeat_loop
+    assert thread.name == "claude-deck-agent-mail-heartbeat"
+    assert thread.daemon is True
+
+
+def test_deck_reply_only_uses_answer_for_context_requests(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    posted = []
+    shim._state["member_id"] = 7
+
+    def fake_request(method, path, **kwargs):
+        if method == "GET" and path == "/messages/10/thread":
+            return {
+                "ok": True,
+                "data": {
+                    "root": {
+                        "kind": "handoff",
+                        "request_status": "pending",
+                        "recipient_member_id": 7,
+                    }
+                },
+            }
+        if method == "POST":
+            posted.append(kwargs["json"])
+            return {"ok": True, "data": {"id": 99}}
+        if path.startswith("/agent/inbox"):
+            return {"ok": True, "data": {"unread_count": 0, "pending_count": 0}}
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+
+    result = shim.deck_reply(10, "Completed the work.")
+
+    assert result["ok"] is True
+    assert posted[0]["kind"] == "message"
+
+
+def test_deck_check_inbox_returns_deck_unreachable_on_http_error(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    def fake_http_request(*args, **kwargs):
+        raise shim.httpx.ConnectError("no server", request=SimpleNamespace())
+
+    shim._state["member_id"] = None
+    shim._state["offline_until"] = 0.0
+    shim._state["last_error"] = None
+    monkeypatch.setattr(shim.httpx, "request", fake_http_request)
+
+    result = shim.deck_check_inbox()
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "deck_unreachable"
+
+
+def test_mcp_request_uses_short_timeout_and_offline_backoff(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    calls = []
+
+    def fake_http_request(*args, **kwargs):
+        calls.append(kwargs["timeout"])
+        raise shim.httpx.ConnectError("no server", request=SimpleNamespace())
+
+    shim._state["offline_until"] = 0.0
+    shim._state["last_error"] = None
+    monkeypatch.setattr(shim.httpx, "request", fake_http_request)
+
+    first = shim._request("GET", "/team")
+    second = shim._request("GET", "/team")
+
+    assert first["ok"] is False
+    assert second["ok"] is False
+    assert len(calls) == 1
+    assert calls[0].connect == 0.3
+    assert calls[0].read == 2.0

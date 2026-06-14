@@ -7,7 +7,7 @@ from app.config import settings
 from app.database import init_db
 from app.api.v1.router import router as api_v1_router
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 
 
@@ -68,7 +68,7 @@ if os.path.exists(frontend_path):
         """Standard 404 handler to serve index.html for SPA routing."""
         if not request.url.path.startswith(settings.api_v1_prefix):
             return FileResponse(os.path.join(frontend_path, "index.html"), status_code=200)
-        return {"detail": "Not Found"}
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
 else:
     @app.get("/")
     async def root():

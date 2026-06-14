@@ -42,6 +42,7 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Output Styles** — Configure response output formats
 - **Status Line** — Customize Claude Code status line display
 - **Agent Bridge** — Discover and monitor Claude Code and Codex CLI sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage provider-specific options directly from the UI
+- **Agent Mail** — Coordinate local Claude Code and Codex CLI agents through durable per-repo identities, structured context requests, handoffs, and an inspectable team mailbox
 - **Session Transcripts** — View conversation history with full message details and tool use
 - **Usage Tracking** — Monitor token usage, costs, and billing blocks with daily/monthly charts
 - **Plan History** — Browse and review Claude Code implementation plans
@@ -129,6 +130,13 @@ cd claude-deck
 This starts:
 - Backend at http://localhost:8000 (API docs at http://localhost:8000/docs)
 - Frontend at http://localhost:5173
+
+To stop or restart the dev servers for this checkout:
+
+```bash
+./scripts/dev.sh stop
+./scripts/dev.sh restart
+```
 
 To make the dev environment reachable from another machine on your LAN or tailnet (e.g. to monitor tmux sessions via Agent Bridge from a different host), pass `--host`:
 

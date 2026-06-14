@@ -1836,3 +1836,127 @@ class SystemStatusResponse(BaseModel):
     active_sessions: int = 0
     providers: Dict[str, Any] = Field(default_factory=dict)
     instance: Optional[InstanceIdentity] = None
+
+
+# --- Agent Mail ---
+
+MAIL_MESSAGE_KINDS = ["message", "broadcast", "context_request", "handoff", "answer"]
+MAIL_REQUEST_KINDS = ["context_request", "handoff"]
+
+
+class MailSessionResponse(BaseModel):
+    """One live/observed agent session attached to a member."""
+
+    id: int
+    provider: str
+    source: str
+    session_key: str
+    cwd: Optional[str] = None
+    tmux_target: Optional[str] = None
+    mailbox_status: str
+    activity: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
+
+
+class MailMemberResponse(BaseModel):
+    """Durable team member with derived status and inbox counts."""
+
+    id: int
+    repo_id: str
+    repo_path: str
+    repo_name: str
+    display_name: str
+    role: Optional[str] = None
+    charter: Optional[str] = None
+    status: str
+    unread_count: int = 0
+    pending_count: int = 0
+    unseen_pending_count: int = 0
+    stale_pending_count: int = 0
+    can_nudge: bool = False
+    last_inbox_checked_at: Optional[datetime] = None
+    sessions: List[MailSessionResponse] = Field(default_factory=list)
+
+
+class TeamListResponse(BaseModel):
+    members: List[MailMemberResponse]
+
+
+class MailMemberUpdate(BaseModel):
+    display_name: Optional[str] = None
+    role: Optional[str] = None
+    charter: Optional[str] = None
+
+
+class MailMessageCreate(BaseModel):
+    kind: str = "message"
+    sender_member_id: Optional[int] = None
+    recipient_member_id: Optional[int] = None
+    thread_root_id: Optional[int] = None
+    subject: Optional[str] = None
+    body_markdown: str
+    payload: Optional[Dict[str, Any]] = None
+
+
+class MailMessageResponse(BaseModel):
+    id: int
+    thread_root_id: Optional[int] = None
+    kind: str
+    sender_member_id: Optional[int] = None
+    sender_name: str
+    recipient_member_id: Optional[int] = None
+    subject: Optional[str] = None
+    body_markdown: str
+    payload: Optional[Dict[str, Any]] = None
+    request_status: Optional[str] = None
+    is_stale: bool = False
+    read_at: Optional[datetime] = None
+    acked_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class MailThreadResponse(BaseModel):
+    root: MailMessageResponse
+    replies: List[MailMessageResponse] = Field(default_factory=list)
+
+
+class MailInboxResponse(BaseModel):
+    member_id: int
+    unread_count: int
+    pending_count: int
+    messages: List[MailMessageResponse] = Field(default_factory=list)
+
+
+class MailAgentRegisterRequest(BaseModel):
+    source: str
+    provider: str = "unknown"
+    cwd: str
+    session_key: str
+    pid: Optional[int] = None
+
+
+class MailAgentRegisterResponse(BaseModel):
+    member: MailMemberResponse
+    session: MailSessionResponse
+
+
+class AgentMailInstallStatus(BaseModel):
+    claude_code_hooks: List[str]
+    claude_code_hooks_missing: List[str]
+    claude_code_mcp_installed: bool
+    codex_cli_available: bool
+    codex_mcp_installed: bool
+    codex_hooks: List[str] = Field(default_factory=list)
+    codex_hooks_missing: List[str] = Field(default_factory=list)
+    curl_available: bool
+    shim_path: str
+    python_path: str
+    deck_url: str
+    claude_settings_path: Optional[str] = None
+    claude_mcp_config_path: Optional[str] = None
+    codex_hooks_path: Optional[str] = None
+
+
+class AgentMailSnippets(BaseModel):
+    codex_config_toml: str
+    codex_agents_md: str
