@@ -553,14 +553,7 @@ class AgentMailService:
             raise ValueError("No live Codex tmux session is available for this member")
         try:
             subprocess.run(
-                ["tmux", "send-keys", "-t", session.tmux_target, "-l", INBOX_CHECK_PROMPT],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=True,
-            )
-            subprocess.run(
-                ["tmux", "send-keys", "-t", session.tmux_target, "C-m"],
+                ["tmux", "send-keys", "-t", session.tmux_target, "-l", f"{INBOX_CHECK_PROMPT}\r"],
                 capture_output=True,
                 text=True,
                 timeout=5,
