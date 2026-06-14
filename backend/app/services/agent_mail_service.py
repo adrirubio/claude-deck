@@ -2,6 +2,7 @@
 import logging
 import os
 import subprocess
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -30,6 +31,7 @@ MCP_HEARTBEAT_TTL_SECONDS = 3600
 OBSERVED_TTL_SECONDS = 300
 STALE_REQUEST_MINUTES = 15
 AUTO_NUDGE_COOLDOWN_SECONDS = 30
+TMUX_ENTER_DELAY_SECONDS = 0.25
 INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: please call `deck_check_inbox(unread_only=False)` now, "
     "then answer any pending context requests or handoffs before continuing."
@@ -559,6 +561,7 @@ class AgentMailService:
                 timeout=5,
                 check=True,
             )
+            time.sleep(TMUX_ENTER_DELAY_SECONDS)
             subprocess.run(
                 ["tmux", "send-keys", "-t", session.tmux_target, "Enter"],
                 capture_output=True,

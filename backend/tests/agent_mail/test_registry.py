@@ -12,6 +12,7 @@ from app.services.agent_mail_service import (
     HEARTBEAT_TTL_SECONDS,
     INBOX_CHECK_PROMPT,
     MCP_HEARTBEAT_TTL_SECONDS,
+    TMUX_ENTER_DELAY_SECONDS,
     AgentMailService,
 )
 
@@ -151,8 +152,10 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_codex(db, svc, tm
         calls.append((command, kwargs))
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
+    sleep_calls = []
     monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
     monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", sleep_calls.append)
     await svc.sync_observed_sessions(db)
     member = (await svc.list_team(db))[0]
 
@@ -163,6 +166,7 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_codex(db, svc, tm
     assert result["prompt"] == INBOX_CHECK_PROMPT
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "w:0.1", "-l", INBOX_CHECK_PROMPT]
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "Enter"]
+    assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
 
 
 @pytest.mark.asyncio
@@ -188,8 +192,10 @@ async def test_send_message_auto_nudges_tmux_observed_codex_recipient(db, svc, t
         calls.append((command, kwargs))
         return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
 
+    sleep_calls = []
     monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
     monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", sleep_calls.append)
     await svc.sync_observed_sessions(db)
     recipient = (await svc.list_team(db))[0]
     sender = MailTeamMember(
@@ -215,6 +221,7 @@ async def test_send_message_auto_nudges_tmux_observed_codex_recipient(db, svc, t
     tmux_calls = [call for call in calls if call[0][0] == "tmux"]
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "w:0.1", "-l", INBOX_CHECK_PROMPT]
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "Enter"]
+    assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
 
 
 @pytest.mark.asyncio
@@ -240,8 +247,10 @@ async def test_send_message_auto_nudge_is_throttled(db, svc, tmp_path, monkeypat
         calls.append((command, kwargs))
         return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
 
+    sleep_calls = []
     monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
     monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", sleep_calls.append)
     await svc.sync_observed_sessions(db)
     recipient = (await svc.list_team(db))[0]
     calls.clear()
@@ -257,6 +266,7 @@ async def test_send_message_auto_nudge_is_throttled(db, svc, tmp_path, monkeypat
 
     tmux_calls = [call for call in calls if call[0][0] == "tmux"]
     assert len(tmux_calls) == 2
+    assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
 
 
 @pytest.mark.asyncio
