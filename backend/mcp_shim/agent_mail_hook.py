@@ -1,0 +1,66 @@
+"""Claude Deck Agent Mail lifecycle hook shim."""
+import argparse
+import json
+import os
+import sys
+from typing import Any
+
+import httpx
+
+HTTP_TIMEOUT = httpx.Timeout(connect=0.25, read=1.0, write=1.0, pool=0.25)
+
+
+def _read_payload() -> dict[str, Any]:
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _session_id(payload: dict[str, Any]) -> str:
+    for key in ("session_id", "thread_id", "conversation_id"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return str(os.getppid())
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--deck-url", default=os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--event", required=True)
+    parser.add_argument("--provider", default=os.environ.get("CLAUDE_DECK_PROVIDER", "codex-cli"))
+    args = parser.parse_args()
+
+    payload = _read_payload()
+    payload.setdefault("cwd", os.getcwd())
+    payload["provider"] = args.provider
+    payload["session_id"] = _session_id(payload)
+    payload["pid"] = os.getppid()
+
+    try:
+        response = httpx.post(
+            f"{args.deck_url.rstrip('/')}/api/v1/agent-mail/hooks/{args.event}",
+            json=payload,
+            timeout=HTTP_TIMEOUT,
+        )
+        response.raise_for_status()
+        body = response.json()
+    except Exception:
+        return 0
+
+    context = (
+        body.get("hookSpecificOutput", {})
+        .get("additionalContext")
+    )
+    if context:
+        print(context)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

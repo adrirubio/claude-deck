@@ -1,4 +1,4 @@
-import { Terminal, Radio, AlertCircle, Server } from "lucide-react";
+import { Terminal, AlertCircle, Server } from "lucide-react";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -77,16 +77,6 @@ export function Header() {
                   {provider.version ? ` v${provider.version}` : provider.installed ? " ready" : " missing"}
                 </Badge>
               ))}
-              <Badge
-                variant="secondary"
-                className={cn(
-                  "gap-1 text-xs",
-                  status.activeSessions > 0 && "bg-green-500/15 text-green-600 dark:text-green-400"
-                )}
-              >
-                <Radio className="h-3 w-3" />
-                {status.activeSessions} active
-              </Badge>
             </>
           )}
           <ThemeToggle />

@@ -31,7 +31,7 @@ import {
   Gauge,
   ClipboardList,
   MonitorPlay,
-  Radio,
+  Mail,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -61,7 +61,7 @@ const commonNavigation: NavGroup[] = [
   {
     name: 'Operations',
     items: [
-      { name: 'Presence', href: '/presence', icon: Radio },
+      { name: 'Agent Mail', href: '/agent-mail', icon: Mail },
       { name: 'Plans', href: '/plans', icon: ClipboardList },
       { name: 'Backup', href: '/backup', icon: Archive, capability: 'backup' },
     ],

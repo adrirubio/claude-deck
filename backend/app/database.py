@@ -1,5 +1,6 @@
 """Database setup with SQLAlchemy async."""
 from sqlalchemy import event
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -60,3 +61,10 @@ async def init_db() -> None:
     """Initialize database tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if settings.database_url.startswith("sqlite"):
+            result = await conn.execute(text("PRAGMA table_info(mail_team_members)"))
+            columns = {row[1] for row in result.fetchall()}
+            if columns and "last_inbox_checked_at" not in columns:
+                await conn.execute(
+                    text("ALTER TABLE mail_team_members ADD COLUMN last_inbox_checked_at DATETIME")
+                )

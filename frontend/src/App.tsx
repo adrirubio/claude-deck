@@ -26,6 +26,7 @@ import { PlansPage } from './features/plans/PlansPage'
 import { PlanDetailPage } from './features/plans/PlanDetailPage'
 import { CCBridgePage } from './features/cc-bridge/CCBridgePage'
 import { PresencePage } from './features/presence/PresencePage'
+import { AgentMailPage } from './features/agent-mail/AgentMailPage'
 
 function App() {
   return (
@@ -55,6 +56,7 @@ function App() {
                 <Route path="agent-bridge" element={<CCBridgePage />} />
                 <Route path="cc-bridge" element={<CCBridgePage />} />
                 <Route path="presence" element={<PresencePage />} />
+                <Route path="agent-mail" element={<AgentMailPage />} />
                 <Route path="plans/:filename" element={<PlanDetailPage />} />
                 <Route path="plans" element={<PlansPage />} />
                 <Route path="context" element={<ContextPage />} />
