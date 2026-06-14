@@ -133,6 +133,24 @@ Actions:
 
 Copy should be explicit that this enables local Codex wakeups for Agent Mail and uses Codex's local app-server daemon.
 
+### Daemon Lifetime And Idempotency
+
+Treat Codex Agent Mail install and Codex remote-control runtime state as separate things:
+
+- Codex MCP/hooks install is durable user configuration and should remain a one-off install action.
+- Codex remote-control/app-server availability is runtime state and may need to be started again after reboot, logout, or manual stop.
+- Claude Deck must never ask users to reinstall Codex Agent Mail just because the app-server daemon is stopped.
+
+The backend start path must be idempotent:
+
+- If remote control is already running, `start` returns success and refreshed status without launching a duplicate daemon.
+- If a managed daemon is running without remote control, `start` enables remote control for that daemon and returns success.
+- If no daemon is running, `start` starts one with remote control enabled and returns success.
+- If the daemon is half-started or the control socket exists but does not answer, `start` should retry once with the documented Codex command before surfacing an error.
+- `stop` should be idempotent: stopping an already-stopped daemon returns success with `remote_control_running=false`.
+
+Install-tab copy should use "Start Codex wakeups" or "Enable Codex wakeups" rather than "Install" for this action, so users understand it is runtime availability, not repeated configuration mutation.
+
 ## Architecture
 
 ### New Backend Service
@@ -414,7 +432,10 @@ Commands to test:
 codex app-server daemon version
 codex remote-control start --json
 codex app-server daemon version
+codex remote-control start --json
+codex app-server daemon version
 codex app-server proxy
+codex remote-control stop --json
 codex remote-control stop --json
 ```
 
@@ -422,9 +443,13 @@ Record:
 
 - Exit codes.
 - JSON output shape.
-- Whether `remote-control start` is idempotent.
+- Whether repeated `remote-control start` is idempotent.
+- Whether repeated `remote-control stop` is idempotent.
+- Whether start creates duplicate daemon processes.
+- Whether start recovers from a stale socket or half-started daemon.
 - Whether it persists remote-control enablement.
 - Whether it leaves background processes after stop.
+- Whether the daemon survives shell exit, Deck restart, user logout, or machine reboot. Reboot testing can be manual, but the plan must not assume persistence without verification.
 
 ### Spike B: Protocol handshake through proxy
 
@@ -509,11 +534,15 @@ Add:
 - Status fields for app-server/remote-control.
 - Start/stop endpoints.
 - Tests with mocked Codex executor.
+- Explicit idempotency tests for start and stop.
 
 Acceptance:
 
 - Install tab can report remote-control unavailable/running.
 - Start/stop actions return refreshed install status.
+- Start action is safe to call repeatedly and does not create duplicate app-server daemon processes.
+- Stop action is safe to call repeatedly and reports stopped state.
+- Stopped daemon state does not mark Codex MCP/hooks install as missing.
 - Failures surface as concise UI errors.
 
 ### Task 3: Wake routing refactor
@@ -570,6 +599,8 @@ Acceptance:
 
 - User can see Codex remote-control status.
 - User can start/stop remote control.
+- The UI distinguishes durable Codex Agent Mail install from runtime Codex wakeup availability.
+- The main action says `Start Codex wakeups` or `Enable Codex wakeups`, not `Install`, when MCP/hooks are already installed.
 - Copy explains why this matters for non-tmux Codex wakeups.
 - Actions show success/error toasts and refresh status.
 
@@ -674,6 +705,9 @@ Recommended wake result reasons:
 - A non-tmux Codex member with app-server remote control available can be nudged from Agent Mail without terminal key injection.
 - Agent Mail still stores messages even when wakeup fails.
 - UI clearly distinguishes connected from wakeable.
+- UI clearly distinguishes Codex Agent Mail installed state from Codex remote-control running state.
+- Starting Codex remote control is idempotent and does not spawn duplicate daemons.
+- Stopping Codex remote control is idempotent and leaves durable MCP/hooks install intact.
 - Tmux wakeups continue to work.
 - Codex install/status UI explains and manages app-server remote control.
 - Tests cover tmux-first routing, app-server fallback, and no-wake fallback.
