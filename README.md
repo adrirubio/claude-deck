@@ -131,6 +131,13 @@ This starts:
 - Backend at http://localhost:8000 (API docs at http://localhost:8000/docs)
 - Frontend at http://localhost:5173
 
+To stop or restart the dev servers for this checkout:
+
+```bash
+./scripts/dev.sh stop
+./scripts/dev.sh restart
+```
+
 To make the dev environment reachable from another machine on your LAN or tailnet (e.g. to monitor tmux sessions via Agent Bridge from a different host), pass `--host`:
 
 ```bash
