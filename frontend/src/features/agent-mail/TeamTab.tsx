@@ -162,7 +162,7 @@ export function TeamTab({
                 ? `${member.stale_pending_count} pending request(s) are stale.`
                 : null,
               !member.can_nudge && (member.unread_count > 0 || member.pending_count > 0)
-                ? 'No automatic wake path is available; delivery waits for the agent to check its inbox.'
+                ? 'No wake path is available; the visible agent must check its inbox.'
                 : null,
             ].filter(Boolean)
             const showQueueInboxCheck = member.can_nudge && (member.unread_count > 0 || member.pending_count > 0)

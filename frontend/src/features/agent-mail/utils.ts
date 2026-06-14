@@ -46,14 +46,14 @@ export function statusTitle(status: MailMemberStatus | string): string {
 
 export function wakeStateLabel(state: string): string {
   if (state === 'wakeable') return 'Wakeable'
-  if (state === 'delivered_waiting') return 'Waiting'
+  if (state === 'delivered_waiting') return 'Not wakeable'
   if (state === 'offline') return 'Offline'
   return state
 }
 
 export function wakeStateTitle(state: string): string {
   if (state === 'wakeable') return 'Claude Deck has a wake path for this member.'
-  if (state === 'delivered_waiting') return 'Messages can be delivered, but this member has no automatic wake path right now.'
+  if (state === 'delivered_waiting') return 'Messages are delivered, but Claude Deck cannot wake this visible agent session.'
   if (state === 'offline') return 'No live session is available for this member.'
   return state
 }

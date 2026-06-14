@@ -120,7 +120,7 @@ Suggested UI labels:
 
 - `Connected`: this member has checked in recently through MCP/hooks.
 - `Wakeable via tmux`: Deck can inject an inbox check into an observed tmux Codex pane.
-- `Delivered, waiting`: mail is stored, but no active visible wake path is available.
+- `Not wakeable`: mail is stored, but no active visible wake path is available.
 - `Offline`: no recent check-in and no live observation.
 
 Keep the UI quiet:
@@ -128,7 +128,7 @@ Keep the UI quiet:
 - Show a small wakeability badge next to the existing member status badge.
 - Keep the manual button as `Queue inbox check`.
 - In the button tooltip, name the method that will be used.
-- If no wake path exists and the member has unread/pending mail, show a compact warning: `Delivered, waiting for agent activity`.
+- If no wake path exists and the member has unread/pending mail, show a compact warning: `No wake path is available; the visible agent must check its inbox.`
 
 ### Install Tab
 
@@ -318,7 +318,7 @@ Routing priority:
    - Use when member has any live/recent `codex-cli` session or Codex thread for the repo.
 3. No wake path:
    - Mail remains delivered.
-   - UI shows `Delivered, waiting`.
+   - UI shows `Not wakeable`.
 
 Keep throttling:
 
@@ -421,7 +421,7 @@ Team tab:
 - Show wake badge separately from connectivity badge.
 - Keep `Queue inbox check` if `wake_methods.length > 0`.
 - Tooltip should show the preferred method.
-- For unread/pending mail with no wake method, show a small `Delivered, waiting for poll` warning.
+- For unread/pending mail with no wake method, show a small `No wake path is available` warning.
 
 Install tab:
 
