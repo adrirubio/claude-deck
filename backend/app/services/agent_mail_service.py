@@ -560,7 +560,7 @@ class AgentMailService:
                 check=True,
             )
             subprocess.run(
-                ["tmux", "send-keys", "-t", session.tmux_target, "Enter"],
+                ["tmux", "send-keys", "-t", session.tmux_target, "C-m"],
                 capture_output=True,
                 text=True,
                 timeout=5,

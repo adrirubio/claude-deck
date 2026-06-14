@@ -162,7 +162,7 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_codex(db, svc, tm
     assert result["target"] == "w:0.1"
     assert result["prompt"] == INBOX_CHECK_PROMPT
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "w:0.1", "-l", INBOX_CHECK_PROMPT]
-    assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "Enter"]
+    assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "C-m"]
 
 
 @pytest.mark.asyncio
@@ -214,7 +214,7 @@ async def test_send_message_auto_nudges_tmux_observed_codex_recipient(db, svc, t
 
     tmux_calls = [call for call in calls if call[0][0] == "tmux"]
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "w:0.1", "-l", INBOX_CHECK_PROMPT]
-    assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "Enter"]
+    assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "w:0.1", "C-m"]
 
 
 @pytest.mark.asyncio
