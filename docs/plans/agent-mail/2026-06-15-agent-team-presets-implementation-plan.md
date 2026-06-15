@@ -24,6 +24,7 @@ The feature should not introduce a second messaging model. It should make it eas
 4. **Make launch state inspectable.** The user should see which slots are already running, which will be spawned, which are pending registration, and which failed.
 5. **Stay provider-aware.** Claude Code and Codex launch options differ. The preset model should store common slot intent plus provider-specific launch options.
 6. **Do not hide setup prerequisites.** If Agent Mail MCP/hooks are missing for a provider, the launch plan should say so before spawning.
+7. **Support agent-friendly orchestration.** The UI is one caller, not the only caller. Local external agents and scripts should be able to plan and launch presets through stable JSON APIs.
 
 ## Supported Use Cases
 
@@ -146,6 +147,24 @@ Supported in v1:
 - per-slot launch action uses the same launch planner and result model
 - still reuses matching live sessions by default
 
+### UC10: External Agent Launches A Team Preset
+
+An external local agent, such as an OpenClaw instance or another orchestrator running on the user's machine, wants to launch a known Claude Deck team before delegating work to its members.
+
+Supported in v1:
+
+- CRUD, launch-plan, and launch endpoints return stable machine-readable JSON
+- launch planning does not require browser state
+- launch execution can be called through the HTTP API by a local external agent
+- external callers get the same per-slot statuses as the UI
+- external callers can request a dry-run plan, inspect it, then submit the returned `plan_hash` to launch
+
+Important boundaries:
+
+- this is not autonomous scheduling; the external agent is an explicit caller
+- this does not require new cross-machine auth or remote exposure in v1
+- the API should remain localhost-oriented unless a broader external-control security design is added later
+
 ## Explicitly Unsupported Or Deferred Use Cases
 
 ### Multiple Independently Addressable Agents In The Same Repo
@@ -184,13 +203,15 @@ Deferred:
 
 ### Autonomous Scheduling
 
-V1 is manually launched from Deck.
+V1 is explicitly launched by a caller. That caller can be the Deck UI, a local script, or a local external agent using the HTTP API.
 
 Deferred:
 
 - scheduled team launch
 - recurring maintenance runs
 - automatic launch based on GitHub events
+
+Do not implement the launch API in a way that depends on browser-only state, modal-only confirmation, or UI-only tokens. The UI may use the same API, but external local agents must be able to call the API intentionally.
 
 ### Full Team Lifecycle Management
 
@@ -464,6 +485,48 @@ Behavior:
 
 Do not make launch long-running in v1. Spawning tmux sessions should be quick. Registration can remain `pending_registration` and be refreshed by UI polling.
 
+### External Agent API Requirements
+
+The Agent Teams API should be usable by external local agents, not only the React UI.
+
+Requirements:
+
+- all plan/launch responses must be complete JSON documents with no required UI follow-up to understand status
+- launch should accept either:
+  - a caller-reviewed `confirm_plan_hash`
+  - or an explicit `skip_plan_confirmation: true` for single-step local automation
+- validation errors should return structured details where practical:
+  - preset id
+  - slot id
+  - field
+  - error code
+  - human-readable message
+- launch result should include enough data for a caller to continue orchestration:
+  - preset id/name
+  - slot id/name
+  - provider
+  - repo path
+  - action/result
+  - tmux target/session name
+  - Agent Mail member id if already known
+  - pending registration marker if not known yet
+- API behavior should not depend on localStorage, browser-only confirmation state, or frontend-only generated ids
+
+Security stance for v1:
+
+- keep this as a local Claude Deck API capability
+- do not expose a remote access model in this PR
+- if Claude Deck later adds API tokens or external-control permissions, Agent Teams launch endpoints should be easy to put behind that policy
+
+External agent example flow:
+
+1. `GET /api/v1/agent-teams/presets`
+2. choose preset by name or id
+3. `POST /api/v1/agent-teams/presets/{preset_id}/plan-launch`
+4. inspect per-slot plan
+5. `POST /api/v1/agent-teams/presets/{preset_id}/launch` with `confirm_plan_hash`
+6. poll Agent Mail team state or use returned tmux targets for follow-up
+
 ## Launch Planning Logic
 
 For each enabled slot:
@@ -666,6 +729,7 @@ Reuse provider ids and spawn option names from existing Agent Bridge types where
 - Add plan computation using Agent Bridge discovery and Agent Mail install status.
 - Match provider + repo conservatively.
 - Return per-slot planned action/reason.
+- Return a stable `plan_hash` suitable for external callers to confirm later launch.
 - Test reuse, spawn, disabled, provider unavailable, Agent Mail not configured.
 
 ### Task 5: Launch Execution
@@ -673,6 +737,8 @@ Reuse provider ids and spawn option names from existing Agent Bridge types where
 - Extend Agent Bridge spawn helper to accept extra env.
 - Implement launch endpoint.
 - Recompute plan before launch.
+- Accept confirmed plan hashes without relying on frontend state.
+- Support an explicit single-call local automation path for trusted local callers.
 - Spawn missing slots.
 - Return partial results.
 - Test successful spawn, reuse, and partial failure.
@@ -745,6 +811,9 @@ Key cases:
 - Launch plan blocks unavailable provider.
 - Launch execution spawns with team env.
 - Launch execution returns partial failure when one slot fails.
+- Launch execution accepts a valid `confirm_plan_hash`.
+- Launch execution returns 409 with an updated plan when the confirmed plan hash is stale.
+- Launch endpoints return enough structured JSON for an external caller to continue orchestration without UI state.
 - MCP shim forwards team env on registration.
 - Hook shim forwards team env on registration.
 - Agent Mail context includes slot role/charter.
