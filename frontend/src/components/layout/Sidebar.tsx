@@ -32,6 +32,7 @@ import {
   ClipboardList,
   MonitorPlay,
   Mail,
+  UsersRound,
   PanelLeftClose,
   PanelLeftOpen,
   type LucideIcon,
@@ -62,6 +63,7 @@ const commonNavigation: NavGroup[] = [
     name: 'Operations',
     items: [
       { name: 'Agent Mail', href: '/agent-mail', icon: Mail },
+      { name: 'Agent Teams', href: '/agent-teams', icon: UsersRound },
       { name: 'Plans', href: '/plans', icon: ClipboardList },
       { name: 'Backup', href: '/backup', icon: Archive, capability: 'backup' },
     ],

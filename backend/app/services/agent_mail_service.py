@@ -9,7 +9,14 @@ from typing import List, Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import MailAgentSession, MailMessage, MailReceipt, MailTeamMember
+from app.models.database import (
+    AgentTeamPreset,
+    AgentTeamSlot,
+    MailAgentSession,
+    MailMessage,
+    MailReceipt,
+    MailTeamMember,
+)
 from app.models.schemas import (
     MAIL_MESSAGE_KINDS,
     MAIL_REQUEST_KINDS,
@@ -65,6 +72,8 @@ class AgentMailService:
         self, db: AsyncSession, request: MailAgentRegisterRequest
     ) -> tuple[MailTeamMember, MailAgentSession]:
         member = await self._get_or_create_member(db, request.cwd)
+        has_team_context = request.team_preset_id is not None or request.team_slot_id is not None
+        team_preset_id, team_slot_id = await self._resolve_team_context(db, request)
         result = await db.execute(
             select(MailAgentSession).where(MailAgentSession.session_key == request.session_key)
         )
@@ -80,12 +89,39 @@ class AgentMailService:
         session.provider = request.provider
         session.cwd = request.cwd
         session.pid = request.pid
+        if has_team_context:
+            session.team_preset_id = team_preset_id
+            session.team_slot_id = team_slot_id
         session.mailbox_status = "connected"
         session.last_seen_at = datetime.utcnow()
         await db.commit()
         await db.refresh(member)
         await db.refresh(session)
         return member, session
+
+    async def _resolve_team_context(
+        self,
+        db: AsyncSession,
+        request: MailAgentRegisterRequest,
+    ) -> tuple[int | None, int | None]:
+        if request.team_slot_id is not None:
+            slot = await db.get(AgentTeamSlot, request.team_slot_id)
+            if slot is not None and (
+                request.team_preset_id is None or request.team_preset_id == slot.preset_id
+            ):
+                if request.provider != slot.provider:
+                    return None, None
+                try:
+                    if derive_repo_identity(request.cwd)["repo_id"] == slot.repo_id:
+                        return slot.preset_id, slot.id
+                except Exception:
+                    return None, None
+            return None, None
+        if request.team_preset_id is not None:
+            preset = await db.get(AgentTeamPreset, request.team_preset_id)
+            if preset is not None:
+                return preset.id, None
+        return None, None
 
     async def heartbeat_session(
         self, db: AsyncSession, session_key: str, activity: Optional[str] = None
@@ -273,7 +309,13 @@ class AgentMailService:
             return "offline"
         return session.mailbox_status
 
-    def _session_response(self, session: MailAgentSession, now: datetime) -> MailSessionResponse:
+    def _session_response(
+        self,
+        session: MailAgentSession,
+        now: datetime,
+        team_context: dict[int, dict[str, str | int | None]] | None = None,
+    ) -> MailSessionResponse:
+        context = (team_context or {}).get(session.id, {})
         return MailSessionResponse(
             id=session.id,
             provider=session.provider,
@@ -281,15 +323,57 @@ class AgentMailService:
             session_key=session.session_key,
             cwd=session.cwd,
             tmux_target=session.tmux_target,
+            team_preset_id=session.team_preset_id,
+            team_preset_name=context.get("team_preset_name"),
+            team_slot_id=session.team_slot_id,
+            team_slot_name=context.get("team_slot_name"),
             mailbox_status=self._effective_status(session, now),
             activity=session.activity,
             last_seen_at=session.last_seen_at,
         )
 
+    async def _team_context_by_session(
+        self,
+        db: AsyncSession,
+        sessions: list[MailAgentSession],
+    ) -> dict[int, dict[str, str | int | None]]:
+        slot_ids = {session.team_slot_id for session in sessions if session.team_slot_id is not None}
+        preset_ids = {
+            session.team_preset_id for session in sessions if session.team_preset_id is not None
+        }
+        slots: dict[int, AgentTeamSlot] = {}
+        if slot_ids:
+            slots = {
+                slot.id: slot
+                for slot in (
+                    await db.execute(select(AgentTeamSlot).where(AgentTeamSlot.id.in_(slot_ids)))
+                ).scalars().all()
+            }
+            preset_ids.update(slot.preset_id for slot in slots.values())
+        presets: dict[int, AgentTeamPreset] = {}
+        if preset_ids:
+            presets = {
+                preset.id: preset
+                for preset in (
+                    await db.execute(select(AgentTeamPreset).where(AgentTeamPreset.id.in_(preset_ids)))
+                ).scalars().all()
+            }
+        context: dict[int, dict[str, str | int | None]] = {}
+        for session in sessions:
+            slot = slots.get(session.team_slot_id) if session.team_slot_id is not None else None
+            preset_id = slot.preset_id if slot is not None else session.team_preset_id
+            preset = presets.get(preset_id) if preset_id is not None else None
+            context[session.id] = {
+                "team_preset_name": preset.name if preset is not None else None,
+                "team_slot_name": slot.display_name if slot is not None else None,
+            }
+        return context
+
     async def list_team(self, db: AsyncSession) -> List[MailMemberResponse]:
         now = datetime.utcnow()
         members = (await db.execute(select(MailTeamMember))).scalars().all()
         sessions = (await db.execute(select(MailAgentSession))).scalars().all()
+        team_context = await self._team_context_by_session(db, sessions)
         by_member: dict[int, list[MailAgentSession]] = {}
         for session in sessions:
             by_member.setdefault(session.member_id, []).append(session)
@@ -297,7 +381,8 @@ class AgentMailService:
         responses: List[MailMemberResponse] = []
         for member in members:
             session_responses = [
-                self._session_response(session, now) for session in by_member.get(member.id, [])
+                self._session_response(session, now, team_context)
+                for session in by_member.get(member.id, [])
             ]
             statuses = {session.mailbox_status for session in session_responses}
             if "connected" in statuses:
@@ -715,19 +800,66 @@ class AgentMailService:
         )
         return [await self._message_response(db, root, for_member_id=None) for root in roots]
 
-    async def build_session_start_context(self, db: AsyncSession, member_id: int) -> str:
+    async def _session_team_context(
+        self,
+        db: AsyncSession,
+        member_id: int,
+        session_key: str | None = None,
+    ) -> tuple[AgentTeamPreset | None, AgentTeamSlot | None]:
+        session: MailAgentSession | None = None
+        if session_key is not None:
+            session = (
+                await db.execute(
+                    select(MailAgentSession).where(MailAgentSession.session_key == session_key)
+                )
+            ).scalar_one_or_none()
+        if session is None:
+            session = (
+                await db.execute(
+                    select(MailAgentSession)
+                    .where(
+                        MailAgentSession.member_id == member_id,
+                        MailAgentSession.team_preset_id.is_not(None),
+                    )
+                    .order_by(MailAgentSession.last_seen_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if session is None:
+            return None, None
+
+        slot = await db.get(AgentTeamSlot, session.team_slot_id) if session.team_slot_id else None
+        preset_id = slot.preset_id if slot is not None else session.team_preset_id
+        preset = await db.get(AgentTeamPreset, preset_id) if preset_id else None
+        return preset, slot
+
+    async def build_session_start_context(
+        self,
+        db: AsyncSession,
+        member_id: int,
+        session_key: str | None = None,
+    ) -> str:
         member = await db.get(MailTeamMember, member_id)
         if member is None:
             return ""
+        preset, slot = await self._session_team_context(db, member_id, session_key)
         team = await self.list_team(db)
         me = next((candidate for candidate in team if candidate.id == member_id), None)
         others = [candidate for candidate in team if candidate.id != member_id]
 
         lines = ["[Claude Deck Agent Mail]"]
-        role = f" ({member.role})" if member.role else ""
+        effective_role = slot.role if slot and slot.role else member.role
+        role = f" ({effective_role})" if effective_role else ""
         lines.append(f'You are "{member.display_name}"{role} - repo: {member.repo_name}.')
+        if preset is not None:
+            if slot is not None:
+                lines.append(f'Agent Team: "{preset.name}" / slot "{slot.display_name}".')
+            else:
+                lines.append(f'Agent Team: "{preset.name}".')
         if member.charter:
             lines.append(f"Charter: {member.charter}")
+        if slot is not None and slot.charter:
+            lines.append(f"Team slot charter: {slot.charter}")
         if others:
             roster = " | ".join(
                 f"{candidate.display_name} ({candidate.role or candidate.repo_name}, {candidate.status})"

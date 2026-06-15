@@ -35,6 +35,16 @@ def _write_hook_output(body: dict[str, Any]) -> None:
     print(json.dumps(body, separators=(",", ":")))
 
 
+def _env_int(name: str) -> int | None:
+    value = os.environ.get(name)
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--deck-url", default=os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000"))
@@ -47,6 +57,12 @@ def main() -> int:
     payload["provider"] = args.provider
     payload["session_id"] = _session_id(payload)
     payload["pid"] = os.getppid()
+    team_preset_id = _env_int("CLAUDE_DECK_TEAM_PRESET_ID")
+    team_slot_id = _env_int("CLAUDE_DECK_TEAM_SLOT_ID")
+    if team_preset_id is not None:
+        payload["team_preset_id"] = team_preset_id
+    if team_slot_id is not None:
+        payload["team_slot_id"] = team_slot_id
 
     try:
         response = httpx.post(

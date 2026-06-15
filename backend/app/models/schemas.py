@@ -1853,6 +1853,10 @@ class MailSessionResponse(BaseModel):
     session_key: str
     cwd: Optional[str] = None
     tmux_target: Optional[str] = None
+    team_preset_id: Optional[int] = None
+    team_preset_name: Optional[str] = None
+    team_slot_id: Optional[int] = None
+    team_slot_name: Optional[str] = None
     mailbox_status: str
     activity: Optional[str] = None
     last_seen_at: Optional[datetime] = None
@@ -1935,6 +1939,8 @@ class MailAgentRegisterRequest(BaseModel):
     cwd: str
     session_key: str
     pid: Optional[int] = None
+    team_preset_id: Optional[int] = None
+    team_slot_id: Optional[int] = None
 
 
 class MailAgentRegisterResponse(BaseModel):
@@ -1962,3 +1968,171 @@ class AgentMailInstallStatus(BaseModel):
 class AgentMailSnippets(BaseModel):
     codex_config_toml: str
     codex_agents_md: str
+
+
+# --- Agent Team Presets ---
+
+AgentTeamLaunchAction = Literal["reuse", "spawn", "skip", "blocked"]
+AgentTeamLaunchStatus = Literal[
+    "ready",
+    "blocked",
+    "skipped",
+    "skipped_disabled",
+    "reused",
+    "spawned",
+    "pending_registration",
+    "failed",
+    "blocked_provider_unavailable",
+    "blocked_agent_mail_not_configured",
+]
+
+
+class AgentTeamSlotCreate(BaseModel):
+    """A desired agent slot in a saved team roster."""
+
+    display_name: str
+    provider: str = "codex-cli"
+    repo_path: str
+    role: Optional[str] = None
+    charter: Optional[str] = None
+    bootstrap_prompt: Optional[str] = None
+    launch_mode: str = "plain"
+    launch_options: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    position: Optional[int] = None
+
+
+class AgentTeamSlotUpdate(BaseModel):
+    display_name: Optional[str] = None
+    provider: Optional[str] = None
+    repo_path: Optional[str] = None
+    role: Optional[str] = None
+    charter: Optional[str] = None
+    bootstrap_prompt: Optional[str] = None
+    launch_mode: Optional[str] = None
+    launch_options: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+    position: Optional[int] = None
+
+
+class AgentTeamSlotResponse(BaseModel):
+    id: int
+    preset_id: int
+    position: int
+    display_name: str
+    provider: str
+    repo_id: str
+    repo_path: str
+    repo_name: str
+    role: Optional[str] = None
+    charter: Optional[str] = None
+    bootstrap_prompt: Optional[str] = None
+    launch_mode: str
+    launch_options: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentTeamPresetCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    created_by: Optional[str] = None
+    slots: List[AgentTeamSlotCreate] = Field(default_factory=list)
+
+
+class AgentTeamPresetUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class AgentTeamPresetResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    slots: List[AgentTeamSlotResponse] = Field(default_factory=list)
+
+
+class AgentTeamPresetListResponse(BaseModel):
+    presets: List[AgentTeamPresetResponse] = Field(default_factory=list)
+
+
+class AgentTeamCreateFromMailRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    member_ids: Optional[List[int]] = None
+    include_offline: bool = True
+
+
+class AgentTeamCreateFromBridgeRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+class AgentTeamSlotReorderRequest(BaseModel):
+    slot_ids: List[int]
+
+
+class AgentTeamLaunchPlanItem(BaseModel):
+    slot_id: int
+    slot_name: str
+    provider: str
+    repo_id: str
+    repo_path: str
+    repo_name: str
+    action: AgentTeamLaunchAction
+    status: str
+    reasons: List[str] = Field(default_factory=list)
+    matching_session: Optional[Dict[str, Any]] = None
+    block_code: Optional[str] = None
+
+
+class AgentTeamLaunchPlan(BaseModel):
+    preset_id: int
+    preset_name: str
+    plan_hash: str
+    generated_at: datetime
+    can_launch: bool
+    items: List[AgentTeamLaunchPlanItem] = Field(default_factory=list)
+    reuse_count: int = 0
+    spawn_count: int = 0
+    skipped_count: int = 0
+    blocked_count: int = 0
+
+
+class AgentTeamLaunchRequest(BaseModel):
+    requested_by: Optional[str] = None
+    slot_ids: Optional[List[int]] = None
+    reuse_existing: bool = True
+    include_disabled: bool = False
+    confirm_plan_hash: Optional[str] = None
+    skip_plan_confirmation: bool = False
+
+
+class AgentTeamLaunchResultItem(BaseModel):
+    slot_id: int
+    slot_name: str
+    action: AgentTeamLaunchAction
+    status: AgentTeamLaunchStatus
+    provider: str
+    repo_path: str
+    session_name: Optional[str] = None
+    tmux_target: Optional[str] = None
+    agent_mail_member_id: Optional[int] = None
+    message: Optional[str] = None
+    block_code: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AgentTeamLaunchResult(BaseModel):
+    launch_id: int
+    preset_id: int
+    preset_name: str
+    plan_hash: str
+    status: str
+    launched_at: datetime
+    completed_at: datetime
+    items: List[AgentTeamLaunchResultItem] = Field(default_factory=list)

@@ -19,6 +19,7 @@ from .context import router as context_router
 from .plans import router as plans_router
 from .presence import router as presence_router
 from .agent_mail import router as agent_mail_router
+from .agent_teams import router as agent_teams_router
 from .cc_bridge.router import router as cc_bridge_router
 from .agent_bridge.router import router as agent_bridge_router
 from .providers import router as providers_router
@@ -59,6 +60,7 @@ router.include_router(context_router, tags=["Context"])
 router.include_router(plans_router, tags=["Plans"])
 router.include_router(presence_router, prefix="/presence", tags=["Presence"])
 router.include_router(agent_mail_router, prefix="/agent-mail", tags=["Agent Mail"])
+router.include_router(agent_teams_router, prefix="/agent-teams", tags=["Agent Teams"])
 router.include_router(cc_bridge_router, prefix="/cc-bridge", tags=["CC Bridge"])
 router.include_router(agent_bridge_router, prefix="/agent-bridge", tags=["Agent Bridge"])
 router.include_router(providers_router, tags=["Providers"])

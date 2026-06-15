@@ -12,6 +12,10 @@ export interface MailSessionResponse {
   session_key: string
   cwd?: string | null
   tmux_target?: string | null
+  team_preset_id?: number | null
+  team_preset_name?: string | null
+  team_slot_id?: number | null
+  team_slot_name?: string | null
   mailbox_status: MailMemberStatus | string
   activity?: string | null
   last_seen_at?: string | null
