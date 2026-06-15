@@ -20,9 +20,15 @@ import {
   formatDateTime,
   sessionSourceLabel,
   sessionSourceTitle,
+  sessionStatusLabel,
+  sessionStatusTitle,
   statusBadgeClass,
   statusLabel,
   statusTitle,
+  wakeMethodLabel,
+  wakeStateBadgeClass,
+  wakeStateLabel,
+  wakeStateTitle,
 } from './utils'
 
 export type TeamStatusFilter = 'all' | MailMemberStatus
@@ -148,6 +154,8 @@ export function TeamTab({
         <div className="grid gap-4 xl:grid-cols-2">
           {filtered.map((member) => {
             const visibleSessions = displaySessions(member.sessions)
+            const wakeState = member.wake_state ?? (member.status === 'offline' ? 'offline' : 'delivered_waiting')
+            const wakeMethods = member.wake_methods ?? []
             const deliveryWarnings = [
               member.unseen_pending_count > 0
                 ? `${member.unseen_pending_count} pending request(s) have not been read by this agent.`
@@ -155,8 +163,12 @@ export function TeamTab({
               member.stale_pending_count > 0
                 ? `${member.stale_pending_count} pending request(s) are stale.`
                 : null,
+              !member.can_nudge && (member.unread_count > 0 || member.pending_count > 0)
+                ? 'No wake path is available; the visible agent must check its inbox.'
+                : null,
             ].filter(Boolean)
             const showQueueInboxCheck = member.can_nudge && (member.unread_count > 0 || member.pending_count > 0)
+            const wakeMethodText = wakeMethods.map(wakeMethodLabel).join(', ')
 
             return (
               <Card key={member.id} className="rounded-lg">
@@ -174,6 +186,16 @@ export function TeamTab({
                       >
                         {statusLabel(member.status)}
                       </Badge>
+                      {wakeState !== 'offline' && (
+                        <Badge
+                          variant="outline"
+                          className={wakeStateBadgeClass(wakeState)}
+                          title={wakeStateTitle(wakeState)}
+                        >
+                          {wakeStateLabel(wakeState)}
+                          {wakeMethodText ? `: ${wakeMethodText}` : ''}
+                        </Badge>
+                      )}
                       {member.pending_count > 0 && (
                         <Badge variant="outline" className="border-amber-300 text-amber-700">
                           {member.pending_count} pending
@@ -255,9 +277,9 @@ export function TeamTab({
                             <Badge
                               variant="outline"
                               className={statusBadgeClass(session.mailbox_status)}
-                              title={statusTitle(session.mailbox_status)}
+                              title={sessionStatusTitle(session.source, session.mailbox_status)}
                             >
-                              {statusLabel(session.mailbox_status)}
+                              {sessionStatusLabel(session.source, session.mailbox_status)}
                             </Badge>
                           </div>
                         ))}

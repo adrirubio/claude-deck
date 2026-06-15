@@ -44,6 +44,31 @@ export function statusTitle(status: MailMemberStatus | string): string {
   return status
 }
 
+export function wakeStateLabel(state: string): string {
+  if (state === 'wakeable') return 'Wakeable'
+  if (state === 'delivered_waiting') return 'Not wakeable'
+  if (state === 'offline') return 'Offline'
+  return state
+}
+
+export function wakeStateTitle(state: string): string {
+  if (state === 'wakeable') return 'Claude Deck has a wake path for this member.'
+  if (state === 'delivered_waiting') return 'Messages are delivered, but Claude Deck cannot wake this visible agent session.'
+  if (state === 'offline') return 'No live session is available for this member.'
+  return state
+}
+
+export function wakeStateBadgeClass(state: string): string {
+  if (state === 'wakeable') return 'border-emerald-300 text-emerald-700 dark:text-emerald-300'
+  if (state === 'delivered_waiting') return 'border-amber-300 text-amber-700 dark:text-amber-300'
+  return 'border-muted-foreground/30 text-muted-foreground'
+}
+
+export function wakeMethodLabel(method: string): string {
+  if (method === 'tmux') return 'tmux'
+  return method
+}
+
 export function sessionSourceLabel(source: string): string {
   if (source === 'observed') return 'Bridge'
   if (source === 'mcp') return 'MCP'
@@ -54,8 +79,20 @@ export function sessionSourceLabel(source: string): string {
 export function sessionSourceTitle(source: string): string {
   if (source === 'observed') return 'Discovered by Agent Bridge from a tmux pane.'
   if (source === 'mcp') return 'Registered by an Agent Mail MCP tool call.'
-  if (source === 'hook') return 'Registered by Claude Code Agent Mail hooks.'
+  if (source === 'hook') return 'Registered by Agent Mail lifecycle hooks.'
   return source
+}
+
+export function sessionStatusLabel(source: string, status: MailMemberStatus | string): string {
+  if (source === 'hook' && status === 'connected') return 'Recent event'
+  if (source === 'hook' && status === 'offline') return 'No recent event'
+  return statusLabel(status)
+}
+
+export function sessionStatusTitle(source: string, status: MailMemberStatus | string): string {
+  if (source === 'hook' && status === 'connected') return 'A lifecycle hook checked in recently.'
+  if (source === 'hook' && status === 'offline') return 'No recent lifecycle hook event has checked in. This does not mean the agent is disconnected.'
+  return statusTitle(status)
 }
 
 export function requestBadgeClass(status?: MailRequestStatus | null): string {

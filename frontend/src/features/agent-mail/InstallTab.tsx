@@ -115,15 +115,18 @@ export function InstallTab({
         run: onApplyCodex,
       }
     }
-    return {
-      title: 'Remove Agent Mail from Codex',
-      description: 'A backup is attempted before Claude Deck removes the managed MCP server and hooks.',
-      mutations: [
-        'Codex CLI: run `codex mcp remove claude-deck-mail`',
-        `${status.codex_hooks_path || '~/.codex/hooks.json'}: remove Agent Mail hook commands`,
-      ],
-      run: onUninstallCodex,
+    if (confirming === 'codex-uninstall') {
+      return {
+        title: 'Remove Agent Mail from Codex',
+        description: 'A backup is attempted before Claude Deck removes the managed MCP server and hooks.',
+        mutations: [
+          'Codex CLI: run `codex mcp remove claude-deck-mail`',
+          `${status.codex_hooks_path || '~/.codex/hooks.json'}: remove Agent Mail hook commands`,
+        ],
+        run: onUninstallCodex,
+      }
     }
+    return null
   })()
 
   const runConfirmed = async () => {
@@ -264,26 +267,28 @@ export function InstallTab({
               <PathLine label="Python" value={status.python_path} />
               <PathLine label="Deck URL" value={status.deck_url} />
             </div>
-            <Badge variant={status.codex_cli_available ? 'secondary' : 'destructive'}>
-              Codex CLI {status.codex_cli_available ? 'available' : 'missing'}
-            </Badge>
-            <Badge
-              variant="outline"
-              className={status.codex_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
-            >
-              MCP {status.codex_mcp_installed ? 'installed' : 'not installed'}
-            </Badge>
-            <Badge
-              variant="outline"
-              className={codexHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
-            >
-              hooks {codexHooksInstalled ? 'installed' : `${status.codex_hooks.length}/2 installed`}
-            </Badge>
-            {status.codex_hooks_missing.length > 0 && (
-              <Badge variant="outline" className="border-amber-300 text-amber-700">
-                missing {status.codex_hooks_missing.length}
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={status.codex_cli_available ? 'secondary' : 'destructive'}>
+                Codex CLI {status.codex_cli_available ? 'available' : 'missing'}
               </Badge>
-            )}
+              <Badge
+                variant="outline"
+                className={status.codex_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                MCP {status.codex_mcp_installed ? 'installed' : 'not installed'}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={codexHooksInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                hooks {codexHooksInstalled ? 'installed' : `${status.codex_hooks.length}/2 installed`}
+              </Badge>
+              {status.codex_hooks_missing.length > 0 && (
+                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                  missing {status.codex_hooks_missing.length}
+                </Badge>
+              )}
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"

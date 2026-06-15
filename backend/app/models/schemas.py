@@ -1874,6 +1874,8 @@ class MailMemberResponse(BaseModel):
     unseen_pending_count: int = 0
     stale_pending_count: int = 0
     can_nudge: bool = False
+    wake_methods: List[str] = Field(default_factory=list)
+    wake_state: str = "delivered_waiting"
     last_inbox_checked_at: Optional[datetime] = None
     sessions: List[MailSessionResponse] = Field(default_factory=list)
 

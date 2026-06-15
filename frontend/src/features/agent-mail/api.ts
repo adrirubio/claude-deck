@@ -61,8 +61,10 @@ export function markAgentMailRead(messageId: number, memberId: number): Promise<
   })
 }
 
-export function queueAgentMailInboxCheck(memberId: number): Promise<{ ok: boolean; target: string; prompt: string }> {
-  return apiClient<{ ok: boolean; target: string; prompt: string }>(
+export function queueAgentMailInboxCheck(
+  memberId: number
+): Promise<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }> {
+  return apiClient<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }>(
     `agent-mail/members/${memberId}/queue-inbox-check`,
     { method: 'POST' }
   )

@@ -21,9 +21,13 @@ Codex CLI gets the MCP server through `codex mcp add`. Claude Deck also installs
 
 ## Delivery Nudges
 
-When a message is delivered to a Codex member that Agent Bridge can observe in tmux, Claude Deck automatically sends that session a short inbox-check prompt, waits briefly for the Codex composer to ingest the text, and submits it with tmux's named `Enter` key. The automatic nudge is best-effort and throttled per recipient, so rapid message bursts do not keep injecting prompts into the same terminal. The **Queue inbox check** button remains available for a manual retry when the UI shows unread or pending mail.
+When a message is delivered to a reachable Codex member, Claude Deck tries to wake it with an inbox-check prompt. The automatic nudge is best-effort and throttled per recipient, so rapid message bursts do not keep injecting prompts into the same session. The **Queue inbox check** button remains available for a manual retry when the UI shows unread or pending mail.
 
-This does not replace MCP polling. Agents should still call `deck_check_inbox` before major work and after finishing a task, because non-tmux sessions and unsupported providers cannot be nudged through the terminal. Codex may require its native queued-message path when a turn is already running; Claude Deck's later app-server integration should replace terminal injection for that case.
+Claude Deck uses one visible Codex wake path:
+
+- tmux-observed sessions can be nudged through Agent Bridge by sending text and `Enter` to the pane.
+
+Non-tmux Codex sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a hook boundary. Agents should still call `deck_check_inbox` before major work and after finishing a task.
 
 ## External Local Callers
 
@@ -70,7 +74,7 @@ Without this setup, the page can still show install status, but agents cannot ex
 Open **Agent Mail** in Claude Deck and use the **Install** tab.
 
 - Claude Code install adds user-scope command hooks and a user-scope MCP server.
-- Codex install runs the Codex CLI MCP installer.
+- Codex install runs the Codex CLI MCP installer and writes Agent Mail lifecycle hooks.
 - Install and uninstall actions require confirmation and attempt a backup before mutating config.
 
 The Install tab also shows manual Codex snippets for config and `AGENTS.md`.

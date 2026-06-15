@@ -411,6 +411,63 @@ async def test_dead_mcp_process_reports_offline_even_before_ttl(db, svc, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_connected_codex_mcp_session_without_tmux_is_delivered_waiting(db, svc, tmp_path):
+    cwd = tmp_path / "r"
+    cwd.mkdir()
+    await svc.register_session(
+        db,
+        _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
+    )
+
+    members = await svc.list_team(db)
+
+    assert members[0].status == "connected"
+    assert members[0].can_nudge is False
+    assert members[0].wake_methods == []
+    assert members[0].wake_state == "delivered_waiting"
+
+
+@pytest.mark.asyncio
+async def test_queue_inbox_check_does_not_use_app_server_for_connected_codex_mcp_session(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "r"
+    cwd.mkdir()
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
+    member, _ = await svc.register_session(
+        db,
+        _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
+    )
+
+    with pytest.raises(ValueError, match="No Agent Mail wake path"):
+        await svc.queue_inbox_check(db, member.id)
+
+    inbox = await svc.get_inbox(db, member.id, unread_only=True)
+    assert inbox.unread_count == 0
+
+
+@pytest.mark.asyncio
+async def test_send_message_to_non_tmux_codex_stays_unread_until_agent_polls(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "r"
+    cwd.mkdir()
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
+    recipient, _ = await svc.register_session(
+        db,
+        _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
+    )
+
+    await svc.send_message(
+        db,
+        MailMessageCreate(
+            recipient_member_id=recipient.id,
+            body_markdown="please check this",
+        ),
+    )
+
+    inbox = await svc.get_inbox(db, recipient.id, unread_only=True)
+    assert inbox.unread_count == 1
+    assert inbox.messages[0].body_markdown == "please check this"
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_refreshes_and_sets_activity(db, svc, tmp_path):
     cwd = tmp_path / "r"
     cwd.mkdir()

@@ -1,4 +1,4 @@
-import { BookOpen, CheckCircle2, Inbox, Plug, ShieldAlert } from 'lucide-react'
+import { BookOpen, CheckCircle2, Inbox, Plug, ShieldAlert, Terminal } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -57,6 +57,14 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
               <li>Have each agent call <code>deck_whoami</code> once from its repo.</li>
               <li>Ask agents to check <code>deck_check_inbox</code> before and after major work.</li>
             </ol>
+          </HelpSection>
+
+          <HelpSection icon={Terminal} title="Non-tmux Codex delivery">
+            <p>
+              Codex sessions outside tmux can receive mail through MCP, but Claude Deck cannot
+              wake their visible terminal session yet. Those messages stay unread until the agent
+              checks its inbox or reaches a hook boundary.
+            </p>
           </HelpSection>
 
           <HelpSection icon={Inbox} title="What agents can do">

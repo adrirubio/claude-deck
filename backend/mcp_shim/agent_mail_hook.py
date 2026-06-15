@@ -29,6 +29,12 @@ def _session_id(payload: dict[str, Any]) -> str:
     return str(os.getppid())
 
 
+def _write_hook_output(body: dict[str, Any]) -> None:
+    if not body:
+        return
+    print(json.dumps(body, separators=(",", ":")))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--deck-url", default=os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000"))
@@ -53,12 +59,7 @@ def main() -> int:
     except Exception:
         return 0
 
-    context = (
-        body.get("hookSpecificOutput", {})
-        .get("additionalContext")
-    )
-    if context:
-        print(context)
+    _write_hook_output(body)
     return 0
 
 

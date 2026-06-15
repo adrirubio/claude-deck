@@ -2,6 +2,8 @@ export type MailMessageKind = 'message' | 'broadcast' | 'context_request' | 'han
 export type MailRequestStatus = 'pending' | 'answered' | 'acknowledged'
 export type MailMemberStatus = 'connected' | 'observed' | 'offline'
 export type MailSessionSource = 'hook' | 'mcp' | 'observed' | string
+export type MailWakeMethod = 'tmux' | string
+export type MailWakeState = 'wakeable' | 'delivered_waiting' | 'offline' | string
 
 export interface MailSessionResponse {
   id: number
@@ -29,6 +31,8 @@ export interface MailMemberResponse {
   unseen_pending_count: number
   stale_pending_count: number
   can_nudge: boolean
+  wake_methods?: MailWakeMethod[]
+  wake_state?: MailWakeState
   last_inbox_checked_at?: string | null
   sessions: MailSessionResponse[]
 }

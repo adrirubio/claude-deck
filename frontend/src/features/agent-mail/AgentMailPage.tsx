@@ -173,9 +173,10 @@ export function AgentMailPage() {
   const handleQueueInboxCheck = async (member: MailMemberResponse) => {
     setNudgingMemberId(member.id)
     try {
-      await queueAgentMailInboxCheck(member.id)
+      const result = await queueAgentMailInboxCheck(member.id)
       await loadOperationalData(false)
-      toast.success(`Queued inbox check for ${member.display_name}`)
+      const method = result.method ? `via ${result.method}` : 'via tmux'
+      toast.success(`Queued inbox check for ${member.display_name} ${method}`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to queue inbox check')
     } finally {
@@ -188,6 +189,7 @@ export function AgentMailPage() {
       const status = await action()
       setInstallStatus(status)
       await loadInstallData()
+      await loadOperationalData(false)
       toast.success(label)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Install action failed')
