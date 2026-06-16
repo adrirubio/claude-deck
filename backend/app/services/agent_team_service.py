@@ -6,7 +6,6 @@ import json
 import os
 from dataclasses import fields
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, or_, select, update
@@ -53,7 +52,6 @@ class PlanConflictError(ValueError):
 
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
 _PROVIDER_IDS = {provider.id for provider in get_providers()}
-_ALLOWED_REPO_ROOTS_ENV = "CLAUDE_DECK_ALLOWED_REPO_ROOTS"
 
 
 class AgentTeamService:
@@ -1015,27 +1013,20 @@ class AgentTeamService:
         expanded = os.path.expanduser(repo_path)
         if not os.path.isabs(expanded):
             raise ValueError("Repo path must be absolute")
-        resolved = os.path.realpath(expanded)
 
-        allowed_roots = self._allowed_repo_roots()
-        allowed = False
-        for root in allowed_roots:
-            if root == os.path.sep or resolved == root or resolved.startswith(root + os.path.sep):
-                allowed = True
-                break
-        if not allowed:
-            roots = ", ".join(allowed_roots)
-            raise ValueError(f"Repo path must be under an allowed root: {roots}")
+        home_root = os.path.realpath(os.path.expanduser("~"))
+        normalized = os.path.normpath(expanded)
+        if not (normalized == home_root or normalized.startswith(home_root + os.path.sep)):
+            raise ValueError(f"Repo path must be under the current user's home directory: {home_root}")
+
+        relative_path = os.path.relpath(normalized, home_root)
+        resolved = os.path.realpath(os.path.join(home_root, relative_path))
+        if not (resolved == home_root or resolved.startswith(home_root + os.path.sep)):
+            raise ValueError(f"Repo path must be under the current user's home directory: {home_root}")
 
         if not os.path.isdir(resolved):
             raise ValueError(f"Repo path does not exist or is not a directory: {repo_path}")
         return resolved, derive_repo_identity(resolved)
-
-    def _allowed_repo_roots(self) -> list[str]:
-        roots = [str(Path.home())]
-        configured_roots = os.environ.get(_ALLOWED_REPO_ROOTS_ENV, "")
-        roots.extend(root for root in configured_roots.split(os.pathsep) if root.strip())
-        return [os.path.realpath(os.path.expanduser(root)) for root in roots]
 
     def _validate_provider(self, provider: str) -> str:
         provider = provider.strip()

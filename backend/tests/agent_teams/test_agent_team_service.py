@@ -131,7 +131,7 @@ async def test_blank_repo_path_is_rejected(db):
 
 @pytest.mark.asyncio
 async def test_repo_path_outside_allowed_roots_is_rejected(db):
-    with pytest.raises(ValueError, match="Repo path must be under an allowed root"):
+    with pytest.raises(ValueError, match="Repo path must be under the current user's home directory"):
         await agent_team_service.create_preset(
             db,
             AgentTeamPresetCreate(
