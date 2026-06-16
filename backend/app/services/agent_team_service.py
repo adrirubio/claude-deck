@@ -1018,7 +1018,12 @@ class AgentTeamService:
         resolved = os.path.realpath(expanded)
 
         allowed_roots = self._allowed_repo_roots()
-        if not any(self._path_is_under_root(resolved, root) for root in allowed_roots):
+        allowed = False
+        for root in allowed_roots:
+            if root == os.path.sep or resolved == root or resolved.startswith(root + os.path.sep):
+                allowed = True
+                break
+        if not allowed:
             roots = ", ".join(allowed_roots)
             raise ValueError(f"Repo path must be under an allowed root: {roots}")
 
@@ -1031,11 +1036,6 @@ class AgentTeamService:
         configured_roots = os.environ.get(_ALLOWED_REPO_ROOTS_ENV, "")
         roots.extend(root for root in configured_roots.split(os.pathsep) if root.strip())
         return [os.path.realpath(os.path.expanduser(root)) for root in roots]
-
-    def _path_is_under_root(self, path: str, root: str) -> bool:
-        if root == os.path.sep:
-            return True
-        return path == root or path.startswith(root + os.path.sep)
 
     def _validate_provider(self, provider: str) -> str:
         provider = provider.strip()
