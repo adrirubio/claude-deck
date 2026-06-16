@@ -298,6 +298,21 @@ class MailAgentSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class MailExternalActor(Base):
+    """Durable identity for a local external Agent Mail orchestrator."""
+
+    __tablename__ = "mail_external_actors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_key: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, default="external_tool", nullable=False)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class MailMessage(Base):
     """Agent Mail message with request lifecycle state where applicable."""
 
@@ -310,6 +325,9 @@ class MailMessage(Base):
     kind: Mapped[str] = mapped_column(String, default="message", nullable=False, index=True)
     sender_member_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_team_members.id", ondelete="SET NULL"), nullable=True
+    )
+    sender_actor_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
     )
     recipient_member_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=True
