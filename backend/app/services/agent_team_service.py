@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +53,7 @@ class PlanConflictError(ValueError):
 
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
 _PROVIDER_IDS = {provider.id for provider in get_providers()}
+_ALLOWED_REPO_ROOTS_ENV = "CLAUDE_DECK_ALLOWED_REPO_ROOTS"
 
 
 class AgentTeamService:
@@ -1007,11 +1009,33 @@ class AgentTeamService:
         repo_path = repo_path.strip()
         if not repo_path:
             raise ValueError("Repo path is required")
-        path = Path(repo_path).expanduser().resolve()
-        if not path.is_dir():
+        if "\x00" in repo_path:
+            raise ValueError("Repo path contains an invalid character")
+
+        expanded = os.path.expanduser(repo_path)
+        if not os.path.isabs(expanded):
+            raise ValueError("Repo path must be absolute")
+        resolved = os.path.realpath(expanded)
+
+        allowed_roots = self._allowed_repo_roots()
+        if not any(self._path_is_under_root(resolved, root) for root in allowed_roots):
+            roots = ", ".join(allowed_roots)
+            raise ValueError(f"Repo path must be under an allowed root: {roots}")
+
+        if not os.path.isdir(resolved):
             raise ValueError(f"Repo path does not exist or is not a directory: {repo_path}")
-        resolved = str(path)
         return resolved, derive_repo_identity(resolved)
+
+    def _allowed_repo_roots(self) -> list[str]:
+        roots = [str(Path.home())]
+        configured_roots = os.environ.get(_ALLOWED_REPO_ROOTS_ENV, "")
+        roots.extend(root for root in configured_roots.split(os.pathsep) if root.strip())
+        return [os.path.realpath(os.path.expanduser(root)) for root in roots]
+
+    def _path_is_under_root(self, path: str, root: str) -> bool:
+        if root == os.path.sep:
+            return True
+        return path == root or path.startswith(root + os.path.sep)
 
     def _validate_provider(self, provider: str) -> str:
         provider = provider.strip()

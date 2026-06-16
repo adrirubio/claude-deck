@@ -130,6 +130,24 @@ async def test_blank_repo_path_is_rejected(db):
 
 
 @pytest.mark.asyncio
+async def test_repo_path_outside_allowed_roots_is_rejected(db):
+    with pytest.raises(ValueError, match="Repo path must be under an allowed root"):
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Bad root",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="System root",
+                        provider="codex-cli",
+                        repo_path="/",
+                    )
+                ],
+            ),
+        )
+
+
+@pytest.mark.asyncio
 async def test_duplicate_preset_names_are_rejected(db, tmp_path):
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"
