@@ -19,6 +19,20 @@ export function memberName(members: MailMemberResponse[], memberId?: number | nu
   return members.find((member) => member.id === memberId)?.display_name ?? `Member ${memberId}`
 }
 
+export function senderName(message: MailMessageResponse, members: MailMemberResponse[]): string {
+  if (message.sender_type === 'external_actor') return message.sender_name || 'External actor'
+  if (message.sender_member_id) return memberName(members, message.sender_member_id)
+  return message.sender_name || 'Director'
+}
+
+export function senderTypeLabel(message: MailMessageResponse): string | null {
+  if (message.sender_type === 'external_actor') {
+    if (message.sender_actor_kind === 'external_tool') return 'External'
+    return message.sender_actor_kind || 'External'
+  }
+  return null
+}
+
 export function recipientName(message: MailMessageResponse, members: MailMemberResponse[]): string {
   if (message.kind === 'broadcast' || !message.recipient_member_id) return 'All members'
   return memberName(members, message.recipient_member_id)

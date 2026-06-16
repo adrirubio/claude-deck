@@ -1909,6 +1909,9 @@ class MailMessageResponse(BaseModel):
     thread_root_id: Optional[int] = None
     kind: str
     sender_member_id: Optional[int] = None
+    sender_actor_id: Optional[int] = None
+    sender_type: str = "director"
+    sender_actor_kind: Optional[str] = None
     sender_name: str
     recipient_member_id: Optional[int] = None
     subject: Optional[str] = None
@@ -1931,6 +1934,81 @@ class MailInboxResponse(BaseModel):
     unread_count: int
     pending_count: int
     messages: List[MailMessageResponse] = Field(default_factory=list)
+
+
+class MailExternalActorCreate(BaseModel):
+    actor_key: str
+    display_name: str
+    kind: str = "external_tool"
+    description: Optional[str] = None
+
+
+class MailExternalActorResponse(BaseModel):
+    id: int
+    actor_key: str
+    display_name: str
+    kind: str
+    description: Optional[str] = None
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+
+class MailExternalActorCreateResponse(BaseModel):
+    actor: MailExternalActorResponse
+    token: str
+
+
+class ExternalAgentMailMessageRequest(BaseModel):
+    recipient_member_id: Optional[int] = None
+    subject: Optional[str] = None
+    body_markdown: str
+    payload: Optional[Dict[str, Any]] = None
+
+
+class ExternalAgentMailContextRequest(BaseModel):
+    recipient_member_id: int
+    subject: Optional[str] = None
+    body_markdown: str
+    why_needed: Optional[str] = None
+    files_or_symbols: List[str] = Field(default_factory=list)
+
+
+class ExternalAgentMailHandoffRequest(BaseModel):
+    recipient_member_id: int
+    subject: Optional[str] = None
+    body_markdown: str
+    files: List[str] = Field(default_factory=list)
+    next_steps: List[str] = Field(default_factory=list)
+
+
+class ExternalAgentMailDeliveryRecipient(BaseModel):
+    member_id: int
+    member_name: str
+    receipt_created: bool = True
+    status: str
+    wake_state: str
+    wake_attempted: bool = False
+    wake_succeeded: bool = False
+    wake_method: Optional[str] = None
+    wake_error: Optional[str] = None
+
+
+class ExternalAgentMailSendResponse(BaseModel):
+    actor: MailExternalActorResponse
+    message: MailMessageResponse
+    delivery_state: str
+    recipients: List[ExternalAgentMailDeliveryRecipient] = Field(default_factory=list)
+
+
+class ExternalAgentMailRequestStatus(BaseModel):
+    message_id: int
+    kind: str
+    request_status: Optional[str] = None
+    is_stale: bool = False
+    answered: bool = False
+    acknowledged: bool = False
+    root: MailMessageResponse
+    replies: List[MailMessageResponse] = Field(default_factory=list)
 
 
 class MailAgentRegisterRequest(BaseModel):

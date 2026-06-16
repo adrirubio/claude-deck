@@ -94,3 +94,9 @@ async def init_db() -> None:
                 await conn.execute(
                     text("ALTER TABLE agent_team_launch_items ADD COLUMN block_code VARCHAR")
                 )
+            result = await conn.execute(text("PRAGMA table_info(mail_messages)"))
+            message_columns = {row[1] for row in result.fetchall()}
+            if message_columns and "sender_actor_id" not in message_columns:
+                await conn.execute(
+                    text("ALTER TABLE mail_messages ADD COLUMN sender_actor_id INTEGER")
+                )

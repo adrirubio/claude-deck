@@ -184,6 +184,34 @@ ensure_port_available() {
     done
 }
 
+wait_for_backend() {
+    local host="$1"
+    local url="http://${host}:${BACKEND_PORT}/api/v1/health"
+    local attempts=60
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "curl not found; waiting briefly for backend startup..."
+        sleep 2
+        return 0
+    fi
+
+    echo "Waiting for backend readiness..."
+    for _ in $(seq 1 "$attempts"); do
+        if curl -fsS --max-time 1 "$url" >/dev/null 2>&1; then
+            echo "Backend is ready."
+            return 0
+        fi
+        if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+            echo "Error: backend process exited before becoming ready."
+            exit 1
+        fi
+        sleep 0.5
+    done
+
+    echo "Error: backend did not become ready at $url"
+    exit 1
+}
+
 check_dependencies() {
     # Check if backend venv exists
     if [ ! -d "$BACKEND_DIR/venv" ]; then
@@ -226,6 +254,11 @@ start_servers() {
     source venv/bin/activate
     uvicorn app.main:app --reload --port "$BACKEND_PORT" "${BACKEND_HOST_ARGS[@]}" &
     BACKEND_PID=$!
+    BACKEND_CONNECT_HOST="${HOST:-127.0.0.1}"
+    if [ "$BACKEND_CONNECT_HOST" = "0.0.0.0" ]; then
+        BACKEND_CONNECT_HOST="127.0.0.1"
+    fi
+    wait_for_backend "$BACKEND_CONNECT_HOST"
 
     # Start frontend
     echo "Starting frontend server on http://${BACKEND_DISPLAY_HOST}:${FRONTEND_PORT}..."

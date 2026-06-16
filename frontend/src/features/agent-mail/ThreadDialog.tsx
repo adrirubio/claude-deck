@@ -35,6 +35,8 @@ import {
   memberName,
   recipientName,
   requestBadgeClass,
+  senderName,
+  senderTypeLabel,
 } from './utils'
 
 interface ThreadDialogProps {
@@ -65,8 +67,15 @@ function MessageBlock({ message, members }: {
         )}
         <span className="text-xs text-muted-foreground">{formatDateTime(message.created_at)}</span>
       </div>
-      <div className="mb-3 text-sm text-muted-foreground">
-        From {memberName(members, message.sender_member_id)} to {recipientName(message, members)}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <span>
+          From {senderName(message, members)} to {recipientName(message, members)}
+        </span>
+        {senderTypeLabel(message) && (
+          <Badge variant="outline" className="text-xs">
+            {senderTypeLabel(message)}
+          </Badge>
+        )}
       </div>
       {message.subject && <h4 className="mb-2 text-sm font-semibold">{message.subject}</h4>}
       <MarkdownRenderer content={message.body_markdown} />

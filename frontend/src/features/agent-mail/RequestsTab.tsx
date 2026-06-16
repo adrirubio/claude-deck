@@ -19,10 +19,11 @@ import type {
 import {
   KIND_LABEL,
   formatDateTime,
-  memberName,
   messageSummary,
   recipientName,
   requestBadgeClass,
+  senderName,
+  senderTypeLabel,
 } from './utils'
 
 export type RequestKindFilter = 'all' | Exclude<MailMessageKind, 'answer'>
@@ -71,7 +72,7 @@ export function RequestsTab({
       KIND_LABEL[message.kind],
       message.subject ?? '',
       message.body_markdown,
-      memberName(members, message.sender_member_id),
+      senderName(message, members),
       recipientName(message, members),
     ].join(' ').toLowerCase()
     return matchesKind && matchesStatus && (!normalizedSearch || haystack.includes(normalizedSearch))
@@ -157,9 +158,16 @@ export function RequestsTab({
                     <h3 className="truncate text-base font-semibold">
                       {message.subject || `${KIND_LABEL[message.kind]} ${message.id}`}
                     </h3>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {memberName(members, message.sender_member_id)} to {recipientName(message, members)}
-                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                      <span>
+                        {senderName(message, members)} to {recipientName(message, members)}
+                      </span>
+                      {senderTypeLabel(message) && (
+                        <Badge variant="outline" className="text-xs">
+                          {senderTypeLabel(message)}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <p className="text-sm leading-6 text-muted-foreground">{messageSummary(message)}</p>
                 </div>

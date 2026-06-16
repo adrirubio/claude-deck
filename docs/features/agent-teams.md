@@ -46,3 +46,5 @@ Local external agents can use the JSON API:
 4. `POST /api/v1/agent-teams/presets/{preset_id}/launch`
 
 Launch accepts a reviewed `confirm_plan_hash`, or `skip_plan_confirmation: true` for explicit single-step local automation. If a plan hash is stale, the API returns `409` with the updated plan.
+
+After a launch, use the [External Agent Orchestration](./external-agent-orchestration.md) Agent Mail API to discover registered members, send context requests, create handoffs, and poll for answers.

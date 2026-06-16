@@ -31,25 +31,9 @@ Non-tmux Codex sessions can still receive and send Agent Mail through MCP, but C
 
 ## External Local Callers
 
-Local tools such as OpenClaw can send Agent Mail through Claude Deck's REST API. A typical flow is:
+Local tools such as OpenClaw can use the external Agent Mail API to authenticate as a named local actor, discover members, send direct messages, request context, create handoffs, and poll request status.
 
-1. `GET /api/v1/agent-mail/team?sync=true` to find the target `member.id`.
-2. `POST /api/v1/agent-mail/messages` with a body like:
-
-```json
-{
-  "kind": "context_request",
-  "recipient_member_id": 2,
-  "subject": "Need repository context",
-  "body_markdown": "Please inspect the failing workflow and reply with the likely owner.",
-  "payload": {
-    "files_or_symbols": ["backend/app/api/v1/agent_mail.py"],
-    "why_needed": "OpenClaw is validating the Agent Mail integration."
-  }
-}
-```
-
-The same delivery path is used for UI, MCP, and external REST messages, so a nudgeable recipient is nudged automatically after the message is stored.
+See [External Agent Orchestration](./external-agent-orchestration.md) for token setup, endpoint examples, delivery result semantics, and Agent Teams launch integration.
 
 ## Setup Checklist
 
@@ -65,8 +49,8 @@ Without this setup, the page can still show install status, but agents cannot ex
 
 - Visibility is machine-global. Every local member is visible to every other member.
 - MVP identity is one team member per repository. Git worktrees of the same repository share the same member.
-- There is no Agent Mail token yet. This follows the current local Deck trust model, where existing configuration endpoints are local and unauthenticated.
-- External callers should only use the API from the same trusted machine or network until a broader Claude Deck auth model exists.
+- External Agent Mail calls use local actor bearer tokens. Token creation is loopback-only and follows Claude Deck's local trust model.
+- External callers should only use the API from the same trusted machine until a broader Claude Deck auth model exists.
 - Agent Mail is coordination state, not source control. Handoffs should still reference files, branches, issues, or commits when durable provenance matters.
 
 ## Install Details

@@ -13,6 +13,7 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     MailAgentSession,
+    MailExternalActor,
     MailMessage,
     MailReceipt,
     MailTeamMember,
@@ -430,10 +431,17 @@ class AgentMailService:
         return responses
 
     async def send_message(
-        self, db: AsyncSession, request: MailMessageCreate
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        *,
+        auto_nudge: bool = True,
+        sender_actor_id: Optional[int] = None,
     ) -> MailMessageResponse:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
+        if request.sender_member_id is not None and sender_actor_id is not None:
+            raise ValueError("messages cannot have both sender_member_id and sender_actor_id")
         if request.kind == "answer" and request.thread_root_id is None:
             raise ValueError("answer messages require thread_root_id")
         if request.kind == "answer":
@@ -451,6 +459,7 @@ class AgentMailService:
             thread_root_id=request.thread_root_id,
             kind=request.kind,
             sender_member_id=request.sender_member_id,
+            sender_actor_id=sender_actor_id,
             recipient_member_id=request.recipient_member_id,
             subject=request.subject,
             body_markdown=request.body_markdown,
@@ -483,14 +492,25 @@ class AgentMailService:
 
         await db.commit()
         await db.refresh(message)
-        await self.auto_nudge_members(db, recipients)
+        if auto_nudge:
+            await self.auto_nudge_members(db, recipients)
         return await self._message_response(db, message, for_member_id=None)
 
-    async def _sender_name(self, db: AsyncSession, sender_member_id: Optional[int]) -> str:
+    async def _sender_identity(
+        self,
+        db: AsyncSession,
+        sender_member_id: Optional[int],
+        sender_actor_id: Optional[int],
+    ) -> tuple[str, str, str | None]:
+        if sender_actor_id is not None:
+            actor = await db.get(MailExternalActor, sender_actor_id)
+            if actor is not None:
+                return actor.display_name, "external_actor", actor.kind
+            return "unknown external actor", "external_actor", None
         if sender_member_id is None:
-            return "Director"
+            return "Director", "director", None
         member = await db.get(MailTeamMember, sender_member_id)
-        return member.display_name if member else "unknown"
+        return (member.display_name if member else "unknown", "member", None)
 
     async def _message_response(
         self, db: AsyncSession, message: MailMessage, for_member_id: Optional[int]
@@ -511,12 +531,20 @@ class AgentMailService:
             and message.request_status == "pending"
             and message.created_at < datetime.utcnow() - timedelta(minutes=STALE_REQUEST_MINUTES)
         )
+        sender_name, sender_type, sender_actor_kind = await self._sender_identity(
+            db,
+            message.sender_member_id,
+            message.sender_actor_id,
+        )
         return MailMessageResponse(
             id=message.id,
             thread_root_id=message.thread_root_id,
             kind=message.kind,
             sender_member_id=message.sender_member_id,
-            sender_name=await self._sender_name(db, message.sender_member_id),
+            sender_actor_id=message.sender_actor_id,
+            sender_type=sender_type,
+            sender_actor_kind=sender_actor_kind,
+            sender_name=sender_name,
             recipient_member_id=message.recipient_member_id,
             subject=message.subject,
             body_markdown=message.body_markdown,
@@ -706,6 +734,45 @@ class AgentMailService:
             self._last_auto_nudge_at[member_id] = now
             nudged.append({"member_id": member_id, **result})
         return nudged
+
+    async def recipient_ids_for_message(self, db: AsyncSession, message_id: int) -> set[int]:
+        rows = (
+            await db.execute(select(MailReceipt.member_id).where(MailReceipt.message_id == message_id))
+        ).scalars().all()
+        return set(rows)
+
+    async def wake_members_with_results(
+        self,
+        db: AsyncSession,
+        member_ids: set[int],
+    ) -> dict[int, dict[str, str | bool]]:
+        if not member_ids:
+            return {}
+        await self.sync_observed_sessions(db)
+        now = datetime.utcnow()
+        results: dict[int, dict[str, str | bool]] = {}
+        for member_id in sorted(member_ids):
+            try:
+                result = await self._wake_member(db, member_id, now)
+            except ValueError as exc:
+                results[member_id] = {
+                    "wake_attempted": True,
+                    "wake_succeeded": False,
+                    "wake_error": str(exc),
+                }
+                continue
+            if result is None:
+                results[member_id] = {
+                    "wake_attempted": False,
+                    "wake_succeeded": False,
+                }
+                continue
+            results[member_id] = {
+                "wake_attempted": True,
+                "wake_succeeded": True,
+                "wake_method": str(result.get("method") or ""),
+            }
+        return results
 
     async def queue_inbox_check(self, db: AsyncSession, member_id: int) -> dict[str, str]:
         await self.sync_observed_sessions(db)
