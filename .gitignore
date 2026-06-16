@@ -30,6 +30,8 @@ frontend/dist/
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 
@@ -48,6 +50,7 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+.playwright-mcp/
 .tox/
 
 # Backup files
@@ -56,6 +59,7 @@ htmlcov/
 
 # Claude Deck specific
 ~/.claude-registry/
+.claude/commands/
 
 # Git worktrees
 .worktrees/

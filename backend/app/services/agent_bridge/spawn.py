@@ -35,7 +35,21 @@ def _session_name_for(directory: str) -> str:
     return f"{safe_basename}-{uuid.uuid4().hex[:4]}"
 
 
-def spawn_session(provider_id: str, options: SpawnCommandOptions) -> dict:
+def _env_flags(env: dict[str, str]) -> list[str]:
+    flags: list[str] = []
+    for key, value in env.items():
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
+            raise ValueError(f"Invalid environment variable name: {key}")
+        flags += ["-e", f"{key}={value}"]
+    return flags
+
+
+def spawn_session(
+    provider_id: str,
+    options: SpawnCommandOptions,
+    *,
+    extra_env: dict[str, str] | None = None,
+) -> dict:
     """Spawn a new provider CLI session inside tmux."""
     provider = get_provider(provider_id)
     if isinstance(provider, ClaudeCodeProvider):
@@ -56,9 +70,9 @@ def spawn_session(provider_id: str, options: SpawnCommandOptions) -> dict:
         aws_profile=options.aws_profile,
         model=options.bedrock_model,
     )
-    env_flags: list[str] = []
-    for key, value in platform_env.items():
-        env_flags += ["-e", f"{key}={value}"]
+    env_flags = _env_flags(platform_env)
+    if extra_env:
+        env_flags += _env_flags(extra_env)
 
     try:
         result = subprocess.run(

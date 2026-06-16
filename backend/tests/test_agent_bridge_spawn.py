@@ -128,3 +128,67 @@ def test_anthropic_platform_adds_no_env_flags(monkeypatch, tmp_path):
     assert argv[:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
     assert len(argv) == 8
     assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "anthropic"
+
+
+def test_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "codex-cli",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+        extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"},
+    )
+
+    assert "CLAUDE_DECK_TEAM_SLOT_ID=7" in calls[0]
+
+
+def test_claude_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+        extra_env={"CLAUDE_DECK_TEAM_SLOT_ID": "7"},
+    )
+
+    assert "CLAUDE_DECK_TEAM_SLOT_ID=7" in calls[0]
+
+
+def test_spawn_session_rejects_invalid_extra_env_names(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+
+    try:
+        spawn.spawn_session(
+            "codex-cli",
+            SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+            extra_env={"bad-name": "7"},
+        )
+    except ValueError as exc:
+        assert "Invalid environment variable name" in str(exc)
+    else:
+        raise AssertionError("Expected invalid env name to be rejected")

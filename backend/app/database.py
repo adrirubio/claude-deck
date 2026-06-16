@@ -68,3 +68,29 @@ async def init_db() -> None:
                 await conn.execute(
                     text("ALTER TABLE mail_team_members ADD COLUMN last_inbox_checked_at DATETIME")
                 )
+            result = await conn.execute(text("PRAGMA table_info(mail_agent_sessions)"))
+            session_columns = {row[1] for row in result.fetchall()}
+            if session_columns and "team_preset_id" not in session_columns:
+                await conn.execute(
+                    text("ALTER TABLE mail_agent_sessions ADD COLUMN team_preset_id INTEGER")
+                )
+            if session_columns and "team_slot_id" not in session_columns:
+                await conn.execute(
+                    text("ALTER TABLE mail_agent_sessions ADD COLUMN team_slot_id INTEGER")
+                )
+            result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
+            slot_columns = {row[1] for row in result.fetchall()}
+            if slot_columns and "bootstrap_prompt" not in slot_columns:
+                await conn.execute(
+                    text("ALTER TABLE agent_team_slots ADD COLUMN bootstrap_prompt VARCHAR")
+                )
+            result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
+            launch_item_columns = {row[1] for row in result.fetchall()}
+            if launch_item_columns and "message" not in launch_item_columns:
+                await conn.execute(
+                    text("ALTER TABLE agent_team_launch_items ADD COLUMN message VARCHAR")
+                )
+            if launch_item_columns and "block_code" not in launch_item_columns:
+                await conn.execute(
+                    text("ALTER TABLE agent_team_launch_items ADD COLUMN block_code VARCHAR")
+                )

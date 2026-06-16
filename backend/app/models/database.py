@@ -172,6 +172,85 @@ class PresenceSession(Base):
     last_user_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class AgentTeamPreset(Base):
+    """Saved roster of local agent slots that can be launched together."""
+
+    __tablename__ = "agent_team_presets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AgentTeamSlot(Base):
+    """One desired agent slot within a saved team preset."""
+
+    __tablename__ = "agent_team_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    preset_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    repo_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    repo_path: Mapped[str] = mapped_column(String, nullable=False)
+    repo_name: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str | None] = mapped_column(String, nullable=True)
+    charter: Mapped[str | None] = mapped_column(String, nullable=True)
+    bootstrap_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
+    launch_mode: Mapped[str] = mapped_column(String, default="plain", nullable=False)
+    launch_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AgentTeamLaunch(Base):
+    """Audit record for an Agent Team launch request."""
+
+    __tablename__ = "agent_team_launches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    preset_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    requested_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    plan_hash: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="running", nullable=False)
+    summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AgentTeamLaunchItem(Base):
+    """Per-slot launch outcome for an Agent Team launch."""
+
+    __tablename__ = "agent_team_launch_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    launch_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_team_launches.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    repo_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    session_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    message: Mapped[str | None] = mapped_column(String, nullable=True)
+    block_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MailTeamMember(Base):
     """Durable Agent Mail team identity, keyed by repository."""
 
@@ -205,6 +284,12 @@ class MailAgentSession(Base):
     tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
     pane_id: Mapped[str | None] = mapped_column(String, nullable=True)
     pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    team_preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
+    )
+    team_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
     mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
     activity: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(

@@ -265,6 +265,16 @@ export function TeamTab({
                                     Bridge observed
                                   </Badge>
                                 )}
+                                {session.team_preset_name && (
+                                  <Badge
+                                    variant="outline"
+                                    title={session.team_slot_name ? `Slot: ${session.team_slot_name}` : undefined}
+                                  >
+                                    {session.team_slot_name
+                                      ? `${session.team_preset_name} / ${session.team_slot_name}`
+                                      : session.team_preset_name}
+                                  </Badge>
+                                )}
                                 <span className="font-medium">{session.provider}</span>
                                 <span className="text-xs text-muted-foreground">
                                   {formatDateTime(session.last_seen_at)}

@@ -162,6 +162,16 @@ def _hook_session_key(payload: dict) -> Optional[str]:
     return f"{prefix}:{session_id}"
 
 
+def _payload_int(payload: dict, key: str) -> Optional[int]:
+    value = payload.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def _register_from_hook(db: AsyncSession, payload: dict):
     session_key = _hook_session_key(payload)
     cwd = payload.get("cwd")
@@ -175,6 +185,8 @@ async def _register_from_hook(db: AsyncSession, payload: dict):
             cwd=cwd,
             session_key=session_key,
             pid=payload.get("pid"),
+            team_preset_id=_payload_int(payload, "team_preset_id"),
+            team_slot_id=_payload_int(payload, "team_slot_id"),
         ),
     )
 
@@ -185,10 +197,14 @@ async def hook_session_start(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        member, _ = await _register_from_hook(db, payload)
+        member, session = await _register_from_hook(db, payload)
         if member is None:
             return {}
-        context = await agent_mail_service.build_session_start_context(db, member.id)
+        context = await agent_mail_service.build_session_start_context(
+            db,
+            member.id,
+            session.session_key if session is not None else None,
+        )
         if not context:
             return {}
         return {
