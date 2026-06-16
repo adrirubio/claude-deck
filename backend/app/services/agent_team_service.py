@@ -1024,6 +1024,8 @@ class AgentTeamService:
         if not (resolved == home_root or resolved.startswith(home_root + os.path.sep)):
             raise ValueError(f"Repo path must be under the current user's home directory: {home_root}")
 
+        # Guarded above by realpath normalization and a current-user-home prefix check.
+        # codeql[py/path-injection]
         if not os.path.isdir(resolved):
             raise ValueError(f"Repo path does not exist or is not a directory: {repo_path}")
         return resolved, derive_repo_identity(resolved)
