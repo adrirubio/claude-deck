@@ -7,6 +7,16 @@ export interface PlanSummary {
   excerpt: string
   modified_at: string
   size_bytes: number
+  source: string
+  source_label: string
+  project_path?: string | null
+  session_id?: string | null
+  git_branch?: string | null
+  step_count?: number | null
+  pending_count?: number | null
+  in_progress_count?: number | null
+  completed_count?: number | null
+  history_count?: number | null
 }
 
 export interface PlanLinkedSession {
@@ -29,6 +39,17 @@ export interface PlanDetail {
   code_block_count: number
   table_count: number
   linked_sessions: PlanLinkedSession[]
+  source: string
+  source_label: string
+  project_path?: string | null
+  session_id?: string | null
+  git_branch?: string | null
+  git_sha?: string | null
+  step_count?: number | null
+  pending_count?: number | null
+  in_progress_count?: number | null
+  completed_count?: number | null
+  history_count?: number | null
 }
 
 export interface PlanSearchResult {
@@ -37,6 +58,8 @@ export interface PlanSearchResult {
   title: string
   matches: string[]
   modified_at: string
+  source: string
+  source_label: string
 }
 
 export interface PlanListResponse {
@@ -59,4 +82,6 @@ export interface PlanStatsResponse {
   oldest_date: string | null
   newest_date: string | null
   total_size_bytes: number
+  source: string
+  source_label: string
 }

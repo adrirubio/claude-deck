@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { usePlansApi } from '@/hooks/usePlansApi'
+import { useProviderContext } from '@/contexts/ProviderContext'
 import { CLICKABLE_CARD } from '@/lib/constants'
 import { formatBytes } from '@/types/backup'
 import type { PlanSummary, PlanStatsResponse } from '@/types/plans'
@@ -55,6 +56,7 @@ function groupByDate(plans: PlanSummary[]): { label: string; plans: PlanSummary[
 export function PlansPage() {
   const navigate = useNavigate()
   const { listPlans, getStats } = usePlansApi()
+  const { selectedProviderId } = useProviderContext()
   const [plans, setPlans] = useState<PlanSummary[]>([])
   const [stats, setStats] = useState<PlanStatsResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -82,18 +84,36 @@ export function PlansPage() {
     fetchData()
   }, [fetchData])
 
+  const providerPlans = useMemo(
+    () => plans.filter((plan) => (plan.source ?? 'claude-code') === selectedProviderId),
+    [plans, selectedProviderId],
+  )
+  const providerStats = stats?.source === selectedProviderId ? stats : null
+
   // Client-side filtering by search query
   const filteredPlans = useMemo(() => {
-    if (!searchQuery.trim()) return plans
+    if (!searchQuery.trim()) return providerPlans
     const q = searchQuery.toLowerCase()
-    return plans.filter(
+    return providerPlans.filter(
       p => p.title.toLowerCase().includes(q) ||
            p.excerpt.toLowerCase().includes(q) ||
            p.slug.toLowerCase().includes(q)
     )
-  }, [plans, searchQuery])
+  }, [providerPlans, searchQuery])
 
   const grouped = useMemo(() => groupByDate(filteredPlans), [filteredPlans])
+  const isCodex = selectedProviderId === 'codex-cli'
+  const sourceDescription = isCodex
+    ? 'Browse Codex update_plan snapshots from local session history'
+    : 'Browse and search your Claude Code execution plans'
+  const planNoun = isCodex ? 'Plan Snapshots' : 'Total Plans'
+  const sizeDescription = isCodex ? 'Source JSONL data' : 'Combined plan files'
+  const emptyText = isCodex
+    ? 'No Codex plan snapshots found'
+    : 'No plans found'
+  const searchPlaceholder = isCodex
+    ? 'Search snapshots by step, repo, or session...'
+    : 'Search plans by title, content, or slug...'
 
   return (
     <div className="space-y-6">
@@ -104,7 +124,7 @@ export function PlansPage() {
             Plans
           </h1>
           <p className="text-muted-foreground">
-            Browse and search your Claude Code execution plans
+            {sourceDescription}
           </p>
         </div>
         <RefreshButton onClick={fetchData} loading={loading} />
@@ -120,16 +140,16 @@ export function PlansPage() {
       )}
 
       {/* Stats Row */}
-      {stats && (
+      {providerStats && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Total Plans</CardDescription>
-              <CardTitle className="text-3xl">{stats.total_plans}</CardTitle>
+              <CardDescription>{planNoun}</CardDescription>
+              <CardTitle className="text-3xl">{providerStats.total_plans}</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Execution plan files
+                {isCodex ? 'Latest snapshots per Codex thread' : 'Execution plan files'}
               </p>
             </CardContent>
           </Card>
@@ -138,28 +158,28 @@ export function PlansPage() {
             <CardHeader className="pb-2">
               <CardDescription>Date Range</CardDescription>
               <CardTitle className="text-lg">
-                {stats.oldest_date
-                  ? `${new Date(stats.oldest_date).toLocaleDateString()} — ${new Date(stats.newest_date!).toLocaleDateString()}`
+                {providerStats.oldest_date
+                  ? `${new Date(providerStats.oldest_date).toLocaleDateString()} — ${new Date(providerStats.newest_date!).toLocaleDateString()}`
                   : 'No plans'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Calendar className="h-3 w-3" />
-                <span>First to latest plan</span>
+                <span>{isCodex ? 'First to latest snapshot' : 'First to latest plan'}</span>
               </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Total Size</CardDescription>
-              <CardTitle className="text-3xl">{formatBytes(stats.total_size_bytes)}</CardTitle>
+              <CardDescription>{isCodex ? 'Source Size' : 'Total Size'}</CardDescription>
+              <CardTitle className="text-3xl">{formatBytes(providerStats.total_size_bytes)}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <HardDrive className="h-3 w-3" />
-                <span>Combined plan files</span>
+                <span>{sizeDescription}</span>
               </div>
             </CardContent>
           </Card>
@@ -170,7 +190,7 @@ export function PlansPage() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Search plans by title, content, or slug..."
+          placeholder={searchPlaceholder}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-10"
@@ -178,7 +198,7 @@ export function PlansPage() {
       </div>
 
       {/* Plan List */}
-      {loading && plans.length === 0 ? (
+      {loading && providerPlans.length === 0 ? (
         <Card>
           <CardContent className="py-8">
             <p className="text-center text-muted-foreground">Loading plans...</p>
@@ -188,7 +208,7 @@ export function PlansPage() {
         <Card>
           <CardContent className="py-8">
             <p className="text-center text-muted-foreground">
-              {searchQuery ? 'No plans match your search' : 'No plans found'}
+              {searchQuery ? 'No plans match your search' : emptyText}
             </p>
           </CardContent>
         </Card>
@@ -222,6 +242,22 @@ export function PlansPage() {
                           <p className="text-sm text-muted-foreground line-clamp-2">
                             {plan.excerpt}
                           </p>
+                          {isCodex && plan.step_count != null && (
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <Badge variant="secondary" className="text-xs">
+                                {plan.step_count} step{plan.step_count !== 1 ? 's' : ''}
+                              </Badge>
+                              <Badge variant="outline" className="text-xs">
+                                {plan.completed_count ?? 0} completed
+                              </Badge>
+                              <Badge variant="outline" className="text-xs">
+                                {plan.in_progress_count ?? 0} active
+                              </Badge>
+                              <Badge variant="outline" className="text-xs">
+                                {plan.pending_count ?? 0} pending
+                              </Badge>
+                            </div>
+                          )}
                         </div>
                         <div className="flex flex-col items-end gap-1 flex-shrink-0">
                           <span
@@ -231,7 +267,7 @@ export function PlansPage() {
                             {formatRelativeDate(plan.modified_at)}
                           </span>
                           <Badge variant="outline" className="text-xs">
-                            {formatBytes(plan.size_bytes)}
+                            {isCodex ? plan.source_label : formatBytes(plan.size_bytes)}
                           </Badge>
                         </div>
                       </div>

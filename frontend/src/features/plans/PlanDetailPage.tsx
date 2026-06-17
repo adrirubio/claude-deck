@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, FileText, Calendar, HardDrive, Code, Table, GitBranch } from 'lucide-react'
+import { ArrowLeft, FileText, Calendar, HardDrive, Code, Table, GitBranch, ListChecks } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { MarkdownRenderer } from '@/components/shared/MarkdownRenderer'
 import { RefreshButton } from '@/components/shared/RefreshButton'
 import { usePlansApi } from '@/hooks/usePlansApi'
+import { useProviderContext } from '@/contexts/ProviderContext'
 import { formatBytes } from '@/types/backup'
 import type { PlanDetail } from '@/types/plans'
 
@@ -14,9 +15,18 @@ export function PlanDetailPage() {
   const { filename } = useParams<{ filename: string }>()
   const navigate = useNavigate()
   const { getPlan } = usePlansApi()
+  const { selectedProviderId } = useProviderContext()
+  const previousProviderId = useRef(selectedProviderId)
   const [plan, setPlan] = useState<PlanDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (previousProviderId.current !== selectedProviderId) {
+      previousProviderId.current = selectedProviderId
+      navigate('/plans', { replace: true })
+    }
+  }, [navigate, selectedProviderId])
 
   const fetchPlan = useCallback(async () => {
     if (!filename) return
@@ -70,6 +80,8 @@ export function PlanDetailPage() {
     )
   }
 
+  const isCodex = plan.source === 'codex-cli'
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -80,6 +92,14 @@ export function PlanDetailPage() {
             <FileText className="h-8 w-8" />
             {plan.title}
           </h1>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <Badge variant="outline">{plan.source_label}</Badge>
+            {isCodex && plan.step_count != null && (
+              <Badge variant="secondary">
+                {plan.step_count} step{plan.step_count !== 1 ? 's' : ''}
+              </Badge>
+            )}
+          </div>
           <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
             <span className="flex items-center gap-1" title={new Date(plan.modified_at).toLocaleString()}>
               <Calendar className="h-3 w-3" />
@@ -89,6 +109,12 @@ export function PlanDetailPage() {
               <HardDrive className="h-3 w-3" />
               {formatBytes(plan.size_bytes)}
             </span>
+            {isCodex && plan.history_count != null && (
+              <span className="flex items-center gap-1">
+                <ListChecks className="h-3 w-3" />
+                {plan.history_count} update{plan.history_count !== 1 ? 's' : ''}
+              </span>
+            )}
             {plan.code_block_count > 0 && (
               <span className="flex items-center gap-1">
                 <Code className="h-3 w-3" />
@@ -103,7 +129,7 @@ export function PlanDetailPage() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1 font-mono">
-            {plan.filename}
+            {isCodex ? plan.session_id ?? plan.filename : plan.filename}
           </p>
         </div>
         <RefreshButton onClick={fetchPlan} loading={loading} />
@@ -139,14 +165,39 @@ export function PlanDetailPage() {
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
             <GitBranch className="h-4 w-4" />
-            Linked Sessions
+            {isCodex ? 'Source Session' : 'Linked Sessions'}
           </CardTitle>
           <CardDescription>
-            Sessions that used this plan (matched by slug: {plan.slug})
+            {isCodex
+              ? 'Codex thread metadata used to locate this update_plan snapshot'
+              : `Sessions that used this plan (matched by slug: ${plan.slug})`}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {plan.linked_sessions.length === 0 ? (
+          {isCodex ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 border rounded-lg gap-4">
+                <div className="space-y-1 min-w-0">
+                  <p className="text-sm font-mono truncate">
+                    {plan.session_id ?? 'Unknown Codex thread'}
+                  </p>
+                  {plan.project_path && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      {plan.project_path}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {plan.git_branch && (
+                    <Badge variant="outline" className="text-xs">
+                      <GitBranch className="h-3 w-3 mr-1" />
+                      {plan.git_branch}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : plan.linked_sessions.length === 0 ? (
             <p className="text-sm text-muted-foreground">No linked sessions found</p>
           ) : (
             <div className="space-y-3">

@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useProjectContext } from '@/contexts/ProjectContext';
+import { useProviderContext } from '@/contexts/ProviderContext';
 import { useSessionsApi } from '@/hooks/useSessionsApi';
 import { useContextApi } from '@/hooks/useContextApi';
 import { usePlansApi } from '@/hooks/usePlansApi';
@@ -61,6 +62,7 @@ const DashboardContext = createContext<DashboardContextType | undefined>(undefin
 
 export function DashboardProvider({ children }: { children: ReactNode }) {
   const { activeProject } = useProjectContext();
+  const { selectedProviderId } = useProviderContext();
   const { getDashboardStats } = useSessionsApi();
   const { getActiveSessions } = useContextApi();
   const { getStats: getPlanStats } = usePlansApi();
@@ -70,6 +72,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const prevProjectPath = useRef<string | undefined>(undefined);
+  const prevProviderId = useRef<string | undefined>(undefined);
   const fetchId = useRef(0);
 
   const fetchStats = useCallback(async () => {
@@ -151,18 +154,22 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       }
     }
   // getDashboardStats and getActiveSessions have stable refs (empty deps).
-  // getPlanStats changes with activeProject?.path but we handle project changes separately.
+  // getPlanStats changes with activeProject?.path and selectedProviderId; those are handled below.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject?.path]);
+  }, [activeProject?.path, selectedProviderId]);
 
-  // Re-fetch when active project changes (but not on initial mount)
+  // Re-fetch when active project or provider changes (but not on initial mount)
   useEffect(() => {
     const currentPath = activeProject?.path;
-    if (prevProjectPath.current !== undefined && prevProjectPath.current !== currentPath) {
+    const currentProvider = selectedProviderId;
+    const projectChanged = prevProjectPath.current !== undefined && prevProjectPath.current !== currentPath;
+    const providerChanged = prevProviderId.current !== undefined && prevProviderId.current !== currentProvider;
+    if (projectChanged || providerChanged) {
       fetchStats();
     }
     prevProjectPath.current = currentPath;
-  }, [activeProject?.path, fetchStats]);
+    prevProviderId.current = currentProvider;
+  }, [activeProject?.path, selectedProviderId, fetchStats]);
 
   return (
     <DashboardContext.Provider
