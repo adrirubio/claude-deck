@@ -1654,6 +1654,16 @@ class PlanSummary(BaseModel):
     excerpt: str
     modified_at: str
     size_bytes: int
+    source: str = "claude-code"
+    source_label: str = "Claude Code plan file"
+    project_path: Optional[str] = None
+    session_id: Optional[str] = None
+    git_branch: Optional[str] = None
+    step_count: Optional[int] = None
+    pending_count: Optional[int] = None
+    in_progress_count: Optional[int] = None
+    completed_count: Optional[int] = None
+    history_count: Optional[int] = None
 
 
 class PlanLinkedSession(BaseModel):
@@ -1680,6 +1690,17 @@ class PlanDetail(BaseModel):
     code_block_count: int
     table_count: int
     linked_sessions: List[PlanLinkedSession]
+    source: str = "claude-code"
+    source_label: str = "Claude Code plan file"
+    project_path: Optional[str] = None
+    session_id: Optional[str] = None
+    git_branch: Optional[str] = None
+    git_sha: Optional[str] = None
+    step_count: Optional[int] = None
+    pending_count: Optional[int] = None
+    in_progress_count: Optional[int] = None
+    completed_count: Optional[int] = None
+    history_count: Optional[int] = None
 
 
 class PlanSearchResult(BaseModel):
@@ -1690,6 +1711,8 @@ class PlanSearchResult(BaseModel):
     title: str
     matches: List[str]
     modified_at: str
+    source: str = "claude-code"
+    source_label: str = "Claude Code plan file"
 
 
 class PlanListResponse(BaseModel):
@@ -1720,6 +1743,8 @@ class PlanStatsResponse(BaseModel):
     oldest_date: Optional[str] = None
     newest_date: Optional[str] = None
     total_size_bytes: int
+    source: str = "claude-code"
+    source_label: str = "Claude Code plan file"
 
 
 # MCP Registry Schemas

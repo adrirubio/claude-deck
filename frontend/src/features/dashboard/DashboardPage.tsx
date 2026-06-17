@@ -279,11 +279,13 @@ export function DashboardPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Plans</CardDescription>
+              <CardDescription>{selectedProviderId === 'codex-cli' ? 'Plan Snapshots' : 'Plans'}</CardDescription>
               <CardTitle className="text-3xl">{stats.planCount}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground">Execution plans</p>
+              <p className="text-xs text-muted-foreground">
+                {selectedProviderId === 'codex-cli' ? 'Codex update_plan snapshots' : 'Execution plans'}
+              </p>
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"

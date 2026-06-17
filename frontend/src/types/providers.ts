@@ -20,6 +20,7 @@ export interface AgentProviderCapabilities {
   context: boolean
   doctor: boolean
   backup: boolean
+  plans: boolean
 }
 
 export type AgentProviderCapabilityState = 'supported' | 'read_only' | 'write_capable' | 'unsupported' | 'unknown'

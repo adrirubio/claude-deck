@@ -16,9 +16,11 @@ def test_provider_registry_smoke_exposes_claude_and_codex_statuses():
 
     assert claude_status["capabilities"]["sessions"] is True
     assert claude_status["capabilities"]["usage"] is True
+    assert claude_status["capabilities"]["plans"] is True
     assert codex_status["capabilities"]["sessions"] is True
     assert codex_status["capabilities"]["doctor"] is True
     assert codex_status["capabilities"]["usage"] is False
+    assert codex_status["capabilities"]["plans"] is True
 
 
 def test_agent_bridge_session_filter_smoke(monkeypatch):
