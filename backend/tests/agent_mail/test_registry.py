@@ -5,8 +5,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import select
 
-from app.models.database import MailMessage, MailTeamMember
+from app.models.database import (
+    AgentTeamPreset,
+    AgentTeamSlot,
+    MailAgentSession,
+    MailMessage,
+    MailTeamMember,
+)
 from app.models.schemas import MailAgentRegisterRequest, MailMessageCreate
 from app.services.agent_mail_service import (
     HEARTBEAT_TTL_SECONDS,
@@ -15,6 +22,7 @@ from app.services.agent_mail_service import (
     TMUX_ENTER_DELAY_SECONDS,
     AgentMailService,
 )
+from app.utils.repo_utils import derive_repo_identity
 
 
 @pytest.fixture
@@ -30,6 +38,30 @@ def _register(cwd, session_key="cc:s1", source="hook", provider="claude-code", p
         session_key=session_key,
         pid=pid,
     )
+
+
+async def _slot(db, cwd, name, *, preset=None, position=0, role=None, charter=None):
+    if preset is None:
+        preset = AgentTeamPreset(name="Project team")
+        db.add(preset)
+        await db.flush()
+    ident = derive_repo_identity(cwd)
+    slot = AgentTeamSlot(
+        preset_id=preset.id,
+        position=position,
+        display_name=name,
+        provider="codex-cli",
+        repo_id=ident["repo_id"],
+        repo_path=ident["repo_root"],
+        repo_name=ident["repo_name"],
+        role=role,
+        charter=charter,
+    )
+    db.add(slot)
+    await db.commit()
+    await db.refresh(preset)
+    await db.refresh(slot)
+    return preset, slot
 
 
 @pytest.mark.asyncio
@@ -53,6 +85,149 @@ async def test_second_session_same_repo_reuses_member(db, svc, tmp_path):
     )
     assert m1.id == m2.id
     assert s2.session_key == "mcp:abc"
+
+
+@pytest.mark.asyncio
+async def test_same_repo_team_slots_are_distinct_mail_participants(db, svc, tmp_path):
+    cwd = tmp_path / "r"
+    cwd.mkdir()
+    planner_preset, planner_slot = await _slot(
+        db,
+        str(cwd),
+        "Planner",
+        position=0,
+        role="planner/reviewer",
+    )
+    _, implementer_slot = await _slot(
+        db,
+        str(cwd),
+        "Implementer",
+        preset=planner_preset,
+        position=1,
+        role="implementer",
+    )
+
+    planner, _ = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(cwd),
+            session_key="mcp:planner",
+            team_preset_id=planner_preset.id,
+            team_slot_id=planner_slot.id,
+        ),
+    )
+    implementer, _ = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(cwd),
+            session_key="mcp:implementer",
+            team_preset_id=planner_preset.id,
+            team_slot_id=implementer_slot.id,
+        ),
+    )
+
+    assert planner.id != implementer.id
+    assert planner.repo_id == implementer.repo_id
+    assert planner.identity_key == svc._slot_identity_key(planner_slot)
+    assert implementer.identity_key == svc._slot_identity_key(implementer_slot)
+
+    message = await svc.send_message(
+        db,
+        MailMessageCreate(
+            kind="handoff",
+            sender_member_id=planner.id,
+            recipient_member_id=implementer.id,
+            body_markdown="Please implement plan v1.",
+        ),
+        auto_nudge=False,
+    )
+    planner_inbox = await svc.get_inbox(db, planner.id)
+    implementer_inbox = await svc.get_inbox(db, implementer.id)
+
+    assert planner_inbox.pending_count == 0
+    assert implementer_inbox.pending_count == 1
+    assert [item.id for item in implementer_inbox.messages] == [message.id]
+
+
+@pytest.mark.asyncio
+async def test_reused_session_key_clears_stale_team_slot_context(db, svc, tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    preset, slot = await _slot(db, str(repo_a), "Planner")
+    slot_member, session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(repo_a),
+            session_key="mcp:reused",
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+
+    preserved_member, preserved_session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(repo_a),
+            session_key="mcp:reused",
+        ),
+    )
+
+    assert preserved_member.id == slot_member.id
+    assert preserved_session.id == session.id
+    assert preserved_session.team_slot_id == slot.id
+
+    moved_member, moved_session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(repo_b),
+            session_key="mcp:reused",
+        ),
+    )
+
+    assert moved_member.participant_kind == "repo"
+    assert moved_member.repo_path == str(repo_b)
+    assert moved_session.id == session.id
+    assert moved_session.member_id == moved_member.id
+    assert moved_session.team_preset_id is None
+    assert moved_session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_register_ignores_mismatched_team_slot_context(db, svc, tmp_path):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    preset, slot = await _slot(db, str(repo_a), "Planner")
+
+    member, session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(repo_b),
+            session_key="mcp:mismatch",
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+
+    assert member.participant_kind == "repo"
+    assert member.repo_path == str(repo_b)
+    assert session.team_preset_id is None
+    assert session.team_slot_id is None
 
 
 @pytest.mark.asyncio
@@ -101,6 +276,189 @@ async def test_sync_observed_creates_observed_sessions(db, svc, tmp_path):
     assert members[0].status == "observed"
     assert members[0].sessions[0].session_key == "tmux:%7"
     assert members[0].can_nudge is True
+
+
+@pytest.mark.asyncio
+async def test_observed_session_attaches_to_matching_team_slot_participant(db, svc, tmp_path):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Implementer", role="implementer")
+    member, _ = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="hook",
+            provider="codex-cli",
+            cwd=str(cwd),
+            session_key="codex:s1",
+            pid=4242,
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    members = await svc.list_team(db)
+
+    assert [candidate.id for candidate in members] == [member.id]
+    assert members[0].participant_kind == "team_slot"
+    assert members[0].team_slot_id == slot.id
+    assert members[0].can_nudge is True
+    assert {session.source for session in members[0].sessions} == {"hook", "observed"}
+
+
+@pytest.mark.asyncio
+async def test_observed_session_ignores_stale_pid_match(db, svc, tmp_path):
+    old_cwd = tmp_path / "old"
+    new_cwd = tmp_path / "new"
+    old_cwd.mkdir()
+    new_cwd.mkdir()
+    preset, slot = await _slot(db, str(old_cwd), "Old slot")
+    _member, stale_session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="hook",
+            provider="codex-cli",
+            cwd=str(old_cwd),
+            session_key="codex:old",
+            pid=4242,
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+    stale_session.last_seen_at = datetime.utcnow() - timedelta(seconds=HEARTBEAT_TTL_SECONDS + 30)
+    await db.commit()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(new_cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    members = await svc.list_team(db)
+    observed_member = next(member for member in members if member.repo_path == str(new_cwd))
+
+    assert observed_member.participant_kind == "repo"
+    assert observed_member.repo_name == "new"
+    assert observed_member.sessions[0].session_key == "tmux:%7"
+
+
+@pytest.mark.asyncio
+async def test_sync_preserves_observed_session_team_slot_attachment(db, svc, tmp_path):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Reused slot")
+    slot_member = await svc.get_or_create_slot_member(db, slot)
+    db.add(
+        MailAgentSession(
+            member_id=slot_member.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%7",
+            cwd=str(cwd),
+            tmux_target="w:0.1",
+            pane_id="%7",
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+            mailbox_status="observed",
+        )
+    )
+    await db.commit()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    members = await svc.list_team(db)
+
+    assert len(members) == 1
+    assert members[0].id == slot_member.id
+    assert members[0].participant_kind == "team_slot"
+    assert members[0].team_slot_id == slot.id
+    assert members[0].sessions[0].team_slot_id == slot.id
+
+
+@pytest.mark.asyncio
+async def test_sync_does_not_preserve_team_slot_when_observed_pid_changes(db, svc, tmp_path):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Reused slot")
+    slot_member = await svc.get_or_create_slot_member(db, slot)
+    db.add(
+        MailAgentSession(
+            member_id=slot_member.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%7",
+            cwd=str(cwd),
+            tmux_target="w:0.1",
+            pane_id="%7",
+            pid=111,
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+            mailbox_status="observed",
+        )
+    )
+    await db.commit()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "222",
+            "status": "active",
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    members = await svc.list_team(db)
+    session = (
+        await db.execute(select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%7"))
+    ).scalar_one()
+
+    assert session.pid == 222
+    assert session.team_slot_id is None
+    assert session.member_id != slot_member.id
+    assert members[0].participant_kind == "repo"
+    assert members[0].sessions[0].session_key == "tmux:%7"
 
 
 @pytest.mark.asyncio
@@ -199,6 +557,7 @@ async def test_send_message_auto_nudges_tmux_observed_codex_recipient(db, svc, t
     await svc.sync_observed_sessions(db)
     recipient = (await svc.list_team(db))[0]
     sender = MailTeamMember(
+        identity_key="repo:sender",
         repo_id="sender",
         repo_path="/tmp/sender",
         repo_name="sender",

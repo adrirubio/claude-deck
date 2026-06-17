@@ -20,9 +20,9 @@ Agent Teams do not create a second messaging system. Once agents are launched or
 
 You can create a team manually, import selected Agent Mail members, or snapshot currently visible Agent Bridge sessions.
 
-`From Mail` uses Agent Mail members and copies their current role and charter into slot-specific values. This is a snapshot; editing a team slot does not update the global Agent Mail member.
+`From Mail` uses Agent Mail participants and copies their current role and charter into slot-specific values. This is a snapshot; editing a team slot does not update existing mail history.
 
-`From Bridge` uses live Agent Bridge tmux sessions. If multiple sessions are visible for the same repo, v1 keeps one enabled slot because Agent Mail currently has one durable identity per repo.
+`From Bridge` uses live Agent Bridge tmux sessions. If multiple sessions are visible for the same repo, Claude Deck keeps each session as a separate slot so the resulting team can have distinct same-repo roles.
 
 ## Launch Planning
 
@@ -34,7 +34,7 @@ Before launch, Claude Deck computes a plan. The plan checks:
 - disabled slots
 - provider launch option validity
 
-By default, launch only includes enabled slots and only reuses wakeable sessions observed through Agent Bridge. Connected non-tmux Agent Mail sessions can still communicate, but they are not reliable team launch/reuse targets in v1.
+By default, launch only includes enabled slots and only reuses wakeable sessions observed through Agent Bridge. Connected non-tmux Agent Mail sessions can still communicate, but they are not reliable team launch/reuse targets.
 
 ## External Local Agents
 
@@ -47,4 +47,4 @@ Local external agents can use the JSON API:
 
 Launch accepts a reviewed `confirm_plan_hash`, or `skip_plan_confirmation: true` for explicit single-step local automation. If a plan hash is stale, the API returns `409` with the updated plan.
 
-After a launch, use the [External Agent Orchestration](./external-agent-orchestration.md) Agent Mail API to discover registered members, send context requests, create handoffs, and poll for answers.
+After a launch, use the [External Agent Orchestration](./external-agent-orchestration.md) Agent Mail API to discover registered participants, send context requests, create handoffs, and poll for answers.

@@ -121,6 +121,9 @@ export function TeamTab({
       member.charter ?? '',
       member.repo_name,
       member.repo_path,
+      member.team_preset_name ?? '',
+      member.team_slot_name ?? '',
+      member.participant_kind,
     ].join(' ').toLowerCase()
     return matchesStatus && (!normalizedSearch || haystack.includes(normalizedSearch))
   })
@@ -175,8 +178,22 @@ export function TeamTab({
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <CardTitle className="truncate text-lg">{member.display_name}</CardTitle>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <CardTitle className="truncate text-lg">{member.display_name}</CardTitle>
+                        {member.participant_kind === 'team_slot' && (
+                          <Badge variant="outline" title={member.team_preset_name ?? undefined}>
+                            Team slot
+                          </Badge>
+                        )}
+                      </div>
                       <p className="truncate text-sm text-muted-foreground">{member.repo_path}</p>
+                      {member.team_preset_name && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {member.team_slot_name
+                            ? `${member.team_preset_name} / ${member.team_slot_name}`
+                            : member.team_preset_name}
+                        </p>
+                      )}
                     </div>
                     <div className="flex shrink-0 flex-wrap justify-end gap-2">
                       <Badge
@@ -296,7 +313,7 @@ export function TeamTab({
                       </div>
                     ) : (
                       <div className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground">
-                        No sessions observed for this member.
+                        No sessions observed for this participant.
                       </div>
                     )}
                   </div>
@@ -338,7 +355,7 @@ export function TeamTab({
       ) : (
         <Card className="rounded-lg border-dashed">
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            {loading ? 'Loading team members...' : 'No team members match the current filters.'}
+            {loading ? 'Loading participants...' : 'No participants match the current filters.'}
           </CardContent>
         </Card>
       )}

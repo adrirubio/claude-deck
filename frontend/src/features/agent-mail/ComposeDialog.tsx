@@ -43,6 +43,12 @@ const composeKinds: Array<Exclude<MailMessageKind, 'answer'>> = [
   'handoff',
 ]
 
+function recipientLabel(member: MailMemberResponse): string {
+  const role = member.role ? `, ${member.role}` : ''
+  const team = member.team_preset_name ? `, ${member.team_preset_name}` : ''
+  return `${member.display_name} (${member.repo_name}${role}${team})`
+}
+
 export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: ComposeDialogProps) {
   const [kind, setKind] = useState<Exclude<MailMessageKind, 'answer'>>('message')
   const [recipient, setRecipient] = useState('')
@@ -135,12 +141,12 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
                 <Label>Recipient</Label>
                 <Select value={recipient} onValueChange={setRecipient}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select a member" />
+                    <SelectValue placeholder="Select a participant" />
                   </SelectTrigger>
                   <SelectContent>
                     {members.map((member) => (
                       <SelectItem key={member.id} value={String(member.id)}>
-                        {member.display_name}
+                        {recipientLabel(member)}
                       </SelectItem>
                     ))}
                   </SelectContent>

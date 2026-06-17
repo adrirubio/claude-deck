@@ -152,9 +152,9 @@ export function AgentMailPage() {
     try {
       await updateAgentMailMember(memberId, update)
       await loadOperationalData()
-      toast.success('Member updated')
+      toast.success('Participant updated')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to update member')
+      toast.error(error instanceof Error ? error.message : 'Failed to update participant')
       throw error
     }
   }
@@ -233,7 +233,7 @@ export function AgentMailPage() {
               <p>
                 {!hasConfiguredIntegration
                   ? 'Install the Agent Mail MCP server for Claude Code or Codex before agents can send, receive, or answer mailbox requests.'
-                  : 'Start or resume an agent in a repository, then have it call deck_whoami once so Claude Deck can attach it to a team member.'}
+                  : 'Start or resume an agent in a repository, then have it call deck_whoami once so Claude Deck can attach it to a participant.'}
               </p>
               <div className="flex shrink-0 flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setHelpOpen(true)}>
@@ -265,7 +265,7 @@ export function AgentMailPage() {
       <div className="grid gap-4 md:grid-cols-4">
         <Card className="rounded-lg">
           <CardHeader className="pb-3">
-            <CardDescription>Members</CardDescription>
+            <CardDescription>Participants</CardDescription>
             <CardTitle className="flex items-center gap-2 text-3xl">
               <Users className="h-5 w-5 text-muted-foreground" />
               {members.length}

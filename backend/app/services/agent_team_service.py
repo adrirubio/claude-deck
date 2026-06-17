@@ -4,11 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import fields
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -84,7 +85,6 @@ class AgentTeamService:
             self._normalize_slot_create(slot, index)
             for index, slot in enumerate(request.slots)
         ]
-        self._validate_enabled_repo_uniqueness(normalized_slots)
         for slot_data in normalized_slots:
             db.add(AgentTeamSlot(preset_id=preset.id, **slot_data))
 
@@ -115,15 +115,13 @@ class AgentTeamService:
         preset = await self._require_preset(db, preset_id)
         slots = await self._slots_for_preset(db, preset_id)
         slot_ids = [slot.id for slot in slots]
-        statement = update(MailAgentSession).where(MailAgentSession.team_preset_id == preset_id)
+        session_condition = MailAgentSession.team_preset_id == preset_id
         if slot_ids:
-            statement = update(MailAgentSession).where(
-                or_(
-                    MailAgentSession.team_preset_id == preset_id,
-                    MailAgentSession.team_slot_id.in_(slot_ids),
-                )
+            session_condition = or_(
+                MailAgentSession.team_preset_id == preset_id,
+                MailAgentSession.team_slot_id.in_(slot_ids),
             )
-        await db.execute(statement.values(team_preset_id=None, team_slot_id=None))
+        await self._move_sessions_to_repo_members(db, session_condition)
         launch_ids = (
             await db.execute(select(AgentTeamLaunch.id).where(AgentTeamLaunch.preset_id == preset_id))
         ).scalars().all()
@@ -244,7 +242,6 @@ class AgentTeamService:
             ),
         )
         slot_requests: list[AgentTeamSlotCreate] = []
-        seen_repo_ids: set[str] = set()
 
         for session in sessions:
             provider = self._clean_optional(session.get("provider"))
@@ -255,9 +252,6 @@ class AgentTeamService:
                 repo_path, identity = self._normalize_repo(cwd)
             except ValueError:
                 continue
-            if identity["repo_id"] in seen_repo_ids:
-                continue
-            seen_repo_ids.add(identity["repo_id"])
 
             slot_requests.append(
                 AgentTeamSlotCreate(
@@ -290,12 +284,6 @@ class AgentTeamService:
         slot_data = self._normalize_slot_create(
             request,
             await self._next_slot_position(db, preset_id) if request.position is None else request.position,
-        )
-        await self._ensure_enabled_repo_is_unique(
-            db,
-            preset_id,
-            repo_id=slot_data["repo_id"],
-            enabled=slot_data["enabled"],
         )
         db.add(AgentTeamSlot(preset_id=preset.id, **slot_data))
         preset.updated_at = datetime.utcnow()
@@ -339,26 +327,12 @@ class AgentTeamService:
         if request.position is not None:
             updates["position"] = request.position
 
-        final_repo_id = updates.get("repo_id", slot.repo_id)
-        final_enabled = updates.get("enabled", slot.enabled)
-        await self._ensure_enabled_repo_is_unique(
-            db,
-            slot.preset_id,
-            repo_id=final_repo_id,
-            enabled=final_enabled,
-            exclude_slot_id=slot.id,
-        )
-
         identity_changed = (
             ("repo_id" in updates and updates["repo_id"] != slot.repo_id)
             or ("provider" in updates and updates["provider"] != slot.provider)
         )
         if identity_changed:
-            await db.execute(
-                update(MailAgentSession)
-                .where(MailAgentSession.team_slot_id == slot.id)
-                .values(team_preset_id=None, team_slot_id=None)
-            )
+            await self._move_sessions_to_repo_members(db, MailAgentSession.team_slot_id == slot.id)
 
         for key, value in updates.items():
             setattr(slot, key, value)
@@ -371,11 +345,7 @@ class AgentTeamService:
     async def delete_slot(self, db: AsyncSession, slot_id: int) -> AgentTeamPresetResponse:
         slot = await self._require_slot(db, slot_id)
         preset = await self._require_preset(db, slot.preset_id)
-        await db.execute(
-            update(MailAgentSession)
-            .where(MailAgentSession.team_slot_id == slot.id)
-            .values(team_preset_id=None, team_slot_id=None)
-        )
+        await self._move_sessions_to_repo_members(db, MailAgentSession.team_slot_id == slot.id)
         await db.delete(slot)
         preset.updated_at = datetime.utcnow()
         await db.commit()
@@ -418,10 +388,22 @@ class AgentTeamService:
         await agent_mail_service.sync_observed_sessions(db)
         discovered = self._discover_sessions()
         install_status = await agent_mail_install_service.get_install_status()
+        reuse_group_counts = self._reuse_group_counts(slots)
 
         items: list[AgentTeamLaunchPlanItem] = []
+        used_matching_sessions: set[str] = set()
         for slot in slots:
-            matching = self._matching_session(slot, discovered) if request.reuse_existing else None
+            matching = (
+                await self._matching_session(
+                    db,
+                    slot,
+                    discovered,
+                    used_matching_sessions,
+                    requires_disambiguation=reuse_group_counts.get((slot.provider, slot.repo_id), 0) > 1,
+                )
+                if request.reuse_existing and slot.enabled
+                else None
+            )
             item = self._plan_slot(slot, matching, install_status)
             items.append(item)
 
@@ -733,25 +715,152 @@ class AgentTeamService:
             return "blocked_agent_mail_not_configured"
         return "failed"
 
-    def _matching_session(
+    def _reuse_group_counts(self, slots: list[AgentTeamSlot]) -> dict[tuple[str, str], int]:
+        counts: dict[tuple[str, str], int] = {}
+        for slot in slots:
+            if not slot.enabled:
+                continue
+            key = (slot.provider, slot.repo_id)
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    async def _matching_session(
+        self,
+        db: AsyncSession,
+        slot: AgentTeamSlot,
+        discovered: list[dict[str, Any]],
+        used_matching_sessions: set[str],
+        *,
+        requires_disambiguation: bool,
+    ) -> dict[str, Any] | None:
+        attached = await self._matching_attached_session(db, slot, discovered, used_matching_sessions)
+        if attached is not None:
+            return attached
+        named = self._matching_named_session(slot, discovered, used_matching_sessions)
+        if named is not None:
+            return named
+        if requires_disambiguation:
+            return None
+        for session in discovered:
+            match_key = self._matching_session_key(session)
+            if match_key in used_matching_sessions:
+                continue
+            if self._discovered_session_matches_slot(session, slot):
+                used_matching_sessions.add(match_key)
+                return self._matching_session_payload(session)
+        return None
+
+    async def _matching_attached_session(
+        self,
+        db: AsyncSession,
+        slot: AgentTeamSlot,
+        discovered: list[dict[str, Any]],
+        used_matching_sessions: set[str],
+    ) -> dict[str, Any] | None:
+        result = await db.execute(
+            select(MailAgentSession)
+            .where(
+                MailAgentSession.team_slot_id == slot.id,
+                MailAgentSession.provider == slot.provider,
+            )
+            .order_by(MailAgentSession.last_seen_at.desc())
+        )
+        attached_sessions = result.scalars().all()
+        now = datetime.utcnow()
+        for attached in attached_sessions:
+            if agent_mail_service._effective_status(attached, now) == "offline":
+                continue
+            for session in discovered:
+                match_key = self._matching_session_key(session)
+                if match_key in used_matching_sessions:
+                    continue
+                if not self._discovered_session_matches_slot(session, slot):
+                    continue
+                if self._discovered_session_matches_registered(session, attached):
+                    used_matching_sessions.add(match_key)
+                    return self._matching_session_payload(session)
+        return None
+
+    def _matching_named_session(
         self,
         slot: AgentTeamSlot,
         discovered: list[dict[str, Any]],
+        used_matching_sessions: set[str],
     ) -> dict[str, Any] | None:
         for session in discovered:
-            if session.get("provider") != slot.provider:
+            match_key = self._matching_session_key(session)
+            if match_key in used_matching_sessions:
                 continue
-            cwd = session.get("cwd")
-            if cwd and derive_repo_identity(cwd)["repo_id"] == slot.repo_id:
-                return {
-                    "source": "bridge",
-                    "provider": session.get("provider"),
-                    "session_name": session.get("session_name"),
-                    "tmux_target": session.get("tmux_target"),
-                    "cwd": cwd,
-                    "pid": session.get("pid"),
-                }
+            if not self._discovered_session_matches_slot(session, slot):
+                continue
+            if self._session_name_matches_slot(session, slot):
+                used_matching_sessions.add(match_key)
+                return self._matching_session_payload(session)
         return None
+
+    def _session_name_matches_slot(self, session: dict[str, Any], slot: AgentTeamSlot) -> bool:
+        slot_terms = [slot.display_name, slot.role]
+        session_terms = [session.get("session_name"), session.get("tmux_target")]
+        slot_tokens = {
+            token for term in slot_terms if term for token in self._match_tokens(term)
+        }
+        session_tokens = {
+            token for term in session_terms if term for token in self._match_tokens(term)
+        }
+        return bool(slot_tokens & session_tokens)
+
+    def _match_tokens(self, value: Any) -> list[str]:
+        return [token for token in re.split(r"[^a-z0-9]+", str(value).lower()) if len(token) >= 3]
+
+    def _discovered_session_matches_slot(
+        self,
+        session: dict[str, Any],
+        slot: AgentTeamSlot,
+    ) -> bool:
+        if session.get("provider") != slot.provider:
+            return False
+        cwd = session.get("cwd")
+        return bool(cwd and derive_repo_identity(cwd)["repo_id"] == slot.repo_id)
+
+    def _discovered_session_matches_registered(
+        self,
+        session: dict[str, Any],
+        registered: MailAgentSession,
+    ) -> bool:
+        payload = self._matching_session_payload(session)
+        if registered.session_key and payload.get("session_key") == registered.session_key:
+            return True
+        if registered.tmux_target and payload.get("tmux_target") == registered.tmux_target:
+            return True
+        if registered.pane_id and payload.get("pane_id") == registered.pane_id:
+            return True
+        if registered.pid and payload.get("pid"):
+            try:
+                return registered.pid == int(str(payload["pid"]))
+            except (TypeError, ValueError):
+                return False
+        return False
+
+    def _matching_session_payload(self, session: dict[str, Any]) -> dict[str, Any]:
+        pane_id = session.get("pane_id")
+        session_key = session.get("session_key") or (f"tmux:{pane_id}" if pane_id else None)
+        return {
+            "source": "bridge",
+            "provider": session.get("provider"),
+            "session_key": session_key,
+            "session_name": session.get("session_name"),
+            "tmux_target": session.get("tmux_target"),
+            "pane_id": pane_id,
+            "cwd": session.get("cwd"),
+            "pid": session.get("pid"),
+        }
+
+    def _matching_session_key(self, session: dict[str, Any]) -> str:
+        for key in ("session_key", "tmux_target", "pane_id", "pid", "session_name"):
+            value = session.get(key)
+            if value:
+                return f"{key}:{value}"
+        return f"{session.get('provider')}:{session.get('cwd')}"
 
     async def _attach_team_context_to_existing_session(
         self,
@@ -770,6 +879,8 @@ class AgentTeamService:
             statement = statement.where(MailAgentSession.session_key == matching_session["session_key"])
         elif matching_session.get("tmux_target"):
             statement = statement.where(MailAgentSession.tmux_target == matching_session["tmux_target"])
+        elif matching_session.get("pane_id"):
+            statement = statement.where(MailAgentSession.pane_id == matching_session["pane_id"])
         else:
             return None
         result = await db.execute(
@@ -779,10 +890,28 @@ class AgentTeamService:
         for session, member in result.all():
             if agent_mail_service._effective_status(session, now) == "offline":
                 continue
+            slot_member = await agent_mail_service.get_or_create_slot_member(db, slot)
+            if member.id != slot_member.id:
+                old_member_id = member.id
+                session.member_id = slot_member.id
+                await db.flush()
+                await agent_mail_service._remove_empty_observed_member(db, old_member_id)
             session.team_preset_id = slot.preset_id
             session.team_slot_id = slot.id
-            return member.id
+            return slot_member.id
         return None
+
+    async def _move_sessions_to_repo_members(self, db: AsyncSession, condition: Any) -> None:
+        sessions = (await db.execute(select(MailAgentSession).where(condition))).scalars().all()
+        for session in sessions:
+            if session.cwd:
+                try:
+                    repo_member = await agent_mail_service.get_or_create_repo_member(db, session.cwd)
+                    session.member_id = repo_member.id
+                except Exception:
+                    pass
+            session.team_preset_id = None
+            session.team_slot_id = None
 
     def _validate_spawn_options(self, slot: AgentTeamSlot) -> str | None:
         try:
@@ -936,28 +1065,6 @@ class AgentTeamService:
         slots = await self._slots_for_preset(db, preset_id)
         return (max((slot.position for slot in slots), default=-1) + 1)
 
-    async def _ensure_enabled_repo_is_unique(
-        self,
-        db: AsyncSession,
-        preset_id: int,
-        *,
-        repo_id: str,
-        enabled: bool,
-        exclude_slot_id: int | None = None,
-    ) -> None:
-        if not enabled:
-            return
-        statement = select(AgentTeamSlot).where(
-            AgentTeamSlot.preset_id == preset_id,
-            AgentTeamSlot.repo_id == repo_id,
-            AgentTeamSlot.enabled.is_(True),
-        )
-        if exclude_slot_id is not None:
-            statement = statement.where(AgentTeamSlot.id != exclude_slot_id)
-        existing = (await db.execute(statement)).scalar_one_or_none()
-        if existing is not None:
-            raise ValueError("A team preset cannot have duplicate enabled slots for the same repo")
-
     async def _ensure_preset_name_is_unique(
         self,
         db: AsyncSession,
@@ -971,16 +1078,6 @@ class AgentTeamService:
         existing = (await db.execute(statement)).scalar_one_or_none()
         if existing is not None:
             raise ValueError("An Agent Team preset with this name already exists")
-
-    def _validate_enabled_repo_uniqueness(self, slots: list[dict[str, Any]]) -> None:
-        seen: set[str] = set()
-        for slot in slots:
-            if not slot["enabled"]:
-                continue
-            repo_id = slot["repo_id"]
-            if repo_id in seen:
-                raise ValueError("A team preset cannot have duplicate enabled slots for the same repo")
-            seen.add(repo_id)
 
     def _normalize_slot_create(
         self,

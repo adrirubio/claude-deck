@@ -31,6 +31,7 @@ def clean_external_rate_limits(monkeypatch):
 
 async def _member(db, repo_id, name):
     member = MailTeamMember(
+        identity_key=f"repo:{repo_id}",
         repo_id=repo_id,
         repo_path=f"/tmp/{name}",
         repo_name=name,

@@ -1891,10 +1891,16 @@ class MailMemberResponse(BaseModel):
     """Durable team member with derived status and inbox counts."""
 
     id: int
+    identity_key: str
     repo_id: str
     repo_path: str
     repo_name: str
     display_name: str
+    participant_kind: str = "repo"
+    team_preset_id: Optional[int] = None
+    team_preset_name: Optional[str] = None
+    team_slot_id: Optional[int] = None
+    team_slot_name: Optional[str] = None
     role: Optional[str] = None
     charter: Optional[str] = None
     status: str

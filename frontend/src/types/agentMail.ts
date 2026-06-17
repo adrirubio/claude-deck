@@ -23,10 +23,16 @@ export interface MailSessionResponse {
 
 export interface MailMemberResponse {
   id: number
+  identity_key: string
   repo_id: string
   repo_path: string
   repo_name: string
   display_name: string
+  participant_kind: 'repo' | 'team_slot' | string
+  team_preset_id?: number | null
+  team_preset_name?: string | null
+  team_slot_id?: number | null
+  team_slot_name?: string | null
   role?: string | null
   charter?: string | null
   status: MailMemberStatus

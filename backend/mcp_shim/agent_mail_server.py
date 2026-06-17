@@ -130,9 +130,9 @@ def _guard() -> Optional[dict]:
 
 @mcp.tool()
 def deck_whoami() -> dict:
-    """Register with Claude Deck Agent Mail and return your team identity, role, charter,
-    repo, live status, and unread/pending inbox counts. Call this once when starting
-    coordinated work."""
+    """Register with Claude Deck Agent Mail and return your participant identity, role,
+    charter, repo, live status, and unread/pending inbox counts. Call this once when
+    starting coordinated work."""
     err = _guard()
     if err:
         return err
@@ -148,8 +148,8 @@ def deck_whoami() -> dict:
 
 @mcp.tool()
 def deck_list_team() -> dict:
-    """List all local team members Claude Deck knows about across repositories, including
-    member ids, display names, roles, repos, charters, and live statuses."""
+    """List all local Agent Mail participants Claude Deck knows about, including member
+    ids, display names, roles, repos, team slots, charters, and live statuses."""
     err = _guard()
     if err:
         return err
@@ -158,8 +158,18 @@ def deck_list_team() -> dict:
         return result
     members = [
         {
-            key: member[key]
-            for key in ("id", "display_name", "role", "repo_name", "status", "charter")
+            key: member.get(key)
+            for key in (
+                "id",
+                "display_name",
+                "participant_kind",
+                "role",
+                "repo_name",
+                "status",
+                "charter",
+                "team_preset_name",
+                "team_slot_name",
+            )
         }
         for member in result["data"]["members"]
     ]
@@ -267,7 +277,7 @@ def deck_request_context(
     why_needed: str = "",
     files_or_symbols: Optional[list[str]] = None,
 ) -> dict:
-    """Ask another repository's agent a structured question about something they know.
+    """Ask another Agent Mail participant a structured question about something they know.
     Creates a pending context request they will be nudged to answer."""
     err = _guard()
     if err:
@@ -300,7 +310,7 @@ def deck_create_handoff(
     files: Optional[list[str]] = None,
     next_steps: Optional[list[str]] = None,
 ) -> dict:
-    """Hand work over to another team member with a summary, touched files, and next
+    """Hand work over to another Agent Mail participant with a summary, touched files, and next
     steps. The recipient acknowledges it to accept the handoff."""
     err = _guard()
     if err:

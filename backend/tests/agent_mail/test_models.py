@@ -7,6 +7,7 @@ from app.models.database import MailAgentSession, MailMessage, MailReceipt, Mail
 @pytest.mark.asyncio
 async def test_tables_create_and_accept_rows(db):
     member = MailTeamMember(
+        identity_key="repo:abc123",
         repo_id="abc123",
         repo_path="/tmp/r",
         repo_name="r",

@@ -28,14 +28,14 @@ export DECK_API='http://127.0.0.1:8000/api/v1'
 
 Actor registration is loopback-only. External Agent Mail endpoints require `Authorization: Bearer ...`.
 
-## Discover Members
+## Discover Participants
 
 ```bash
 curl -s "$DECK_API/external/agent-mail/members" \
   -H "Authorization: Bearer $DECK_EXTERNAL_AGENT_TOKEN"
 ```
 
-The response includes each Agent Mail member's repo, role, charter, connection status, inbox load, `wake_state`, `wake_methods`, and current Agent Team preset/slot context when present.
+The response includes each Agent Mail participant's repo, role, charter, connection status, inbox load, `wake_state`, `wake_methods`, and current Agent Team preset/slot context when present. A repository can have multiple participants when Agent Team slots represent distinct same-repo roles.
 
 Wake states mean:
 
@@ -145,7 +145,7 @@ curl -s -X POST "$DECK_API/agent-teams/presets/3/launch" \
   }'
 ```
 
-Once agents register through Agent Mail, use `/external/agent-mail/members` to discover their member ids, then send context requests or handoffs through the external Agent Mail endpoints.
+Once agents register through Agent Mail, use `/external/agent-mail/members` to discover their participant/member ids, then send context requests or handoffs through the external Agent Mail endpoints.
 
 ## Safeguards
 

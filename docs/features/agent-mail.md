@@ -1,12 +1,12 @@
 # Agent Mail
 
-Agent Mail lets local Claude Code and Codex CLI sessions coordinate as a user-directed team. Claude Deck keeps durable team identities per repository, tracks ephemeral sessions under those identities, and gives agents a shared mailbox for structured context requests, handoffs, broadcasts, and replies.
+Agent Mail lets local Claude Code and Codex CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
 
 ## What It Is For
 
 - Ask the agent that knows one repository to explain a local API, component, convention, or failure mode to another agent.
 - Hand work from one repository agent to another with touched files and next steps.
-- Keep short-lived agent sessions attached to a durable repo member, so role and charter survive restarts and context compaction.
+- Keep short-lived agent sessions attached to a durable repo or Agent Team slot participant, so role and charter survive restarts and context compaction.
 - Inspect team communication from Claude Deck without turning the product into a general chat app.
 
 ## How Agents Connect
@@ -31,7 +31,7 @@ Non-tmux Codex sessions can still receive and send Agent Mail through MCP, but C
 
 ## External Local Callers
 
-Local tools such as OpenClaw can use the external Agent Mail API to authenticate as a named local actor, discover members, send direct messages, request context, create handoffs, and poll request status.
+Local tools such as OpenClaw can use the external Agent Mail API to authenticate as a named local actor, discover participants, send direct messages, request context, create handoffs, and poll request status.
 
 See [External Agent Orchestration](./external-agent-orchestration.md) for token setup, endpoint examples, delivery result semantics, and Agent Teams launch integration.
 
@@ -47,8 +47,8 @@ Without this setup, the page can still show install status, but agents cannot ex
 
 ## Current Limits
 
-- Visibility is machine-global. Every local member is visible to every other member.
-- MVP identity is one team member per repository. Git worktrees of the same repository share the same member.
+- Visibility is machine-global. Every local participant is visible to every other participant.
+- Sessions without Agent Team slot context use one repo-level participant. Agent Team slots can create multiple distinct participants in the same repo, such as planner/reviewer and implementer.
 - External Agent Mail calls use local actor bearer tokens. Token creation is loopback-only and follows Claude Deck's local trust model.
 - External callers should only use the API from the same trusted machine until a broader Claude Deck auth model exists.
 - Agent Mail is coordination state, not source control. Handoffs should still reference files, branches, issues, or commits when durable provenance matters.

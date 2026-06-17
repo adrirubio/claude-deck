@@ -234,7 +234,7 @@ export function ThreadDialog({
                 <Label>Reply as</Label>
                 <Select value={sender} onValueChange={setSender}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select member" />
+                    <SelectValue placeholder="Select participant" />
                   </SelectTrigger>
                   <SelectContent>
                     {members.map((member) => (

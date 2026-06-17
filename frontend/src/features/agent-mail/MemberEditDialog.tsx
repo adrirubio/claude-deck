@@ -61,7 +61,7 @@ export function MemberEditDialog({ member, open, onOpenChange, onSave }: MemberE
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={MODAL_SIZES.SM}>
         <DialogHeader>
-          <DialogTitle>Edit team member</DialogTitle>
+          <DialogTitle>Edit participant</DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-2">

@@ -85,6 +85,7 @@ async def test_user_prompt_submit_injects_only_when_inbox_nonempty(client, db, t
     team = await agent_mail_service.list_team(db)
     me = team[0]
     other = MailTeamMember(
+        identity_key="repo:other",
         repo_id="other",
         repo_path="/tmp/o",
         repo_name="o",
