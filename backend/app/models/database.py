@@ -252,15 +252,23 @@ class AgentTeamLaunchItem(Base):
 
 
 class MailTeamMember(Base):
-    """Durable Agent Mail team identity, keyed by repository."""
+    """Durable Agent Mail routable participant, grouped by repository."""
 
     __tablename__ = "mail_team_members"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    repo_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    identity_key: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    repo_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     repo_path: Mapped[str] = mapped_column(String, nullable=False)
     repo_name: Mapped[str] = mapped_column(String, nullable=False)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
+    participant_kind: Mapped[str] = mapped_column(String, default="repo", nullable=False)
+    team_preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
+    )
+    team_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
     role: Mapped[str | None] = mapped_column(String, nullable=True)
     charter: Mapped[str | None] = mapped_column(String, nullable=True)
     last_inbox_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

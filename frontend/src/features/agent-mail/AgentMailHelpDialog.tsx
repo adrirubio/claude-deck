@@ -78,9 +78,9 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
 
           <HelpSection icon={ShieldAlert} title="MVP limits">
             <p>
-              Visibility is machine-global, members are keyed one-per-repo, and Claude Deck must
-              be running for agents to use the mailbox. Git worktrees of the same repository share
-              a member identity.
+              Visibility is machine-global, sessions without Agent Team slot context share a
+              repo-level participant, and Claude Deck must be running for agents to use the mailbox.
+              Use Agent Team slots when separate same-repo agents need distinct inboxes.
             </p>
           </HelpSection>
         </div>

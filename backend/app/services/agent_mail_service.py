@@ -52,33 +52,125 @@ class AgentMailService:
     def __init__(self) -> None:
         self._last_auto_nudge_at: dict[int, datetime] = {}
 
-    async def _get_or_create_member(self, db: AsyncSession, cwd: str) -> MailTeamMember:
+    def _repo_member_values(self, cwd: str) -> dict[str, str | int | None]:
         ident = derive_repo_identity(cwd)
+        return {
+            "identity_key": f"repo:{ident['repo_id']}",
+            "repo_id": ident["repo_id"],
+            "repo_path": ident["repo_root"],
+            "repo_name": ident["repo_name"],
+            "display_name": ident["repo_name"],
+            "participant_kind": "repo",
+            "team_preset_id": None,
+            "team_slot_id": None,
+            "role": None,
+            "charter": None,
+        }
+
+    def _slot_identity_key(self, slot: AgentTeamSlot) -> str:
+        created_at = slot.created_at.isoformat(timespec="microseconds")
+        return f"slot:{slot.preset_id}:{slot.id}:{created_at}"
+
+    def _slot_member_values(self, slot: AgentTeamSlot) -> dict[str, str | int | None]:
+        return {
+            "identity_key": self._slot_identity_key(slot),
+            "repo_id": slot.repo_id,
+            "repo_path": slot.repo_path,
+            "repo_name": slot.repo_name,
+            "display_name": slot.display_name,
+            "participant_kind": "team_slot",
+            "team_preset_id": slot.preset_id,
+            "team_slot_id": slot.id,
+            "role": slot.role,
+            "charter": slot.charter,
+        }
+
+    async def _registration_member_values(
+        self,
+        db: AsyncSession,
+        request: MailAgentRegisterRequest,
+        team_preset_id: int | None,
+        team_slot_id: int | None,
+    ) -> dict[str, str | int | None]:
+        if team_slot_id is not None:
+            slot = await db.get(AgentTeamSlot, team_slot_id)
+            if slot is not None and self._slot_matches_registration(slot, request):
+                return self._slot_member_values(slot)
+        values = self._repo_member_values(request.cwd)
+        if team_preset_id is not None:
+            values["team_preset_id"] = team_preset_id
+        return values
+
+    async def _get_or_create_member_by_values(
+        self,
+        db: AsyncSession,
+        values: dict[str, str | int | None],
+    ) -> MailTeamMember:
         result = await db.execute(
-            select(MailTeamMember).where(MailTeamMember.repo_id == ident["repo_id"])
+            select(MailTeamMember).where(MailTeamMember.identity_key == values["identity_key"])
         )
         member = result.scalar_one_or_none()
         if member is None:
-            member = MailTeamMember(
-                repo_id=ident["repo_id"],
-                repo_path=ident["repo_root"],
-                repo_name=ident["repo_name"],
-                display_name=ident["repo_name"],
-            )
+            member = MailTeamMember(**values)
             db.add(member)
             await db.flush()
+        else:
+            member.repo_id = str(values["repo_id"])
+            member.repo_path = str(values["repo_path"])
+            member.repo_name = str(values["repo_name"])
+            member.participant_kind = str(values["participant_kind"])
+            member.team_preset_id = values["team_preset_id"]  # type: ignore[assignment]
+            member.team_slot_id = values["team_slot_id"]  # type: ignore[assignment]
+            if member.participant_kind == "team_slot":
+                member.display_name = str(values["display_name"])
+                member.role = values["role"]  # type: ignore[assignment]
+                member.charter = values["charter"]  # type: ignore[assignment]
+            member.updated_at = datetime.utcnow()
         return member
+
+    async def _get_or_create_repo_member(self, db: AsyncSession, cwd: str) -> MailTeamMember:
+        return await self._get_or_create_member_by_values(db, self._repo_member_values(cwd))
+
+    async def get_or_create_repo_member(self, db: AsyncSession, cwd: str) -> MailTeamMember:
+        return await self._get_or_create_repo_member(db, cwd)
+
+    async def get_or_create_slot_member(
+        self,
+        db: AsyncSession,
+        slot: AgentTeamSlot,
+    ) -> MailTeamMember:
+        return await self._get_or_create_member_by_values(db, self._slot_member_values(slot))
 
     async def register_session(
         self, db: AsyncSession, request: MailAgentRegisterRequest
     ) -> tuple[MailTeamMember, MailAgentSession]:
-        member = await self._get_or_create_member(db, request.cwd)
         has_team_context = request.team_preset_id is not None or request.team_slot_id is not None
         team_preset_id, team_slot_id = await self._resolve_team_context(db, request)
         result = await db.execute(
             select(MailAgentSession).where(MailAgentSession.session_key == request.session_key)
         )
         session = result.scalar_one_or_none()
+        if not has_team_context and session is not None and session.team_slot_id is not None:
+            existing_member = await db.get(MailTeamMember, session.member_id)
+            if existing_member is not None and await self._session_team_context_matches_registration(
+                db,
+                session,
+                existing_member,
+                request,
+            ):
+                member = existing_member
+                team_preset_id = session.team_preset_id
+                team_slot_id = session.team_slot_id
+            else:
+                member = await self._get_or_create_member_by_values(
+                    db,
+                    await self._registration_member_values(db, request, team_preset_id, team_slot_id),
+                )
+        else:
+            member = await self._get_or_create_member_by_values(
+                db,
+                await self._registration_member_values(db, request, team_preset_id, team_slot_id),
+            )
         if session is None:
             session = MailAgentSession(
                 member_id=member.id,
@@ -90,15 +182,33 @@ class AgentMailService:
         session.provider = request.provider
         session.cwd = request.cwd
         session.pid = request.pid
-        if has_team_context:
-            session.team_preset_id = team_preset_id
-            session.team_slot_id = team_slot_id
+        session.team_preset_id = team_preset_id
+        session.team_slot_id = team_slot_id
         session.mailbox_status = "connected"
         session.last_seen_at = datetime.utcnow()
         await db.commit()
         await db.refresh(member)
         await db.refresh(session)
         return member, session
+
+    async def _session_team_context_matches_registration(
+        self,
+        db: AsyncSession,
+        session: MailAgentSession,
+        member: MailTeamMember,
+        request: MailAgentRegisterRequest,
+    ) -> bool:
+        if session.team_slot_id is None or member.participant_kind != "team_slot":
+            return False
+        if member.team_slot_id != session.team_slot_id:
+            return False
+        slot = await db.get(AgentTeamSlot, session.team_slot_id)
+        if slot is None or slot.provider != request.provider:
+            return False
+        try:
+            return derive_repo_identity(request.cwd)["repo_id"] == slot.repo_id
+        except Exception:
+            return False
 
     async def _resolve_team_context(
         self,
@@ -110,19 +220,26 @@ class AgentMailService:
             if slot is not None and (
                 request.team_preset_id is None or request.team_preset_id == slot.preset_id
             ):
-                if request.provider != slot.provider:
-                    return None, None
-                try:
-                    if derive_repo_identity(request.cwd)["repo_id"] == slot.repo_id:
-                        return slot.preset_id, slot.id
-                except Exception:
-                    return None, None
+                if self._slot_matches_registration(slot, request):
+                    return slot.preset_id, slot.id
             return None, None
         if request.team_preset_id is not None:
             preset = await db.get(AgentTeamPreset, request.team_preset_id)
             if preset is not None:
                 return preset.id, None
         return None, None
+
+    def _slot_matches_registration(
+        self,
+        slot: AgentTeamSlot,
+        request: MailAgentRegisterRequest,
+    ) -> bool:
+        if request.provider != slot.provider:
+            return False
+        try:
+            return derive_repo_identity(request.cwd)["repo_id"] == slot.repo_id
+        except Exception:
+            return False
 
     async def heartbeat_session(
         self, db: AsyncSession, session_key: str, activity: Optional[str] = None
@@ -175,18 +292,21 @@ class AgentMailService:
             logger.warning("agent bridge discovery failed: %s", exc)
             return
         active_observed_keys: set[str] = set()
+        affected_member_ids: set[int] = set()
         for info in discovered:
             pane_id = info.get("pane_id")
             cwd = info.get("cwd")
             if not pane_id or not cwd:
                 continue
-            member = await self._get_or_create_member(db, cwd)
             session_key = f"tmux:{pane_id}"
             active_observed_keys.add(session_key)
             result = await db.execute(
                 select(MailAgentSession).where(MailAgentSession.session_key == session_key)
             )
             session = result.scalar_one_or_none()
+            member = await self._member_for_existing_observed_session(db, session, info)
+            if member is None:
+                member = await self._member_for_observed_session(db, info)
             if session is None:
                 session = MailAgentSession(
                     member_id=member.id,
@@ -194,6 +314,8 @@ class AgentMailService:
                     session_key=session_key,
                 )
                 db.add(session)
+            elif session.member_id != member.id:
+                affected_member_ids.add(session.member_id)
             session.member_id = member.id
             session.provider = info.get("provider", "unknown")
             session.cwd = cwd
@@ -203,10 +325,107 @@ class AgentMailService:
                 session.pid = int(info.get("pid") or 0) or None
             except (TypeError, ValueError):
                 session.pid = None
+            session.team_preset_id = member.team_preset_id
+            session.team_slot_id = member.team_slot_id
             session.mailbox_status = "observed"
             session.last_seen_at = datetime.utcnow()
         await self._remove_stale_observed_sessions(db, active_observed_keys)
+        for member_id in affected_member_ids:
+            await self._remove_empty_observed_member(db, member_id)
         await db.commit()
+
+    async def _member_for_observed_session(
+        self,
+        db: AsyncSession,
+        info: dict,
+    ) -> MailTeamMember:
+        cwd = str(info.get("cwd") or "")
+        provider = str(info.get("provider") or "unknown")
+        pid = None
+        try:
+            pid = int(info.get("pid") or 0) or None
+        except (TypeError, ValueError):
+            pid = None
+
+        if pid is not None:
+            now = datetime.utcnow()
+            result = await db.execute(
+                select(MailAgentSession)
+                .where(
+                    MailAgentSession.source != "observed",
+                    MailAgentSession.provider == provider,
+                    MailAgentSession.pid == pid,
+                )
+                .order_by(MailAgentSession.last_seen_at.desc())
+                .limit(1)
+            )
+            registered_session = result.scalar_one_or_none()
+            if registered_session is not None and self._registered_session_matches_observed(
+                registered_session,
+                info,
+                now,
+            ):
+                member = await db.get(MailTeamMember, registered_session.member_id)
+                if member is not None:
+                    return member
+
+        return await self._get_or_create_repo_member(db, cwd)
+
+    async def _member_for_existing_observed_session(
+        self,
+        db: AsyncSession,
+        session: MailAgentSession | None,
+        info: dict,
+    ) -> MailTeamMember | None:
+        if session is None or session.source != "observed" or session.team_slot_id is None:
+            return None
+        if session.provider != str(info.get("provider") or "unknown"):
+            return None
+        if session.pane_id and session.pane_id != info.get("pane_id"):
+            return None
+        if session.tmux_target and session.tmux_target != info.get("tmux_target"):
+            return None
+        try:
+            discovered_pid = int(info.get("pid") or 0) or None
+        except (TypeError, ValueError):
+            discovered_pid = None
+        if session.pid is not None and discovered_pid is not None and session.pid != discovered_pid:
+            return None
+        cwd = str(info.get("cwd") or "")
+        if not session.cwd or not cwd:
+            return None
+        try:
+            if derive_repo_identity(session.cwd)["repo_id"] != derive_repo_identity(cwd)["repo_id"]:
+                return None
+        except Exception:
+            if os.path.realpath(session.cwd) != os.path.realpath(cwd):
+                return None
+        slot = await db.get(AgentTeamSlot, session.team_slot_id)
+        if slot is None or slot.provider != session.provider:
+            return None
+        member = await db.get(MailTeamMember, session.member_id)
+        if member is None or member.team_slot_id != slot.id:
+            return None
+        return member
+
+    def _registered_session_matches_observed(
+        self,
+        session: MailAgentSession,
+        info: dict,
+        now: datetime,
+    ) -> bool:
+        cwd = str(info.get("cwd") or "")
+        if not session.cwd or not cwd:
+            return False
+        try:
+            if derive_repo_identity(session.cwd)["repo_id"] != derive_repo_identity(cwd)["repo_id"]:
+                return False
+        except Exception:
+            if os.path.realpath(session.cwd) != os.path.realpath(cwd):
+                return False
+        if session.last_seen_at < now - timedelta(seconds=HEARTBEAT_TTL_SECONDS):
+            return False
+        return self._effective_status(session, now) != "offline"
 
     async def _remove_stale_observed_sessions(
         self, db: AsyncSession, active_observed_keys: set[str]
@@ -233,6 +452,8 @@ class AgentMailService:
         """Remove auto-observed members only when they have no durable user/mail state."""
         member = await db.get(MailTeamMember, member_id)
         if member is None:
+            return
+        if member.participant_kind != "repo":
             return
         if member.role or member.charter or member.display_name != member.repo_name:
             return
@@ -370,17 +591,56 @@ class AgentMailService:
             }
         return context
 
+    async def _team_context_by_member(
+        self,
+        db: AsyncSession,
+        members: list[MailTeamMember],
+    ) -> dict[int, dict[str, str | int | None]]:
+        slot_ids = {member.team_slot_id for member in members if member.team_slot_id is not None}
+        preset_ids = {
+            member.team_preset_id for member in members if member.team_preset_id is not None
+        }
+        slots: dict[int, AgentTeamSlot] = {}
+        if slot_ids:
+            slots = {
+                slot.id: slot
+                for slot in (
+                    await db.execute(select(AgentTeamSlot).where(AgentTeamSlot.id.in_(slot_ids)))
+                ).scalars().all()
+            }
+            preset_ids.update(slot.preset_id for slot in slots.values())
+        presets: dict[int, AgentTeamPreset] = {}
+        if preset_ids:
+            presets = {
+                preset.id: preset
+                for preset in (
+                    await db.execute(select(AgentTeamPreset).where(AgentTeamPreset.id.in_(preset_ids)))
+                ).scalars().all()
+            }
+        context: dict[int, dict[str, str | int | None]] = {}
+        for member in members:
+            slot = slots.get(member.team_slot_id) if member.team_slot_id is not None else None
+            preset_id = slot.preset_id if slot is not None else member.team_preset_id
+            preset = presets.get(preset_id) if preset_id is not None else None
+            context[member.id] = {
+                "team_preset_name": preset.name if preset is not None else None,
+                "team_slot_name": slot.display_name if slot is not None else None,
+            }
+        return context
+
     async def list_team(self, db: AsyncSession) -> List[MailMemberResponse]:
         now = datetime.utcnow()
         members = (await db.execute(select(MailTeamMember))).scalars().all()
         sessions = (await db.execute(select(MailAgentSession))).scalars().all()
         team_context = await self._team_context_by_session(db, sessions)
+        member_team_context = await self._team_context_by_member(db, members)
         by_member: dict[int, list[MailAgentSession]] = {}
         for session in sessions:
             by_member.setdefault(session.member_id, []).append(session)
 
         responses: List[MailMemberResponse] = []
         for member in members:
+            member_context = member_team_context.get(member.id, {})
             session_responses = [
                 self._session_response(session, now, team_context)
                 for session in by_member.get(member.id, [])
@@ -409,10 +669,16 @@ class AgentMailService:
             responses.append(
                 MailMemberResponse(
                     id=member.id,
+                    identity_key=member.identity_key,
                     repo_id=member.repo_id,
                     repo_path=member.repo_path,
                     repo_name=member.repo_name,
                     display_name=member.display_name,
+                    participant_kind=member.participant_kind,
+                    team_preset_id=member.team_preset_id,
+                    team_preset_name=member_context.get("team_preset_name"),
+                    team_slot_id=member.team_slot_id,
+                    team_slot_name=member_context.get("team_slot_name"),
                     role=member.role,
                     charter=member.charter,
                     status=status,

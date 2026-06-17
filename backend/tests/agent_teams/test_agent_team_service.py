@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.models.database import AgentTeamSlot
+from app.models.database import AgentTeamSlot, MailAgentSession, MailTeamMember
 from app.models.schemas import (
     AgentTeamCreateFromMailRequest,
     AgentTeamCreateFromBridgeRequest,
@@ -70,7 +70,7 @@ def no_real_process_boundaries(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_duplicate_enabled_repo_slots_are_rejected(db, tmp_path):
+async def test_duplicate_enabled_repo_slots_are_allowed(db, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -87,16 +87,16 @@ async def test_duplicate_enabled_repo_slots_are_rejected(db, tmp_path):
         ),
     )
 
-    with pytest.raises(ValueError, match="duplicate enabled slots"):
-        await agent_team_service.add_slot(
-            db,
-            preset.id,
-            AgentTeamSlotCreate(
-                display_name="Duplicate",
-                provider="codex-cli",
-                repo_path=str(repo),
-            ),
-        )
+    updated = await agent_team_service.add_slot(
+        db,
+        preset.id,
+        AgentTeamSlotCreate(
+            display_name="Implementer",
+            provider="codex-cli",
+            repo_path=str(repo),
+        ),
+    )
+    assert [slot.display_name for slot in updated.slots] == ["Primary", "Implementer"]
 
     updated = await agent_team_service.add_slot(
         db,
@@ -108,7 +108,7 @@ async def test_duplicate_enabled_repo_slots_are_rejected(db, tmp_path):
             enabled=False,
         ),
     )
-    assert len(updated.slots) == 2
+    assert len(updated.slots) == 3
 
 
 @pytest.mark.asyncio
@@ -263,7 +263,7 @@ async def test_create_from_agent_bridge_imports_current_bridge_sessions(db, tmp_
 
 
 @pytest.mark.asyncio
-async def test_create_from_agent_bridge_deduplicates_repo_sessions(db, tmp_path, monkeypatch):
+async def test_create_from_agent_bridge_keeps_same_repo_sessions(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setattr(
@@ -289,8 +289,323 @@ async def test_create_from_agent_bridge_deduplicates_repo_sessions(db, tmp_path,
         AgentTeamCreateFromBridgeRequest(name="Bridge team"),
     )
 
-    assert len(preset.slots) == 1
-    assert preset.slots[0].display_name == "repo-a"
+    assert [slot.display_name for slot in preset.slots] == ["repo-a", "repo-b"]
+
+
+@pytest.mark.asyncio
+async def test_plan_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Same repo team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "implementer",
+                "tmux_target": "implementer:0.0",
+                "cwd": str(repo),
+            },
+            {
+                "provider": "codex-cli",
+                "session_name": "planner",
+                "tmux_target": "planner:0.0",
+                "cwd": str(repo),
+            },
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+
+    assert [item.action for item in plan.items] == ["reuse", "reuse"]
+    assert [item.matching_session["tmux_target"] for item in plan.items] == [
+        "planner:0.0",
+        "implementer:0.0",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_plan_launch_does_not_reuse_ambiguous_same_repo_sessions(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Same repo team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="A",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="B",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "main",
+                "tmux_target": "main:0.0",
+                "cwd": str(repo),
+            },
+            {
+                "provider": "codex-cli",
+                "session_name": "backup",
+                "tmux_target": "backup:0.0",
+                "cwd": str(repo),
+            },
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+
+    assert [item.action for item in plan.items] == ["spawn", "spawn"]
+
+
+@pytest.mark.asyncio
+async def test_plan_launch_prefers_existing_same_repo_slot_attachment(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Same repo team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    planner_slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    implementer_slot = await db.get(AgentTeamSlot, preset.slots[1].id)
+    planner_member = await agent_mail_service.get_or_create_slot_member(db, planner_slot)
+    implementer_member = await agent_mail_service.get_or_create_slot_member(db, implementer_slot)
+    db.add_all(
+        [
+            MailAgentSession(
+                member_id=planner_member.id,
+                source="observed",
+                provider="codex-cli",
+                session_key="tmux:%1",
+                tmux_target="planner:0.0",
+                pane_id="%1",
+                cwd=str(repo),
+                team_preset_id=preset.id,
+                team_slot_id=planner_slot.id,
+                mailbox_status="observed",
+            ),
+            MailAgentSession(
+                member_id=implementer_member.id,
+                source="observed",
+                provider="codex-cli",
+                session_key="tmux:%2",
+                tmux_target="implementer:0.0",
+                pane_id="%2",
+                cwd=str(repo),
+                team_preset_id=preset.id,
+                team_slot_id=implementer_slot.id,
+                mailbox_status="observed",
+            ),
+        ]
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "implementer",
+                "tmux_target": "implementer:0.0",
+                "pane_id": "%2",
+                "cwd": str(repo),
+            },
+            {
+                "provider": "codex-cli",
+                "session_name": "planner",
+                "tmux_target": "planner:0.0",
+                "pane_id": "%1",
+                "cwd": str(repo),
+            },
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+
+    assert [item.action for item in plan.items] == ["reuse", "reuse"]
+    assert [item.matching_session["tmux_target"] for item in plan.items] == [
+        "planner:0.0",
+        "implementer:0.0",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Same repo team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    repo_member = await agent_mail_service.get_or_create_repo_member(db, str(repo))
+    db.add_all(
+        [
+            MailAgentSession(
+                member_id=repo_member.id,
+                source="observed",
+                provider="codex-cli",
+                session_key="tmux:%1",
+                tmux_target="planner:0.0",
+                pane_id="%1",
+                cwd=str(repo),
+                mailbox_status="observed",
+            ),
+            MailAgentSession(
+                member_id=repo_member.id,
+                source="observed",
+                provider="codex-cli",
+                session_key="tmux:%2",
+                tmux_target="implementer:0.0",
+                pane_id="%2",
+                cwd=str(repo),
+                mailbox_status="observed",
+            ),
+        ]
+    )
+    await db.commit()
+    discovered_sessions = [
+        {
+            "provider": "codex-cli",
+            "session_name": "planner",
+            "tmux_target": "planner:0.0",
+            "pane_id": "%1",
+            "cwd": str(repo),
+            "pid": "101",
+        },
+        {
+            "provider": "codex-cli",
+            "session_name": "implementer",
+            "tmux_target": "implementer:0.0",
+            "pane_id": "%2",
+            "cwd": str(repo),
+            "pid": "102",
+        },
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: discovered_sessions,
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert [item.matching_session["session_key"] for item in plan.items] == ["tmux:%1", "tmux:%2"]
+
+    result = await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+    )
+    sessions = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key.in_(["tmux:%1", "tmux:%2"]))
+        )
+    ).scalars().all()
+    sessions_by_key = {session.session_key: session for session in sessions}
+
+    assert [item.status for item in result.items] == ["reused", "reused"]
+    assert result.items[0].agent_mail_member_id != result.items[1].agent_mail_member_id
+    assert sessions_by_key["tmux:%1"].team_slot_id == preset.slots[0].id
+    assert sessions_by_key["tmux:%2"].team_slot_id == preset.slots[1].id
+    assert await db.get(MailTeamMember, repo_member.id) is None
+
+
+@pytest.mark.asyncio
+async def test_disabled_same_repo_slot_does_not_consume_reuse_match(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Same repo team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Disabled",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    enabled=False,
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Enabled",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "repo",
+                "tmux_target": "repo:0.0",
+                "cwd": str(repo),
+            }
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(include_disabled=True),
+    )
+
+    assert [item.action for item in plan.items] == ["skip", "reuse"]
+    assert plan.items[1].matching_session["tmux_target"] == "repo:0.0"
 
 
 @pytest.mark.asyncio
@@ -810,6 +1125,55 @@ async def test_deleting_slot_or_preset_clears_session_team_context(db, tmp_path)
     assert session_b.team_preset_id is None
     assert session_b.team_slot_id is None
     assert orphaned_slots == []
+
+
+@pytest.mark.asyncio
+async def test_deleting_slot_clears_context_when_session_cwd_cannot_resolve(
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Cleanup team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="A",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    slot = preset.slots[0]
+    _member, session = await agent_mail_service.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(repo),
+            session_key="mcp:a",
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+
+    async def fail_repo_member(_db, _cwd):
+        raise FileNotFoundError("missing cwd")
+
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_service.get_or_create_repo_member",
+        fail_repo_member,
+    )
+
+    await agent_team_service.delete_slot(db, slot.id)
+    await db.refresh(session)
+
+    assert session.team_preset_id is None
+    assert session.team_slot_id is None
 
 
 @pytest.mark.asyncio
