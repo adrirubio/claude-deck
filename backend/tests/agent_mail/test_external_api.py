@@ -171,12 +171,13 @@ async def test_external_actor_cannot_read_other_actor_threads(client, db):
 
 
 @pytest.mark.asyncio
-async def test_external_delivery_reports_non_tmux_codex_as_delivered_waiting(client, db):
+@pytest.mark.parametrize("provider", ["codex-cli", "claude-code"])
+async def test_external_delivery_reports_non_tmux_agent_as_delivered_waiting(client, db, provider):
     recipient = await _member(db, "repo-beta", "beta")
     db.add(
         MailAgentSession(
             member_id=recipient.id,
-            provider="codex-cli",
+            provider=provider,
             source="mcp",
             session_key="mcp:beta",
             cwd=recipient.repo_path,
@@ -206,13 +207,24 @@ async def test_external_delivery_reports_non_tmux_codex_as_delivered_waiting(cli
 
 
 @pytest.mark.asyncio
-async def test_external_delivery_reports_tmux_wake_success(client, db, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("provider", "display_name"),
+    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+)
+async def test_external_delivery_reports_tmux_wake_success(
+    client,
+    db,
+    tmp_path,
+    monkeypatch,
+    provider,
+    display_name,
+):
     cwd = tmp_path / "repo-beta"
     cwd.mkdir()
     fake = [
         {
-            "provider": "codex-cli",
-            "provider_display_name": "Codex",
+            "provider": provider,
+            "provider_display_name": display_name,
             "tmux_target": "deck:0.1",
             "session_name": "deck",
             "window_name": "main",

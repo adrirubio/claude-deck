@@ -40,6 +40,7 @@ OBSERVED_TTL_SECONDS = 300
 STALE_REQUEST_MINUTES = 15
 AUTO_NUDGE_COOLDOWN_SECONDS = 30
 TMUX_ENTER_DELAY_SECONDS = 0.25
+TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli"}
 INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: please call `deck_check_inbox(unread_only=False)` now, "
     "then answer any pending context requests or handoffs before continuing."
@@ -495,7 +496,7 @@ class AgentMailService:
     def _session_can_nudge(self, session: MailAgentSession, now: datetime) -> bool:
         return bool(
             session.source == "observed"
-            and session.provider == "codex-cli"
+            and session.provider in TMUX_WAKE_PROVIDERS
             and session.tmux_target
             and self._effective_status(session, now) == "observed"
         )
@@ -929,7 +930,7 @@ class AgentMailService:
             .where(
                 MailAgentSession.member_id == member_id,
                 MailAgentSession.source == "observed",
-                MailAgentSession.provider == "codex-cli",
+                MailAgentSession.provider.in_(sorted(TMUX_WAKE_PROVIDERS)),
                 MailAgentSession.tmux_target.is_not(None),
             )
             .order_by(MailAgentSession.last_seen_at.desc())
@@ -941,7 +942,7 @@ class AgentMailService:
 
     def _send_tmux_inbox_check(self, session: MailAgentSession) -> dict[str, str]:
         if not session.tmux_target:
-            raise ValueError("No live Codex tmux session is available for this member")
+            raise ValueError("No live tmux session is available for this member")
         try:
             subprocess.run(
                 ["tmux", "send-keys", "-t", session.tmux_target, "-l", INBOX_CHECK_PROMPT],
@@ -979,7 +980,7 @@ class AgentMailService:
         return None
 
     async def auto_nudge_members(self, db: AsyncSession, member_ids: set[int]) -> list[dict[str, str | int]]:
-        """Best-effort delivery wakeup for visible tmux-observed Codex recipients."""
+        """Best-effort delivery wakeup for visible tmux-observed recipients."""
         if not member_ids:
             return []
         await self.sync_observed_sessions(db)
