@@ -1,6 +1,14 @@
 import { apiClient, buildEndpoint } from '@/lib/api'
 import type { AgentProviderId } from '@/types/providers'
-import type { CCSessionsResponse, CCPreviewResponse, CCTokenResponse, SpawnSessionRequest, SpawnSessionResponse, KillSessionResponse } from './types'
+import type {
+  CCSessionsResponse,
+  CCPreviewResponse,
+  CCTokenResponse,
+  CodexLaunchOptionsResponse,
+  SpawnSessionRequest,
+  SpawnSessionResponse,
+  KillSessionResponse,
+} from './types'
 
 const BASE = 'agent-bridge'
 
@@ -27,6 +35,10 @@ export async function spawnSession(request: SpawnSessionRequest): Promise<SpawnS
     method: 'POST',
     body: JSON.stringify(request),
   })
+}
+
+export async function fetchCodexLaunchOptions(): Promise<CodexLaunchOptionsResponse> {
+  return apiClient<CodexLaunchOptionsResponse>('providers/codex-cli/launch-options')
 }
 
 export async function killSession(target: string, cleanupWorktree: boolean = false): Promise<KillSessionResponse> {

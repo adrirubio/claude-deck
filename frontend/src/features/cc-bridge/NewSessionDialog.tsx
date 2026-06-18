@@ -22,12 +22,17 @@ import { MODAL_SIZES } from '@/lib/constants'
 import { claudeProjectFolderFromPath, cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import type { ProjectResponse } from '@/types/projects'
-import { spawnSession } from './api'
+import { fetchCodexLaunchOptions, spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
 import type { AgentProviderId } from '@/types/providers'
-import type { SpawnSessionRequest } from './types'
+import type {
+  CodexLaunchModelOption,
+  CodexLaunchOptionsResponse,
+  CodexLaunchProfileOption,
+  SpawnSessionRequest,
+} from './types'
 import type { SessionSummary } from '@/types/sessions'
 
 type Mode = 'plain' | 'worktree' | 'resume' | 'fork'
@@ -52,6 +57,10 @@ const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
 ]
 
 const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
+const DEFAULT_SELECT_VALUE = '__default__'
+const CUSTOM_SELECT_VALUE = '__custom__'
+const EMPTY_MODEL_OPTIONS: CodexLaunchModelOption[] = []
+const EMPTY_PROFILE_OPTIONS: CodexLaunchProfileOption[] = []
 
 type Platform = 'anthropic' | 'bedrock'
 
@@ -92,6 +101,20 @@ function matchesProjectSearch(project: ProjectResponse, query: string) {
   return terms.every((term) => searchable.includes(term))
 }
 
+function optionValues<T extends { value: string }>(options: T[]) {
+  return new Set(options.map((option) => option.value))
+}
+
+function formatModelOption(option: CodexLaunchModelOption) {
+  return option.label && option.label !== option.value
+    ? `${option.label} (${option.value})`
+    : option.value
+}
+
+function formatProfileOption(option: CodexLaunchProfileOption) {
+  return option.active ? `${option.label} (active)` : option.label
+}
+
 export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvider }: NewSessionDialogProps) {
   const { providers, selectedProviderId } = useProviderContext()
   const defaultProvider = initialProvider ?? selectedProviderId
@@ -103,7 +126,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [skipPermissions, setSkipPermissions] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState('')
+  const [customModel, setCustomModel] = useState(false)
   const [profile, setProfile] = useState('')
+  const [customProfile, setCustomProfile] = useState(false)
   const [sandbox, setSandbox] = useState('')
   const [approvalPolicy, setApprovalPolicy] = useState('')
   const [search, setSearch] = useState(false)
@@ -121,6 +146,8 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([])
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(false)
+  const [codexLaunchOptions, setCodexLaunchOptions] = useState<CodexLaunchOptionsResponse | null>(null)
+  const [codexLaunchOptionsError, setCodexLaunchOptionsError] = useState<string | null>(null)
   const projectSearchRef = useRef<HTMLInputElement>(null)
   const projectOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
@@ -132,6 +159,22 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     () => projects.filter((project) => matchesProjectSearch(project, projectSearch)),
     [projects, projectSearch],
   )
+  const modelOptions = codexLaunchOptions?.model_options ?? EMPTY_MODEL_OPTIONS
+  const profileOptions = codexLaunchOptions?.profile_options ?? EMPTY_PROFILE_OPTIONS
+  const knownModelValues = useMemo(() => optionValues(modelOptions), [modelOptions])
+  const knownProfileValues = useMemo(() => optionValues(profileOptions), [profileOptions])
+  const modelSelectValue = customModel || (model && !knownModelValues.has(model))
+    ? CUSTOM_SELECT_VALUE
+    : model || DEFAULT_SELECT_VALUE
+  const profileSelectValue = customProfile || (profile && !knownProfileValues.has(profile))
+    ? CUSTOM_SELECT_VALUE
+    : profile || DEFAULT_SELECT_VALUE
+  const defaultModelLabel = codexLaunchOptions?.default_model
+    ? `Default (${codexLaunchOptions.default_model})`
+    : 'Default'
+  const defaultProfileLabel = codexLaunchOptions?.default_profile
+    ? `Default (${codexLaunchOptions.default_profile})`
+    : 'Default'
   const resumeProjectPath = directory.trim()
   const resumeProjectFolder = resumeProjectPath
     ? claudeProjectFolderFromPath(resumeProjectPath)
@@ -177,6 +220,36 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     }
   }
 
+  function handleModelSelect(value: string) {
+    if (value === DEFAULT_SELECT_VALUE) {
+      setCustomModel(false)
+      setModel('')
+      return
+    }
+    if (value === CUSTOM_SELECT_VALUE) {
+      setCustomModel(true)
+      setModel('')
+      return
+    }
+    setCustomModel(false)
+    setModel(value)
+  }
+
+  function handleProfileSelect(value: string) {
+    if (value === DEFAULT_SELECT_VALUE) {
+      setCustomProfile(false)
+      setProfile('')
+      return
+    }
+    if (value === CUSTOM_SELECT_VALUE) {
+      setCustomProfile(true)
+      setProfile('')
+      return
+    }
+    setCustomProfile(false)
+    setProfile(value)
+  }
+
   useEffect(() => {
     if (open && !directory.trim() && activeProject?.path) {
       setDirectory(activeProject.path)
@@ -192,6 +265,25 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     setAwsProfile(remembered.aws_profile)
     setBedrockModel(remembered.bedrock_model)
   }, [open])
+
+  useEffect(() => {
+    if (!open || !isCodex) return
+    let cancelled = false
+    fetchCodexLaunchOptions()
+      .then((options) => {
+        if (!cancelled) {
+          setCodexLaunchOptions(options)
+          setCodexLaunchOptionsError(null)
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setCodexLaunchOptions(null)
+          setCodexLaunchOptionsError(err instanceof Error ? err.message : 'Failed to load Codex options')
+        }
+      })
+    return () => { cancelled = true }
+  }, [open, isCodex])
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
@@ -227,7 +319,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       setSkipPermissions(false)
       setPrompt('')
       setModel('')
+      setCustomModel(false)
       setProfile('')
+      setCustomProfile(false)
       setSandbox('')
       setApprovalPolicy('')
       setSearch(false)
@@ -238,6 +332,8 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       setError(null)
       setSelectedSession(null)
       setRecentSessions([])
+      setCodexLaunchOptions(null)
+      setCodexLaunchOptionsError(null)
       setSubmitting(false)
     }
   }, [open, defaultProvider])
@@ -327,6 +423,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                 setProvider(value as AgentProviderId)
                 setMode('plain')
                 setSelectedSession(null)
+                setModel('')
+                setCustomModel(false)
+                setProfile('')
+                setCustomProfile(false)
                 setError(null)
               }}
             >
@@ -531,12 +631,63 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="codex-model">Model</Label>
-                <Input id="codex-model" value={model} onChange={(e) => setModel(e.target.value)} placeholder="default" />
+                <Select value={modelSelectValue} onValueChange={handleModelSelect}>
+                  <SelectTrigger id="codex-model">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={DEFAULT_SELECT_VALUE}>{defaultModelLabel}</SelectItem>
+                    {modelOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {formatModelOption(option)}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={CUSTOM_SELECT_VALUE}>Custom model</SelectItem>
+                  </SelectContent>
+                </Select>
+                {modelSelectValue === CUSTOM_SELECT_VALUE && (
+                  <Input
+                    id="codex-model-custom"
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                    placeholder="model name"
+                    autoComplete="off"
+                    aria-label="Custom Codex model"
+                  />
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="codex-profile">Profile</Label>
-                <Input id="codex-profile" value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
+                <Select value={profileSelectValue} onValueChange={handleProfileSelect}>
+                  <SelectTrigger id="codex-profile">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={DEFAULT_SELECT_VALUE}>{defaultProfileLabel}</SelectItem>
+                    {profileOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {formatProfileOption(option)}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value={CUSTOM_SELECT_VALUE}>Custom profile</SelectItem>
+                  </SelectContent>
+                </Select>
+                {profileSelectValue === CUSTOM_SELECT_VALUE && (
+                  <Input
+                    id="codex-profile-custom"
+                    value={profile}
+                    onChange={(event) => setProfile(event.target.value)}
+                    placeholder="profile name"
+                    autoComplete="off"
+                    aria-label="Custom Codex profile"
+                  />
+                )}
               </div>
+              {codexLaunchOptionsError && (
+                <p className="col-span-2 text-xs text-destructive">
+                  Could not load Codex models and profiles. Custom values are still available.
+                </p>
+              )}
               <div className="space-y-1.5">
                 <Label>Sandbox</Label>
                 <Select value={sandbox || 'default'} onValueChange={(value) => setSandbox(value === 'default' ? '' : value)}>

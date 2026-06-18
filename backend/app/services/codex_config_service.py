@@ -6,6 +6,7 @@ import tempfile
 import tomllib
 import re
 import copy
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ SAFE_SCALAR_FIELDS = {
 SENSITIVE_KEY_PATTERN = re.compile(r"(token|secret|password|credential|api[_-]?key|auth|cookie|session)", re.I)
 PROFILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 PROFILE_V2_KEYS = ("profile-v2", "profile_v2")
+MAX_MODELS_CACHE_BYTES = 5 * 1024 * 1024
 
 
 class CodexConfigService:
@@ -41,6 +43,10 @@ class CodexConfigService:
     @property
     def config_file(self) -> Path:
         return self.codex_home / "config.toml"
+
+    @property
+    def models_cache_file(self) -> Path:
+        return self.codex_home / "models_cache.json"
 
     def parse_toml_file(self, path: Path) -> tuple[dict[str, Any], str | None]:
         if not path.exists():
@@ -259,6 +265,193 @@ class CodexConfigService:
                 for source in sources if source["parse_error"]
             ],
             "effective_summary": effective_summary,
+        }
+
+    def _read_models_cache(self) -> tuple[dict[str, Any], str | None]:
+        path = self.models_cache_file
+        if not path.exists():
+            return {}, None
+
+        try:
+            if path.stat().st_size > MAX_MODELS_CACHE_BYTES:
+                return {}, "models_cache.json exceeds read limit"
+            with path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except json.JSONDecodeError as exc:
+            return {}, str(exc)
+        except OSError as exc:
+            return {}, str(exc)
+
+        if not isinstance(data, dict):
+            return {}, "models_cache.json root is not an object"
+        return data, None
+
+    @staticmethod
+    def _model_option_from_mapping(value: str, metadata: Any, source: str) -> dict[str, Any] | None:
+        if not value or "\x00" in value:
+            return None
+
+        label = value
+        description = None
+        priority = None
+        if isinstance(metadata, dict):
+            display_name = metadata.get("display_name")
+            if isinstance(display_name, str) and display_name.strip():
+                label = display_name.strip()
+            description_value = metadata.get("description")
+            if isinstance(description_value, str) and description_value.strip():
+                description = description_value.strip()
+            priority_value = metadata.get("priority")
+            if isinstance(priority_value, int):
+                priority = priority_value
+
+        option = {
+            "value": value,
+            "label": label,
+            "source": source,
+        }
+        if description is not None:
+            option["description"] = description
+        if priority is not None:
+            option["priority"] = priority
+        return option
+
+    def _get_model_options(
+        self,
+        config: dict[str, Any],
+        effective_summary: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        cache, parse_error = self._read_models_cache()
+        options: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def add_option(option: dict[str, Any] | None) -> None:
+            if not option:
+                return
+            value = option["value"]
+            if value in seen:
+                return
+            seen.add(value)
+            options.append(option)
+
+        models = cache.get("models")
+        if isinstance(models, list):
+            for item in models:
+                if isinstance(item, str):
+                    add_option(self._model_option_from_mapping(item, {}, "models_cache"))
+                elif isinstance(item, dict):
+                    slug = item.get("slug") or item.get("id") or item.get("name") or item.get("model")
+                    if isinstance(slug, str):
+                        add_option(self._model_option_from_mapping(slug, item, "models_cache"))
+        elif isinstance(models, dict):
+            for value, metadata in sorted(models.items()):
+                if isinstance(value, str):
+                    slug = metadata.get("slug") if isinstance(metadata, dict) else None
+                    add_option(
+                        self._model_option_from_mapping(
+                            slug if isinstance(slug, str) else value,
+                            metadata,
+                            "models_cache",
+                        )
+                    )
+
+        for source, value in (
+            ("effective_config", effective_summary.get("model")),
+            ("config", config.get("model")),
+        ):
+            if isinstance(value, str) and value.strip():
+                add_option({
+                    "value": value.strip(),
+                    "label": value.strip(),
+                    "source": source,
+                })
+
+        return options, parse_error
+
+    def _get_profile_options(
+        self,
+        profile_resolution: dict[str, Any] | None,
+        config: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        options_by_name: dict[str, dict[str, Any]] = {}
+
+        def add_profile(
+            name: Any,
+            source: str,
+            *,
+            parse_error: str | None = None,
+            active: bool = False,
+        ) -> None:
+            if not isinstance(name, str) or not name.strip():
+                return
+            clean_name = name.strip()
+            option = options_by_name.setdefault(
+                clean_name,
+                {
+                    "value": clean_name,
+                    "label": clean_name,
+                    "sources": [],
+                    "active": False,
+                    "parse_error": None,
+                },
+            )
+            if source not in option["sources"]:
+                option["sources"].append(source)
+            if active:
+                option["active"] = True
+            if parse_error and not option["parse_error"]:
+                option["parse_error"] = parse_error
+
+        if profile_resolution:
+            active_names = {
+                profile_resolution.get("active_profile"),
+                profile_resolution.get("active_profile_v2"),
+            }
+            for source in profile_resolution.get("profiles", []):
+                if not isinstance(source, dict):
+                    continue
+                name = source.get("name")
+                add_profile(
+                    name,
+                    str(source.get("source") or "profile"),
+                    parse_error=source.get("parse_error") if isinstance(source.get("parse_error"), str) else None,
+                    active=name in active_names,
+                )
+            for missing in profile_resolution.get("missing_references", []):
+                if isinstance(missing, dict):
+                    add_profile(missing.get("name"), "missing_reference", active=True)
+
+        add_profile(config.get("profile"), "config", active=True)
+        active_profile_v2 = self._get_profile_v2_reference(config)
+        add_profile(active_profile_v2, "config", active=True)
+
+        return sorted(options_by_name.values(), key=lambda option: option["value"].lower())
+
+    def get_launch_options(self) -> dict[str, Any]:
+        """Return non-secret Codex values useful when launching new sessions."""
+        config, parse_error = self.parse_toml_file(self.config_file)
+        profile_resolution = self.resolve_profiles(config) if not parse_error else None
+        effective_summary = profile_resolution["effective_summary"] if profile_resolution else {}
+        default_profile = None
+        if profile_resolution:
+            default_profile = (
+                profile_resolution.get("active_profile")
+                or profile_resolution.get("active_profile_v2")
+            )
+        model_options, models_parse_error = self._get_model_options(config, effective_summary)
+
+        return {
+            "provider": "codex-cli",
+            "config_path": str(self.config_file),
+            "models_cache_path": str(self.models_cache_file),
+            "config_exists": self.config_file.exists(),
+            "config_parse_error": parse_error,
+            "models_cache_exists": self.models_cache_file.exists(),
+            "models_cache_parse_error": models_parse_error,
+            "default_model": effective_summary.get("model") or config.get("model"),
+            "default_profile": default_profile,
+            "model_options": model_options,
+            "profile_options": self._get_profile_options(profile_resolution, config),
         }
 
     def get_all_config_files(self) -> list[dict[str, Any]]:
