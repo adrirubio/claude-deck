@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # Database settings
     database_url: str = "sqlite+aiosqlite:///./claude_registry.db"
 
+    # Legacy Presence telemetry is disabled by default. Agent Mail and Agent
+    # Bridge now own live agent availability; enable only for old diagnostics.
+    enable_presence: bool = False
+
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000

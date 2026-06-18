@@ -1,9 +1,10 @@
-"""API endpoints for Presence Dashboard — webhook receiver, REST, and WebSocket."""
+"""API endpoints for legacy Presence diagnostics."""
 import json
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.constants import SessionStatus
 from app.models.schemas import (
@@ -24,7 +25,13 @@ async def receive_event(
     payload: PresenceEventIn,
     db: AsyncSession = Depends(get_db),
 ):
-    """Webhook receiver for Claude Code HTTP hooks. Always returns {} with 200."""
+    """Legacy Claude Code hook receiver.
+
+    Disabled by default so old Presence hooks fail soft without writing events.
+    """
+    if not settings.enable_presence:
+        return {}
+
     dumped = payload.model_dump()
     updated_session = await service.process_event(dumped, db)
 
@@ -90,6 +97,12 @@ async def clear_all_sessions(db: AsyncSession = Depends(get_db)):
 @router.get("/config-snippet", response_model=PresenceConfigSnippet)
 async def get_config_snippet():
     """Generate the settings.json snippet for hooking up Claude Code."""
+    if not settings.enable_presence:
+        raise HTTPException(
+            status_code=404,
+            detail="Presence ingestion is disabled. Set CLAUDE_DECK_ENABLE_PRESENCE=true to enable legacy Presence hooks.",
+        )
+
     url = "http://localhost:8000/api/v1/presence/events"
     events = [
         "Notification", "PreToolUse", "PostToolUse", "Stop",
@@ -115,6 +128,10 @@ async def presence_websocket(
     db: AsyncSession = Depends(get_db),
 ):
     """WebSocket for live presence updates. On connect, sends all current sessions."""
+    if not settings.enable_presence:
+        await ws.close(code=4403, reason="Presence disabled")
+        return
+
     await manager.connect(ws)
     try:
         # Send initial state

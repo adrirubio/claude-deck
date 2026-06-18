@@ -22,6 +22,8 @@ Recommended direction:
 
 **Rationale:** Agent Mail should become the center of gravity for team coordination and agent availability. Presence remains useful as telemetry infrastructure, but the current standalone card dashboard is not strong enough to sit beside Agent Mail as a primary Operations feature.
 
+**2026-06-18 update:** Disable Presence ingestion by default and remove legacy Presence HTTP hooks from active Claude Code user settings. The hidden frontend was not enough: installed Presence hooks still posted every hook event to `/api/v1/presence/events`, causing extra HTTP proxy traffic, SQLite writes, session aggregation, and WebSocket broadcast attempts during active Claude Code use. The backend should now no-op Presence event ingestion unless `CLAUDE_DECK_ENABLE_PRESENCE=true` is set. Agent Mail hooks remain installed.
+
 **Revisit after usage:** Re-evaluate after Agent Mail has been used in normal multi-agent work for a while. The review question should be: "Do users still need a dedicated activity/diagnostics timeline, or are Agent Mail and Agent Bridge enough?"
 
 Possible revisit outcomes:
@@ -42,7 +44,7 @@ That can still be useful, but only if the feature gives the user actionable obse
 
 Presence is implemented as a Claude Code hook telemetry dashboard:
 
-- `POST /api/v1/presence/events` receives Claude Code HTTP hook payloads.
+- `POST /api/v1/presence/events` receives Claude Code HTTP hook payloads only when legacy Presence ingestion is explicitly enabled.
 - `PresenceEvent` stores raw hook events.
 - `PresenceSession` stores aggregated per-session state.
 - The frontend shows a page with session counts, active/error totals, and one card per session.
