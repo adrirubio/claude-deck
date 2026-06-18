@@ -25,7 +25,6 @@ import { ContextPage } from './features/context/ContextPage'
 import { PlansPage } from './features/plans/PlansPage'
 import { PlanDetailPage } from './features/plans/PlanDetailPage'
 import { CCBridgePage } from './features/cc-bridge/CCBridgePage'
-import { PresencePage } from './features/presence/PresencePage'
 import { AgentMailPage } from './features/agent-mail/AgentMailPage'
 import { AgentTeamsPage } from './features/agent-teams/AgentTeamsPage'
 
@@ -56,7 +55,6 @@ function App() {
                 <Route path="sessions" element={<SessionsPage />} />
                 <Route path="agent-bridge" element={<CCBridgePage />} />
                 <Route path="cc-bridge" element={<CCBridgePage />} />
-                <Route path="presence" element={<PresencePage />} />
                 <Route path="agent-mail" element={<AgentMailPage />} />
                 <Route path="agent-teams" element={<AgentTeamsPage />} />
                 <Route path="plans/:filename" element={<PlanDetailPage />} />

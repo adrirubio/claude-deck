@@ -18,11 +18,13 @@ Recommended direction:
 
 ## Decision Annotation
 
-**Decision:** Demote Presence from the primary Claude Deck sidebar now and remove the Presence-derived active-session badge from the top header. Keep the `/presence` route, API, event tables, and WebSocket path intact.
+**Decision:** Demote Presence from the primary Claude Deck sidebar now and remove the Presence-derived active-session badge from the top header. Initially keep the `/presence` route, API, event tables, and WebSocket path intact.
 
 **Rationale:** Agent Mail should become the center of gravity for team coordination and agent availability. Presence remains useful as telemetry infrastructure, but the current standalone card dashboard is not strong enough to sit beside Agent Mail as a primary Operations feature.
 
 **2026-06-18 update:** Disable Presence ingestion by default and remove legacy Presence HTTP hooks from active Claude Code user settings. The hidden frontend was not enough: installed Presence hooks still posted every hook event to `/api/v1/presence/events`, causing extra HTTP proxy traffic, SQLite writes, session aggregation, and WebSocket broadcast attempts during active Claude Code use. The backend should now no-op Presence event ingestion unless `CLAUDE_DECK_ENABLE_PRESENCE=true` is set. Agent Mail hooks remain installed.
+
+**2026-06-18 final update:** Retire the Presence application feature. Agent Mail, Agent Teams, and Agent Bridge do not depend on Presence. Remove the Presence route, service, frontend page, WebSocket hook, API schemas, and tests. Leave existing local SQLite `presence_events` and `presence_sessions` tables/data untouched; they are historical data and do not need a destructive migration.
 
 **Revisit after usage:** Re-evaluate after Agent Mail has been used in normal multi-agent work for a while. The review question should be: "Do users still need a dedicated activity/diagnostics timeline, or are Agent Mail and Agent Bridge enough?"
 
@@ -177,9 +179,9 @@ Presence should not be ripped out blindly. The backend has useful building block
 - command exit tracking
 - narrative capture
 - WebSocket broadcast pattern
-- header/system active session count dependency
+- former header/system active session count dependency
 
-For example, `backend/app/api/v1/status.py` currently uses `PresenceService` to derive active session count. Removing the backend would require replacing that dependency.
+The former `backend/app/api/v1/status.py` dependency on `PresenceService` has been removed, so the backend no longer needs Presence for header status.
 
 The better move is to separate "remove the weak page" from "remove the useful telemetry pipeline."
 

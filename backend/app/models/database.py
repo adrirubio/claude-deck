@@ -1,10 +1,9 @@
 """SQLAlchemy database models."""
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
-from app.models.constants import SessionStatus
 
 
 class Project(Base):
@@ -119,57 +118,6 @@ class MCPServerCache(Base):
     __table_args__ = (
         UniqueConstraint('server_name', 'server_scope', name='uix_server_name_scope'),
     )
-
-
-class PresenceEvent(Base):
-    """Raw event log from Claude Code HTTP hooks."""
-
-    __tablename__ = "presence_events"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
-    event_type: Mapped[str] = mapped_column(String, nullable=False)
-    tool_name: Mapped[str | None] = mapped_column(String, nullable=True)
-    tool_input: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    tool_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    message: Mapped[str | None] = mapped_column(String, nullable=True)
-    cwd: Mapped[str | None] = mapped_column(String, nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
-    received_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
-
-
-class PresenceSession(Base):
-    """Aggregated per-session state for the Presence Dashboard."""
-
-    __tablename__ = "presence_sessions"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    session_id: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
-    label: Mapped[str | None] = mapped_column(String, nullable=True)
-    project_path: Mapped[str | None] = mapped_column(String, nullable=True)
-    status: Mapped[str] = mapped_column(String, default=SessionStatus.ACTIVE, nullable=False, index=True)
-    status_text: Mapped[str | None] = mapped_column(String, nullable=True)
-    last_narrative: Mapped[str | None] = mapped_column(String, nullable=True)
-    last_narrative_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    modified_files: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    last_command: Mapped[str | None] = mapped_column(String, nullable=True)
-    last_command_exit: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    activity_buckets: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    bucket_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    total_events: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    error_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
-    )
-    last_event_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True
-    )
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_user_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class AgentTeamPreset(Base):

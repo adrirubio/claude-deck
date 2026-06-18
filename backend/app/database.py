@@ -21,7 +21,7 @@ engine = create_async_engine(
 
 
 # For SQLite: enable WAL so readers don't block writers (and vice versa).
-# Without this, any write (usage ingest, presence event, etc.) stalls
+# Without this, writes can stall
 # concurrent chart/page reads and can surface "database is locked" under
 # load. WAL is a one-time pragma that persists in the DB header.
 if settings.database_url.startswith("sqlite"):
