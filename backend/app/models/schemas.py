@@ -1,6 +1,6 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -1776,68 +1776,6 @@ class MCPRegistryInstallResponse(BaseModel):
     server_name: str
     config: Dict[str, Any]
     scope: str
-
-
-# Presence Dashboard Schemas
-
-
-class PresenceEventIn(BaseModel):
-    """Incoming webhook payload from Claude Code HTTP hooks."""
-
-    session_id: str
-    hook_event_name: str
-    tool_name: Optional[str] = None
-    tool_input: Optional[Dict[str, Any]] = None
-    tool_result: Optional[Dict[str, Any]] = None
-    message: Optional[str] = None
-    user_prompt: Optional[str] = None
-    cwd: Optional[str] = None
-    transcript_path: Optional[str] = None
-    permission_mode: Optional[str] = None
-
-
-class PresenceSessionResponse(BaseModel):
-    """Single session state for API/WebSocket."""
-
-    session_id: str
-    label: Optional[str] = None
-    project_path: Optional[str] = None
-    status: str = "active"
-    status_text: Optional[str] = None
-    last_narrative: Optional[str] = None
-    last_narrative_at: Optional[str] = None
-    modified_files: Optional[List[Union[str, dict]]] = None
-    last_user_prompt: Optional[str] = None
-    last_command: Optional[str] = None
-    last_command_exit: Optional[int] = None
-    activity_buckets: Optional[List[int]] = None
-    total_events: int = 0
-    error_count: int = 0
-    started_at: str
-    last_event_at: str
-    ended_at: Optional[str] = None
-
-
-class PresenceSessionListResponse(BaseModel):
-    """List of presence sessions with totals."""
-
-    sessions: List[PresenceSessionResponse]
-    total: int = 0
-    active: int = 0
-    error: int = 0
-
-
-class PresenceSessionUpdate(BaseModel):
-    """Label update request."""
-
-    label: str
-
-
-class PresenceConfigSnippet(BaseModel):
-    """Generated setup snippet."""
-
-    snippet: Dict[str, Any]
-    instructions: str
 
 
 InstanceAccent = Literal["blue", "green", "purple", "orange", "red", "pink", "cyan", "slate"]

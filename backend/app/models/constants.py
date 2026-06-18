@@ -3,7 +3,7 @@ from enum import StrEnum
 
 
 class SessionStatus(StrEnum):
-    """Presence session status values."""
+    """Observed agent session status values."""
     ACTIVE = "active"
     IDLE = "idle"
     ERROR = "error"
