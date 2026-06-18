@@ -462,13 +462,13 @@ async def test_sync_does_not_preserve_team_slot_when_observed_pid_changes(db, sv
 
 
 @pytest.mark.asyncio
-async def test_observed_non_codex_session_cannot_be_nudged(db, svc, tmp_path):
+async def test_observed_unsupported_provider_session_cannot_be_nudged(db, svc, tmp_path):
     cwd = tmp_path / "obs"
     cwd.mkdir()
     fake = [
         {
-            "provider": "claude-code",
-            "provider_display_name": "Claude Code",
+            "provider": "unknown-agent",
+            "provider_display_name": "Unknown Agent",
             "tmux_target": "w:0.1",
             "session_name": "w",
             "window_name": "main",
@@ -488,13 +488,24 @@ async def test_observed_non_codex_session_cannot_be_nudged(db, svc, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_queue_inbox_check_sends_prompt_to_tmux_observed_codex(db, svc, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("provider", "display_name"),
+    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+)
+async def test_queue_inbox_check_sends_prompt_to_tmux_observed_agent(
+    db,
+    svc,
+    tmp_path,
+    monkeypatch,
+    provider,
+    display_name,
+):
     cwd = tmp_path / "obs"
     cwd.mkdir()
     fake = [
         {
-            "provider": "codex-cli",
-            "provider_display_name": "Codex",
+            "provider": provider,
+            "provider_display_name": display_name,
             "tmux_target": "w:0.1",
             "session_name": "w",
             "window_name": "main",
@@ -528,13 +539,24 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_codex(db, svc, tm
 
 
 @pytest.mark.asyncio
-async def test_send_message_auto_nudges_tmux_observed_codex_recipient(db, svc, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("provider", "display_name"),
+    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+)
+async def test_send_message_auto_nudges_tmux_observed_recipient(
+    db,
+    svc,
+    tmp_path,
+    monkeypatch,
+    provider,
+    display_name,
+):
     cwd = tmp_path / "obs"
     cwd.mkdir()
     fake = [
         {
-            "provider": "codex-cli",
-            "provider_display_name": "Codex",
+            "provider": provider,
+            "provider_display_name": display_name,
             "tmux_target": "w:0.1",
             "session_name": "w",
             "window_name": "main",
@@ -770,12 +792,13 @@ async def test_dead_mcp_process_reports_offline_even_before_ttl(db, svc, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_connected_codex_mcp_session_without_tmux_is_delivered_waiting(db, svc, tmp_path):
+@pytest.mark.parametrize("provider", ["codex-cli", "claude-code"])
+async def test_connected_mcp_session_without_tmux_is_delivered_waiting(db, svc, tmp_path, provider):
     cwd = tmp_path / "r"
     cwd.mkdir()
     await svc.register_session(
         db,
-        _register(str(cwd), session_key="mcp:abc", source="mcp", provider="codex-cli"),
+        _register(str(cwd), session_key="mcp:abc", source="mcp", provider=provider),
     )
 
     members = await svc.list_team(db)

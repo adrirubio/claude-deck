@@ -59,11 +59,11 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
             </ol>
           </HelpSection>
 
-          <HelpSection icon={Terminal} title="Non-tmux Codex delivery">
+          <HelpSection icon={Terminal} title="Non-tmux delivery">
             <p>
-              Codex sessions outside tmux can receive mail through MCP, but Claude Deck cannot
-              wake their visible terminal session yet. Those messages stay unread until the agent
-              checks its inbox or reaches a hook boundary.
+              Claude Code and Codex sessions outside tmux can receive mail through MCP, but
+              Claude Deck cannot wake their visible terminal session yet. Those messages stay
+              unread until the agent checks its inbox or reaches a hook boundary.
             </p>
           </HelpSection>
 

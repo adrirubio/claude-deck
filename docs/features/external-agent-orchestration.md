@@ -2,7 +2,7 @@
 
 Claude Deck exposes a local Agent Mail API for tools such as OpenClaw to coordinate installed agents without pretending to be a repo agent or a UI user.
 
-This API is for same-machine automation. It does not replace Agent Teams preset launch APIs, and it does not add a new wake path for non-tmux Codex sessions.
+This API is for same-machine automation. It does not replace Agent Teams preset launch APIs, and it does not add a new wake path for non-tmux agent sessions.
 
 ## Setup
 
@@ -39,7 +39,7 @@ The response includes each Agent Mail participant's repo, role, charter, connect
 
 Wake states mean:
 
-- `wakeable`: Claude Deck has a visible wake path, currently tmux-observed Codex through Agent Bridge.
+- `wakeable`: Claude Deck has a visible wake path, currently tmux-observed Claude Code or Codex through Agent Bridge.
 - `delivered_waiting`: the message can be stored and read through Agent Mail, but Claude Deck cannot wake the visible session.
 - `offline`: no live session is available.
 
@@ -150,6 +150,6 @@ Once agents register through Agent Mail, use `/external/agent-mail/members` to d
 ## Safeguards
 
 - External actor tokens are distinct from Agent Mail members and are shown by name in the Agent Mail UI.
-- Non-tmux Codex sessions return `delivered_waiting`; they are not falsely reported as woken.
+- Non-tmux Claude Code and Codex sessions return `delivered_waiting`; they are not falsely reported as woken.
 - Per-actor message rate limits return `429` with a `Retry-After` header.
 - This is a local trust boundary, not a general network authentication system.
