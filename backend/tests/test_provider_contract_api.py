@@ -44,6 +44,39 @@ def test_provider_mcp_inventory_wrong_provider_returns_contract_error():
     assert exc_info.value.detail["supported_providers"] == ["codex-cli"]
 
 
+def test_provider_launch_options_wrong_provider_returns_contract_error():
+    from app.api.v1 import providers as providers_api
+
+    with pytest.raises(providers_api.HTTPException) as exc_info:
+        providers_api.get_provider_launch_options("claude-code")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["code"] == "unsupported_provider_operation"
+    assert exc_info.value.detail["provider"] == "claude-code"
+    assert exc_info.value.detail["operation"] == "launch options"
+    assert exc_info.value.detail["supported_providers"] == ["codex-cli"]
+
+
+def test_provider_launch_options_uses_codex_config_service(monkeypatch):
+    from app.api.v1 import providers as providers_api
+
+    class FakeCodexConfigService:
+        def get_launch_options(self):
+            return {
+                "provider": "codex-cli",
+                "model_options": [{"value": "gpt-5-codex", "label": "GPT-5 Codex"}],
+                "profile_options": [{"value": "reviewer", "label": "reviewer"}],
+            }
+
+    monkeypatch.setattr(providers_api, "CodexConfigService", FakeCodexConfigService)
+
+    response = providers_api.get_provider_launch_options("codex-cli")
+
+    assert response["provider"] == "codex-cli"
+    assert response["model_options"][0]["value"] == "gpt-5-codex"
+    assert response["profile_options"][0]["value"] == "reviewer"
+
+
 def test_provider_cli_disallowed_command_returns_contract_error(monkeypatch):
     from app.api.v1 import providers as providers_api
     from app.models.schemas import CLIExecuteRequest

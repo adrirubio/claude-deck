@@ -190,6 +190,126 @@ def test_codex_profile_resolution_handles_default_config_without_profile(tmp_pat
     assert resolution["effective_summary"]["features"]["search"] is True
 
 
+def test_codex_launch_options_include_models_and_profiles(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text(
+        '\n'.join([
+            'model = "configured-model"',
+            'profile = "work"',
+            '',
+            '[profiles.work]',
+            'model = "profile-model"',
+            '',
+            '[profiles.review]',
+            'approval_policy = "on-request"',
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "work.config.toml").write_text('sandbox_mode = "workspace-write"\n', encoding="utf-8")
+    (tmp_path / "models_cache.json").write_text(
+        """{
+          "models": [
+            {
+              "slug": "gpt-5.1-codex",
+              "display_name": "GPT-5.1 Codex",
+              "description": "Code model",
+              "priority": 10
+            },
+            {"slug": "profile-model", "display_name": "Profile Model"}
+          ]
+        }""",
+        encoding="utf-8",
+    )
+
+    options = CodexConfigService(codex_home=tmp_path).get_launch_options()
+
+    assert options["provider"] == "codex-cli"
+    assert options["default_model"] == "profile-model"
+    assert options["default_profile"] == "work"
+    assert options["models_cache_parse_error"] is None
+    assert [model["value"] for model in options["model_options"]] == [
+        "gpt-5.1-codex",
+        "profile-model",
+        "configured-model",
+    ]
+    assert options["model_options"][0]["label"] == "GPT-5.1 Codex"
+    assert options["profile_options"] == [
+        {
+            "value": "review",
+            "label": "review",
+            "sources": ["inline"],
+            "active": False,
+            "parse_error": None,
+        },
+        {
+            "value": "work",
+            "label": "work",
+            "sources": ["inline", "file", "config"],
+            "active": True,
+            "parse_error": None,
+        },
+    ]
+
+
+def test_codex_launch_options_handle_model_cache_dict_and_errors(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text('model = "configured-model"\n', encoding="utf-8")
+    (tmp_path / "models_cache.json").write_text(
+        """{
+          "models": {
+            "gpt-5-codex": {"display_name": "GPT-5 Codex"},
+            "gpt-5.1-codex": {"slug": "gpt-5.1-codex", "display_name": "GPT-5.1 Codex"}
+          }
+        }""",
+        encoding="utf-8",
+    )
+
+    options = CodexConfigService(codex_home=tmp_path).get_launch_options()
+
+    assert [model["value"] for model in options["model_options"]] == [
+        "gpt-5-codex",
+        "gpt-5.1-codex",
+        "configured-model",
+    ]
+    assert options["models_cache_parse_error"] is None
+
+    (tmp_path / "models_cache.json").write_text("not json", encoding="utf-8")
+
+    options = CodexConfigService(codex_home=tmp_path).get_launch_options()
+
+    assert options["model_options"] == [
+        {
+            "value": "configured-model",
+            "label": "configured-model",
+            "source": "effective_config",
+        }
+    ]
+    assert options["models_cache_parse_error"]
+
+
+def test_codex_launch_options_uses_profile_v2_as_default_profile(tmp_path):
+    from app.services.codex_config_service import CodexConfigService
+
+    (tmp_path / "config.toml").write_text('profile-v2 = "reviewer"\n', encoding="utf-8")
+    (tmp_path / "reviewer.config.toml").write_text('model = "review-model"\n', encoding="utf-8")
+
+    options = CodexConfigService(codex_home=tmp_path).get_launch_options()
+
+    assert options["default_profile"] == "reviewer"
+    assert options["default_model"] == "review-model"
+    assert options["profile_options"] == [
+        {
+            "value": "reviewer",
+            "label": "reviewer",
+            "sources": ["file", "config"],
+            "active": True,
+            "parse_error": None,
+        }
+    ]
+
+
 def test_codex_profile_resolution_does_not_build_paths_for_unsafe_references(tmp_path):
     from app.services.codex_config_service import CodexConfigService
 

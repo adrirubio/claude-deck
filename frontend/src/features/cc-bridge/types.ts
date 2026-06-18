@@ -63,3 +63,33 @@ export interface KillSessionResponse {
   killed: boolean
   error?: string
 }
+
+export interface CodexLaunchModelOption {
+  value: string
+  label: string
+  source: string
+  description?: string
+  priority?: number
+}
+
+export interface CodexLaunchProfileOption {
+  value: string
+  label: string
+  sources?: string[]
+  active?: boolean
+  parse_error?: string | null
+}
+
+export interface CodexLaunchOptionsResponse {
+  provider: 'codex-cli'
+  config_path: string
+  models_cache_path: string
+  config_exists: boolean
+  config_parse_error: string | null
+  models_cache_exists: boolean
+  models_cache_parse_error: string | null
+  default_model?: string | null
+  default_profile?: string | null
+  model_options: CodexLaunchModelOption[]
+  profile_options: CodexLaunchProfileOption[]
+}
