@@ -41,12 +41,12 @@ export function AgentMailHelpDialog({ open, onOpenChange }: AgentMailHelpDialogP
           <HelpSection icon={Plug} title="Required agent configuration">
             <p>
               Agent Mail only works after each agent type has the Claude Deck mail MCP server.
-              Claude Code also needs hooks if you want mailbox state injected into the agent
-              context automatically.
+              Hooks add session registration, activity updates, and mailbox reminders at
+              provider turn boundaries.
             </p>
             <div className="flex flex-wrap gap-2">
               <Badge variant="outline">Claude Code: MCP + hooks</Badge>
-              <Badge variant="outline">Codex CLI: MCP</Badge>
+              <Badge variant="outline">Codex CLI: MCP + hooks</Badge>
             </div>
           </HelpSection>
 

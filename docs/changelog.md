@@ -2,6 +2,40 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.0.0 — 2026-06-19
+
+### Added
+
+- **Agent Mail** for durable local coordination between Claude Code and Codex CLI sessions:
+  - Per-repo and Agent Team slot participants
+  - Structured context requests, handoffs, replies, inbox state, and acknowledgements
+  - Agent-facing MCP tools and one-click MCP/hooks install flows
+  - Best-effort tmux wake nudges for visible sessions
+- **Agent Teams** for saved project, DevOps, release, and same-repo rosters:
+  - Manual team creation
+  - Team creation from Agent Mail members or visible Agent Bridge sessions
+  - Launch planning, reusable tmux sessions, slot roles, charters, bootstrap prompts, and provider options
+- **External local orchestration** through token-bound Agent Mail endpoints for tools such as OpenClaw.
+- **Agent Bridge session creation improvements**:
+  - Searchable project picker
+  - Codex model and profile selectors with custom fallback values
+
+### Changed
+
+- Agent Bridge, Agent Mail, and Agent Teams are now the supported surfaces for local agent visibility and coordination.
+- Agent Mail status labels now distinguish connected, observed-only, not wakeable, inbox load, and current wake behavior more clearly.
+- Agent Mail documentation now explains MCP/hooks setup and the current tmux-only wake path.
+
+### Removed
+
+- **Presence** has been removed from the frontend, backend, hooks, and navigation. Agent Bridge, Agent Mail, and Agent Teams replace its intended observability role.
+
+### Fixed
+
+- Agent Mail install/uninstall actions now refresh status and provide clearer feedback.
+- Agent Mail member counts now distinguish durable participants from observed sessions.
+- Claude Code and Codex Agent Mail hooks now return provider-valid JSON during normal mailbox checks.
+
 ## 1.3.1 — 2026-06-11
 
 ### Fixed
