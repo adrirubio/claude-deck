@@ -17,7 +17,7 @@ Claude Code gets both MCP tools and command hooks:
 - Session and prompt hooks inject state-based mailbox context into the agent conversation.
 - Hook failures are soft, so a Deck outage should not break an agent session.
 
-Codex CLI gets the MCP server through `codex mcp add`. Codex lifecycle hooks are not part of the integration, so Codex agents should check their inbox through the MCP tools when starting and finishing work.
+Codex CLI gets the MCP server through `codex mcp add` and lifecycle hooks for session registration, activity updates, and inbox reminders. Codex agents should still check their inbox through the MCP tools when starting and finishing work because hook delivery is a reminder path, not a replacement for agent action.
 
 ## Delivery Nudges
 
@@ -27,7 +27,7 @@ Claude Deck uses one visible wake path:
 
 - tmux-observed sessions can be nudged through Agent Bridge by sending text and `Enter` to the pane.
 
-Non-tmux Claude Code and Codex sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a provider hook boundary. Agents should still call `deck_check_inbox` before major work and after finishing a task.
+Non-tmux Claude Code and Codex sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a provider hook boundary. Agents should call `deck_check_inbox` before major work and after finishing a task.
 
 ## External Local Callers
 

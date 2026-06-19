@@ -37,7 +37,8 @@ Codex CLI supports:
 - New session with `codex --cd <directory>`
 - Resume by session id or `--last`
 - Fork by session id or `--last`
-- Optional model, profile, profile v2, sandbox, approval policy, web search, and prompt seed
+- Model and profile selectors with custom-value fallback
+- Optional sandbox, approval policy, web search, and prompt seed
 
 Dangerous Codex bypass mode is exposed as an explicit advanced option because it disables approval and sandbox protections.
 

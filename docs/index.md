@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Claude Deck
   text: Documentation
-  tagline: Visual configuration, live session control, and safe Codex CLI management
+  tagline: Local agent coordination, live session control, and provider-aware configuration
   actions:
     - theme: brand
       text: Get Started
@@ -17,15 +17,18 @@ features:
   - icon: 🌉
     title: Agent Bridge
     details: Monitor, spawn, resume, fork, and attach to live Claude Code and Codex CLI tmux sessions from the browser.
+  - icon: ✉️
+    title: Agent Mail
+    details: Route structured context requests, handoffs, replies, and inbox state between local Claude Code and Codex agents.
+  - icon: 👥
+    title: Agent Teams
+    details: Save project, DevOps, release, or same-repo rosters and launch or reuse the sessions that belong to them.
   - icon: 🎛️
     title: Provider-Aware Configuration
     details: Manage Claude Code JSON settings and safe Codex TOML settings, profiles, runtime options, and feature flags.
   - icon: 📊
     title: Dashboard & Usage
     details: See configuration status, context windows, session activity, project state, and Claude Code token usage in one place.
-  - icon: 💬
-    title: Sessions & Transcripts
-    details: Browse conversation history with full message details, tool use, and token tracking.
   - icon: 🤖
     title: Agents & Skills
     details: Create custom agent configurations and discover skills from the community.
@@ -37,8 +40,8 @@ features:
     details: Discover project directories from local agent state or add them with the directory browser.
 ---
 
-## Release Focus: Codex Support
+## Release Focus: 2.0 Team Coordination
 
-The next release makes Codex CLI a stable provider in Claude Deck. Codex sessions can live next to Claude Code sessions in Agent Bridge, and the Config page now includes a Codex-specific editor for safe TOML settings, profile diagnostics, MCP/plugin inventory, and feature flags from `codex features list`.
+Claude Deck 2.0.0 makes Agent Mail and Agent Teams the main coordination layer for local coding agents. Agents can keep durable per-repository or per-team-slot identities, ask each other for context, hand work across repositories, and keep an inspectable mailbox without turning Claude Deck into a general chat product.
 
-Claude Deck still keeps provider boundaries explicit. Codex usage metrics, context charts, and transcript browsing are not shown as if they were Claude Code data. Codex backups are redacted exports and automatic restore is refused until Codex exposes a safe restore contract.
+Presence has been removed. Agent Bridge, Agent Mail, and Agent Teams are now the supported surfaces for live session visibility, communication, and reusable rosters. Codex support still keeps provider boundaries explicit: usage metrics, context charts, and transcript browsing are not shown as if they were Claude Code data, and Codex backups remain redacted exports.

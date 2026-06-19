@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-19
+
+### Added
+- **Agent Mail**: Durable local mailbox coordination for Claude Code and Codex CLI agents
+  - Per-repository and Agent Team slot participants with role and charter metadata
+  - Structured direct messages, context requests, handoffs, replies, read state, acknowledgements, and inbox load
+  - Agent-facing MCP tools for team discovery, inbox checks, replies, context requests, and handoffs
+  - One-click install and uninstall flows for Claude Code and Codex MCP/hooks configuration with best-effort backups
+  - Best-effort tmux wake nudges for visible sessions through Agent Bridge
+- **Agent Teams**: Saved rosters for launching or reusing local agent sessions
+  - Manual team creation, team creation from Agent Mail participants, and team creation from visible Agent Bridge sessions
+  - Team slots with provider, repository, display name, role, charter, bootstrap prompt, launch mode, provider options, and enabled state
+  - Launch planning that checks provider availability, Agent Mail readiness, reusable tmux sessions, disabled slots, and launch option validity
+  - Same-repository planner/reviewer and implementer workflows through distinct Agent Mail team-slot identities
+- **External local orchestration**: Token-bound same-machine Agent Mail API for tools such as OpenClaw
+  - External actor registration, member discovery, direct messages, broadcasts, context requests, handoffs, replies, request status, bounded waits, and acknowledgements
+  - Agent Teams launch endpoints usable by local external automation after plan review
+- **Agent Bridge session creation**: Searchable project picker and Codex model/profile selectors with custom-value fallback.
+
+### Changed
+- **Multi-agent workflow**: Agent Bridge, Agent Mail, and Agent Teams are now the supported surfaces for local session visibility, communication, and reusable rosters.
+- **Agent Mail dashboard**: Connected, observed-only, not wakeable, and inbox-load states now describe delivery behavior more explicitly.
+- **Agent Mail docs**: Setup documentation now explains required MCP/hooks configuration and the current tmux-only wake path.
+- **Dependencies**: Merged low-risk package updates including React package alignment and small UI/runtime dependency updates.
+
+### Removed
+- **Presence**: Removed the Presence frontend route, backend route/service, hook integration, tests, and navigation. Existing inert SQLite tables may remain in local databases, but no active backend polling or UI surface uses them.
+
+### Fixed
+- **Agent Mail install feedback**: Install and uninstall actions now refresh status and show clearer results for Claude Code and Codex configuration.
+- **Agent Mail roster accuracy**: Dashboard member counts now distinguish durable members from observed sessions and collapse bridge-observed/MCP sessions under the same member where appropriate.
+- **Agent Mail hook output**: Claude Code and Codex hooks return provider-valid JSON so hook failures are not shown for normal mailbox checks.
+- **Agent Bridge startup flow**: The development script now avoids transient frontend proxy noise by coordinating backend/frontend startup more carefully.
+
+### Security
+- **External Agent Mail boundary**: External actor creation is loopback-only, external endpoints require bearer tokens, and per-actor rate limits protect the local orchestration surface within Claude Deck's existing local trust model.
+
 ## [1.3.1] - 2026-06-11
 
 ### Fixed
@@ -104,7 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RESTful API at `/api/v1/`
 - CORS configured for local development
 
-[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/adrirubio/claude-deck/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/adrirubio/claude-deck/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/adrirubio/claude-deck/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/adrirubio/claude-deck/compare/v1.1.0...v1.2.0

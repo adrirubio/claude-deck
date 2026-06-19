@@ -71,6 +71,8 @@ FastAPI generates interactive API docs at:
 | [Output Styles](/api/output-styles) | `/output-styles` | Response formatting |
 | [Status Line](/api/statusline) | `/statusline` | Terminal status bar |
 | [Agent Bridge](/api/agent-bridge) | `/agent-bridge` | Provider-aware live terminal monitoring |
+| [Agent Mail](/api/agent-mail) | `/agent-mail` and `/external/agent-mail` | Local agent mailbox coordination and external same-machine orchestration |
+| [Agent Teams](/api/agent-teams) | `/agent-teams` | Saved agent rosters, launch planning, and team slot context |
 | [CC Bridge](/api/cc-bridge) | `/cc-bridge` | Legacy Claude Code terminal monitoring route |
 | [Usage](/api/usage) | `/usage` | Token usage tracking |
 | [Memory](/api/memory) | `/memory` | Memory hierarchy |

@@ -43,24 +43,24 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Status Line** — Customize Claude Code status line display
 - **Agent Bridge** — Discover and monitor Claude Code and Codex CLI sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage provider-specific options directly from the UI
 - **Agent Mail** — Coordinate local Claude Code and Codex CLI agents through durable per-repo identities, structured context requests, handoffs, and an inspectable team mailbox
+- **Agent Teams** — Save reusable rosters of Claude Code and Codex agents, launch or reuse their sessions, and keep same-repo roles distinct through Agent Mail slot identities
 - **Session Transcripts** — View conversation history with full message details and tool use
 - **Usage Tracking** — Monitor token usage, costs, and billing blocks with daily/monthly charts
 - **Plan History** — Browse and review Claude Code implementation plans
 - **Backup & Restore** — Create and manage Claude Code backups with selective restore, plus redacted export-only Codex backups
 - **Projects** — Discover and manage project directories
 
-## What's New for the Next Release
+## What's New in 2.0.0
 
-Codex CLI support has moved from experimental plumbing to a usable provider surface:
+Claude Deck 2.0.0 shifts the product from single-agent management toward local agent coordination:
 
-- Provider-aware Agent Bridge can discover, spawn, resume, fork, attach to, and kill Codex tmux sessions.
-- The Codex config editor now handles safe TOML settings, profiles, runtime controls, and feature flags from `codex features list`.
-- Codex settings include dropdowns for known enum values and help tooltips for settings and feature flags where official descriptions are available.
-- Codex MCP and plugin inventory are visible, with supported CLI-backed add/remove or install/remove actions.
-- Codex exports are redacted and export-only by design.
-- Project discovery is now easier from the UI, including directory browsing when adding projects.
+- Agent Mail gives Claude Code and Codex CLI sessions durable mail identities, structured context requests, handoffs, replies, inbox state, and one-click install flows for MCP and lifecycle hooks.
+- Agent Teams adds saved rosters for repeatable project, DevOps, release, or same-repo planner/implementer teams, with launch planning and session reuse from Agent Bridge.
+- External local tools such as OpenClaw can use token-bound Agent Mail endpoints to discover participants, send requests, create handoffs, poll for answers, and launch saved teams through the Agent Teams API.
+- Agent Bridge now has a searchable project picker and Codex model/profile selectors when spawning sessions.
+- Presence has been removed from the product. Agent Bridge, Agent Mail, and Agent Teams are now the supported observability and coordination surfaces.
 
-Codex support is explicit about provider boundaries: usage/context parity and session transcript browsing are not supported for Codex yet; history and model-cache diagnostics avoid prompt text and raw cache payloads; Codex automatic restore is refused because exports intentionally exclude auth, history, cache, and local state.
+Codex support remains explicit about provider boundaries: usage/context parity and session transcript browsing are not supported for Codex yet; history and model-cache diagnostics avoid prompt text and raw cache payloads; Codex automatic restore is refused because exports intentionally exclude auth, history, cache, and local state.
 
 ## Screenshots
 
