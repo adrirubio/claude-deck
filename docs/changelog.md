@@ -2,6 +2,30 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2.0.1 — 2026-06-20
+
+### Added
+
+- Claude Code Config now covers current high-impact settings:
+  - advisor model
+  - fallback model chains
+  - Remote Control startup
+  - push notifications and terminal notification channel
+  - theme, auto-compact, file checkpointing, and newer safety/privacy toggles
+- The settings editor now includes validated JSON editing for complex settings objects and arrays, plus a boolean map editor for plugin enablement.
+
+### Changed
+
+- Dashboard cards and links are provider-aware, so Codex selection no longer shows Claude Code-only data or inaccessible links as if they were Codex surfaces.
+- Codex dashboard inventory for MCP servers, plugins, feature flags, and config now routes to provider-appropriate pages.
+- Claude Code plugin marketplace settings, worktree symlink directories, sandbox Mach lookup settings, and managed marketplace policy values now use documented JSON shapes.
+
+### Fixed
+
+- Claude Code usage dashboards now calculate costs for current model aliases such as Opus 4.6/4.7/4.8, Sonnet 4.6, Haiku 4.5, and Fable 5 instead of showing `$0.00` with non-zero token usage.
+- Usage cache keys now include the pricing table version, preventing stale zero-cost aggregates after pricing support changes.
+- Several settings defaults and descriptions were corrected to match current Claude Code behavior.
+
 ## 2.0.0 — 2026-06-19
 
 ### Added

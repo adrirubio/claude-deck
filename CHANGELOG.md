@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-20
+
+### Added
+- **Claude Code Config**: Added coverage for current Claude Code settings such as advisor model, fallback model chains, Remote Control startup, push notifications, notification channel, theme, auto-compact, file checkpointing, and newer safety/privacy toggles.
+- **Config editor helpers**: Added validated JSON editing for complex settings objects/arrays and a boolean map editor for plugin enablement.
+
+### Changed
+- **Dashboard**: Dashboard cards and navigation are now provider-aware so Codex selection does not show inaccessible Claude Code-only cards as if they were Codex pages.
+- **Codex provider pages**: Codex MCP servers, plugins, feature flags, and configuration inventory now route to provider-appropriate pages instead of dead-end dashboard stats.
+- **Claude Code settings**: Plugin marketplace settings, worktree symlink directories, sandbox Mach lookup settings, and managed marketplace policy values now use the JSON shapes documented by Claude Code.
+- **Docs**: Refreshed release, Config, and Dashboard docs to describe the 2.0.1 stabilization fixes.
+
+### Fixed
+- **Usage costs**: Claude Code usage dashboards now calculate costs for current Claude model aliases such as Opus 4.6/4.7/4.8, Sonnet 4.6, Haiku 4.5, and Fable 5 instead of showing `$0.00` with non-zero token usage.
+- **Usage cache**: Usage cache keys now include the pricing table version, avoiding stale zero-cost aggregates after pricing support changes.
+- **Config defaults**: Corrected stale UI defaults/descriptions for auto-updates, sandbox auto-allow, thinking summaries, plan auto-mode, and turn duration.
+
 ## [2.0.0] - 2026-06-19
 
 ### Added
@@ -141,7 +158,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RESTful API at `/api/v1/`
 - CORS configured for local development
 
-[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/adrirubio/claude-deck/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/adrirubio/claude-deck/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/adrirubio/claude-deck/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/adrirubio/claude-deck/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/adrirubio/claude-deck/compare/v1.2.0...v1.3.0
