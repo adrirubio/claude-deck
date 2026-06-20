@@ -3,6 +3,7 @@ export const MODEL_OPTIONS = [
   { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
   { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
   { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  { value: 'claude-fable-5', label: 'Claude Fable 5' },
   { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
   { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
   { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet' },
@@ -33,6 +34,7 @@ export const EFFORT_LEVEL_OPTIONS = [
   { value: 'low', label: 'Low' },
   { value: 'medium', label: 'Medium' },
   { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra High' },
 ]
 
 export const TEAMMATE_MODE_OPTIONS = [
@@ -69,6 +71,26 @@ export const VIEW_MODE_OPTIONS = [
   { value: 'default', label: 'Default' },
   { value: 'verbose', label: 'Verbose' },
   { value: 'focus', label: 'Focus' },
+]
+
+export const THEME_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark-daltonized', label: 'Dark Daltonized' },
+  { value: 'light-daltonized', label: 'Light Daltonized' },
+  { value: 'dark-ansi', label: 'Dark ANSI' },
+  { value: 'light-ansi', label: 'Light ANSI' },
+]
+
+export const NOTIFICATION_CHANNEL_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'terminal_bell', label: 'Terminal bell' },
+  { value: 'iterm2', label: 'iTerm2 notification' },
+  { value: 'iterm2_with_bell', label: 'iTerm2 + bell' },
+  { value: 'kitty', label: 'Kitty notification' },
+  { value: 'ghostty', label: 'Ghostty notification' },
+  { value: 'notifications_disabled', label: 'Disabled' },
 ]
 
 export const EDITOR_MODE_OPTIONS = [

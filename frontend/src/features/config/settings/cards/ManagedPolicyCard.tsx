@@ -1,6 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Label } from '@/components/ui/label'
-import { ListEditor, SwitchSetting, TextSetting } from '../field-components'
+import { JsonSetting, SwitchSetting, TextSetting } from '../field-components'
 import type { SettingsCardProps } from '../types'
 
 /**
@@ -71,32 +70,32 @@ export function ManagedPolicyCard({ getSetting, scope }: SettingsCardProps) {
           onCheckedChange={() => {}}
         />
 
-        <div className="grid gap-2">
-          <Label>Allowed Channel Plugins</Label>
-          <p className="text-sm text-muted-foreground">
-            Plugins that may be installed from channels.
-          </p>
-          <ListEditor
-            value={getSetting<string[]>('allowedChannelPlugins', [])}
-            onChange={() => {}}
-          />
-        </div>
+        <JsonSetting
+          id="allowedChannelPlugins"
+          label="Allowed Channel Plugins"
+          description="Plugins that may push channel messages."
+          value={getSetting('allowedChannelPlugins', [])}
+          onChange={() => {}}
+          expected="array"
+        />
 
-        <div className="grid gap-2">
-          <Label>Allowed MCP Servers (managed)</Label>
-          <ListEditor
-            value={getSetting<string[]>('allowedMcpServers', [])}
-            onChange={() => {}}
-          />
-        </div>
+        <JsonSetting
+          id="allowedMcpServers"
+          label="Allowed MCP Servers"
+          description="Managed allowlist of MCP servers users can configure."
+          value={getSetting('allowedMcpServers', [])}
+          onChange={() => {}}
+          expected="array"
+        />
 
-        <div className="grid gap-2">
-          <Label>Denied MCP Servers (managed)</Label>
-          <ListEditor
-            value={getSetting<string[]>('deniedMcpServers', [])}
-            onChange={() => {}}
-          />
-        </div>
+        <JsonSetting
+          id="deniedMcpServers"
+          label="Denied MCP Servers"
+          description="Managed denylist of MCP servers."
+          value={getSetting('deniedMcpServers', [])}
+          onChange={() => {}}
+          expected="array"
+        />
 
         <SwitchSetting
           label="Allow Managed Read Paths Only"

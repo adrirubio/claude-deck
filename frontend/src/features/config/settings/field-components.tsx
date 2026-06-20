@@ -270,6 +270,131 @@ export function ObjectArrayEditor({ value: rawValue, onChange, field1Label, fiel
   )
 }
 
+function formatJson(value: ConfigValue | undefined, fallback: ConfigValue) {
+  return JSON.stringify(value ?? fallback, null, 2)
+}
+
+export function JsonSetting({ id, label, description, value, onChange, placeholder, rows = 8, expected = 'any' }: {
+  id: string
+  label: string
+  description?: string
+  value: ConfigValue | undefined
+  onChange: (value: ConfigValue) => void
+  placeholder?: string
+  rows?: number
+  expected?: 'any' | 'object' | 'array'
+}) {
+  const fallback = expected === 'array' ? [] : expected === 'object' ? {} : null
+  const serialized = formatJson(value, fallback)
+  const [error, setError] = useState('')
+
+  function validate(next: string, commit: boolean) {
+    const trimmed = next.trim()
+    if (!trimmed) {
+      setError('')
+      if (commit) onChange(null)
+      return
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as ConfigValue
+      if (expected === 'object' && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
+        setError('Expected a JSON object.')
+        return
+      }
+      if (expected === 'array' && !Array.isArray(parsed)) {
+        setError('Expected a JSON array.')
+        return
+      }
+      setError('')
+      if (commit) onChange(parsed)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid JSON.')
+    }
+  }
+
+  function handleChange(next: string) {
+    validate(next, false)
+  }
+
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      {description && (
+        <p className="text-xs text-muted-foreground">{description}</p>
+      )}
+      <Textarea
+        key={serialized}
+        id={id}
+        className="font-mono text-xs"
+        rows={rows}
+        defaultValue={serialized}
+        onChange={(e) => handleChange(e.target.value)}
+        onBlur={(e) => validate(e.currentTarget.value, true)}
+        placeholder={placeholder}
+      />
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
+  )
+}
+
+export function BooleanMapEditor({ value: rawValue, onChange, placeholder }: {
+  value: Record<string, boolean>
+  onChange: (value: Record<string, boolean>) => void
+  placeholder?: string
+}) {
+  const value = rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) ? rawValue : {}
+  const [newKey, setNewKey] = useState('')
+
+  function addItem() {
+    const key = newKey.trim()
+    if (!key) return
+    onChange({ ...value, [key]: true })
+    setNewKey('')
+  }
+
+  function removeItem(key: string) {
+    const updated = { ...value }
+    delete updated[key]
+    onChange(updated)
+  }
+
+  function toggleItem(key: string, enabled: boolean) {
+    onChange({ ...value, [key]: enabled })
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <Input
+          value={newKey}
+          onChange={(e) => setNewKey(e.target.value)}
+          placeholder={placeholder ?? 'plugin@marketplace'}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addItem())}
+        />
+        <Button type="button" size="icon" variant="outline" onClick={addItem}>
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="space-y-1">
+        {Object.entries(value).map(([key, enabled]) => (
+          <div key={key} className="flex items-center gap-2 bg-muted px-2 py-1 rounded text-sm">
+            <span className="font-mono flex-1 truncate">{key}</span>
+            <Switch checked={enabled} onCheckedChange={(checked) => toggleItem(key, checked)} />
+            <button
+              type="button"
+              onClick={() => removeItem(key)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function KeyValueEditor({ value, onChange }: {
   value: Record<string, string>
   onChange: (value: Record<string, string>) => void

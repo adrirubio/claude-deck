@@ -1,9 +1,27 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { SwitchSetting, TextSetting, ListEditor, ObjectArrayEditor } from '../field-components'
+import { BooleanMapEditor, JsonSetting, TextSetting } from '../field-components'
 import type { SettingsCardProps } from '../types'
 
-export function PluginManagementCard({ getSetting, updateSetting, scope }: SettingsCardProps) {
+const EXTRA_MARKETPLACES_EXAMPLE = `{
+  "team-tools": {
+    "source": {
+      "source": "github",
+      "repo": "acme-corp/claude-plugins"
+    },
+    "autoUpdate": true
+  }
+}`
+
+const BLOCKED_MARKETPLACES_EXAMPLE = `[
+  { "source": "github", "repo": "untrusted/plugins" }
+]`
+
+const STRICT_MARKETPLACES_EXAMPLE = `[
+  { "source": "github", "repo": "acme-corp/approved-plugins" }
+]`
+
+export function PluginManagementCard({ getSetting, getSettingRaw, updateSetting, scope }: SettingsCardProps) {
   return (
     <Card>
       <CardHeader>
@@ -14,41 +32,36 @@ export function PluginManagementCard({ getSetting, updateSetting, scope }: Setti
         <div className="grid gap-2">
           <Label>Enabled Plugins</Label>
           <p className="text-sm text-muted-foreground">
-            Plugins to load. Use &quot;plugin-name@marketplace&quot; or a local path.
+            Map plugin IDs to enabled or disabled state. Format: plugin-name@marketplace.
           </p>
-          <ListEditor
-            value={getSetting<string[]>('enabledPlugins', [])}
+          <BooleanMapEditor
+            value={getSetting<Record<string, boolean>>('enabledPlugins', {})}
             onChange={(v) => updateSetting('enabledPlugins', v)}
-            placeholder="e.g., plugin-name@marketplace or /path/to/plugin"
+            placeholder="e.g., formatter@team-tools"
           />
         </div>
 
-        <div className="grid gap-2">
-          <Label>Extra Marketplaces</Label>
-          <p className="text-sm text-muted-foreground">
-            Additional plugin marketplaces beyond the defaults.
-          </p>
-          <ObjectArrayEditor
-            value={getSetting<{ name: string; url: string }[]>('extraKnownMarketplaces', [])}
-            onChange={(v) => updateSetting('extraKnownMarketplaces', v)}
-            field1Placeholder="Marketplace name"
-            field2Placeholder="https://marketplace.example.com"
-          />
-        </div>
+        <JsonSetting
+          id="extraKnownMarketplaces"
+          label="Extra Marketplaces"
+          description="Named marketplace sources made available to the current scope."
+          value={getSettingRaw('extraKnownMarketplaces')}
+          onChange={(v) => updateSetting('extraKnownMarketplaces', v)}
+          expected="object"
+          placeholder={EXTRA_MARKETPLACES_EXAMPLE}
+        />
 
         {scope === 'managed' && (
           <>
-            <div className="grid gap-2">
-              <Label>Blocked Marketplaces</Label>
-              <p className="text-sm text-muted-foreground">
-                Marketplace identifiers to block.
-              </p>
-              <ListEditor
-                value={getSetting<string[]>('blockedMarketplaces', [])}
-                onChange={(v) => updateSetting('blockedMarketplaces', v)}
-                placeholder="e.g., untrusted-marketplace"
-              />
-            </div>
+            <JsonSetting
+              id="blockedMarketplaces"
+              label="Blocked Marketplaces"
+              description="Managed blocklist of marketplace sources."
+              value={getSettingRaw('blockedMarketplaces')}
+              onChange={(v) => updateSetting('blockedMarketplaces', v)}
+              expected="array"
+              placeholder={BLOCKED_MARKETPLACES_EXAMPLE}
+            />
 
             <TextSetting
               id="pluginTrustMessage"
@@ -59,11 +72,14 @@ export function PluginManagementCard({ getSetting, updateSetting, scope }: Setti
               placeholder="Only install plugins from trusted sources."
             />
 
-            <SwitchSetting
+            <JsonSetting
+              id="strictKnownMarketplaces"
               label="Strict Known Marketplaces"
-              description="Restrict available marketplaces to only known/managed ones"
-              checked={getSetting<boolean>('strictKnownMarketplaces', false)}
-              onCheckedChange={(v) => updateSetting('strictKnownMarketplaces', v)}
+              description="Managed allowlist of marketplace sources users may add or install from."
+              value={getSettingRaw('strictKnownMarketplaces')}
+              onChange={(v) => updateSetting('strictKnownMarketplaces', v)}
+              expected="array"
+              placeholder={STRICT_MARKETPLACES_EXAMPLE}
             />
           </>
         )}

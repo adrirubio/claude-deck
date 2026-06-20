@@ -117,10 +117,45 @@ export function AdvancedCard({ getSetting, updateSetting }: SettingsCardProps) {
         />
 
         <SwitchSetting
+          label="Enable Ultracode Keyword Trigger"
+          description="Allow the ultracode keyword in a prompt to trigger a dynamic workflow."
+          checked={getSetting<boolean>('workflowKeywordTriggerEnabled', true)}
+          onCheckedChange={(v) => updateSetting('workflowKeywordTriggerEnabled', v)}
+        />
+
+        <SwitchSetting
           label="Disable Agent View"
           description="Turn off background agents and agent view (claude agents, --bg, /background, and the on-demand supervisor)."
           checked={getSetting<boolean>('disableAgentView', false)}
           onCheckedChange={(v) => updateSetting('disableAgentView', v)}
+        />
+
+        <SwitchSetting
+          label="Disable Artifacts"
+          description="Disable publishing session output as private Claude.ai artifact pages."
+          checked={getSetting<boolean>('disableArtifact', false)}
+          onCheckedChange={(v) => updateSetting('disableArtifact', v)}
+        />
+
+        <SwitchSetting
+          label="Disable Claude.ai Connectors"
+          description="Prevent Claude.ai MCP connectors from being auto-fetched or connected."
+          checked={getSetting<boolean>('disableClaudeAiConnectors', false)}
+          onCheckedChange={(v) => updateSetting('disableClaudeAiConnectors', v)}
+        />
+
+        <SwitchSetting
+          label="Disable Bundled Skills"
+          description="Remove bundled skills and workflows while leaving user, project, plugin, and command sources intact."
+          checked={getSetting<boolean>('disableBundledSkills', false)}
+          onCheckedChange={(v) => updateSetting('disableBundledSkills', v)}
+        />
+
+        <SwitchSetting
+          label="Skip WebFetch Preflight"
+          description="Skip Anthropic domain safety preflight checks before WebFetch requests. Useful for restricted Bedrock, Vertex, or Foundry egress."
+          checked={getSetting<boolean>('skipWebFetchPreflight', false)}
+          onCheckedChange={(v) => updateSetting('skipWebFetchPreflight', v)}
         />
 
         <div className="grid gap-2">

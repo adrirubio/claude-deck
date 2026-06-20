@@ -19,8 +19,14 @@ export function AutoModeCard({ getSetting, updateSetting, scope }: SettingsCardP
         <SwitchSetting
           label="Disable Auto Mode"
           description="Prevent auto mode from being used"
-          checked={getSetting<string>('permissions.disableAutoMode', '') === 'disable'}
-          onCheckedChange={(v) => updateSetting('permissions.disableAutoMode', v ? 'disable' : '')}
+          checked={
+            getSetting<string>('disableAutoMode', '') === 'disable' ||
+            getSetting<string>('permissions.disableAutoMode', '') === 'disable'
+          }
+          onCheckedChange={(v) => {
+            updateSetting('disableAutoMode', v ? 'disable' : null)
+            updateSetting('permissions.disableAutoMode', null)
+          }}
         />
 
         <div className="grid gap-2">
@@ -56,6 +62,18 @@ export function AutoModeCard({ getSetting, updateSetting, scope }: SettingsCardP
             value={getSetting<string[]>('autoMode.soft_deny', [])}
             onChange={(v) => updateSetting('autoMode.soft_deny', v)}
             placeholder="e.g., Bash(rm -rf *)"
+          />
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Hard Deny Rules</Label>
+          <p className="text-sm text-muted-foreground">
+            Actions that auto mode should block outright, even if defaults or allow rules would otherwise permit them.
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('autoMode.hard_deny', [])}
+            onChange={(v) => updateSetting('autoMode.hard_deny', v)}
+            placeholder="e.g., Never run terraform apply"
           />
         </div>
       </CardContent>

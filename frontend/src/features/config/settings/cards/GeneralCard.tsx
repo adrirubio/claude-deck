@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { SelectSetting, TextSetting, ListEditor, KeyValueEditor } from '../field-components'
+import { SelectSetting, TextSetting, ListEditor, KeyValueEditor, SwitchSetting } from '../field-components'
 import { MODEL_OPTIONS, UPDATE_CHANNEL_OPTIONS, EFFORT_LEVEL_OPTIONS } from '../constants'
 import type { SettingsCardProps } from '../types'
 
@@ -22,6 +22,27 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
         />
 
         <TextSetting
+          id="advisorModel"
+          label="Advisor Model"
+          description="Optional model alias or full model ID for the advisor tool. Leave empty to disable the advisor."
+          value={getSetting<string>('advisorModel', '')}
+          onChange={(v) => updateSetting('advisorModel', v.trim() ? v : null)}
+          placeholder="opus, sonnet, fable, or a full model ID"
+        />
+
+        <div className="grid gap-2">
+          <Label>Fallback Models</Label>
+          <p className="text-sm text-muted-foreground">
+            Ordered models to try when the primary model is overloaded or unavailable. Claude Code uses up to three.
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('fallbackModel', [])}
+            onChange={(v) => updateSetting('fallbackModel', v)}
+            placeholder="e.g., claude-sonnet-4-6 or default"
+          />
+        </div>
+
+        <TextSetting
           id="language"
           label="Language"
           value={getSetting<string>('language', '')}
@@ -32,7 +53,7 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
         <SelectSetting
           id="autoUpdatesChannel"
           label="Auto Updates Channel"
-          value={getSetting<string>('autoUpdatesChannel', 'stable')}
+          value={getSetting<string>('autoUpdatesChannel', 'latest')}
           onValueChange={(v) => updateSetting('autoUpdatesChannel', v)}
           options={UPDATE_CHANNEL_OPTIONS}
         />
@@ -45,6 +66,20 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
           onValueChange={(v) => updateSetting('effortLevel', v)}
           placeholder="Select effort level"
           options={EFFORT_LEVEL_OPTIONS}
+        />
+
+        <SwitchSetting
+          label="Auto-Compact"
+          description="Automatically compact the conversation when context approaches the limit."
+          checked={getSetting<boolean>('autoCompactEnabled', true)}
+          onCheckedChange={(v) => updateSetting('autoCompactEnabled', v)}
+        />
+
+        <SwitchSetting
+          label="File Checkpointing"
+          description="Snapshot files before edits so /rewind can restore them."
+          checked={getSetting<boolean>('fileCheckpointingEnabled', true)}
+          onCheckedChange={(v) => updateSetting('fileCheckpointingEnabled', v)}
         />
 
         <div className="grid gap-2">
