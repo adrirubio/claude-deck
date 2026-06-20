@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Plus, Server, Shield, Info, PlayCircle } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -40,6 +46,7 @@ import { MCPServerForm } from "./MCPServerForm";
 import { MCPServerDetailDialog } from "./MCPServerDetailDialog";
 import { MCPRegistryBrowser } from "./MCPRegistryBrowser";
 import { RefreshButton } from "@/components/shared/RefreshButton";
+import { CodexInventoryCard } from "@/features/config/CodexInventoryCard";
 import type {
   MCPServer,
   MCPServerCreate,
@@ -50,17 +57,84 @@ import type {
 } from "@/types/mcp";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
+import { useProviderContext } from "@/contexts/ProviderContext";
+import { fetchCodexMcpInventory } from "@/hooks/useProviders";
+import type { CodexMcpInventoryResponse } from "@/types/providers";
 import { toast } from "sonner";
 
 export function MCPServersPage() {
+  const { selectedProviderId } = useProviderContext();
+  if (selectedProviderId === "codex-cli") return <CodexMCPServersPage />;
+  return <ClaudeMCPServersPage />;
+}
+
+function CodexMCPServersPage() {
+  const [inventory, setInventory] = useState<CodexMcpInventoryResponse | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchInventory = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setInventory(await fetchCodexMcpInventory());
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load Codex MCP servers";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInventory();
+  }, [fetchInventory]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <Server className="h-8 w-8" />
+            Codex MCP Servers
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Manage MCP servers through the Codex CLI command surface
+          </p>
+        </div>
+        <RefreshButton onClick={fetchInventory} loading={loading} />
+      </div>
+
+      <CodexInventoryCard
+        mcp={inventory}
+        plugins={null}
+        mcpError={error}
+        pluginError={null}
+        loading={loading}
+        onRefresh={fetchInventory}
+        sections={["mcp"]}
+        title="Codex MCP Inventory"
+        description="List, add, and remove MCP servers using codex mcp. Claude Code approval settings and registry installs are not part of the Codex CLI MCP surface."
+      />
+    </div>
+  );
+}
+
+function ClaudeMCPServersPage() {
   const { activeProject } = useProjectContext();
+  const activeProjectPath = activeProject?.path;
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null);
   const [approvalSettingsOpen, setApprovalSettingsOpen] = useState(false);
-  const [approvalSettings, setApprovalSettings] = useState<MCPServerApprovalSettings | null>(null);
+  const [approvalSettings, setApprovalSettings] =
+    useState<MCPServerApprovalSettings | null>(null);
 
   // Detail dialog state
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
@@ -74,8 +148,8 @@ export function MCPServersPage() {
   const [showTestAllConfirm, setShowTestAllConfirm] = useState(false);
 
   // Separate managed servers from editable ones
-  const managedServers = servers.filter(s => s.scope === "managed");
-  const editableServers = servers.filter(s => s.scope !== "managed");
+  const managedServers = servers.filter((s) => s.scope === "managed");
+  const editableServers = servers.filter((s) => s.scope !== "managed");
 
   // Build approval overrides lookup map
   const approvalOverrides = useMemo(() => {
@@ -91,21 +165,26 @@ export function MCPServersPage() {
     setLoading(true);
     setError(null);
     try {
-      const endpoint = buildEndpoint("mcp/servers", { project_path: activeProject?.path });
+      const endpoint = buildEndpoint("mcp/servers", {
+        project_path: activeProjectPath,
+      });
       const response = await apiClient<MCPServerListResponse>(endpoint);
       setServers(response.servers);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load MCP servers";
+      const message =
+        err instanceof Error ? err.message : "Failed to load MCP servers";
       setError(message);
       toast.error(message);
     } finally {
       setLoading(false);
     }
-  }, [activeProject?.path]);
+  }, [activeProjectPath]);
 
   const fetchApprovalSettings = useCallback(async () => {
     try {
-      const response = await apiClient<MCPServerApprovalSettings>("mcp/approval-settings");
+      const response = await apiClient<MCPServerApprovalSettings>(
+        "mcp/approval-settings",
+      );
       setApprovalSettings(response);
     } catch {
       // Silently fail - approval settings are optional
@@ -119,13 +198,16 @@ export function MCPServersPage() {
 
   const handleApprovalSettingsChange = async (defaultMode: string) => {
     try {
-      const updated = await apiClient<MCPServerApprovalSettings>("mcp/approval-settings", {
-        method: "PUT",
-        body: JSON.stringify({
-          default_mode: defaultMode,
-          server_overrides: approvalSettings?.server_overrides || [],
-        }),
-      });
+      const updated = await apiClient<MCPServerApprovalSettings>(
+        "mcp/approval-settings",
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            default_mode: defaultMode,
+            server_overrides: approvalSettings?.server_overrides || [],
+          }),
+        },
+      );
       setApprovalSettings(updated);
       toast.success("Approval settings updated");
     } catch {
@@ -133,24 +215,33 @@ export function MCPServersPage() {
     }
   };
 
-  const handleServerApprovalChange = async (serverName: string, mode: string | null) => {
+  const handleServerApprovalChange = async (
+    serverName: string,
+    mode: string | null,
+  ) => {
     if (!approvalSettings) return;
     try {
       // Build new overrides: remove existing entry for this server, add new one if mode is not null
       const newOverrides = approvalSettings.server_overrides.filter(
-        o => o.server_name !== serverName
+        (o) => o.server_name !== serverName,
       );
       if (mode) {
-        newOverrides.push({ server_name: serverName, mode: mode as MCPServerApprovalSettings["default_mode"] });
+        newOverrides.push({
+          server_name: serverName,
+          mode: mode as MCPServerApprovalSettings["default_mode"],
+        });
       }
 
-      const updated = await apiClient<MCPServerApprovalSettings>("mcp/approval-settings", {
-        method: "PUT",
-        body: JSON.stringify({
-          default_mode: approvalSettings.default_mode,
-          server_overrides: newOverrides,
-        }),
-      });
+      const updated = await apiClient<MCPServerApprovalSettings>(
+        "mcp/approval-settings",
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            default_mode: approvalSettings.default_mode,
+            server_overrides: newOverrides,
+          }),
+        },
+      );
       setApprovalSettings(updated);
       toast.success("Server approval override updated");
     } catch {
@@ -160,7 +251,9 @@ export function MCPServersPage() {
 
   const handleAddServer = async (server: MCPServerCreate) => {
     try {
-      const endpoint = buildEndpoint("mcp/servers", { project_path: activeProject?.path });
+      const endpoint = buildEndpoint("mcp/servers", {
+        project_path: activeProjectPath,
+      });
       await apiClient<MCPServer>(endpoint, {
         method: "POST",
         body: JSON.stringify(server),
@@ -170,17 +263,22 @@ export function MCPServersPage() {
       setShowWizard(false);
       await fetchServers();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to add server";
+      const message =
+        err instanceof Error ? err.message : "Failed to add server";
       toast.error(message);
       throw err;
     }
   };
 
-  const handleUpdateServer = async (name: string, scope: string, updates: MCPServerUpdate) => {
+  const handleUpdateServer = async (
+    name: string,
+    scope: string,
+    updates: MCPServerUpdate,
+  ) => {
     try {
       const endpoint = buildEndpoint(`mcp/servers/${name}`, {
         scope,
-        project_path: activeProject?.path,
+        project_path: activeProjectPath,
       });
       await apiClient<MCPServer>(endpoint, {
         method: "PUT",
@@ -191,7 +289,8 @@ export function MCPServersPage() {
       setEditingServer(null);
       await fetchServers();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to update server";
+      const message =
+        err instanceof Error ? err.message : "Failed to update server";
       toast.error(message);
       throw err;
     }
@@ -201,7 +300,7 @@ export function MCPServersPage() {
     try {
       const endpoint = buildEndpoint(`mcp/servers/${name}`, {
         scope,
-        project_path: activeProject?.path,
+        project_path: activeProjectPath,
       });
       await apiClient(endpoint, {
         method: "DELETE",
@@ -210,24 +309,25 @@ export function MCPServersPage() {
       toast.success(`MCP server "${name}" removed successfully`);
       await fetchServers();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to remove server";
+      const message =
+        err instanceof Error ? err.message : "Failed to remove server";
       toast.error(message);
     }
   };
 
   const handleToggle = async (server: MCPServer, enabled: boolean) => {
     try {
-      await apiClient(
-        `mcp/servers/${encodeURIComponent(server.name)}/toggle`,
-        {
-          method: "POST",
-          body: JSON.stringify({ disabled: !enabled }),
-        }
+      await apiClient(`mcp/servers/${encodeURIComponent(server.name)}/toggle`, {
+        method: "POST",
+        body: JSON.stringify({ disabled: !enabled }),
+      });
+      toast.success(
+        `Server "${server.name}" ${enabled ? "enabled" : "disabled"}`,
       );
-      toast.success(`Server "${server.name}" ${enabled ? "enabled" : "disabled"}`);
       await fetchServers();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to toggle server";
+      const message =
+        err instanceof Error ? err.message : "Failed to toggle server";
       toast.error(message);
     }
   };
@@ -241,14 +341,19 @@ export function MCPServersPage() {
     setShowTestAllConfirm(false);
     setTestingAll(true);
     try {
-      const endpoint = buildEndpoint("mcp/servers/test-all", { project_path: activeProject?.path });
-      const response = await apiClient<MCPTestAllResponse>(endpoint, { method: "POST" });
-      const connected = response.results.filter(r => r.success).length;
-      const failed = response.results.filter(r => !r.success).length;
+      const endpoint = buildEndpoint("mcp/servers/test-all", {
+        project_path: activeProjectPath,
+      });
+      const response = await apiClient<MCPTestAllResponse>(endpoint, {
+        method: "POST",
+      });
+      const connected = response.results.filter((r) => r.success).length;
+      const failed = response.results.filter((r) => !r.success).length;
       toast.success(`${connected} connected, ${failed} failed`);
       await fetchServers();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to test servers";
+      const message =
+        err instanceof Error ? err.message : "Failed to test servers";
       toast.error(message);
     } finally {
       setTestingAll(false);
@@ -323,12 +428,16 @@ export function MCPServersPage() {
                 <div className="flex items-center gap-2">
                   <Shield className="h-5 w-5 text-amber-600" />
                   <CardTitle className="text-lg">Managed Servers</CardTitle>
-                  <Badge variant="outline" className="text-amber-600 border-amber-600">
+                  <Badge
+                    variant="outline"
+                    className="text-amber-600 border-amber-600"
+                  >
                     Enterprise
                   </Badge>
                 </div>
                 <CardDescription>
-                  These servers are configured by your organization and cannot be modified.
+                  These servers are configured by your organization and cannot
+                  be modified.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -348,18 +457,26 @@ export function MCPServersPage() {
           )}
 
           {/* Approval Settings Panel */}
-          <Collapsible open={approvalSettingsOpen} onOpenChange={setApprovalSettingsOpen}>
+          <Collapsible
+            open={approvalSettingsOpen}
+            onOpenChange={setApprovalSettingsOpen}
+          >
             <Card>
               <CollapsibleTrigger asChild>
                 <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Info className="h-5 w-5" />
-                      <CardTitle className="text-lg">Server Approval Settings</CardTitle>
+                      <CardTitle className="text-lg">
+                        Server Approval Settings
+                      </CardTitle>
                     </div>
                     <Badge variant="outline">
-                      {approvalSettings?.default_mode === "always-allow" ? "Auto-approve" :
-                       approvalSettings?.default_mode === "always-deny" ? "Always deny" : "Ask each time"}
+                      {approvalSettings?.default_mode === "always-allow"
+                        ? "Auto-approve"
+                        : approvalSettings?.default_mode === "always-deny"
+                          ? "Always deny"
+                          : "Ask each time"}
                     </Badge>
                   </div>
                   <CardDescription>
@@ -371,23 +488,34 @@ export function MCPServersPage() {
                 <CardContent className="pt-0">
                   <div className="space-y-4">
                     <div>
-                      <Label htmlFor="default-approval">Default Approval Mode</Label>
+                      <Label htmlFor="default-approval">
+                        Default Approval Mode
+                      </Label>
                       <Select
-                        value={approvalSettings?.default_mode || "ask-every-time"}
+                        value={
+                          approvalSettings?.default_mode || "ask-every-time"
+                        }
                         onValueChange={handleApprovalSettingsChange}
                       >
                         <SelectTrigger id="default-approval" className="mt-2">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="ask-every-time">Ask every time</SelectItem>
-                          <SelectItem value="always-allow">Always allow (trust all servers)</SelectItem>
-                          <SelectItem value="always-deny">Always deny</SelectItem>
+                          <SelectItem value="ask-every-time">
+                            Ask every time
+                          </SelectItem>
+                          <SelectItem value="always-allow">
+                            Always allow (trust all servers)
+                          </SelectItem>
+                          <SelectItem value="always-deny">
+                            Always deny
+                          </SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="text-xs text-muted-foreground mt-2">
-                        This controls whether Claude Code asks for permission before using MCP tools.
-                        Per-server overrides can be set in each server's detail view.
+                        This controls whether Claude Code asks for permission
+                        before using MCP tools. Per-server overrides can be set
+                        in each server's detail view.
                       </p>
                     </div>
                   </div>
@@ -434,17 +562,24 @@ export function MCPServersPage() {
         onTestComplete={fetchServers}
         approvalSettings={approvalSettings}
         onApprovalChange={handleServerApprovalChange}
-        readOnly={detailServer?.scope === "plugin" || detailServer?.scope === "managed"}
+        readOnly={
+          detailServer?.scope === "plugin" || detailServer?.scope === "managed"
+        }
       />
 
       {/* Test All Confirmation Dialog */}
-      <AlertDialog open={showTestAllConfirm} onOpenChange={setShowTestAllConfirm}>
+      <AlertDialog
+        open={showTestAllConfirm}
+        onOpenChange={setShowTestAllConfirm}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Test All Servers?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will test {serverCount} {serverCount === 1 ? "server" : "servers"} sequentially.
-              Estimated time: ~{estimatedTime}s. Each test spawns a subprocess and may take up to 30s for npx-based servers.
+              This will test {serverCount}{" "}
+              {serverCount === 1 ? "server" : "servers"} sequentially. Estimated
+              time: ~{estimatedTime}s. Each test spawns a subprocess and may
+              take up to 30s for npx-based servers.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -473,7 +608,10 @@ export function MCPServersPage() {
       </Dialog>
 
       {/* Edit Server Dialog */}
-      <Dialog open={!!editingServer} onOpenChange={(open) => !open && setEditingServer(null)}>
+      <Dialog
+        open={!!editingServer}
+        onOpenChange={(open) => !open && setEditingServer(null)}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit MCP Server</DialogTitle>

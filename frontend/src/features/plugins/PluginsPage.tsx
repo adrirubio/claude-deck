@@ -9,19 +9,97 @@ import type {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, Package, Store, Settings, Globe, ArrowUpCircle } from "lucide-react";
+import {
+  RefreshCw,
+  Package,
+  Store,
+  Settings,
+  Globe,
+  ArrowUpCircle,
+} from "lucide-react";
 import { InstalledPlugins } from "./InstalledPlugins";
 import { PluginDetails } from "./PluginDetails";
 import { MarketplaceBrowser } from "./MarketplaceBrowser";
 import { PluginInstallWizard } from "./PluginInstallWizard";
 import { MarketplaceManager } from "./MarketplaceManager";
 import { AllAvailablePlugins } from "./AllAvailablePlugins";
+import { CodexInventoryCard } from "@/features/config/CodexInventoryCard";
 import { apiClient, buildEndpoint } from "@/lib/api";
 import { useProjectContext } from "@/contexts/ProjectContext";
+import { useProviderContext } from "@/contexts/ProviderContext";
+import { fetchCodexPluginInventory } from "@/hooks/useProviders";
+import type { CodexPluginInventoryResponse } from "@/types/providers";
 import { toast } from "sonner";
 
 export function PluginsPage() {
+  const { selectedProviderId } = useProviderContext();
+  if (selectedProviderId === "codex-cli") return <CodexPluginsPage />;
+  return <ClaudePluginsPage />;
+}
+
+function CodexPluginsPage() {
+  const [inventory, setInventory] =
+    useState<CodexPluginInventoryResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchInventory = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setInventory(await fetchCodexPluginInventory());
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load Codex plugins";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInventory();
+  }, [fetchInventory]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <Package className="h-8 w-8" />
+            Codex Plugins
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            View Codex plugin inventory and use supported install/remove actions
+          </p>
+        </div>
+        <Button onClick={fetchInventory} variant="outline" disabled={loading}>
+          <RefreshCw
+            className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`}
+          />
+          Refresh
+        </Button>
+      </div>
+
+      <CodexInventoryCard
+        mcp={null}
+        plugins={inventory}
+        mcpError={null}
+        pluginError={error}
+        loading={loading}
+        onRefresh={fetchInventory}
+        sections={["plugins"]}
+        title="Codex Plugin Inventory"
+        description="Codex CLI reports installed and available plugin rows together. Enable/disable actions are shown as unsupported when the installed CLI does not expose them."
+      />
+    </div>
+  );
+}
+
+function ClaudePluginsPage() {
   const { activeProject } = useProjectContext();
+  const activeProjectPath = activeProject?.path;
   const [activeTab, setActiveTab] = useState<PluginTab>("installed");
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [marketplaces, setMarketplaces] = useState<MarketplaceResponse[]>([]);
@@ -29,7 +107,9 @@ export function PluginsPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Update tracking
-  const [updateInfo, setUpdateInfo] = useState<Map<string, PluginUpdateInfo>>(new Map());
+  const [updateInfo, setUpdateInfo] = useState<Map<string, PluginUpdateInfo>>(
+    new Map(),
+  );
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   // Search state (shared across tabs)
@@ -40,8 +120,11 @@ export function PluginsPage() {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   // Install wizard
-  const [pluginToInstall, setPluginToInstall] = useState<MarketplacePlugin | null>(null);
-  const [installMarketplaceName, setInstallMarketplaceName] = useState<string | null>(null);
+  const [pluginToInstall, setPluginToInstall] =
+    useState<MarketplacePlugin | null>(null);
+  const [installMarketplaceName, setInstallMarketplaceName] = useState<
+    string | null
+  >(null);
   const [installWizardOpen, setInstallWizardOpen] = useState(false);
 
   // Show marketplace manager
@@ -58,23 +141,29 @@ export function PluginsPage() {
 
   const fetchPlugins = useCallback(async () => {
     try {
-      const endpoint = buildEndpoint("plugins", { project_path: activeProject?.path });
+      const endpoint = buildEndpoint("plugins", {
+        project_path: activeProjectPath,
+      });
       const data = await apiClient<{ plugins: Plugin[] }>(endpoint);
       setPlugins(data.plugins || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load plugins");
     }
-  }, [activeProject?.path]);
+  }, [activeProjectPath]);
 
   const fetchMarketplaces = useCallback(async () => {
     try {
-      const endpoint = buildEndpoint("plugins/marketplaces", { project_path: activeProject?.path });
-      const data = await apiClient<{ marketplaces: MarketplaceResponse[] }>(endpoint);
+      const endpoint = buildEndpoint("plugins/marketplaces", {
+        project_path: activeProjectPath,
+      });
+      const data = await apiClient<{ marketplaces: MarketplaceResponse[] }>(
+        endpoint,
+      );
       setMarketplaces(data.marketplaces || []);
     } catch (err) {
       console.error("Failed to load marketplaces:", err);
     }
-  }, [activeProject?.path]);
+  }, [activeProjectPath]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -90,9 +179,10 @@ export function PluginsPage() {
   const handleCheckUpdates = useCallback(async () => {
     setCheckingUpdates(true);
     try {
-      const data = await apiClient<{ plugins: PluginUpdateInfo[]; outdated_count: number }>(
-        "plugins/updates"
-      );
+      const data = await apiClient<{
+        plugins: PluginUpdateInfo[];
+        outdated_count: number;
+      }>("plugins/updates");
       const newUpdateInfo = new Map<string, PluginUpdateInfo>();
       data.plugins.forEach((info) => {
         newUpdateInfo.set(info.name, info);
@@ -110,28 +200,31 @@ export function PluginsPage() {
     }
   }, []);
 
-  const handleUpdatePlugin = useCallback(async (name: string) => {
-    try {
-      const data = await apiClient<{ success: boolean; message: string }>(
-        `/api/v1/plugins/${name}/update`,
-        { method: "POST" }
-      );
-      if (data.success) {
-        toast.success(`Plugin "${name}" updated successfully`);
-        // Refresh plugins and clear update info for this plugin
-        fetchPlugins();
-        setUpdateInfo((prev) => {
-          const newMap = new Map(prev);
-          newMap.delete(name);
-          return newMap;
-        });
-      } else {
-        toast.error(data.message);
+  const handleUpdatePlugin = useCallback(
+    async (name: string) => {
+      try {
+        const data = await apiClient<{ success: boolean; message: string }>(
+          `/api/v1/plugins/${name}/update`,
+          { method: "POST" },
+        );
+        if (data.success) {
+          toast.success(`Plugin "${name}" updated successfully`);
+          // Refresh plugins and clear update info for this plugin
+          fetchPlugins();
+          setUpdateInfo((prev) => {
+            const newMap = new Map(prev);
+            newMap.delete(name);
+            return newMap;
+          });
+        } else {
+          toast.error(data.message);
+        }
+      } catch {
+        toast.error(`Failed to update plugin "${name}"`);
       }
-    } catch {
-      toast.error(`Failed to update plugin "${name}"`);
-    }
-  }, [fetchPlugins]);
+    },
+    [fetchPlugins],
+  );
 
   const handleUpdateAll = useCallback(async () => {
     try {
@@ -140,15 +233,15 @@ export function PluginsPage() {
         message: string;
         updated_count: number;
         failed_count: number;
-}>("plugins/update-all", { method: "POST" });
-      
+      }>("plugins/update-all", { method: "POST" });
+
       if (data.updated_count > 0) {
         toast.success(`Updated ${data.updated_count} plugin(s)`);
       }
       if (data.failed_count > 0) {
         toast.error(`${data.failed_count} plugin(s) failed to update`);
       }
-      
+
       // Refresh plugins and clear update info
       fetchPlugins();
       setUpdateInfo(new Map());
@@ -160,7 +253,11 @@ export function PluginsPage() {
   const handleEnableAll = useCallback(async () => {
     let successCount = 0;
     for (const plugin of plugins) {
-      if (plugin.enabled === false && plugin.source !== "local" && plugin.source !== "local-project") {
+      if (
+        plugin.enabled === false &&
+        plugin.source !== "local" &&
+        plugin.source !== "local-project"
+      ) {
         try {
           await apiClient(`/api/v1/plugins/${plugin.name}/toggle`, {
             method: "POST",
@@ -181,7 +278,11 @@ export function PluginsPage() {
   const handleDisableAll = useCallback(async () => {
     let successCount = 0;
     for (const plugin of plugins) {
-      if (plugin.enabled !== false && plugin.source !== "local" && plugin.source !== "local-project") {
+      if (
+        plugin.enabled !== false &&
+        plugin.source !== "local" &&
+        plugin.source !== "local-project"
+      ) {
         try {
           await apiClient(`/api/v1/plugins/${plugin.name}/toggle`, {
             method: "POST",
@@ -206,17 +307,24 @@ export function PluginsPage() {
 
   const handleUninstall = async (name: string) => {
     try {
-      const endpoint = buildEndpoint(`plugins/${name}`, { project_path: activeProject?.path });
+      const endpoint = buildEndpoint(`plugins/${name}`, {
+        project_path: activeProjectPath,
+      });
       await apiClient(endpoint, { method: "DELETE" });
 
       toast.success(`Plugin "${name}" uninstalled successfully`);
       fetchPlugins();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to uninstall plugin");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to uninstall plugin",
+      );
     }
   };
 
-  const handleInstall = (plugin: MarketplacePlugin, marketplaceName: string) => {
+  const handleInstall = (
+    plugin: MarketplacePlugin,
+    marketplaceName: string,
+  ) => {
     setPluginToInstall(plugin);
     setInstallMarketplaceName(marketplaceName);
     setInstallWizardOpen(true);
@@ -228,7 +336,9 @@ export function PluginsPage() {
 
   const handleToggle = async (plugin: Plugin, enabled: boolean) => {
     try {
-      const endpoint = buildEndpoint(`plugins/${plugin.name}/toggle`, { project_path: activeProject?.path });
+      const endpoint = buildEndpoint(`plugins/${plugin.name}/toggle`, {
+        project_path: activeProjectPath,
+      });
       const data = await apiClient<{ message: string }>(endpoint, {
         method: "POST",
         body: JSON.stringify({
@@ -240,7 +350,9 @@ export function PluginsPage() {
       toast.success(data.message);
       fetchPlugins();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to toggle plugin");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to toggle plugin",
+      );
     }
   };
 
@@ -258,7 +370,11 @@ export function PluginsPage() {
           </p>
         </div>
         {updatesCount > 0 && (
-          <Button variant="default" onClick={handleUpdateAll} className="bg-orange-500 hover:bg-orange-600">
+          <Button
+            variant="default"
+            onClick={handleUpdateAll}
+            className="bg-orange-500 hover:bg-orange-600"
+          >
             <ArrowUpCircle className="h-4 w-4 mr-2" />
             Update All ({updatesCount})
           </Button>
@@ -277,7 +393,9 @@ export function PluginsPage() {
       {/* Actions */}
       <div className="flex gap-2">
         <Button onClick={fetchData} variant="outline" disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          <RefreshCw
+            className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`}
+          />
           Refresh
         </Button>
         <Button
@@ -291,11 +409,17 @@ export function PluginsPage() {
 
       {/* Marketplace Manager */}
       {showMarketplaceManager && (
-        <MarketplaceManager marketplaces={marketplaces} onRefresh={fetchMarketplaces} />
+        <MarketplaceManager
+          marketplaces={marketplaces}
+          onRefresh={fetchMarketplaces}
+        />
       )}
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PluginTab)}>
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as PluginTab)}
+      >
         <TabsList>
           <TabsTrigger value="installed" className="flex items-center gap-2">
             <Package className="h-4 w-4" />
