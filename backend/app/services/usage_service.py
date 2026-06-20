@@ -79,7 +79,7 @@ class UsageService:
         **params: Any,
     ) -> str:
         """Generate cache key for query."""
-        key_parts = [cache_type]
+        key_parts = [cache_type, f"pricing:{self.pricing.PRICING_VERSION}"]
         if project_path:
             key_parts.append(f"project:{project_path}")
         for k, v in sorted(params.items()):
@@ -284,7 +284,7 @@ class UsageService:
 
     def _calculate_entry_cost(self, entry: LoadedUsageEntry) -> float:
         """Calculate cost for a single entry."""
-        if entry.cost_usd is not None:
+        if entry.cost_usd is not None and entry.cost_usd > 0:
             return entry.cost_usd
         return self.pricing.calculate_cost(
             input_tokens=entry.input_tokens,
