@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import { ListEditor, SelectSetting, SwitchSetting } from '../field-components'
+import { ListEditor, SelectSetting } from '../field-components'
 import { WORKTREE_BASE_REF_OPTIONS, WORKTREE_BG_ISOLATION_OPTIONS } from '../constants'
 import type { SettingsCardProps } from '../types'
 
@@ -32,12 +32,17 @@ export function WorktreeCard({ getSetting, updateSetting }: SettingsCardProps) {
           options={WORKTREE_BG_ISOLATION_OPTIONS}
         />
 
-        <SwitchSetting
-          label="Symlink Directories"
-          description="Symlink ignored/untracked directories (e.g., node_modules, venv) into new worktrees to save time and disk."
-          checked={getSetting<boolean>('worktree.symlinkDirectories', false)}
-          onCheckedChange={(v) => updateSetting('worktree.symlinkDirectories', v)}
-        />
+        <div className="grid gap-2">
+          <Label>Symlink Directories</Label>
+          <p className="text-sm text-muted-foreground">
+            Directories to symlink into new worktrees to avoid duplicating large ignored folders.
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('worktree.symlinkDirectories', [])}
+            onChange={(v) => updateSetting('worktree.symlinkDirectories', v)}
+            placeholder="e.g., node_modules"
+          />
+        </div>
 
         <div className="grid gap-2">
           <Label>Sparse Paths</Label>

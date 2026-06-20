@@ -28,7 +28,7 @@ export function SandboxCard({ getSetting, updateSetting }: SettingsCardProps) {
         <SwitchSetting
           label="Auto-Allow Bash if Sandboxed"
           description="Automatically allow bash commands when sandbox is enabled"
-          checked={getSetting<boolean>('sandbox.autoAllowBashIfSandboxed', false)}
+          checked={getSetting<boolean>('sandbox.autoAllowBashIfSandboxed', true)}
           onCheckedChange={(v) => updateSetting('sandbox.autoAllowBashIfSandboxed', v)}
         />
 
@@ -48,7 +48,7 @@ export function SandboxCard({ getSetting, updateSetting }: SettingsCardProps) {
 
         <SwitchSetting
           label="Weaker Network Isolation (macOS)"
-          description="Use a looser network isolation policy — needed on some macOS versions where strict isolation breaks DNS."
+          description="Allow sandboxed commands to reach the system TLS trust service when a custom CA or proxy requires it."
           checked={getSetting<boolean>('sandbox.enableWeakerNetworkIsolation', false)}
           onCheckedChange={(v) => updateSetting('sandbox.enableWeakerNetworkIsolation', v)}
         />
@@ -115,12 +115,17 @@ export function SandboxCard({ getSetting, updateSetting }: SettingsCardProps) {
           onCheckedChange={(v) => updateSetting('sandbox.network.allowLocalBinding', v)}
         />
 
-        <SwitchSetting
-          label="Allow Mach Lookup (macOS)"
-          description="Allow mach-bootstrap service lookups from inside the sandbox."
-          checked={getSetting<boolean>('sandbox.network.allowMachLookup', false)}
-          onCheckedChange={(v) => updateSetting('sandbox.network.allowMachLookup', v)}
-        />
+        <div className="grid gap-2">
+          <Label>Allowed Mach Services (macOS)</Label>
+          <p className="text-sm text-muted-foreground">
+            XPC/Mach service names the sandbox may look up. Supports a trailing * for prefix matching.
+          </p>
+          <ListEditor
+            value={getSetting<string[]>('sandbox.network.allowMachLookup', [])}
+            onChange={(v) => updateSetting('sandbox.network.allowMachLookup', v)}
+            placeholder="e.g., com.apple.coresimulator.*"
+          />
+        </div>
 
         <div className="grid grid-cols-2 gap-4">
           <NumberSetting

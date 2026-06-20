@@ -33,6 +33,7 @@ import { HooksSecurityCard } from './cards/HooksSecurityCard'
 import { HookEventEditorCard } from './cards/HookEventEditorCard'
 import { AdvancedCard } from './cards/AdvancedCard'
 import { IdeCard } from './cards/IdeCard'
+import { RemoteControlCard } from './cards/RemoteControlCard'
 import { WorktreeCard } from './cards/WorktreeCard'
 import { ManagedPolicyCard } from './cards/ManagedPolicyCard'
 
@@ -42,6 +43,7 @@ interface SettingsEditorProps {
 
 export function SettingsEditor({ onSave }: SettingsEditorProps) {
   const { activeProject } = useProjectContext()
+  const activeProjectPath = activeProject?.path
   const [scope, setScope] = useState<SettingsScope>('user')
   const [settings, setSettings] = useState<Record<string, ConfigValue>>({})
   const [loading, setLoading] = useState(true)
@@ -54,7 +56,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     setLoading(true)
     try {
       const endpoint = buildEndpoint(`config/settings/${scope}`, {
-        project_path: activeProject?.path,
+        project_path: activeProjectPath,
       })
       const response = await apiClient<ScopedSettingsResponse>(endpoint)
       setSettings(response.settings || {})
@@ -65,7 +67,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     } finally {
       setLoading(false)
     }
-  }, [scope, activeProject?.path])
+  }, [scope, activeProjectPath])
 
   useEffect(() => {
     fetchSettings()
@@ -126,7 +128,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
         body: JSON.stringify({
           scope,
           settings: settingsToSave,
-          project_path: activeProject?.path,
+          project_path: activeProjectPath,
         }),
       })
       if (result.migrated_patterns?.length || result.removed_patterns?.length) {
@@ -162,7 +164,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
     await doSave(fixed)
   }
 
-  const hasProject = !!activeProject?.path
+  const hasProject = !!activeProjectPath
   const isManaged = scope === 'managed'
   const cardProps = { getSetting, getSettingRaw, updateSetting, scope }
 
@@ -227,6 +229,7 @@ export function SettingsEditor({ onSave }: SettingsEditorProps) {
           <AuthenticationCard {...cardProps} />
           <GeneralCard {...cardProps} />
           <IdeCard {...cardProps} />
+          <RemoteControlCard {...cardProps} />
           <MemoryCard {...cardProps} />
           <SandboxCard {...cardProps} />
           <PermissionsCard {...cardProps} />
