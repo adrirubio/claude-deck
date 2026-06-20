@@ -10,12 +10,74 @@ from typing import Optional
 class PricingService:
     """Service for model pricing and cost calculation."""
 
+    # Bump when MODEL_PRICING changes so cached usage aggregates are recalculated.
+    PRICING_VERSION = "2026-06-20"
+
     # Default token threshold for tiered pricing (200k tokens)
     TIERED_THRESHOLD = 200_000
 
     # Model pricing data (costs per token)
     # Based on LiteLLM pricing data
     MODEL_PRICING = {
+        # Claude Fable 5 (June 2026)
+        "claude-fable-5": {
+            "input": 10.00 / 1_000_000,
+            "output": 50.00 / 1_000_000,
+            "cache_creation": 12.50 / 1_000_000,
+            "cache_read": 1.00 / 1_000_000,
+        },
+        # Claude Mythos 5 (June 2026, limited availability)
+        "claude-mythos-5": {
+            "input": 10.00 / 1_000_000,
+            "output": 50.00 / 1_000_000,
+            "cache_creation": 12.50 / 1_000_000,
+            "cache_read": 1.00 / 1_000_000,
+        },
+        # Claude Opus 4.x current aliases (2025-2026)
+        "claude-opus-4-8": {
+            "input": 5.00 / 1_000_000,
+            "output": 25.00 / 1_000_000,
+            "cache_creation": 6.25 / 1_000_000,
+            "cache_read": 0.50 / 1_000_000,
+        },
+        "claude-opus-4-7": {
+            "input": 5.00 / 1_000_000,
+            "output": 25.00 / 1_000_000,
+            "cache_creation": 6.25 / 1_000_000,
+            "cache_read": 0.50 / 1_000_000,
+        },
+        "claude-opus-4-6": {
+            "input": 5.00 / 1_000_000,
+            "output": 25.00 / 1_000_000,
+            "cache_creation": 6.25 / 1_000_000,
+            "cache_read": 0.50 / 1_000_000,
+        },
+        "claude-opus-4-5": {
+            "input": 5.00 / 1_000_000,
+            "output": 25.00 / 1_000_000,
+            "cache_creation": 6.25 / 1_000_000,
+            "cache_read": 0.50 / 1_000_000,
+        },
+        # Claude Sonnet 4.x current aliases (2025-2026)
+        "claude-sonnet-4-6": {
+            "input": 3.00 / 1_000_000,
+            "output": 15.00 / 1_000_000,
+            "cache_creation": 3.75 / 1_000_000,
+            "cache_read": 0.30 / 1_000_000,
+        },
+        "claude-sonnet-4-5": {
+            "input": 3.00 / 1_000_000,
+            "output": 15.00 / 1_000_000,
+            "cache_creation": 3.75 / 1_000_000,
+            "cache_read": 0.30 / 1_000_000,
+        },
+        # Claude Haiku 4.5 (October 2025)
+        "claude-haiku-4-5": {
+            "input": 1.00 / 1_000_000,
+            "output": 5.00 / 1_000_000,
+            "cache_creation": 1.25 / 1_000_000,
+            "cache_read": 0.10 / 1_000_000,
+        },
         # Claude Sonnet 4 (May 2025)
         "claude-sonnet-4-20250514": {
             "input": 3.00 / 1_000_000,
@@ -40,14 +102,10 @@ class PricingService:
         },
         # Claude Opus 4.5 (November 2025)
         "claude-opus-4-5-20251101": {
-            "input": 15.00 / 1_000_000,
-            "output": 75.00 / 1_000_000,
-            "cache_creation": 18.75 / 1_000_000,
-            "cache_read": 1.50 / 1_000_000,
-            "input_above_200k": 30.00 / 1_000_000,
-            "output_above_200k": 112.50 / 1_000_000,
-            "cache_creation_above_200k": 37.50 / 1_000_000,
-            "cache_read_above_200k": 3.00 / 1_000_000,
+            "input": 5.00 / 1_000_000,
+            "output": 25.00 / 1_000_000,
+            "cache_creation": 6.25 / 1_000_000,
+            "cache_read": 0.50 / 1_000_000,
         },
         # Claude 3.5 Sonnet (October 2024)
         "claude-3-5-sonnet-20241022": {
@@ -96,6 +154,7 @@ class PricingService:
     # Provider prefixes for model name matching
     PROVIDER_PREFIXES = [
         "anthropic/",
+        "anthropic.",
         "claude-",
         "claude-3-",
         "claude-3-5-",

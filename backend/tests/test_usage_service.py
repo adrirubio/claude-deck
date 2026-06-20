@@ -87,11 +87,47 @@ class TestPricingService:
         # The fuzzy matching should find it
         assert pricing is not None or self.pricing.get_model_pricing("claude-sonnet-4-20250514") is not None
 
+    def test_current_claude_code_alias_pricing(self):
+        """Test current Claude Code model aliases have non-zero pricing."""
+        sonnet_cost = self.pricing.calculate_cost(
+            input_tokens=1000,
+            output_tokens=500,
+            model="claude-sonnet-4-6",
+        )
+        assert sonnet_cost == pytest.approx(0.0105, rel=1e-3)
+
+        opus_cost = self.pricing.calculate_cost(
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=200,
+            cache_read_tokens=1000,
+            model="claude-opus-4-7",
+        )
+        assert opus_cost == pytest.approx(0.01925, rel=1e-3)
+
+        fable_cost = self.pricing.calculate_cost(
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=200,
+            cache_read_tokens=1000,
+            model="claude-fable-5",
+        )
+        assert fable_cost == pytest.approx(0.0385, rel=1e-3)
+
+    def test_current_alias_matching_with_provider_style_name(self):
+        """Test provider-prefixed current aliases resolve."""
+        pricing = self.pricing.get_model_pricing("anthropic.claude-sonnet-4-6-v1:0")
+        assert pricing is not None
+        assert pricing["input"] == pytest.approx(3.00 / 1_000_000)
+
     def test_get_supported_models(self):
         """Test listing supported models."""
         models = self.pricing.get_supported_models()
         assert len(models) > 0
         assert "claude-sonnet-4-20250514" in models
+        assert "claude-sonnet-4-6" in models
+        assert "claude-opus-4-7" in models
+        assert "claude-fable-5" in models
 
     def test_calculate_tiered_cost_boundary(self):
         """Test tiered cost calculation at boundary."""
@@ -148,6 +184,38 @@ class TestUsageService:
         assert entry.input_tokens == 1000
         assert entry.output_tokens == 500
         assert entry.model == "claude-sonnet-4-20250514"
+
+    def test_zero_cost_usd_falls_back_to_pricing(self):
+        """Test zero costUSD does not suppress calculated cost for token usage."""
+        entry = LoadedUsageEntry(
+            timestamp=datetime.now(),
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=0,
+            cache_read_tokens=0,
+            cost_usd=0.0,
+            model="claude-fable-5",
+            session_id="test-session",
+            version="1.0.0",
+            project_path="test-project",
+        )
+        assert self.service._calculate_entry_cost(entry) == pytest.approx(0.035, rel=1e-3)
+
+    def test_positive_cost_usd_is_trusted(self):
+        """Test positive costUSD remains authoritative when present."""
+        entry = LoadedUsageEntry(
+            timestamp=datetime.now(),
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=0,
+            cache_read_tokens=0,
+            cost_usd=0.01,
+            model="claude-fable-5",
+            session_id="test-session",
+            version="1.0.0",
+            project_path="test-project",
+        )
+        assert self.service._calculate_entry_cost(entry) == 0.01
 
     @pytest.fixture
     def sample_entries(self):
