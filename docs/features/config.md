@@ -18,12 +18,17 @@ The Settings Editor tab provides form controls for common Claude Code settings:
 
 | Setting | Type | Description |
 |---------|------|-------------|
-| Model | Dropdown | Claude model selection (Opus 4.6, Sonnet 4.6, Haiku 4.5, etc.) |
+| Model | Dropdown | Claude model selection, including current Opus, Sonnet, Haiku, and Fable aliases |
+| Advisor Model | Text input | Optional model alias or full model ID for Claude Code's advisor tool |
+| Fallback Models | List | Ordered model chain to try when the primary model is overloaded or unavailable |
 | Permission Mode | Dropdown | default, acceptEdits, dontAsk, plan, bypassPermissions, delegate |
 | Update Channel | Dropdown | stable or latest |
 | Teammate Mode | Dropdown | auto, in-process, or tmux |
-| Read-only Files | Toggle | Always allow reading files without permission prompts |
-| Timeouts & Limits | Number inputs | Various timeout and limit settings |
+| Remote Control & Notifications | Toggles/dropdowns | Remote Control startup, mobile push notifications, and terminal notification channel |
+| Safety & Privacy | Toggles | Artifact publishing, Claude.ai connectors, bundled skills, WebFetch preflight, hooks, and workflow behavior |
+| Plugins | Map/JSON editors | Plugin enablement and marketplace settings using Claude Code's documented JSON shapes |
+| Worktrees & Sandbox | Lists/toggles | Worktree base refs, symlink directories, sparse paths, sandbox filesystem/network controls, and macOS service allowlists |
+| Timeouts & Limits | Number inputs | Cleanup, feedback survey, file suggestion, and sandbox proxy settings |
 
 The editor also includes a **Permission Rules** section where you can add allow/ask/deny patterns using glob syntax.
 
@@ -78,9 +83,9 @@ The Codex editor keeps open-ended fields editable and uses dropdowns where Codex
 
 | Setting | Control | Notes |
 |---------|---------|-------|
-| Model | Text input | Shows model ids already found in the loaded config/profile data, but allows any Codex-supported model id. |
+| Model | Dropdown with custom fallback | Shows model ids already found in the loaded config/profile data, while still allowing any Codex-supported model id. |
 | Reasoning Effort | Dropdown | Default, low, medium, high, or extra high. Existing custom values remain selectable. |
-| Profile | Text input | Shows profile names found in config/profile diagnostics, but allows any Codex profile name. |
+| Profile | Dropdown with custom fallback | Shows profile names found in config/profile diagnostics, while still allowing any Codex profile name. |
 | Sandbox Mode | Dropdown | Default, read-only, workspace-write, or danger-full-access. |
 | Approval Policy | Dropdown | Default, untrusted, on-request, never, or deprecated on-failure. |
 | Search | Toggle | Enables live web search for Codex. |

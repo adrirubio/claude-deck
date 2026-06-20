@@ -50,6 +50,15 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Backup & Restore** — Create and manage Claude Code backups with selective restore, plus redacted export-only Codex backups
 - **Projects** — Discover and manage project directories
 
+## What's New in 2.0.1
+
+Claude Deck 2.0.1 is a stabilization release for the 2.x coordination work:
+
+- Claude Code usage dashboards now calculate costs for current Claude model aliases instead of showing `$0.00` when token usage is present.
+- Dashboard cards and links are provider-aware, including Codex configuration, MCP, plugin, feature flag, live session, and plan surfaces.
+- Claude Code Config now exposes more current settings, including advisor model, fallback model chains, Remote Control, notification, checkpointing, theme, and safety/privacy controls.
+- Plugin marketplace, worktree, and sandbox settings now write the JSON shapes expected by current Claude Code.
+
 ## What's New in 2.0.0
 
 Claude Deck 2.0.0 shifts the product from single-agent management toward local agent coordination:

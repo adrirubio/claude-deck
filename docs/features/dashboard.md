@@ -1,10 +1,10 @@
 # Dashboard
 
-The dashboard provides an at-a-glance overview of your entire Claude Code configuration with 12 information cards organized in a responsive grid.
+The dashboard provides an at-a-glance overview of the selected provider and active project. Claude Code has the richest metrics; Codex focuses on configuration, provider inventory, and live-session state that can be read without exposing prompt history or provider-owned cache data.
 
 ## Overview
 
-When you open Claude Deck, the dashboard aggregates data from 12 API endpoints in parallel and displays:
+When Claude Code is selected, the dashboard aggregates data from the Claude Code configuration and session APIs and displays:
 
 - **Projects** — number of tracked project directories
 - **MCP Servers** — configured server count
@@ -21,15 +21,26 @@ When you open Claude Deck, the dashboard aggregates data from 12 API endpoints i
 
 A **Quick Status** card at the bottom shows settings key count and allow/deny rule breakdown.
 
+When Codex CLI is selected, the dashboard switches to Codex-specific cards such as:
+
+- **Codex Config** — safe config entries, profiles, projects, and feature settings
+- **Codex MCP Servers** — configured MCP server inventory
+- **Codex Plugins** — installed plugin inventory
+- **Codex Feature Flags** — available and enabled feature flags
+- **Codex Live Sessions** — sessions currently visible through Agent Bridge
+- **Plan Snapshots** — Codex `update_plan` snapshots
+
+Cards link to provider-appropriate pages. Claude Code-only surfaces such as usage costs, context windows, transcript browsing, memory, hooks, and permission pages are not shown as Codex data.
+
 ## How to Use
 
 ### Viewing Data
 
-All cards update together. The dashboard shows project-scoped data for the currently selected project — switch projects using the sidebar selector.
+All cards update together. The dashboard shows data for the currently selected provider and active project — switch providers and projects using the sidebar selectors.
 
 ### Context Window Indicator
 
-The context window card shows the highest context usage percentage across all active Claude Code sessions:
+For Claude Code, the context window card shows the highest context usage percentage across all active Claude Code sessions:
 
 | Color | Range | Meaning |
 |-------|-------|---------|
@@ -53,10 +64,10 @@ Several cards include links to jump to their full page:
 
 ## Configuration
 
-The dashboard has no dedicated configuration. It reads data from all other features. The active project (set via sidebar) determines the scope for MCP servers, commands, hooks, and permissions.
+The dashboard has no dedicated configuration. It reads data from all other features. The selected provider controls which cards are shown, and the active project determines the scope for project-aware cards.
 
 ## Tips
 
 - **Data is cached** — switching pages doesn't trigger a re-fetch. Click refresh for fresh data.
-- **Project switching** automatically re-fetches dashboard data for the new project.
+- **Provider and project switching** automatically re-fetch dashboard data for the new selection.
 - **First visit** shows a loading skeleton while data loads. Subsequent visits show cached data.

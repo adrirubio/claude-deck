@@ -40,8 +40,10 @@ features:
     details: Discover project directories from local agent state or add them with the directory browser.
 ---
 
-## Release Focus: 2.0 Team Coordination
+## Release Focus: 2.x Team Coordination
 
 Claude Deck 2.0.0 makes Agent Mail and Agent Teams the main coordination layer for local coding agents. Agents can keep durable per-repository or per-team-slot identities, ask each other for context, hand work across repositories, and keep an inspectable mailbox without turning Claude Deck into a general chat product.
+
+Claude Deck 2.0.1 stabilizes that release with provider-aware dashboard fixes, current Claude Code usage-cost calculations, and broader coverage for recent Claude Code configuration settings.
 
 Presence has been removed. Agent Bridge, Agent Mail, and Agent Teams are now the supported surfaces for live session visibility, communication, and reusable rosters. Codex support still keeps provider boundaries explicit: usage metrics, context charts, and transcript browsing are not shown as if they were Claude Code data, and Codex backups remain redacted exports.
