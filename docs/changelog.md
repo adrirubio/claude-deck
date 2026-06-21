@@ -8,6 +8,10 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 
 - Agent Bridge can launch Codex CLI sessions on Amazon Bedrock with a provider-aware platform selector, a per-session Codex `model_provider = "amazon-bedrock"` override, and optional AWS region/profile/model fields.
 
+### Fixed
+
+- Agent Teams now blocks unsafe multi-slot Codex `resume --last` launches in the same repository and keeps Codex hook session keys distinct per team slot.
+
 ## 2.0.1 — 2026-06-20
 
 ### Added

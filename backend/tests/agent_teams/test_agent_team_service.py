@@ -112,6 +112,84 @@ async def test_duplicate_enabled_repo_slots_are_allowed(db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_multiple_same_repo_codex_resume_last_slots_are_blocked(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Project team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": True},
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": True},
+                ),
+            ],
+        ),
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(reuse_existing=False),
+    )
+
+    assert plan.can_launch is False
+    assert plan.spawn_count == 0
+    assert plan.blocked_count == 2
+    assert {item.block_code for item in plan.items} == {"unsafe_codex_resume_last"}
+    assert all("resume --last cannot be used" in item.reasons[0] for item in plan.items)
+
+
+@pytest.mark.asyncio
+async def test_explicit_same_repo_codex_resume_sessions_are_allowed(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Project team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": False, "session_id": "planner-session"},
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": False, "session_id": "implementer-session"},
+                ),
+            ],
+        ),
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(reuse_existing=False),
+    )
+
+    assert plan.can_launch is True
+    assert plan.spawn_count == 2
+    assert plan.blocked_count == 0
+
+
+@pytest.mark.asyncio
 async def test_blank_repo_path_is_rejected(db):
     with pytest.raises(ValueError, match="Repo path is required"):
         await agent_team_service.create_preset(
