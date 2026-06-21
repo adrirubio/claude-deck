@@ -147,6 +147,17 @@ curl -s -X POST "$DECK_API/agent-teams/presets/3/launch" \
 
 Once agents register through Agent Mail, use `/external/agent-mail/members` to discover their participant/member ids, then send context requests or handoffs through the external Agent Mail endpoints.
 
+### Same-Repo Role Routing
+
+External orchestrators should launch same-repo multi-agent workflows through Agent Teams before sending Agent Mail requests. For example, a planner/reviewer workflow should use two slots that point at the same repository:
+
+- `Planner`: creates or revises the plan
+- `Reviewer`: reviews the plan and replies with feedback
+
+After launch, discover participants with `/external/agent-mail/members` and route by the returned slot participant ids. Do not rely on manually started same-repo sessions for role-based routing; without Agent Team slot context they can appear as a single repo-level participant.
+
+If `wake_state` is `wakeable`, Deck can nudge the visible tmux session when mail arrives. If it is `delivered_waiting`, the message is stored but the recipient must poll or reach a hook boundary.
+
 ## Safeguards
 
 - External actor tokens are distinct from Agent Mail members and are shown by name in the Agent Mail UI.
