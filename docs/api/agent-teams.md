@@ -87,7 +87,9 @@ POST /api/v1/agent-teams/presets/{preset_id}/plan-launch
 }
 ```
 
-The plan checks provider availability, Agent Mail MCP/hooks readiness, reusable Agent Bridge sessions, disabled slots, and launch-option validity.
+The plan checks provider availability, Agent Mail MCP/hooks readiness, reusable Agent Bridge sessions, disabled slots, launch-option validity, and unsafe launch combinations.
+
+For Codex CLI slots, `resume` with `use_last: true` is blocked when multiple enabled slots target the same repository and would need to spawn. Use `plain` for fresh agents, or provide a distinct `session_id` per slot.
 
 ### Launch
 

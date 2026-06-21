@@ -389,6 +389,7 @@ class AgentTeamService:
         discovered = self._discover_sessions()
         install_status = await agent_mail_install_service.get_install_status()
         reuse_group_counts = self._reuse_group_counts(slots)
+        unsafe_resume_last_slot_ids = self._unsafe_codex_resume_last_slot_ids(slots)
 
         items: list[AgentTeamLaunchPlanItem] = []
         used_matching_sessions: set[str] = set()
@@ -404,7 +405,16 @@ class AgentTeamService:
                 if request.reuse_existing and slot.enabled
                 else None
             )
-            item = self._plan_slot(slot, matching, install_status)
+            item = self._plan_slot(
+                slot,
+                matching,
+                install_status,
+                unsafe_spawn_reason=(
+                    self._codex_resume_last_block_reason()
+                    if matching is None and slot.id in unsafe_resume_last_slot_ids
+                    else None
+                ),
+            )
             items.append(item)
 
         plan_hash = self._plan_hash(preset, slots, items)
@@ -603,6 +613,8 @@ class AgentTeamService:
         slot: AgentTeamSlot,
         matching_session: dict[str, Any] | None,
         install_status: Any,
+        *,
+        unsafe_spawn_reason: str | None = None,
     ) -> AgentTeamLaunchPlanItem:
         if not slot.enabled:
             return AgentTeamLaunchPlanItem(
@@ -646,6 +658,10 @@ class AgentTeamService:
                 reasons=["A matching running session is already available"],
                 matching_session=matching_session,
             )
+
+        if block_code is None and unsafe_spawn_reason:
+            reasons.append(unsafe_spawn_reason)
+            block_code = "unsafe_codex_resume_last"
 
         if block_code is None:
             validation_error = self._validate_spawn_options(slot)
@@ -696,6 +712,40 @@ class AgentTeamService:
                 return "Codex Agent Mail hooks are missing"
             return None
         return None
+
+    def _unsafe_codex_resume_last_slot_ids(self, slots: list[AgentTeamSlot]) -> set[int]:
+        groups: dict[tuple[str, str], list[AgentTeamSlot]] = {}
+        for slot in slots:
+            if not slot.enabled or not self._is_codex_resume_last_slot(slot):
+                continue
+            key = (slot.provider, slot.repo_id)
+            groups.setdefault(key, []).append(slot)
+        return {
+            slot.id
+            for grouped_slots in groups.values()
+            if len(grouped_slots) > 1
+            for slot in grouped_slots
+        }
+
+    def _is_codex_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
+        if slot.provider != "codex-cli":
+            return False
+        if (slot.launch_mode or "plain").strip() != "resume":
+            return False
+        return self._truthy_launch_option((slot.launch_options or {}).get("use_last"))
+
+    def _truthy_launch_option(self, value: Any) -> bool:
+        if value is True:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+
+    def _codex_resume_last_block_reason(self) -> str:
+        return (
+            "Codex resume --last cannot be used for multiple same-repo team slots. "
+            "Use fresh/plain sessions, or provide a distinct session_id per slot."
+        )
 
     async def _fallback_provider(self) -> str:
         install_status = await agent_mail_install_service.get_install_status()

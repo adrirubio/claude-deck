@@ -159,6 +159,9 @@ def _hook_session_key(payload: dict) -> Optional[str]:
         return None
     provider = _hook_provider(payload)
     prefix = "cc" if provider == "claude-code" else "codex"
+    team_slot_id = _payload_int(payload, "team_slot_id")
+    if team_slot_id is not None:
+        return f"{prefix}:{session_id}:team-slot:{team_slot_id}"
     return f"{prefix}:{session_id}"
 
 

@@ -47,8 +47,11 @@ Before launch, Claude Deck computes a plan. The plan checks:
 - live Agent Bridge tmux sessions that can be reused
 - disabled slots
 - provider launch option validity
+- unsafe launch combinations, such as multiple same-repo Codex slots using `resume --last`
 
 By default, launch only includes enabled slots and only reuses wakeable sessions observed through Agent Bridge. Connected non-tmux Agent Mail sessions can still communicate, but they are not reliable team launch/reuse targets.
+
+For same-repo Codex teams, prefer fresh sessions (`plain`) or explicit `resume` session ids per slot. Do not use `resume --last` for more than one slot in the same repo: each slot can resume the same Codex conversation and lose the role-specific team boundary.
 
 ## External Local Agents
 
