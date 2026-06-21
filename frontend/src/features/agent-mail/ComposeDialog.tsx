@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Send } from 'lucide-react'
+import { AlertTriangle, Send } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -46,7 +47,41 @@ const composeKinds: Array<Exclude<MailMessageKind, 'answer'>> = [
 function recipientLabel(member: MailMemberResponse): string {
   const role = member.role ? `, ${member.role}` : ''
   const team = member.team_preset_name ? `, ${member.team_preset_name}` : ''
-  return `${member.display_name} (${member.repo_name}${role}${team})`
+  return `${member.display_name} (${member.repo_name}${role}${team}) - ${deliveryLabel(member)}`
+}
+
+function deliveryLabel(member: MailMemberResponse): string {
+  if (member.status === 'offline' || member.wake_state === 'offline') return 'offline, stored only'
+  if (member.wake_state === 'wakeable') {
+    const methodText = member.wake_methods?.length ? ` via ${member.wake_methods.join(', ')}` : ''
+    return `wakeable${methodText}`
+  }
+  if (member.wake_state === 'delivered_waiting') return 'not wakeable'
+  if (member.status === 'observed') return 'observed only'
+  return member.status
+}
+
+function deliveryRank(member: MailMemberResponse): number {
+  if (member.status === 'offline' || member.wake_state === 'offline') return 4
+  if (member.wake_state === 'wakeable') return 0
+  if (member.status === 'connected') return 1
+  if (member.status === 'observed') return 2
+  return 3
+}
+
+function deliveryWarning(member: MailMemberResponse, kind: Exclude<MailMessageKind, 'answer'>): string | null {
+  const expectsAction = kind === 'context_request' || kind === 'handoff'
+  if (member.status === 'offline' || member.wake_state === 'offline') {
+    return expectsAction
+      ? `${member.display_name} is offline. This ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but no live agent can be woken to respond until that participant checks in again.`
+      : `${member.display_name} is offline. This message will be stored for later; Claude Deck cannot wake a live session.`
+  }
+  if (member.wake_state === 'delivered_waiting') {
+    return expectsAction
+      ? `${member.display_name} is not wakeable. The ${kind === 'handoff' ? 'handoff' : 'request'} will be stored, but the agent may not see it until it checks Agent Mail or reaches a hook boundary.`
+      : `${member.display_name} is not wakeable. The message will be stored, but Claude Deck cannot nudge this session.`
+  }
+  return null
 }
 
 export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: ComposeDialogProps) {
@@ -58,6 +93,14 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
   const [files, setFiles] = useState('')
   const [nextSteps, setNextSteps] = useState('')
   const [sending, setSending] = useState(false)
+  const sortedMembers = useMemo(
+    () => [...members].sort((left, right) => {
+      const rankDelta = deliveryRank(left) - deliveryRank(right)
+      if (rankDelta !== 0) return rankDelta
+      return left.display_name.localeCompare(right.display_name)
+    }),
+    [members],
+  )
 
   useEffect(() => {
     if (!open) return
@@ -78,6 +121,10 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
   }, [open, preset])
 
   const needsRecipient = kind !== 'broadcast'
+  const selectedMember = recipient
+    ? members.find((member) => member.id === Number(recipient)) ?? null
+    : null
+  const selectedDeliveryWarning = selectedMember ? deliveryWarning(selectedMember, kind) : null
   const canSend = useMemo(() => {
     if (!body.trim()) return false
     if (needsRecipient && !recipient) return false
@@ -144,7 +191,7 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
                     <SelectValue placeholder="Select a participant" />
                   </SelectTrigger>
                   <SelectContent>
-                    {members.map((member) => (
+                    {sortedMembers.map((member) => (
                       <SelectItem key={member.id} value={String(member.id)}>
                         {recipientLabel(member)}
                       </SelectItem>
@@ -154,6 +201,13 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
               </div>
             )}
           </div>
+
+          {needsRecipient && selectedDeliveryWarning && (
+            <Alert className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">
+              <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-300" />
+              <AlertDescription>{selectedDeliveryWarning}</AlertDescription>
+            </Alert>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="agent-mail-subject">Subject</Label>
