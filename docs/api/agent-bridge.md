@@ -85,6 +85,22 @@ Codex example:
 }
 ```
 
+Codex on Amazon Bedrock:
+
+```json
+{
+  "provider": "codex-cli",
+  "directory": "/home/user/repo",
+  "mode": "plain",
+  "platform": "bedrock",
+  "aws_region": "us-east-2",
+  "aws_profile": "bedrock-prod",
+  "bedrock_model": "openai.gpt-5.5"
+}
+```
+
+When `platform` is `bedrock` for Codex, Agent Bridge launches Codex with `model_provider = "amazon-bedrock"` as a per-session config override. `aws_region` and `aws_profile` are optional non-secret environment hints; AWS credentials must already be available to the spawned process through the environment or AWS SDK credential chain.
+
 ### Delete Session
 
 ```http

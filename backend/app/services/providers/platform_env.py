@@ -8,6 +8,8 @@ from __future__ import annotations
 
 PLATFORM_ANTHROPIC = "anthropic"
 PLATFORM_BEDROCK = "bedrock"
+PROVIDER_CLAUDE_CODE = "claude-code"
+PROVIDER_CODEX_CLI = "codex-cli"
 
 
 def _clean(value: str | None) -> str | None:
@@ -27,18 +29,24 @@ def build_platform_env(
     region: str | None = None,
     aws_profile: str | None = None,
     model: str | None = None,
+    provider_id: str = PROVIDER_CLAUDE_CODE,
 ) -> dict[str, str]:
-    """Return the env vars for a platform selection (empty for Anthropic)."""
+    """Return non-secret env vars for a platform selection."""
     if platform != PLATFORM_BEDROCK:
         return {}
 
-    env: dict[str, str] = {"CLAUDE_CODE_USE_BEDROCK": "1"}
+    env: dict[str, str] = {}
     cleaned_region = _clean(region)
     if cleaned_region:
         env["AWS_REGION"] = cleaned_region
     cleaned_profile = _clean(aws_profile)
     if cleaned_profile:
         env["AWS_PROFILE"] = cleaned_profile
+
+    if provider_id == PROVIDER_CODEX_CLI:
+        return env
+
+    env = {"CLAUDE_CODE_USE_BEDROCK": "1", **env}
     cleaned_model = _clean(model)
     if cleaned_model:
         env["ANTHROPIC_MODEL"] = cleaned_model

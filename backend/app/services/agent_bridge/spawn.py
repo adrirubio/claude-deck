@@ -69,6 +69,7 @@ def spawn_session(
         region=options.aws_region,
         aws_profile=options.aws_profile,
         model=options.bedrock_model,
+        provider_id=provider.id,
     )
     env_flags = _env_flags(platform_env)
     if extra_env:
