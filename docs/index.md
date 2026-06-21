@@ -16,10 +16,10 @@ hero:
 features:
   - icon: 🌉
     title: Agent Bridge
-    details: Monitor, spawn, resume, fork, and attach to live Claude Code and Codex CLI tmux sessions from the browser.
+    details: Monitor, spawn, resume, fork, and attach to live Claude Code, Codex CLI, and GitHub Copilot CLI tmux sessions from the browser.
   - icon: ✉️
     title: Agent Mail
-    details: Route structured context requests, handoffs, replies, and inbox state between local Claude Code and Codex agents.
+    details: Route structured context requests, handoffs, replies, and inbox state between local Claude Code, Codex, and Copilot agents.
   - icon: 👥
     title: Agent Teams
     details: Save project, DevOps, release, or same-repo rosters and launch or reuse the sessions that belong to them.

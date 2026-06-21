@@ -39,7 +39,11 @@ export function SessionList({
 }: SessionListProps) {
   const emptyName = providerFilter === 'all'
     ? 'agent'
-    : providerFilter === 'codex-cli' ? 'Codex' : 'Claude Code'
+    : providerFilter === 'codex-cli'
+      ? 'Codex'
+      : providerFilter === 'copilot-cli'
+        ? 'Copilot'
+        : 'Claude Code'
   const emptyHint = createDisabledReason
     ?? (providerFilter === 'all'
       ? 'Launch or start a supported CLI in tmux.'

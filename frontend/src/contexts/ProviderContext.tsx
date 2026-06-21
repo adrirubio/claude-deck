@@ -19,7 +19,9 @@ const ProviderContext = createContext<ProviderContextValue | undefined>(undefine
 
 function readStoredProvider(): AgentProviderId {
   const stored = window.localStorage.getItem(STORAGE_KEY)
-  return stored === 'codex-cli' || stored === 'claude-code' ? stored : DEFAULT_PROVIDER
+  return stored === 'codex-cli' || stored === 'claude-code' || stored === 'copilot-cli'
+    ? stored
+    : DEFAULT_PROVIDER
 }
 
 export function ProviderProvider({ children }: { children: ReactNode }) {

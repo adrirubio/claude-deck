@@ -21,15 +21,15 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Local only** — no cloud
 - **No account** — nothing to sign up for
 - **No telemetry** — no usage tracking sent anywhere
-- **Works with your real files** — reads and writes existing Claude Code and Codex config files
+- **Works with your real files** — reads and writes existing Claude Code/Codex config files and agent integration files
 
 > [!WARNING]
-> Claude Deck reads and writes your real local agent configuration files. Changes made in the UI affect the files Claude Code and Codex CLI actually use. Review changes carefully, and create a backup before major edits.
+> Claude Deck reads and writes your real local agent configuration files. Changes made in the UI affect the files Claude Code, Codex CLI, and installed agent integrations actually use. Review changes carefully, and create a backup before major edits.
 
 ## Features
 
 - **Dashboard** — Overview of local agent configuration with Claude Code context window visualizer
-- **Provider Switcher** — Move between Claude Code and Codex CLI surfaces without leaving the app
+- **Provider Switcher** — Move between Claude Code, Codex CLI, and GitHub Copilot CLI surfaces without leaving the app
 - **Config Editor** — Browse, inspect, and edit Claude Code JSON settings or Codex TOML settings, including Codex profiles, runtime options, and feature flags
 - **MCP Servers** — Add, edit, test, and manage MCP server connections with OAuth support. Browse and install servers from the [MCP Registry](https://registry.modelcontextprotocol.io). View tools, resources, and prompts. Supports stdio, HTTP, and SSE transports
 - **Slash Commands** — Browse, create, and edit custom commands (user and project scope)
@@ -41,9 +41,9 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 - **Memory** — View and edit Claude Code memory files
 - **Output Styles** — Configure response output formats
 - **Status Line** — Customize Claude Code status line display
-- **Agent Bridge** — Discover and monitor Claude Code and Codex CLI sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage provider-specific options directly from the UI
-- **Agent Mail** — Coordinate local Claude Code and Codex CLI agents through durable per-repo identities, structured context requests, handoffs, and an inspectable team mailbox
-- **Agent Teams** — Save reusable rosters of Claude Code and Codex agents, launch or reuse their sessions, and keep same-repo roles distinct through Agent Mail slot identities
+- **Agent Bridge** — Discover and monitor Claude Code, Codex CLI, and GitHub Copilot CLI sessions running in tmux. Attach up to 4 terminals simultaneously in a 2x2 grid with independent read-only/interactive modes, fullscreen toggle, and per-pane controls. Spawn new sessions and manage provider-specific options directly from the UI
+- **Agent Mail** — Coordinate local Claude Code, Codex CLI, and GitHub Copilot CLI agents through durable per-repo identities, structured context requests, handoffs, and an inspectable team mailbox
+- **Agent Teams** — Save reusable rosters of Claude Code, Codex, and Copilot agents, launch or reuse their sessions, and keep same-repo roles distinct through Agent Mail slot identities
 - **Session Transcripts** — View conversation history with full message details and tool use
 - **Usage Tracking** — Monitor token usage, costs, and billing blocks with daily/monthly charts
 - **Plan History** — Browse and review Claude Code implementation plans
@@ -76,7 +76,7 @@ Codex support remains explicit about provider boundaries: usage/context parity a
 | Agent Bridge | Dashboard |
 |--------------|-----------|
 | ![Agent Bridge](screenshots/cc-bridge.png) | ![Dashboard](screenshots/dashboard.png) |
-| Monitor and interact with Claude Code and Codex tmux sessions | High-level overview of your local agent workspace |
+| Monitor and interact with Claude Code, Codex, and Copilot tmux sessions | High-level overview of your local agent workspace |
 
 | Config | MCP Servers |
 |--------|-------------|

@@ -1,6 +1,6 @@
 # Agent Bridge API
 
-Provider-aware live terminal monitoring for Claude Code and Codex CLI tmux sessions.
+Provider-aware live terminal monitoring for Claude Code, Codex CLI, and GitHub Copilot CLI tmux sessions.
 
 ## Endpoints
 
@@ -10,7 +10,7 @@ Provider-aware live terminal monitoring for Claude Code and Codex CLI tmux sessi
 GET /api/v1/agent-bridge/sessions?provider={provider_id}
 ```
 
-`provider` is optional. Supported values are `claude-code` and `codex-cli`.
+`provider` is optional. Supported values are `claude-code`, `codex-cli`, and `copilot-cli`.
 
 ```json
 {
@@ -100,6 +100,23 @@ Codex on Amazon Bedrock:
 ```
 
 When `platform` is `bedrock` for Codex, Agent Bridge launches Codex with `model_provider = "amazon-bedrock"` as a per-session config override. `aws_region` and `aws_profile` are optional non-secret environment hints; AWS credentials must already be available to the spawned process through the environment or AWS SDK credential chain.
+
+Copilot example:
+
+```json
+{
+  "provider": "copilot-cli",
+  "directory": "/home/user/repo",
+  "mode": "resume",
+  "use_last": true,
+  "model": "claude-sonnet-4.6",
+  "agent": "planner",
+  "context_tier": "long_context",
+  "reasoning_effort": "high",
+  "plan": true,
+  "remote": true
+}
+```
 
 ### Delete Session
 

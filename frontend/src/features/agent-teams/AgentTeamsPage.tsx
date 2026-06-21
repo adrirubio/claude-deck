@@ -383,6 +383,7 @@ function SlotDialog({
               <SelectContent>
                 <SelectItem value="codex-cli">Codex CLI</SelectItem>
                 <SelectItem value="claude-code">Claude Code</SelectItem>
+                <SelectItem value="copilot-cli">GitHub Copilot CLI</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -773,7 +774,7 @@ export function AgentTeamsPage() {
             Agent Teams
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Saved agent rosters with launch plans for local Codex and Claude Code sessions.
+            Saved agent rosters with launch plans for local Claude Code, Codex, and Copilot sessions.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

@@ -1,6 +1,6 @@
 # Agent Mail API
 
-Durable local mailbox coordination for Claude Code, Codex CLI, and trusted same-machine orchestration tools.
+Durable local mailbox coordination for Claude Code, Codex CLI, GitHub Copilot CLI, and trusted same-machine orchestration tools.
 
 ## Team And Messages
 
@@ -105,6 +105,8 @@ POST /api/v1/agent-mail/install/claude-code/apply
 POST /api/v1/agent-mail/install/claude-code/uninstall
 POST /api/v1/agent-mail/install/codex/apply
 POST /api/v1/agent-mail/install/codex/uninstall
+POST /api/v1/agent-mail/install/copilot/apply
+POST /api/v1/agent-mail/install/copilot/uninstall
 ```
 
 Install and uninstall endpoints mutate real user configuration and create best-effort backups before changes.

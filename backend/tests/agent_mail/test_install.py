@@ -81,6 +81,46 @@ def test_installed_codex_hooks_accept_python_alias(monkeypatch, tmp_path):
     assert install.installed_codex_hooks() == ["SessionStart", "UserPromptSubmit"]
 
 
+def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_path):
+    hooks_path = tmp_path / "claude-deck-mail.json"
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "hooks": {
+                    "sessionStart": [
+                        {
+                            "type": "command",
+                            "command": (
+                                "/tmp/venv/bin/python /repo/backend/mcp_shim/"
+                                "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                "--provider copilot-cli --event session-start"
+                            ),
+                            "timeoutSec": 2,
+                        }
+                    ],
+                    "notification": [
+                        {
+                            "type": "command",
+                            "command": (
+                                "/tmp/venv/bin/python /repo/backend/mcp_shim/"
+                                "agent_mail_hook.py --deck-url http://127.0.0.1:8000 "
+                                "--provider copilot-cli --event user-prompt-submit"
+                            ),
+                            "matcher": "agent_idle",
+                            "timeoutSec": 2,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(install, "copilot_hooks_path", lambda: hooks_path)
+
+    assert install.installed_copilot_hooks() == ["notification", "sessionStart"]
+
+
 @pytest.mark.asyncio
 async def test_get_status_reports_missing_hooks(monkeypatch):
     monkeypatch.setattr(install.hook_service, "list_hooks", lambda: [])
@@ -88,6 +128,9 @@ async def test_get_status_reports_missing_hooks(monkeypatch):
     monkeypatch.setattr(install, "codex_cli_available", lambda: False)
     monkeypatch.setattr(install, "codex_mcp_installed", lambda: False)
     monkeypatch.setattr(install, "installed_codex_hooks", lambda: [])
+    monkeypatch.setattr(install, "copilot_cli_available", lambda: False)
+    monkeypatch.setattr(install, "copilot_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_copilot_hooks", lambda: [])
     monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
 
     status = await install.get_install_status()
@@ -95,6 +138,7 @@ async def test_get_status_reports_missing_hooks(monkeypatch):
     assert set(status.claude_code_hooks_missing) == set(install.MAIL_HOOK_EVENTS)
     assert status.claude_code_mcp_installed is False
     assert status.curl_available is True
+    assert set(status.copilot_hooks_missing) == set(install.COPILOT_MAIL_HOOK_EVENTS)
 
 
 @pytest.mark.asyncio
@@ -110,6 +154,9 @@ async def test_status_treats_stale_hook_commands_as_missing(monkeypatch):
     monkeypatch.setattr(install, "codex_cli_available", lambda: False)
     monkeypatch.setattr(install, "codex_mcp_installed", lambda: False)
     monkeypatch.setattr(install, "installed_codex_hooks", lambda: [])
+    monkeypatch.setattr(install, "copilot_cli_available", lambda: False)
+    monkeypatch.setattr(install, "copilot_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_copilot_hooks", lambda: [])
     monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
 
     status = await install.get_install_status()
@@ -233,6 +280,43 @@ async def test_codex_apply_writes_hooks_json(monkeypatch, db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkeypatch, db, tmp_path):
+    hooks_path = tmp_path / "claude-deck-mail.json"
+    calls = []
+
+    class FakeExecutor:
+        binary_path = "/usr/bin/copilot"
+
+        def execute(self, command, args, timeout=30):
+            calls.append((command, args, timeout))
+            return SimpleNamespace(stdout='{"mcpServers":{}}', stderr="", exit_code=0)
+
+    monkeypatch.setattr(install, "_copilot_executor", lambda: FakeExecutor())
+    monkeypatch.setattr(install, "_backup_before_mutation", AsyncMock())
+    monkeypatch.setattr(install, "copilot_hooks_path", lambda: hooks_path)
+    monkeypatch.setattr(install, "copilot_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "get_install_status", AsyncMock(return_value=SimpleNamespace()))
+
+    await install.apply_copilot_install(db)
+
+    assert calls[0][0] == "mcp"
+    assert calls[0][1][:6] == [
+        "add",
+        "--env",
+        f"CLAUDE_DECK_URL={install.deck_base_url()}",
+        "--env",
+        "CLAUDE_DECK_PROVIDER=copilot-cli",
+        "--json",
+    ]
+    doc = json.loads(hooks_path.read_text(encoding="utf-8"))
+    assert doc["version"] == 1
+    assert set(doc["hooks"]) == set(install.COPILOT_MAIL_HOOK_EVENTS)
+    assert doc["hooks"]["sessionStart"][0]["command"].endswith("--provider copilot-cli --event session-start")
+    assert doc["hooks"]["notification"][0]["matcher"] == "agent_idle"
+    assert "hooks" not in doc["hooks"]["sessionStart"][0]
+
+
+@pytest.mark.asyncio
 async def test_codex_uninstall_prunes_only_agent_mail_hooks(monkeypatch, db, tmp_path):
     hooks_path = tmp_path / "hooks.json"
     hooks_path.write_text(
@@ -312,6 +396,8 @@ async def test_install_endpoints_require_confirmation(client, monkeypatch):
         claude_code_mcp_installed=True,
         codex_cli_available=False,
         codex_mcp_installed=False,
+        copilot_cli_available=False,
+        copilot_mcp_installed=False,
         curl_available=True,
         shim_path="/tmp/shim.py",
         python_path="/usr/bin/python",

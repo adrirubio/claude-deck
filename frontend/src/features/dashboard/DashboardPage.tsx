@@ -40,7 +40,11 @@ export function DashboardPage() {
   const providerStats = stats?.providerId === selectedProviderId ? stats : null;
   const selectedProviderName =
     selectedProvider?.display_name ??
-    (selectedProviderId === "codex-cli" ? "Codex" : "Claude Code");
+    (selectedProviderId === "codex-cli"
+      ? "Codex"
+      : selectedProviderId === "copilot-cli"
+        ? "GitHub Copilot CLI"
+        : "Claude Code");
   const isCodex = selectedProviderId === "codex-cli";
 
   return (

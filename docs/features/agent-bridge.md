@@ -1,10 +1,10 @@
 # Agent Bridge
 
-Agent Bridge discovers and manages local agent CLIs running inside tmux. It supports mixed Claude Code and Codex CLI sessions in the same view.
+Agent Bridge discovers and manages local agent CLIs running inside tmux. It supports mixed Claude Code, Codex CLI, and GitHub Copilot CLI sessions in the same view.
 
 ## Overview
 
-The bridge performs a provider-aware tmux discovery pass and classifies each matching pane as `claude-code` or `codex-cli`. The UI can show all sessions together or filter to one provider.
+The bridge performs a provider-aware tmux discovery pass and classifies each matching pane as `claude-code`, `codex-cli`, or `copilot-cli`. The UI can show all sessions together or filter to one provider.
 
 Session cards include:
 
@@ -14,13 +14,14 @@ Session cards include:
 - Live preview
 - Attach, fullscreen, and kill controls
 
-The terminal grid is shared across providers. Read-only and interactive modes work the same way whether the pane is Claude Code or Codex.
+The terminal grid is shared across providers. Read-only and interactive modes work the same way whether the pane is Claude Code, Codex, or Copilot.
 
 Provider filters are explicit:
 
-- **All** — mixed Claude Code and Codex sessions
+- **All** — mixed Claude Code, Codex, and Copilot sessions
 - **Claude Code** — Claude Code panes only
 - **Codex** — Codex panes only
+- **Copilot** — GitHub Copilot CLI panes only
 
 ## New Sessions
 
@@ -42,7 +43,13 @@ Codex CLI supports:
 
 Dangerous Codex bypass mode is exposed as an explicit advanced option because it disables approval and sandbox protections.
 
-Both providers support a launch-time platform choice:
+GitHub Copilot CLI supports:
+
+- New sessions with `copilot -C <directory>`
+- Resume by session id or `--continue`
+- Optional model, custom agent, context tier, reasoning effort, plan mode, remote control, prompt seed, and explicit permissive launch flags
+
+Claude Code and Codex support a launch-time platform choice:
 
 - Claude Code: Anthropic or Amazon Bedrock
 - Codex CLI: OpenAI or Amazon Bedrock

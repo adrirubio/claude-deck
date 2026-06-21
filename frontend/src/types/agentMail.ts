@@ -107,6 +107,10 @@ export interface AgentMailInstallStatus {
   codex_mcp_installed: boolean
   codex_hooks: string[]
   codex_hooks_missing: string[]
+  copilot_cli_available: boolean
+  copilot_mcp_installed: boolean
+  copilot_hooks: string[]
+  copilot_hooks_missing: string[]
   curl_available: boolean
   shim_path: string
   python_path: string
@@ -114,9 +118,12 @@ export interface AgentMailInstallStatus {
   claude_settings_path?: string | null
   claude_mcp_config_path?: string | null
   codex_hooks_path?: string | null
+  copilot_hooks_path?: string | null
 }
 
 export interface AgentMailSnippets {
   codex_config_toml: string
   codex_agents_md: string
+  copilot_mcp_command: string
+  copilot_hooks_json: string
 }

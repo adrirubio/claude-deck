@@ -1,6 +1,6 @@
 # Agent Teams
 
-Agent Teams are saved rosters of local Codex and Claude Code sessions. Use them when the same group of repositories should be launched or reused together, such as a project team, DevOps team, or release validation team.
+Agent Teams are saved rosters of local Claude Code, Codex, and Copilot sessions. Use them when the same group of repositories should be launched or reused together, such as a project team, DevOps team, or release validation team.
 
 ## What A Team Contains
 
@@ -47,11 +47,11 @@ Before launch, Claude Deck computes a plan. The plan checks:
 - live Agent Bridge tmux sessions that can be reused
 - disabled slots
 - provider launch option validity
-- unsafe launch combinations, such as multiple same-repo Codex slots using `resume --last`
+- unsafe launch combinations, such as multiple same-repo Codex slots using `resume --last` or Copilot slots using `--continue`
 
 By default, launch only includes enabled slots and only reuses wakeable sessions observed through Agent Bridge. Connected non-tmux Agent Mail sessions can still communicate, but they are not reliable team launch/reuse targets.
 
-For same-repo Codex teams, prefer fresh sessions (`plain`) or explicit `resume` session ids per slot. Do not use `resume --last` for more than one slot in the same repo: each slot can resume the same Codex conversation and lose the role-specific team boundary.
+For same-repo Codex or Copilot teams, prefer fresh sessions (`plain`) or explicit `resume` session ids per slot. Do not use Codex `resume --last` or Copilot `--continue` for more than one slot in the same repo: each slot can resume the same conversation and lose the role-specific team boundary.
 
 ## External Local Agents
 

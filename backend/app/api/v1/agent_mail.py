@@ -150,7 +150,7 @@ async def agent_inbox(
 
 def _hook_provider(payload: dict) -> str:
     provider = str(payload.get("provider") or "claude-code")
-    return provider if provider in {"claude-code", "codex-cli"} else "unknown"
+    return provider if provider in {"claude-code", "codex-cli", "copilot-cli"} else "unknown"
 
 
 def _hook_session_key(payload: dict) -> Optional[str]:
@@ -158,7 +158,12 @@ def _hook_session_key(payload: dict) -> Optional[str]:
     if not session_id:
         return None
     provider = _hook_provider(payload)
-    prefix = "cc" if provider == "claude-code" else "codex"
+    prefix_by_provider = {
+        "claude-code": "cc",
+        "codex-cli": "codex",
+        "copilot-cli": "copilot",
+    }
+    prefix = prefix_by_provider.get(provider, "unknown")
     team_slot_id = _payload_int(payload, "team_slot_id")
     if team_slot_id is not None:
         return f"{prefix}:{session_id}:team-slot:{team_slot_id}"
@@ -334,6 +339,27 @@ async def uninstall_codex(
 ):
     _require_confirmed(body)
     return await agent_mail_install_service.uninstall_codex(db)
+
+
+@router.post("/install/copilot/apply", response_model=AgentMailInstallStatus)
+async def install_copilot(
+    body: dict[str, Any] | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_confirmed(body)
+    try:
+        return await agent_mail_install_service.apply_copilot_install(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/install/copilot/uninstall", response_model=AgentMailInstallStatus)
+async def uninstall_copilot(
+    body: dict[str, Any] | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_confirmed(body)
+    return await agent_mail_install_service.uninstall_copilot(db)
 
 
 @router.get("/install/snippets", response_model=AgentMailSnippets)
