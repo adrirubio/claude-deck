@@ -664,6 +664,8 @@ class AgentTeamService:
             block_code = (
                 "unsafe_copilot_continue"
                 if slot.provider == "copilot-cli"
+                else "unsafe_opencode_continue"
+                if slot.provider == "opencode-cli"
                 else "unsafe_codex_resume_last"
             )
 
@@ -723,6 +725,14 @@ class AgentTeamService:
             if getattr(install_status, "copilot_hooks_missing", []):
                 return "GitHub Copilot CLI Agent Mail hooks are missing"
             return None
+        if provider == "opencode-cli":
+            if not getattr(install_status, "opencode_cli_available", False):
+                return "OpenCode CLI is not available on this machine"
+            if not getattr(install_status, "opencode_mcp_installed", False):
+                return "OpenCode Agent Mail MCP is not installed"
+            if getattr(install_status, "opencode_plugin_events_missing", []):
+                return "OpenCode Agent Mail plugin is missing or incomplete"
+            return None
         return None
 
     def _unsafe_resume_last_slot_ids(self, slots: list[AgentTeamSlot]) -> set[int]:
@@ -740,7 +750,7 @@ class AgentTeamService:
         }
 
     def _is_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
-        if slot.provider not in {"codex-cli", "copilot-cli"}:
+        if slot.provider not in {"codex-cli", "copilot-cli", "opencode-cli"}:
             return False
         if (slot.launch_mode or "plain").strip() != "resume":
             return False
@@ -754,7 +764,13 @@ class AgentTeamService:
         return False
 
     def _resume_last_block_reason(self, provider: str) -> str:
-        label = "GitHub Copilot CLI --continue" if provider == "copilot-cli" else "Codex resume --last"
+        label = (
+            "GitHub Copilot CLI --continue"
+            if provider == "copilot-cli"
+            else "OpenCode --continue"
+            if provider == "opencode-cli"
+            else "Codex resume --last"
+        )
         return (
             f"{label} cannot be used for multiple same-repo team slots. "
             "Use fresh/plain sessions, or provide a distinct session_id per slot."

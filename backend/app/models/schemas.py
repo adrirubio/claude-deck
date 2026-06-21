@@ -2007,6 +2007,10 @@ class AgentMailInstallStatus(BaseModel):
     copilot_mcp_installed: bool = False
     copilot_hooks: List[str] = Field(default_factory=list)
     copilot_hooks_missing: List[str] = Field(default_factory=list)
+    opencode_cli_available: bool = False
+    opencode_mcp_installed: bool = False
+    opencode_plugin_events: List[str] = Field(default_factory=list)
+    opencode_plugin_events_missing: List[str] = Field(default_factory=list)
     curl_available: bool
     shim_path: str
     python_path: str
@@ -2015,6 +2019,8 @@ class AgentMailInstallStatus(BaseModel):
     claude_mcp_config_path: Optional[str] = None
     codex_hooks_path: Optional[str] = None
     copilot_hooks_path: Optional[str] = None
+    opencode_config_path: Optional[str] = None
+    opencode_plugin_path: Optional[str] = None
 
 
 class AgentMailSnippets(BaseModel):
@@ -2022,6 +2028,8 @@ class AgentMailSnippets(BaseModel):
     codex_agents_md: str
     copilot_mcp_command: str = ""
     copilot_hooks_json: str = ""
+    opencode_config_json: str = ""
+    opencode_plugin_js: str = ""
 
 
 # --- Agent Team Presets ---

@@ -19,6 +19,7 @@ const PROVIDER_FILTERS: { value: ProviderFilter; label: string }[] = [
   { value: 'claude-code', label: 'Claude Code' },
   { value: 'codex-cli', label: 'Codex' },
   { value: 'copilot-cli', label: 'Copilot' },
+  { value: 'opencode-cli', label: 'OpenCode' },
 ]
 
 function addTarget(prev: string[], target: string): string[] {
@@ -74,6 +75,7 @@ export function CCBridgePage() {
     'claude-code': sessions.filter((session) => session.provider === 'claude-code').length,
     'codex-cli': sessions.filter((session) => session.provider === 'codex-cli').length,
     'copilot-cli': sessions.filter((session) => session.provider === 'copilot-cli').length,
+    'opencode-cli': sessions.filter((session) => session.provider === 'opencode-cli').length,
   }
 
   const initialDialogProvider = providerFilter === 'all' ? selectedProviderId : providerFilter

@@ -20,6 +20,7 @@ import {
   applyClaudeCodeAgentMailInstall,
   applyCodexAgentMailInstall,
   applyCopilotAgentMailInstall,
+  applyOpenCodeAgentMailInstall,
   fetchAgentMailInstallStatus,
   fetchAgentMailMessages,
   fetchAgentMailSnippets,
@@ -29,6 +30,7 @@ import {
   uninstallClaudeCodeAgentMail,
   uninstallCodexAgentMail,
   uninstallCopilotAgentMail,
+  uninstallOpenCodeAgentMail,
   updateAgentMailMember,
 } from './api'
 import { AgentMailHelpDialog } from './AgentMailHelpDialog'
@@ -137,7 +139,10 @@ export function AgentMailPage() {
   const copilotReady = Boolean(
     installStatus?.copilot_mcp_installed && installStatus.copilot_hooks_missing.length === 0
   )
-  const hasConfiguredIntegration = claudeReady || codexReady || copilotReady
+  const opencodeReady = Boolean(
+    installStatus?.opencode_mcp_installed && installStatus.opencode_plugin_events_missing.length === 0
+  )
+  const hasConfiguredIntegration = claudeReady || codexReady || copilotReady || opencodeReady
   const showSetupNotice = !installLoading && (!hasConfiguredIntegration || members.length === 0)
   const showCodexRegistrationNotice = !installLoading && codexReady && stats.connected === 0 && stats.observed > 0
 
@@ -237,7 +242,7 @@ export function AgentMailPage() {
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <p>
                 {!hasConfiguredIntegration
-                  ? 'Install the Agent Mail MCP server for Claude Code, Codex, or GitHub Copilot CLI before agents can send, receive, or answer mailbox requests.'
+                  ? 'Install the Agent Mail MCP server for Claude Code, Codex, GitHub Copilot CLI, or OpenCode CLI before agents can send, receive, or answer mailbox requests.'
                   : 'Start or resume an agent in a repository, then have it call deck_whoami once so Claude Deck can attach it to a participant.'}
               </p>
               <div className="flex shrink-0 flex-wrap gap-2">
@@ -368,6 +373,8 @@ export function AgentMailPage() {
             onUninstallCodex={() => runInstallAction(uninstallCodexAgentMail, 'Codex MCP install removed')}
             onApplyCopilot={() => runInstallAction(applyCopilotAgentMailInstall, 'GitHub Copilot CLI install updated')}
             onUninstallCopilot={() => runInstallAction(uninstallCopilotAgentMail, 'GitHub Copilot CLI install removed')}
+            onApplyOpenCode={() => runInstallAction(applyOpenCodeAgentMailInstall, 'OpenCode CLI install updated')}
+            onUninstallOpenCode={() => runInstallAction(uninstallOpenCodeAgentMail, 'OpenCode CLI install removed')}
           />
         </TabsContent>
       </Tabs>

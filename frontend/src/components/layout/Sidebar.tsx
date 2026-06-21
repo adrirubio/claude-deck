@@ -182,6 +182,7 @@ const providerNavigation: Record<AgentProviderId, NavGroup[]> = {
     },
   ],
   "copilot-cli": [],
+  "opencode-cli": [],
 };
 
 function getNavigation(providerId: AgentProviderId): NavGroup[] {

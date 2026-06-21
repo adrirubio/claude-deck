@@ -191,6 +191,65 @@ def test_copilot_spawn_builds_cli_flags(monkeypatch, tmp_path):
     assert command_parts[command_parts.index("-i") + 1] == "Review the plan"
 
 
+def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "opencode-cli",
+        SpawnCommandOptions(
+            directory=str(tmp_path),
+            mode="resume",
+            use_last=True,
+            model="anthropic/claude-sonnet-4.6",
+            agent="planner",
+            prompt="Review the plan",
+        ),
+    )
+
+    command_parts = shlex.split(calls[0][-1])
+    assert command_parts[:2] == ["opencode", str(tmp_path)]
+    assert "--continue" in command_parts
+    assert command_parts[command_parts.index("--model") + 1] == "anthropic/claude-sonnet-4.6"
+    assert command_parts[command_parts.index("--agent") + 1] == "planner"
+    assert command_parts[command_parts.index("--prompt") + 1] == "Review the plan"
+
+
+def test_opencode_spawn_rejects_unsupported_tui_flags(tmp_path):
+    from app.services.providers import get_provider
+    from app.services.providers.base import SpawnCommandOptions
+
+    provider = get_provider("opencode-cli")
+
+    try:
+        provider.build_spawn_command(
+            SpawnCommandOptions(directory=str(tmp_path), reasoning_effort="high")
+        )
+    except ValueError as exc:
+        assert "does not support model variants" in str(exc)
+    else:
+        raise AssertionError("expected OpenCode variant launch to be rejected")
+
+    try:
+        provider.build_spawn_command(
+            SpawnCommandOptions(directory=str(tmp_path), dangerously_bypass_approvals_and_sandbox=True)
+        )
+    except ValueError as exc:
+        assert "does not support permission bypass" in str(exc)
+    else:
+        raise AssertionError("expected OpenCode permission bypass launch to be rejected")
+
+
 def test_anthropic_platform_adds_no_env_flags(monkeypatch, tmp_path):
     from app.services.agent_bridge import spawn
     from app.services.providers.base import SpawnCommandOptions

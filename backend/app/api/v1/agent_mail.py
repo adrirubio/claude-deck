@@ -150,7 +150,7 @@ async def agent_inbox(
 
 def _hook_provider(payload: dict) -> str:
     provider = str(payload.get("provider") or "claude-code")
-    return provider if provider in {"claude-code", "codex-cli", "copilot-cli"} else "unknown"
+    return provider if provider in {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"} else "unknown"
 
 
 def _hook_session_key(payload: dict) -> Optional[str]:
@@ -162,6 +162,7 @@ def _hook_session_key(payload: dict) -> Optional[str]:
         "claude-code": "cc",
         "codex-cli": "codex",
         "copilot-cli": "copilot",
+        "opencode-cli": "opencode",
     }
     prefix = prefix_by_provider.get(provider, "unknown")
     team_slot_id = _payload_int(payload, "team_slot_id")
@@ -360,6 +361,27 @@ async def uninstall_copilot(
 ):
     _require_confirmed(body)
     return await agent_mail_install_service.uninstall_copilot(db)
+
+
+@router.post("/install/opencode/apply", response_model=AgentMailInstallStatus)
+async def install_opencode(
+    body: dict[str, Any] | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_confirmed(body)
+    try:
+        return await agent_mail_install_service.apply_opencode_install(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/install/opencode/uninstall", response_model=AgentMailInstallStatus)
+async def uninstall_opencode(
+    body: dict[str, Any] | None = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_confirmed(body)
+    return await agent_mail_install_service.uninstall_opencode(db)
 
 
 @router.get("/install/snippets", response_model=AgentMailSnippets)

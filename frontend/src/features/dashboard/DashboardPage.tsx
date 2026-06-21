@@ -44,7 +44,9 @@ export function DashboardPage() {
       ? "Codex"
       : selectedProviderId === "copilot-cli"
         ? "GitHub Copilot CLI"
-        : "Claude Code");
+        : selectedProviderId === "opencode-cli"
+          ? "OpenCode CLI"
+          : "Claude Code");
   const isCodex = selectedProviderId === "codex-cli";
 
   return (

@@ -8,10 +8,11 @@ def test_provider_registry_contains_initial_providers():
 
     provider_ids = {provider.id for provider in get_providers()}
 
-    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli"}
+    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"}
     assert get_provider("claude-code").display_name == "Claude Code"
     assert get_provider("codex-cli").binary_name == "codex"
     assert get_provider("copilot-cli").binary_name == "copilot"
+    assert get_provider("opencode-cli").binary_name == "opencode"
 
 
 def test_provider_status_includes_central_capability_matrix():
@@ -35,6 +36,10 @@ def test_provider_status_includes_central_capability_matrix():
     assert copilot["capabilities"]["spawn"] is True
     assert copilot["capability_matrix"]["mcp"]["state"] == "write_capable"
     assert copilot["capability_matrix"]["config"]["state"] == "unsupported"
+    opencode = get_provider("opencode-cli").get_status()
+    assert opencode["capabilities"]["spawn"] is True
+    assert opencode["capability_matrix"]["mcp"]["state"] == "write_capable"
+    assert opencode["capability_matrix"]["hooks"]["state"] == "write_capable"
 
 
 def test_provider_capabilities_api_returns_matrix():
@@ -79,3 +84,29 @@ def test_copilot_process_detection_matches_binary_and_node_wrapper():
     with patch("app.services.providers.base.subprocess.run") as run:
         run.return_value = SimpleNamespace(stdout="456 /usr/local/bin/copilot\n")
         assert provider.is_process_match("node", "123") is True
+
+
+def test_opencode_process_detection_matches_binary_and_wrappers():
+    from app.services.providers import get_provider
+
+    provider = get_provider("opencode-cli")
+
+    assert provider.is_process_match("opencode", "123") is True
+    assert provider.is_process_match("/usr/local/bin/opencode", "123") is True
+    assert provider.is_process_match("opencode-server", "123") is False
+    with patch("app.services.providers.base.subprocess.run") as run:
+        run.return_value = SimpleNamespace(stdout="456 /usr/local/bin/opencode\n")
+        assert provider.is_process_match("bun", "123") is True
+
+
+def test_opencode_home_respects_xdg_config_home(monkeypatch, tmp_path):
+    from app.services.providers.opencode_cli import get_opencode_home
+
+    monkeypatch.delenv("OPENCODE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    assert get_opencode_home() == tmp_path / "xdg" / "opencode"
+
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
+
+    assert get_opencode_home() == tmp_path / "custom"

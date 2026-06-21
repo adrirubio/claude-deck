@@ -121,6 +121,37 @@ def test_installed_copilot_hooks_use_official_hook_file_shape(monkeypatch, tmp_p
     assert install.installed_copilot_hooks() == ["notification", "sessionStart"]
 
 
+def test_installed_opencode_plugin_events_use_managed_plugin(monkeypatch, tmp_path):
+    plugin_path = tmp_path / "claude-deck-agent-mail.js"
+    plugin_path.write_text(install._opencode_plugin_content(), encoding="utf-8")
+    monkeypatch.setattr(install, "opencode_plugin_path", lambda: plugin_path)
+
+    assert install.installed_opencode_plugin_events() == sorted(install.OPENCODE_MAIL_PLUGIN_EVENTS)
+
+
+def test_opencode_mcp_status_respects_jsonc_precedence(monkeypatch, tmp_path):
+    json_path = tmp_path / "opencode.json"
+    jsonc_path = tmp_path / "opencode.jsonc"
+    json_path.write_text(
+        json.dumps({"mcp": {install.MCP_SERVER_NAME: install._opencode_mcp_entry()}}),
+        encoding="utf-8",
+    )
+    jsonc_path.write_text(
+        json.dumps({"mcp": {install.MCP_SERVER_NAME: {"enabled": False}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(install, "opencode_config_paths", lambda: [json_path, jsonc_path])
+
+    assert install.opencode_mcp_installed() is False
+
+    jsonc_path.write_text(
+        json.dumps({"mcp": {install.MCP_SERVER_NAME: install._opencode_mcp_entry()}}),
+        encoding="utf-8",
+    )
+
+    assert install.opencode_mcp_installed() is True
+
+
 @pytest.mark.asyncio
 async def test_get_status_reports_missing_hooks(monkeypatch):
     monkeypatch.setattr(install.hook_service, "list_hooks", lambda: [])
@@ -131,6 +162,9 @@ async def test_get_status_reports_missing_hooks(monkeypatch):
     monkeypatch.setattr(install, "copilot_cli_available", lambda: False)
     monkeypatch.setattr(install, "copilot_mcp_installed", lambda: False)
     monkeypatch.setattr(install, "installed_copilot_hooks", lambda: [])
+    monkeypatch.setattr(install, "opencode_cli_available", lambda: False)
+    monkeypatch.setattr(install, "opencode_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_opencode_plugin_events", lambda: [])
     monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
 
     status = await install.get_install_status()
@@ -139,6 +173,7 @@ async def test_get_status_reports_missing_hooks(monkeypatch):
     assert status.claude_code_mcp_installed is False
     assert status.curl_available is True
     assert set(status.copilot_hooks_missing) == set(install.COPILOT_MAIL_HOOK_EVENTS)
+    assert set(status.opencode_plugin_events_missing) == set(install.OPENCODE_MAIL_PLUGIN_EVENTS)
 
 
 @pytest.mark.asyncio
@@ -157,6 +192,9 @@ async def test_status_treats_stale_hook_commands_as_missing(monkeypatch):
     monkeypatch.setattr(install, "copilot_cli_available", lambda: False)
     monkeypatch.setattr(install, "copilot_mcp_installed", lambda: False)
     monkeypatch.setattr(install, "installed_copilot_hooks", lambda: [])
+    monkeypatch.setattr(install, "opencode_cli_available", lambda: False)
+    monkeypatch.setattr(install, "opencode_mcp_installed", lambda: False)
+    monkeypatch.setattr(install, "installed_opencode_plugin_events", lambda: [])
     monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/curl" if name == "curl" else None)
 
     status = await install.get_install_status()
@@ -314,6 +352,60 @@ async def test_copilot_apply_uses_provider_executor_and_writes_hooks_json(monkey
     assert doc["hooks"]["sessionStart"][0]["command"].endswith("--provider copilot-cli --event session-start")
     assert doc["hooks"]["notification"][0]["matcher"] == "agent_idle"
     assert "hooks" not in doc["hooks"]["sessionStart"][0]
+
+
+@pytest.mark.asyncio
+async def test_opencode_apply_writes_mcp_config_and_plugin(monkeypatch, db, tmp_path):
+    config_path = tmp_path / "opencode.json"
+    plugin_path = tmp_path / "plugins" / "claude-deck-agent-mail.js"
+    monkeypatch.setattr(install, "opencode_cli_available", lambda: True)
+    monkeypatch.setattr(install, "_backup_before_mutation", AsyncMock())
+    monkeypatch.setattr(install, "opencode_config_path", lambda: config_path)
+    monkeypatch.setattr(install, "opencode_config_paths", lambda: [config_path])
+    monkeypatch.setattr(install, "opencode_plugin_path", lambda: plugin_path)
+    monkeypatch.setattr(install, "get_install_status", AsyncMock(return_value=SimpleNamespace()))
+
+    await install.apply_opencode_install(db)
+
+    doc = json.loads(config_path.read_text(encoding="utf-8"))
+    entry = doc["mcp"][install.MCP_SERVER_NAME]
+    assert entry["type"] == "local"
+    assert entry["command"] == [install.sys.executable, install.shim_path()]
+    assert entry["environment"]["CLAUDE_DECK_PROVIDER"] == "opencode-cli"
+    plugin = plugin_path.read_text(encoding="utf-8")
+    assert "Claude Deck Agent Mail OpenCode plugin" in plugin
+    assert "experimental.chat.system.transform" in plugin
+
+
+@pytest.mark.asyncio
+async def test_opencode_uninstall_removes_managed_mcp_and_plugin(monkeypatch, db, tmp_path):
+    config_path = tmp_path / "opencode.json"
+    plugin_path = tmp_path / "plugins" / "claude-deck-agent-mail.js"
+    plugin_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcp": {
+                    install.MCP_SERVER_NAME: install._opencode_mcp_entry(),
+                    "keep": {"type": "remote", "url": "https://example.test/mcp"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    plugin_path.write_text(install._opencode_plugin_content(), encoding="utf-8")
+    monkeypatch.setattr(install, "_backup_before_mutation", AsyncMock())
+    monkeypatch.setattr(install, "opencode_config_path", lambda: config_path)
+    monkeypatch.setattr(install, "opencode_config_paths", lambda: [config_path])
+    monkeypatch.setattr(install, "opencode_plugin_path", lambda: plugin_path)
+    monkeypatch.setattr(install, "get_install_status", AsyncMock(return_value=SimpleNamespace()))
+
+    await install.uninstall_opencode(db)
+
+    doc = json.loads(config_path.read_text(encoding="utf-8"))
+    assert install.MCP_SERVER_NAME not in doc["mcp"]
+    assert "keep" in doc["mcp"]
+    assert not plugin_path.exists()
 
 
 @pytest.mark.asyncio

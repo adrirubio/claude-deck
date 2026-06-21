@@ -43,7 +43,9 @@ export function SessionList({
       ? 'Codex'
       : providerFilter === 'copilot-cli'
         ? 'Copilot'
-        : 'Claude Code'
+        : providerFilter === 'opencode-cli'
+          ? 'OpenCode'
+          : 'Claude Code'
   const emptyHint = createDisabledReason
     ?? (providerFilter === 'all'
       ? 'Launch or start a supported CLI in tmux.'

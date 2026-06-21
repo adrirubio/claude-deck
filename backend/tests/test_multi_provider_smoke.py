@@ -8,12 +8,13 @@ def test_provider_registry_smoke_exposes_provider_statuses():
     response = providers_api.list_providers()
 
     provider_ids = {provider["id"] for provider in response["providers"]}
-    assert response["count"] == 3
-    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli"}
+    assert response["count"] == 4
+    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"}
 
     claude_status = providers_api.get_provider_status("claude-code")
     codex_status = providers_api.get_provider_status("codex-cli")
     copilot_status = providers_api.get_provider_status("copilot-cli")
+    opencode_status = providers_api.get_provider_status("opencode-cli")
 
     assert claude_status["capabilities"]["sessions"] is True
     assert claude_status["capabilities"]["usage"] is True
@@ -25,6 +26,9 @@ def test_provider_registry_smoke_exposes_provider_statuses():
     assert copilot_status["capabilities"]["sessions"] is True
     assert copilot_status["capabilities"]["mcp"] is True
     assert copilot_status["capabilities"]["config"] is False
+    assert opencode_status["capabilities"]["sessions"] is True
+    assert opencode_status["capabilities"]["mcp"] is True
+    assert opencode_status["capabilities"]["plugins"] is True
 
 
 def test_agent_bridge_session_filter_smoke(monkeypatch):

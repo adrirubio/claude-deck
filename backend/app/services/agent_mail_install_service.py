@@ -22,6 +22,7 @@ from app.services.hook_service import HookService
 from app.services.mcp_service import MCPService
 from app.services.providers.copilot_cli import get_copilot_home
 from app.services.providers.codex_cli import get_codex_home
+from app.services.providers.opencode_cli import get_opencode_home
 from app.utils.path_utils import get_claude_user_config_file, get_claude_user_settings_file
 
 logger = logging.getLogger(__name__)
@@ -49,9 +50,17 @@ COPILOT_MAIL_HOOK_EVENTS = {
     "postToolUse": "post-tool-use",
     "notification": "user-prompt-submit",
 }
+OPENCODE_MAIL_PLUGIN_EVENTS = {
+    "session.created": "session-start",
+    "session.idle": "user-prompt-submit",
+    "session.deleted": "session-end",
+    "tool.execute.after": "post-tool-use",
+    "experimental.chat.system.transform": "user-prompt-submit",
+}
 
 _HOOK_URL_MARKER = "/api/v1/agent-mail/hooks/"
 _CODEX_HOOK_MARKER = "agent_mail_hook.py"
+_OPENCODE_PLUGIN_MARKER = "Claude Deck Agent Mail OpenCode plugin"
 
 
 def deck_base_url() -> str:
@@ -80,6 +89,20 @@ def codex_hooks_path() -> Path:
 
 def copilot_hooks_path() -> Path:
     return get_copilot_home() / "hooks" / f"{MCP_SERVER_NAME}.json"
+
+
+def opencode_config_path() -> Path:
+    jsonc_path = get_opencode_home() / "opencode.jsonc"
+    return jsonc_path if jsonc_path.exists() else get_opencode_home() / "opencode.json"
+
+
+def opencode_config_paths() -> list[Path]:
+    home = get_opencode_home()
+    return [home / "opencode.json", home / "opencode.jsonc"]
+
+
+def opencode_plugin_path() -> Path:
+    return get_opencode_home() / "plugins" / "claude-deck-agent-mail.js"
 
 
 def provider_hook_command(provider: str, slug: str) -> str:
@@ -184,6 +207,113 @@ def _load_copilot_hooks_doc() -> dict:
 
 def _write_copilot_hooks_doc(doc: dict) -> None:
     path = copilot_hooks_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _strip_json_comments_and_trailing_commas(text: str) -> str:
+    """Parse common JSONC files without taking a runtime dependency."""
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    in_line_comment = False
+    in_block_comment = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if in_line_comment:
+            if char in "\r\n":
+                in_line_comment = False
+                output.append(char)
+            index += 1
+            continue
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+                index += 2
+            else:
+                index += 1
+            continue
+        if in_string:
+            output.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            output.append(char)
+            index += 1
+            continue
+        if char == "/" and next_char == "/":
+            in_line_comment = True
+            index += 2
+            continue
+        if char == "/" and next_char == "*":
+            in_block_comment = True
+            index += 2
+            continue
+        output.append(char)
+        index += 1
+
+    without_comments = "".join(output)
+    cleaned: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(without_comments):
+        char = without_comments[index]
+        if in_string:
+            cleaned.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            cleaned.append(char)
+            index += 1
+            continue
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < len(without_comments) and without_comments[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(without_comments) and without_comments[lookahead] in "}]":
+                index += 1
+                continue
+        cleaned.append(char)
+        index += 1
+    return "".join(cleaned)
+
+
+def _load_opencode_config_doc(path: Path | None = None) -> dict:
+    path = path or opencode_config_path()
+    if not path.exists():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+        doc = json.loads(_strip_json_comments_and_trailing_commas(text))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read OpenCode config file: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ValueError("OpenCode config file must contain a JSON object")
+    mcp = doc.setdefault("mcp", {})
+    if not isinstance(mcp, dict):
+        raise ValueError("OpenCode config file field 'mcp' must be a JSON object")
+    return doc
+
+
+def _write_opencode_config_doc(doc: dict, path: Path | None = None) -> None:
+    path = path or opencode_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -333,12 +463,27 @@ def _copilot_executor():
         return None
 
 
+def _opencode_executor():
+    try:
+        from app.services.cli_executor import ProviderCLIExecutor
+
+        executor = ProviderCLIExecutor("opencode-cli")
+        return executor if executor.binary_path else None
+    except Exception as exc:
+        logger.debug("opencode executor unavailable: %s", exc)
+        return None
+
+
 def codex_cli_available() -> bool:
     return _codex_executor() is not None
 
 
 def copilot_cli_available() -> bool:
     return _copilot_executor() is not None
+
+
+def opencode_cli_available() -> bool:
+    return _opencode_executor() is not None
 
 
 def codex_mcp_installed() -> bool:
@@ -369,6 +514,159 @@ def copilot_mcp_installed() -> bool:
         return False
 
 
+def _opencode_mcp_entry() -> dict:
+    return {
+        "type": "local",
+        "command": [sys.executable, shim_path()],
+        "enabled": True,
+        "environment": {
+            "CLAUDE_DECK_URL": deck_base_url(),
+            "CLAUDE_DECK_PROVIDER": "opencode-cli",
+        },
+    }
+
+
+def _opencode_mcp_entry_is_current(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    expected = _opencode_mcp_entry()
+    command = entry.get("command")
+    environment = entry.get("environment")
+    return (
+        entry.get("type") == "local"
+        and entry.get("enabled", True) is not False
+        and command == expected["command"]
+        and isinstance(environment, dict)
+        and environment.get("CLAUDE_DECK_URL") == expected["environment"]["CLAUDE_DECK_URL"]
+        and environment.get("CLAUDE_DECK_PROVIDER") == "opencode-cli"
+    )
+
+
+def opencode_mcp_installed() -> bool:
+    effective_entry = None
+    for path in opencode_config_paths():
+        try:
+            doc = _load_opencode_config_doc(path)
+        except ValueError:
+            return False
+        mcp = doc.get("mcp")
+        if isinstance(mcp, dict) and MCP_SERVER_NAME in mcp:
+            effective_entry = mcp[MCP_SERVER_NAME]
+    return _opencode_mcp_entry_is_current(effective_entry)
+
+
+def _opencode_plugin_content() -> str:
+    template = r"""// Claude Deck Agent Mail OpenCode plugin.
+const DECK_URL = (__DECK_URL__ || process.env.CLAUDE_DECK_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const PROVIDER = process.env.CLAUDE_DECK_PROVIDER || "opencode-cli";
+
+function envInt(name) {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function timeoutSignal(ms) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms).unref?.();
+  return controller.signal;
+}
+
+export const ClaudeDeckAgentMailPlugin = async (ctx) => {
+  const cwd = () => ctx.worktree || ctx.directory || process.cwd();
+
+  const payload = (sessionID, extra = {}) => {
+    const body = {
+      provider: PROVIDER,
+      cwd: extra.cwd || cwd(),
+      session_id: sessionID || extra.session_id || String(process.pid),
+      pid: process.pid,
+      ...extra,
+    };
+    const teamPresetID = envInt("CLAUDE_DECK_TEAM_PRESET_ID");
+    const teamSlotID = envInt("CLAUDE_DECK_TEAM_SLOT_ID");
+    if (teamPresetID !== undefined) body.team_preset_id = teamPresetID;
+    if (teamSlotID !== undefined) body.team_slot_id = teamSlotID;
+    return body;
+  };
+
+  const post = async (slug, body) => {
+    try {
+      const response = await fetch(`${DECK_URL}/api/v1/agent-mail/hooks/${slug}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: timeoutSignal(1000),
+      });
+      if (!response.ok) return {};
+      return await response.json();
+    } catch {
+      return {};
+    }
+  };
+
+  const send = (slug, sessionID, extra = {}) => post(slug, payload(sessionID, extra));
+
+  return {
+    event: async ({ event }) => {
+      if (event.type === "session.created") {
+        const info = event.properties?.info || {};
+        await send("session-start", info.id, {
+          cwd: info.directory,
+          source: "opencode-session-created",
+        });
+      }
+      if (event.type === "session.idle") {
+        await send("user-prompt-submit", event.properties?.sessionID, {
+          source: "opencode-session-idle",
+        });
+      }
+      if (event.type === "session.deleted") {
+        const info = event.properties?.info || {};
+        await send("session-end", info.id, {
+          cwd: info.directory,
+          source: "opencode-session-deleted",
+        });
+      }
+    },
+
+    "tool.execute.after": async (input) => {
+      await send("post-tool-use", input.sessionID, {
+        tool_name: input.tool,
+        tool_input: input.args || {},
+        source: "opencode-tool-execute-after",
+      });
+    },
+
+    "experimental.chat.system.transform": async (input, output) => {
+      const body = await send("user-prompt-submit", input.sessionID, {
+        source: "opencode-chat-system-transform",
+      });
+      const context = body?.hookSpecificOutput?.additionalContext;
+      if (context) output.system.push(context);
+    },
+  };
+};
+"""
+    return template.replace("__DECK_URL__", json.dumps(deck_base_url()))
+
+
+def installed_opencode_plugin_events() -> list[str]:
+    path = opencode_plugin_path()
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    if _OPENCODE_PLUGIN_MARKER not in content:
+        return []
+    installed = []
+    for event, slug in OPENCODE_MAIL_PLUGIN_EVENTS.items():
+        if event in content and slug in content:
+            installed.append(event)
+    return sorted(installed)
+
+
 async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
     try:
         backup_dir = Path.home() / ".claude-registry" / "backups"
@@ -385,6 +683,11 @@ async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
             paths = [
                 get_copilot_home() / "mcp-config.json",
                 copilot_hooks_path(),
+            ]
+        elif scope == "opencode":
+            paths = [
+                *opencode_config_paths(),
+                opencode_plugin_path(),
             ]
         else:
             paths = [
@@ -443,6 +746,10 @@ async def get_install_status() -> AgentMailInstallStatus:
     copilot_missing = [
         event for event in COPILOT_MAIL_HOOK_EVENTS if event not in copilot_hook_events
     ]
+    opencode_plugin_events = installed_opencode_plugin_events()
+    opencode_missing = [
+        event for event in OPENCODE_MAIL_PLUGIN_EVENTS if event not in opencode_plugin_events
+    ]
     server = await mcp_service.get_server(MCP_SERVER_NAME, "user")
     return AgentMailInstallStatus(
         claude_code_hooks=installed_events,
@@ -456,6 +763,10 @@ async def get_install_status() -> AgentMailInstallStatus:
         copilot_mcp_installed=copilot_mcp_installed(),
         copilot_hooks=copilot_hook_events,
         copilot_hooks_missing=copilot_missing,
+        opencode_cli_available=opencode_cli_available(),
+        opencode_mcp_installed=opencode_mcp_installed(),
+        opencode_plugin_events=opencode_plugin_events,
+        opencode_plugin_events_missing=opencode_missing,
         curl_available=shutil.which("curl") is not None,
         shim_path=shim_path(),
         python_path=sys.executable,
@@ -464,6 +775,8 @@ async def get_install_status() -> AgentMailInstallStatus:
         claude_mcp_config_path=str(get_claude_user_config_file()),
         codex_hooks_path=str(codex_hooks_path()),
         copilot_hooks_path=str(copilot_hooks_path()),
+        opencode_config_path=str(opencode_config_path()),
+        opencode_plugin_path=str(opencode_plugin_path()),
     )
 
 
@@ -603,6 +916,49 @@ async def uninstall_copilot(db: AsyncSession) -> AgentMailInstallStatus:
     return await get_install_status()
 
 
+async def apply_opencode_install(db: AsyncSession) -> AgentMailInstallStatus:
+    if not opencode_cli_available():
+        raise ValueError("OpenCode CLI is not available on this machine")
+    await _backup_before_mutation(db, "opencode")
+    config_path = opencode_config_path()
+    doc = _load_opencode_config_doc(config_path)
+    mcp = doc.setdefault("mcp", {})
+    if not isinstance(mcp, dict):
+        raise ValueError("OpenCode config file field 'mcp' must be a JSON object")
+    mcp[MCP_SERVER_NAME] = _opencode_mcp_entry()
+    _write_opencode_config_doc(doc, config_path)
+    path = opencode_plugin_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_opencode_plugin_content(), encoding="utf-8")
+    return await get_install_status()
+
+
+async def uninstall_opencode(db: AsyncSession) -> AgentMailInstallStatus:
+    should_backup = opencode_mcp_installed() or bool(installed_opencode_plugin_events())
+    if should_backup:
+        await _backup_before_mutation(db, "opencode")
+    for config_path in opencode_config_paths():
+        try:
+            doc = _load_opencode_config_doc(config_path)
+        except ValueError:
+            continue
+        mcp = doc.get("mcp")
+        if isinstance(mcp, dict) and MCP_SERVER_NAME in mcp:
+            mcp.pop(MCP_SERVER_NAME, None)
+            _write_opencode_config_doc(doc, config_path)
+    path = opencode_plugin_path()
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        content = ""
+    if _OPENCODE_PLUGIN_MARKER in content:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    return await get_install_status()
+
+
 def get_snippets() -> AgentMailSnippets:
     toml = (
         f"[mcp_servers.{MCP_SERVER_NAME}]\n"
@@ -646,9 +1002,16 @@ def get_snippets() -> AgentMailSnippets:
         indent=2,
         sort_keys=True,
     )
+    opencode_config_json = json.dumps(
+        {"mcp": {MCP_SERVER_NAME: _opencode_mcp_entry()}},
+        indent=2,
+        sort_keys=True,
+    )
     return AgentMailSnippets(
         codex_config_toml=toml,
         codex_agents_md=agents_md,
         copilot_mcp_command=copilot_command,
         copilot_hooks_json=copilot_hooks_json,
+        opencode_config_json=opencode_config_json,
+        opencode_plugin_js=_opencode_plugin_content(),
     )

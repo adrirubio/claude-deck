@@ -1,4 +1,4 @@
-export type AgentProviderId = 'claude-code' | 'codex-cli' | 'copilot-cli'
+export type AgentProviderId = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli'
 
 export interface AgentProviderCapabilities {
   config: boolean
