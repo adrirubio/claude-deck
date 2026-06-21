@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -113,8 +114,17 @@ class AgentMailService:
         member = result.scalar_one_or_none()
         if member is None:
             member = MailTeamMember(**values)
-            db.add(member)
-            await db.flush()
+            try:
+                async with db.begin_nested():
+                    db.add(member)
+                    await db.flush()
+            except IntegrityError:
+                result = await db.execute(
+                    select(MailTeamMember).where(
+                        MailTeamMember.identity_key == values["identity_key"]
+                    )
+                )
+                member = result.scalar_one()
         else:
             member.repo_id = str(values["repo_id"])
             member.repo_path = str(values["repo_path"])
@@ -145,6 +155,21 @@ class AgentMailService:
     async def register_session(
         self, db: AsyncSession, request: MailAgentRegisterRequest
     ) -> tuple[MailTeamMember, MailAgentSession]:
+        inferred_team_preset_id, inferred_team_slot_id = await self._infer_team_context_from_process(
+            db,
+            request,
+        )
+        if (
+            request.team_preset_id is None
+            and request.team_slot_id is None
+            and (inferred_team_preset_id is not None or inferred_team_slot_id is not None)
+        ):
+            request = request.model_copy(
+                update={
+                    "team_preset_id": inferred_team_preset_id,
+                    "team_slot_id": inferred_team_slot_id,
+                }
+            )
         has_team_context = request.team_preset_id is not None or request.team_slot_id is not None
         team_preset_id, team_slot_id = await self._resolve_team_context(db, request)
         result = await db.execute(
@@ -191,6 +216,43 @@ class AgentMailService:
         await db.refresh(member)
         await db.refresh(session)
         return member, session
+
+    async def _infer_team_context_from_process(
+        self,
+        db: AsyncSession,
+        request: MailAgentRegisterRequest,
+    ) -> tuple[int | None, int | None]:
+        if request.team_preset_id is not None or request.team_slot_id is not None or request.pid is None:
+            return None, None
+        try:
+            repo_id = derive_repo_identity(request.cwd)["repo_id"]
+        except Exception:
+            repo_id = None
+        now = datetime.utcnow()
+        result = await db.execute(
+            select(MailAgentSession)
+            .where(
+                MailAgentSession.source != "observed",
+                MailAgentSession.provider == request.provider,
+                MailAgentSession.team_slot_id.is_not(None),
+                MailAgentSession.pid.is_not(None),
+                MailAgentSession.last_seen_at >= now - timedelta(seconds=HEARTBEAT_TTL_SECONDS),
+            )
+            .order_by(MailAgentSession.last_seen_at.desc())
+        )
+        for session in result.scalars().all():
+            if not session.pid or not self._pids_related(int(request.pid), int(session.pid)):
+                continue
+            if repo_id is not None:
+                try:
+                    if derive_repo_identity(session.cwd or "")["repo_id"] != repo_id:
+                        continue
+                except Exception:
+                    continue
+            if self._effective_status(session, now) == "offline":
+                continue
+            return session.team_preset_id, session.team_slot_id
+        return None, None
 
     async def _session_team_context_matches_registration(
         self,
@@ -355,22 +417,59 @@ class AgentMailService:
                 .where(
                     MailAgentSession.source != "observed",
                     MailAgentSession.provider == provider,
-                    MailAgentSession.pid == pid,
+                    MailAgentSession.pid.is_not(None),
+                    MailAgentSession.last_seen_at >= now - timedelta(seconds=HEARTBEAT_TTL_SECONDS),
                 )
                 .order_by(MailAgentSession.last_seen_at.desc())
-                .limit(1)
             )
-            registered_session = result.scalar_one_or_none()
-            if registered_session is not None and self._registered_session_matches_observed(
-                registered_session,
-                info,
-                now,
-            ):
-                member = await db.get(MailTeamMember, registered_session.member_id)
-                if member is not None:
-                    return member
+            for registered_session in result.scalars().all():
+                if not registered_session.pid or not self._pids_related(pid, int(registered_session.pid)):
+                    continue
+                if registered_session is not None and self._registered_session_matches_observed(
+                    registered_session,
+                    info,
+                    now,
+                ):
+                    member = await db.get(MailTeamMember, registered_session.member_id)
+                    if member is not None:
+                        return member
 
         return await self._get_or_create_repo_member(db, cwd)
+
+    def _pids_related(self, left_pid: int, right_pid: int) -> bool:
+        return (
+            left_pid == right_pid
+            or self._pid_is_descendant(left_pid, right_pid)
+            or self._pid_is_descendant(right_pid, left_pid)
+        )
+
+    def _pid_is_descendant(self, child_pid: int, ancestor_pid: int) -> bool:
+        current = child_pid
+        visited: set[int] = set()
+        for _ in range(8):
+            if current == ancestor_pid:
+                return True
+            if current in visited:
+                return False
+            visited.add(current)
+            try:
+                result = subprocess.run(
+                    ["ps", "-o", "ppid=", "-p", str(current)],
+                    capture_output=True,
+                    text=True,
+                    timeout=1,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return False
+            if result.returncode != 0:
+                return False
+            try:
+                current = int(result.stdout.strip() or "0")
+            except ValueError:
+                return False
+            if current <= 1:
+                return False
+        return False
 
     async def _member_for_existing_observed_session(
         self,

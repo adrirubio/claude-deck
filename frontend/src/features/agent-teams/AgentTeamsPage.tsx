@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
+  BookOpen,
   Copy,
   Edit,
   GitBranch,
@@ -64,6 +65,7 @@ import {
 } from './api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
 import type { MailMemberResponse } from '@/types/agentMail'
+import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 
 type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
@@ -555,6 +557,7 @@ export function AgentTeamsPage() {
   const [planLoading, setPlanLoading] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [plannedSlotIds, setPlannedSlotIds] = useState<number[] | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId),
@@ -778,6 +781,10 @@ export function AgentTeamsPage() {
             <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
             Refresh
           </Button>
+          <Button variant="outline" onClick={() => setHelpOpen(true)}>
+            <BookOpen className="mr-2 h-4 w-4" />
+            How it works
+          </Button>
           <Button variant="outline" onClick={() => setPresetDialog('from-mail')}>
             <GitBranch className="mr-2 h-4 w-4" />
             From Mail
@@ -907,6 +914,14 @@ export function AgentTeamsPage() {
                 </div>
               </div>
 
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm text-muted-foreground">
+                <p>
+                  For same-repo planner/reviewer workflows, create separate slots with distinct
+                  names and launch them from this team. That gives Agent Mail separate inboxes and
+                  reliable routing for each role.
+                </p>
+              </div>
+
               <div className="space-y-3">
                 {selectedPreset.slots.length === 0 && (
                   <div className="rounded-lg border p-5 text-sm text-muted-foreground">
@@ -983,6 +998,7 @@ export function AgentTeamsPage() {
 
       <NewPresetDialog mode={presetDialog} onOpenChange={setPresetDialog} onCreate={createPreset} />
       <SlotDialog state={slotDialog} onOpenChange={setSlotDialog} onSave={saveSlot} />
+      <AgentTeamsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <LaunchPlanDialog
         plan={plan}
         result={launchResult}

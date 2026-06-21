@@ -71,6 +71,8 @@ POST /api/v1/agent-teams/presets/{preset_id}/slots/reorder
 
 Slots store provider, repository path, display name, role, charter, bootstrap prompt, launch mode, provider options, and enabled state.
 
+Multiple enabled slots can point at the same repository. Use this for same-repo roles such as planner/reviewer or implementer/reviewer. Each launched slot gets a distinct Agent Mail identity, so external tools should route follow-up Agent Mail requests to the slot member returned by Agent Mail discovery.
+
 ## Launch Planning
 
 ### Plan Launch

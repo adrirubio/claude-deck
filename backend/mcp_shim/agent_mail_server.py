@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 DECK_URL = os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000").rstrip("/")
 PROVIDER = os.environ.get("CLAUDE_DECK_PROVIDER", "unknown")
 API = f"{DECK_URL}/api/v1/agent-mail"
-DECK_HTTP_TIMEOUT = httpx.Timeout(connect=0.3, read=2.0, write=2.0, pool=0.3)
+DECK_HTTP_TIMEOUT = httpx.Timeout(connect=0.5, read=15.0, write=5.0, pool=0.5)
 OFFLINE_BACKOFF_SECONDS = 2.0
 HEARTBEAT_INTERVAL_SECONDS = 60.0
 HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0
@@ -68,7 +68,7 @@ def _ensure_registered() -> dict:
             "provider": PROVIDER,
             "cwd": os.getcwd(),
             "session_key": _state["session_key"],
-            "pid": os.getpid(),
+            "pid": os.getppid(),
         }
         team_preset_id = _env_int("CLAUDE_DECK_TEAM_PRESET_ID")
         team_slot_id = _env_int("CLAUDE_DECK_TEAM_SLOT_ID")
@@ -153,7 +153,7 @@ def deck_list_team() -> dict:
     err = _guard()
     if err:
         return err
-    result = _request("GET", "/team?sync=true")
+    result = _request("GET", "/team?sync=false")
     if not result["ok"]:
         return result
     members = [
