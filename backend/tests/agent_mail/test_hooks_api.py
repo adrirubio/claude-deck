@@ -84,6 +84,27 @@ async def test_copilot_hook_registers_with_copilot_session_key(client, db, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_opencode_hook_registers_with_opencode_session_key(client, db, tmp_path):
+    cwd = tmp_path / "myrepo"
+    cwd.mkdir()
+
+    resp = await client.post(
+        "/api/v1/agent-mail/hooks/session-start",
+        json={
+            "provider": "opencode-cli",
+            "session_id": "opencode-session",
+            "cwd": str(cwd),
+            "pid": 123,
+        },
+    )
+
+    assert resp.status_code == 200
+    team = await agent_mail_service.list_team(db)
+    assert team[0].sessions[0].provider == "opencode-cli"
+    assert team[0].sessions[0].session_key == "opencode:opencode-session"
+
+
+@pytest.mark.asyncio
 async def test_codex_hook_session_key_is_team_slot_qualified(client, db, tmp_path):
     cwd = tmp_path / "myrepo"
     cwd.mkdir()

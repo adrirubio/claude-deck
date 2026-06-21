@@ -123,6 +123,20 @@ export function uninstallCopilotAgentMail(): Promise<AgentMailInstallStatus> {
   })
 }
 
+export function applyOpenCodeAgentMailInstall(): Promise<AgentMailInstallStatus> {
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/opencode/apply', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true }),
+  })
+}
+
+export function uninstallOpenCodeAgentMail(): Promise<AgentMailInstallStatus> {
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/opencode/uninstall', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true }),
+  })
+}
+
 export function fetchAgentMailSnippets(): Promise<AgentMailSnippets> {
   return apiClient<AgentMailSnippets>('agent-mail/install/snippets')
 }

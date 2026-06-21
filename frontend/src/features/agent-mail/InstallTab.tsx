@@ -24,6 +24,8 @@ type InstallActionKey =
   | 'codex-uninstall'
   | 'copilot-apply'
   | 'copilot-uninstall'
+  | 'opencode-apply'
+  | 'opencode-uninstall'
 
 interface InstallTabProps {
   status: AgentMailInstallStatus | null
@@ -36,6 +38,8 @@ interface InstallTabProps {
   onUninstallCodex: () => Promise<void>
   onApplyCopilot: () => Promise<void>
   onUninstallCopilot: () => Promise<void>
+  onApplyOpenCode: () => Promise<void>
+  onUninstallOpenCode: () => Promise<void>
 }
 
 function InstalledBadge({
@@ -76,6 +80,8 @@ export function InstallTab({
   onUninstallCodex,
   onApplyCopilot,
   onUninstallCopilot,
+  onApplyOpenCode,
+  onUninstallOpenCode,
 }: InstallTabProps) {
   const [confirming, setConfirming] = useState<InstallActionKey | null>(null)
   const [running, setRunning] = useState(false)
@@ -155,6 +161,29 @@ export function InstallTab({
         run: onUninstallCopilot,
       }
     }
+    if (confirming === 'opencode-apply') {
+      return {
+        title: 'Install Agent Mail for OpenCode CLI',
+        description: 'A backup is attempted before Claude Deck writes the managed OpenCode MCP entry and lifecycle plugin.',
+        mutations: [
+          `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: add MCP server ${'claude-deck-mail'}`,
+          `${status.opencode_plugin_path || '~/.config/opencode/plugins/claude-deck-agent-mail.js'}: write Agent Mail lifecycle plugin`,
+          `MCP server command: ${status.python_path} ${status.shim_path}`,
+        ],
+        run: onApplyOpenCode,
+      }
+    }
+    if (confirming === 'opencode-uninstall') {
+      return {
+        title: 'Remove Agent Mail from OpenCode CLI',
+        description: 'A backup is attempted before Claude Deck removes the managed MCP entry and plugin file.',
+        mutations: [
+          `${status.opencode_config_path || '~/.config/opencode/opencode.json'}: remove MCP server ${'claude-deck-mail'}`,
+          `${status.opencode_plugin_path || '~/.config/opencode/plugins/claude-deck-agent-mail.js'}: remove managed Agent Mail plugin`,
+        ],
+        run: onUninstallOpenCode,
+      }
+    }
     return null
   })()
 
@@ -185,6 +214,8 @@ export function InstallTab({
   const codexInstalled = status.codex_mcp_installed && codexHooksInstalled
   const copilotHooksInstalled = status.copilot_hooks_missing.length === 0
   const copilotInstalled = status.copilot_mcp_installed && copilotHooksInstalled
+  const opencodePluginInstalled = status.opencode_plugin_events_missing.length === 0
+  const opencodeInstalled = status.opencode_mcp_installed && opencodePluginInstalled
 
   return (
     <div className="space-y-4">
@@ -195,7 +226,7 @@ export function InstallTab({
         </Button>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid gap-4 xl:grid-cols-4">
         <Card className="rounded-lg">
           <CardHeader>
             <div className="flex items-start justify-between gap-3">
@@ -418,10 +449,87 @@ export function InstallTab({
             </div>
           </CardContent>
         </Card>
+
+        <Card className="rounded-lg">
+          <CardHeader>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <Terminal className="h-5 w-5" />
+                  OpenCode CLI
+                </CardTitle>
+                <CardDescription>MCP tools read mail; an OpenCode plugin registers sessions and injects inbox context.</CardDescription>
+              </div>
+              <InstalledBadge
+                installed={opencodeInstalled}
+                installedLabel="installed"
+                missingLabel="not installed"
+              />
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {opencodeInstalled && (
+              <Alert className="border-blue-300 bg-blue-50/60 dark:bg-blue-950/20">
+                <Terminal className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <AlertTitle>OpenCode integration installed</AlertTitle>
+                <AlertDescription>
+                  MCP and the lifecycle plugin are configured. Restart or resume OpenCode sessions so the plugin and MCP server are loaded.
+                </AlertDescription>
+              </Alert>
+            )}
+            <div className="space-y-2">
+              <PathLine label="Config file" value={status.opencode_config_path} />
+              <PathLine label="Plugin file" value={status.opencode_plugin_path} />
+              <PathLine label="Shim" value={status.shim_path} />
+              <PathLine label="Deck URL" value={status.deck_url} />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={status.opencode_cli_available ? 'secondary' : 'destructive'}>
+                OpenCode CLI {status.opencode_cli_available ? 'available' : 'missing'}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={status.opencode_mcp_installed ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                MCP {status.opencode_mcp_installed ? 'installed' : 'not installed'}
+              </Badge>
+              <Badge
+                variant="outline"
+                className={opencodePluginInstalled ? 'border-emerald-300 text-emerald-700' : ''}
+              >
+                plugin {opencodePluginInstalled ? 'installed' : `${status.opencode_plugin_events.length}/5 events`}
+              </Badge>
+              {status.opencode_plugin_events_missing.length > 0 && (
+                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                  missing {status.opencode_plugin_events_missing.length}
+                </Badge>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={() => setConfirming('opencode-apply')}
+                disabled={!status.opencode_cli_available || opencodeInstalled}
+              >
+                <ShieldCheck className="mr-2 h-4 w-4" />
+                Install
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirming('opencode-uninstall')}
+                disabled={!status.opencode_cli_available || (!status.opencode_mcp_installed && !opencodePluginInstalled)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Remove
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {snippets && (
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="grid gap-4 xl:grid-cols-4">
           <Card className="rounded-lg">
             <CardHeader>
               <CardTitle>Codex config snippet</CardTitle>
@@ -464,6 +572,28 @@ export function InstallTab({
                 size="sm"
                 variant="outline"
                 onClick={() => copyText(`${snippets.copilot_mcp_command}\n\n${snippets.copilot_hooks_json}`, 'Copilot fallback')}
+              >
+                <Clipboard className="mr-2 h-4 w-4" />
+                Copy
+              </Button>
+            </CardContent>
+          </Card>
+          <Card className="rounded-lg">
+            <CardHeader>
+              <CardTitle>OpenCode fallback</CardTitle>
+              <CardDescription>Manual MCP config fragment and managed plugin file.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Textarea
+                value={`${snippets.opencode_config_json}\n\n${snippets.opencode_plugin_js}`}
+                readOnly
+                rows={8}
+                className="font-mono text-xs"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => copyText(`${snippets.opencode_config_json}\n\n${snippets.opencode_plugin_js}`, 'OpenCode fallback')}
               >
                 <Clipboard className="mr-2 h-4 w-4" />
                 Copy

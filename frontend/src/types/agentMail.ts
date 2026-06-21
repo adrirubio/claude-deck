@@ -111,6 +111,10 @@ export interface AgentMailInstallStatus {
   copilot_mcp_installed: boolean
   copilot_hooks: string[]
   copilot_hooks_missing: string[]
+  opencode_cli_available: boolean
+  opencode_mcp_installed: boolean
+  opencode_plugin_events: string[]
+  opencode_plugin_events_missing: string[]
   curl_available: boolean
   shim_path: string
   python_path: string
@@ -119,6 +123,8 @@ export interface AgentMailInstallStatus {
   claude_mcp_config_path?: string | null
   codex_hooks_path?: string | null
   copilot_hooks_path?: string | null
+  opencode_config_path?: string | null
+  opencode_plugin_path?: string | null
 }
 
 export interface AgentMailSnippets {
@@ -126,4 +132,6 @@ export interface AgentMailSnippets {
   codex_agents_md: string
   copilot_mcp_command: string
   copilot_hooks_json: string
+  opencode_config_json: string
+  opencode_plugin_js: string
 }

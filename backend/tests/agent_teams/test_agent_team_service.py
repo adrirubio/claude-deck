@@ -28,6 +28,9 @@ def _ready_install_status():
         copilot_cli_available=True,
         copilot_mcp_installed=True,
         copilot_hooks_missing=[],
+        opencode_cli_available=True,
+        opencode_mcp_installed=True,
+        opencode_plugin_events_missing=[],
     )
 
 
@@ -230,6 +233,46 @@ async def test_multiple_same_repo_copilot_continue_slots_are_blocked(db, tmp_pat
     assert plan.blocked_count == 2
     assert {item.block_code for item in plan.items} == {"unsafe_copilot_continue"}
     assert all("Copilot CLI --continue cannot be used" in item.reasons[0] for item in plan.items)
+
+
+@pytest.mark.asyncio
+async def test_multiple_same_repo_opencode_continue_slots_are_blocked(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="OpenCode team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="opencode-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": True},
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="opencode-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": True},
+                ),
+            ],
+        ),
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(reuse_existing=False),
+    )
+
+    assert plan.can_launch is False
+    assert plan.spawn_count == 0
+    assert plan.blocked_count == 2
+    assert {item.block_code for item in plan.items} == {"unsafe_opencode_continue"}
+    assert all("OpenCode --continue cannot be used" in item.reasons[0] for item in plan.items)
 
 
 @pytest.mark.asyncio

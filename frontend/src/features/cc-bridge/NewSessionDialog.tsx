@@ -61,6 +61,11 @@ const COPILOT_MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: 'resume', label: 'Resume' },
 ]
 
+const OPENCODE_MODE_OPTIONS: { value: Mode; label: string }[] = [
+  { value: 'plain', label: 'New' },
+  { value: 'resume', label: 'Resume' },
+]
+
 const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
 const DEFAULT_SELECT_VALUE = '__default__'
 const CUSTOM_SELECT_VALUE = '__custom__'
@@ -168,6 +173,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const isClaude = provider === 'claude-code'
   const isCodex = provider === 'codex-cli'
   const isCopilot = provider === 'copilot-cli'
+  const isOpenCode = provider === 'opencode-cli'
   const supportsPlatform = isClaude || isCodex
   const isBedrock = supportsPlatform && platform === 'bedrock'
   const defaultPlatformLabel = isCodex ? 'OpenAI' : 'Anthropic'
@@ -176,7 +182,13 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     : 'Uses AWS credentials from the server environment. Region is usually required.'
   const bedrockModelLabel = isCodex ? 'Bedrock model ID (optional)' : 'Model ARN / ID (optional)'
   const bedrockModelPlaceholder = isCodex ? 'openai.gpt-5.5' : 'arn:aws:bedrock:...'
-  const modeOptions = isCopilot ? COPILOT_MODE_OPTIONS : isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
+  const modeOptions = isOpenCode
+    ? OPENCODE_MODE_OPTIONS
+    : isCopilot
+      ? COPILOT_MODE_OPTIONS
+      : isCodex
+        ? CODEX_MODE_OPTIONS
+        : MODE_OPTIONS
   const filteredProjects = useMemo(
     () => projects.filter((project) => matchesProjectSearch(project, projectSearch)),
     [projects, projectSearch],
@@ -375,6 +387,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (isCopilot && mode === 'resume') {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
+    if (isOpenCode && mode === 'resume') {
+      return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
+    }
     if (isClaude && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
     return directory.trim().length > 0
   })()
@@ -410,9 +425,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         }),
         ...(provider === 'claude-code' && skipPermissions && { skip_permissions: true }),
         ...(isCodex && prompt.trim() && { prompt: prompt.trim() }),
-        ...(isCopilot && prompt.trim() && { prompt: prompt.trim() }),
+        ...((isCopilot || isOpenCode) && prompt.trim() && { prompt: prompt.trim() }),
         ...(isCodex && !isBedrock && model.trim() && { model: model.trim() }),
-        ...(isCopilot && model.trim() && { model: model.trim() }),
+        ...((isCopilot || isOpenCode) && model.trim() && { model: model.trim() }),
         ...(isCodex && profile.trim() && { profile: profile.trim() }),
         ...(isCodex && sandbox && { sandbox }),
         ...(isCodex && approvalPolicy && { approval_policy: approvalPolicy }),
@@ -427,7 +442,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
-        ...(isCopilot && copilotAgent.trim() && { agent: copilotAgent.trim() }),
+        ...(isOpenCode && mode === 'resume' && {
+          use_last: useLast,
+          ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
+        }),
+        ...((isCopilot || isOpenCode) && copilotAgent.trim() && { agent: copilotAgent.trim() }),
         ...(isCopilot && copilotContextTier && { context_tier: copilotContextTier }),
         ...(isCopilot && copilotEffort && { reasoning_effort: copilotEffort }),
         ...(isCopilot && copilotPlan && { plan: true }),
@@ -689,7 +708,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {(isCodex || isCopilot) && (mode === 'resume' || mode === 'fork') && (
+          {(isCodex || isCopilot || isOpenCode) && (mode === 'resume' || mode === 'fork') && (
             <div className="space-y-2">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -698,12 +717,12 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   onCheckedChange={(checked) => setUseLast(checked === true)}
                 />
                 <Label htmlFor="codex-use-last" className="cursor-pointer">
-                  Use last {isCopilot ? 'Copilot' : 'Codex'} session
+                  Use last {isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} session
                 </Label>
               </div>
               {!useLast && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="codex-session-id">{isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
+                  <Label htmlFor="codex-session-id">{isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
                   <Input
                     id="codex-session-id"
                     value={codexSessionId}
@@ -810,7 +829,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {isCopilot && (
+          {(isCopilot || isOpenCode) && (
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="copilot-model">Model</Label>
@@ -832,37 +851,41 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   autoComplete="off"
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label>Context</Label>
-                <Select
-                  value={copilotContextTier || 'default'}
-                  onValueChange={(value) => setCopilotContextTier(value === 'default' ? '' : value)}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="long_context">Long context</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Reasoning effort</Label>
-                <Select
-                  value={copilotEffort || 'default'}
-                  onValueChange={(value) => setCopilotEffort(value === 'default' ? '' : value)}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="low">Low</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="xhigh">XHigh</SelectItem>
-                    <SelectItem value="max">Max</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {isCopilot && (
+                <div className="space-y-1.5">
+                  <Label>Context</Label>
+                  <Select
+                    value={copilotContextTier || 'default'}
+                    onValueChange={(value) => setCopilotContextTier(value === 'default' ? '' : value)}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default</SelectItem>
+                      <SelectItem value="long_context">Long context</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {isCopilot && (
+                <div className="space-y-1.5">
+                  <Label>Reasoning effort</Label>
+                  <Select
+                    value={copilotEffort || 'default'}
+                    onValueChange={(value) => setCopilotEffort(value === 'default' ? '' : value)}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default</SelectItem>
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="xhigh">XHigh</SelectItem>
+                      <SelectItem value="max">Max</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="copilot-prompt">Initial Prompt</Label>
                 <Input
@@ -872,7 +895,8 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   placeholder="Optional prompt"
                 />
               </div>
-              <div className="col-span-2 grid gap-2">
+              {isCopilot && (
+                <div className="col-span-2 grid gap-2">
                 <div className="flex items-center space-x-2">
                   <Checkbox id="copilot-plan" checked={copilotPlan} onCheckedChange={(checked) => setCopilotPlan(checked === true)} />
                   <Label htmlFor="copilot-plan" className="cursor-pointer">Start in plan mode</Label>
@@ -889,7 +913,8 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   <Checkbox id="copilot-no-ask" checked={copilotNoAskUser} onCheckedChange={(checked) => setCopilotNoAskUser(checked === true)} />
                   <Label htmlFor="copilot-no-ask" className="cursor-pointer">Do not ask the user during automation</Label>
                 </div>
-              </div>
+                </div>
+              )}
             </div>
           )}
 

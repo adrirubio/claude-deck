@@ -134,7 +134,9 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
           ? 'Codex'
           : providerId === 'copilot-cli'
             ? 'GitHub Copilot CLI'
-            : 'Claude Code'
+            : providerId === 'opencode-cli'
+              ? 'OpenCode CLI'
+              : 'Claude Code'
       );
       const params = { project_path: activeProject?.path };
 

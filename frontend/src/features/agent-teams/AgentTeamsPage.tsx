@@ -384,6 +384,7 @@ function SlotDialog({
                 <SelectItem value="codex-cli">Codex CLI</SelectItem>
                 <SelectItem value="claude-code">Claude Code</SelectItem>
                 <SelectItem value="copilot-cli">GitHub Copilot CLI</SelectItem>
+                <SelectItem value="opencode-cli">OpenCode CLI</SelectItem>
               </SelectContent>
             </Select>
           </div>
