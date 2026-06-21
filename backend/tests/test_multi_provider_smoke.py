@@ -2,17 +2,18 @@
 import pytest
 
 
-def test_provider_registry_smoke_exposes_claude_and_codex_statuses():
+def test_provider_registry_smoke_exposes_provider_statuses():
     from app.api.v1 import providers as providers_api
 
     response = providers_api.list_providers()
 
     provider_ids = {provider["id"] for provider in response["providers"]}
-    assert response["count"] == 2
-    assert provider_ids == {"claude-code", "codex-cli"}
+    assert response["count"] == 3
+    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli"}
 
     claude_status = providers_api.get_provider_status("claude-code")
     codex_status = providers_api.get_provider_status("codex-cli")
+    copilot_status = providers_api.get_provider_status("copilot-cli")
 
     assert claude_status["capabilities"]["sessions"] is True
     assert claude_status["capabilities"]["usage"] is True
@@ -21,6 +22,9 @@ def test_provider_registry_smoke_exposes_claude_and_codex_statuses():
     assert codex_status["capabilities"]["doctor"] is True
     assert codex_status["capabilities"]["usage"] is False
     assert codex_status["capabilities"]["plans"] is True
+    assert copilot_status["capabilities"]["sessions"] is True
+    assert copilot_status["capabilities"]["mcp"] is True
+    assert copilot_status["capabilities"]["config"] is False
 
 
 def test_agent_bridge_session_filter_smoke(monkeypatch):

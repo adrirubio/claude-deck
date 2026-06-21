@@ -9,16 +9,18 @@ def test_discover_agent_sessions_returns_mixed_providers():
     tmux_output = "\n".join([
         "claudeproj:0.0|claudeproj|main|%1|/repo/a|111|claude",
         "codexproj:0.0|codexproj|main|%2|/repo/b|222|codex",
-        "shell:0.0|shell|main|%3|/repo/c|333|bash",
+        "copilotproj:0.0|copilotproj|main|%3|/repo/c|333|copilot",
+        "shell:0.0|shell|main|%4|/repo/d|444|bash",
     ])
 
     with patch("app.services.agent_bridge.discovery.subprocess.run") as run:
         run.return_value = SimpleNamespace(returncode=0, stdout=tmux_output, stderr="")
         sessions = discover_agent_sessions()
 
-    assert [session["provider"] for session in sessions] == ["claude-code", "codex-cli"]
+    assert [session["provider"] for session in sessions] == ["claude-code", "codex-cli", "copilot-cli"]
     assert sessions[0]["provider_display_name"] == "Claude Code"
     assert sessions[1]["provider_display_name"] == "Codex"
+    assert sessions[2]["provider_display_name"] == "GitHub Copilot CLI"
 
 
 def test_discover_agent_sessions_can_filter_provider():
@@ -27,6 +29,7 @@ def test_discover_agent_sessions_can_filter_provider():
     tmux_output = "\n".join([
         "claudeproj:0.0|claudeproj|main|%1|/repo/a|111|claude",
         "codexproj:0.0|codexproj|main|%2|/repo/b|222|codex",
+        "copilotproj:0.0|copilotproj|main|%3|/repo/c|333|copilot",
     ])
 
     with patch("app.services.agent_bridge.discovery.subprocess.run") as run:
@@ -35,4 +38,3 @@ def test_discover_agent_sessions_can_filter_provider():
 
     assert len(sessions) == 1
     assert sessions[0]["provider"] == "codex-cli"
-

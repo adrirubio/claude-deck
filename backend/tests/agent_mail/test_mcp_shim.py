@@ -258,6 +258,54 @@ def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
     ]
 
 
+def test_copilot_hook_shim_emits_additional_context(monkeypatch, capsys):
+    import mcp_shim.agent_mail_hook as hook
+
+    body = {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "Check Agent Mail now.",
+        }
+    }
+    posts = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return body
+
+    def fake_post(url, **kwargs):
+        posts.append((url, kwargs["json"]))
+        return FakeResponse()
+
+    monkeypatch.setattr(hook.httpx, "post", fake_post)
+    monkeypatch.setattr(
+        hook.sys,
+        "argv",
+        [
+            "agent_mail_hook.py",
+            "--deck-url",
+            "http://deck",
+            "--event",
+            "user-prompt-submit",
+            "--provider",
+            "copilot-cli",
+        ],
+    )
+    monkeypatch.setattr(hook.sys, "stdin", StringIO('{"sessionId":"s1","cwd":"/repo"}'))
+    monkeypatch.setattr(hook.os, "getcwd", lambda: "/fallback")
+    monkeypatch.setattr(hook.os, "getppid", lambda: 123)
+
+    assert hook.main() == 0
+
+    output = capsys.readouterr().out.strip()
+    assert json.loads(output) == {"additionalContext": "Check Agent Mail now."}
+    assert posts[0][1]["session_id"] == "s1"
+    assert posts[0][1]["provider"] == "copilot-cli"
+
+
 def test_codex_hook_shim_suppresses_empty_backend_response(monkeypatch, capsys):
     import mcp_shim.agent_mail_hook as hook
 

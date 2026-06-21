@@ -1,6 +1,6 @@
 # Agent Mail
 
-Agent Mail lets local Claude Code and Codex CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
+Agent Mail lets local Claude Code, Codex CLI, and GitHub Copilot CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
 
 ## What It Is For
 
@@ -19,15 +19,17 @@ Claude Code gets both MCP tools and command hooks:
 
 Codex CLI gets the MCP server through `codex mcp add` and lifecycle hooks for session registration, activity updates, and inbox reminders. Codex agents should still check their inbox through the MCP tools when starting and finishing work because hook delivery is a reminder path, not a replacement for agent action.
 
+GitHub Copilot CLI gets the MCP server through `copilot mcp add` and user-level hook JSON for session registration, activity updates, and idle inbox reminders.
+
 ## Delivery Nudges
 
-When a message is delivered to a reachable Claude Code or Codex member, Claude Deck tries to wake it with an inbox-check prompt. The automatic nudge is best-effort and throttled per recipient, so rapid message bursts do not keep injecting prompts into the same session. The **Queue inbox check** button remains available for a manual retry when the UI shows unread or pending mail.
+When a message is delivered to a reachable Claude Code, Codex, or Copilot member, Claude Deck tries to wake it with an inbox-check prompt. The automatic nudge is best-effort and throttled per recipient, so rapid message bursts do not keep injecting prompts into the same session. The **Queue inbox check** button remains available for a manual retry when the UI shows unread or pending mail.
 
 Claude Deck uses one visible wake path:
 
 - tmux-observed sessions can be nudged through Agent Bridge by sending text and `Enter` to the pane.
 
-Non-tmux Claude Code and Codex sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a provider hook boundary. Agents should call `deck_check_inbox` before major work and after finishing a task.
+Non-tmux Claude Code, Codex, and Copilot sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a provider hook boundary. Agents should call `deck_check_inbox` before major work and after finishing a task.
 
 ## External Local Callers
 
@@ -38,7 +40,7 @@ See [External Agent Orchestration](./external-agent-orchestration.md) for token 
 ## Setup Checklist
 
 1. Open **Agent Mail** in Claude Deck.
-2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, or both.
+2. Use the **Install** tab to install the integration for Claude Code, Codex CLI, GitHub Copilot CLI, or any combination of them.
 3. Restart or resume the affected agent sessions so their MCP configuration is loaded.
 4. Have each agent call `deck_whoami` once from its repository.
 5. Ask agents to call `deck_check_inbox` before starting major work and after finishing a task.
@@ -59,6 +61,7 @@ Open **Agent Mail** in Claude Deck and use the **Install** tab.
 
 - Claude Code install adds user-scope command hooks and a user-scope MCP server.
 - Codex install runs the Codex CLI MCP installer and writes Agent Mail lifecycle hooks.
+- Copilot install runs the Copilot CLI MCP installer and writes a managed user-level hook file.
 - Install and uninstall actions require confirmation and attempt a backup before mutating config.
 
-The Install tab also shows manual Codex snippets for config and `AGENTS.md`.
+The Install tab also shows manual Codex snippets and Copilot fallback commands/hook JSON.

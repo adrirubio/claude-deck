@@ -36,13 +36,14 @@ import {
   BACKUP_SCOPES,
   formatBytes,
 } from "@/types/backup";
+import type { AgentProviderId } from "@/types/providers";
 
 interface BackupWizardProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate: (backup: BackupCreate) => Promise<Backup>;
   currentProjectPath?: string;
-  providerId?: "claude-code" | "codex-cli";
+  providerId?: AgentProviderId;
 }
 
 const STEPS = [

@@ -22,7 +22,7 @@ def _read_payload() -> dict[str, Any]:
 
 
 def _session_id(payload: dict[str, Any]) -> str:
-    for key in ("session_id", "thread_id", "conversation_id"):
+    for key in ("session_id", "sessionId", "thread_id", "threadId", "conversation_id", "conversationId"):
         value = payload.get(key)
         if value:
             return str(value)
@@ -33,6 +33,18 @@ def _write_hook_output(body: dict[str, Any]) -> None:
     if not body:
         return
     print(json.dumps(body, separators=(",", ":")))
+
+
+def _provider_hook_output(provider: str, body: dict[str, Any]) -> dict[str, Any]:
+    if provider != "copilot-cli":
+        return body
+    hook_output = body.get("hookSpecificOutput")
+    if not isinstance(hook_output, dict):
+        return body
+    context = hook_output.get("additionalContext")
+    if not context:
+        return {}
+    return {"additionalContext": context}
 
 
 def _env_int(name: str) -> int | None:
@@ -75,7 +87,7 @@ def main() -> int:
     except Exception:
         return 0
 
-    _write_hook_output(body)
+    _write_hook_output(_provider_hook_output(args.provider, body))
     return 0
 
 

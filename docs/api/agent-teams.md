@@ -1,6 +1,6 @@
 # Agent Teams API
 
-Saved rosters for launching or reusing local Claude Code and Codex CLI sessions.
+Saved rosters for launching or reusing local Claude Code, Codex CLI, and GitHub Copilot CLI sessions.
 
 ## Presets
 
@@ -42,6 +42,8 @@ POST /api/v1/agent-teams/presets
   ]
 }
 ```
+
+Slots also accept `"provider": "copilot-cli"` for GitHub Copilot CLI launch/reuse workflows.
 
 ### Create From Current State
 

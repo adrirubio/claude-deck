@@ -1,4 +1,4 @@
-export type AgentTeamProvider = 'claude-code' | 'codex-cli'
+export type AgentTeamProvider = 'claude-code' | 'codex-cli' | 'copilot-cli'
 export type AgentTeamLaunchAction = 'reuse' | 'spawn' | 'skip' | 'blocked'
 export type AgentTeamLaunchStatus =
   | 'ready'

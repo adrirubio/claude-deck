@@ -39,6 +39,13 @@ class SpawnCommandOptions:
     aws_region: str | None = None
     aws_profile: str | None = None
     bedrock_model: str | None = None
+    agent: str | None = None
+    context_tier: str | None = None
+    reasoning_effort: str | None = None
+    plan: bool = False
+    remote: bool | None = None
+    allow_all: bool = False
+    no_ask_user: bool = False
 
 
 def argv0_name(command: str) -> str:

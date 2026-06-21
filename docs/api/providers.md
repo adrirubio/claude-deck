@@ -10,7 +10,7 @@ Provider endpoints expose installed agent CLI metadata, capabilities, diagnostic
 GET /api/v1/providers
 ```
 
-Returns registered providers such as `claude-code` and `codex-cli`, including install status, version, capabilities, and config paths.
+Returns registered providers such as `claude-code`, `codex-cli`, and `copilot-cli`, including install status, version, capabilities, and config paths.
 
 Capability flags are stable booleans. Unsupported provider surfaces are returned as `false`; detailed provider-specific state belongs in metadata fields such as backup policy, diagnostics, inventory, or command status.
 

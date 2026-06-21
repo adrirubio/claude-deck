@@ -109,6 +109,20 @@ export function uninstallCodexAgentMail(): Promise<AgentMailInstallStatus> {
   })
 }
 
+export function applyCopilotAgentMailInstall(): Promise<AgentMailInstallStatus> {
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/copilot/apply', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true }),
+  })
+}
+
+export function uninstallCopilotAgentMail(): Promise<AgentMailInstallStatus> {
+  return apiClient<AgentMailInstallStatus>('agent-mail/install/copilot/uninstall', {
+    method: 'POST',
+    body: JSON.stringify({ confirmed: true }),
+  })
+}
+
 export function fetchAgentMailSnippets(): Promise<AgentMailSnippets> {
   return apiClient<AgentMailSnippets>('agent-mail/install/snippets')
 }

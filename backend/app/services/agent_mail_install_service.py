@@ -1,4 +1,4 @@
-"""Install Agent Mail integration into Claude Code and Codex."""
+"""Install Agent Mail integration into supported local agent CLIs."""
 import json
 import logging
 import shlex
@@ -20,6 +20,7 @@ from app.models.schemas import (
 )
 from app.services.hook_service import HookService
 from app.services.mcp_service import MCPService
+from app.services.providers.copilot_cli import get_copilot_home
 from app.services.providers.codex_cli import get_codex_home
 from app.utils.path_utils import get_claude_user_config_file, get_claude_user_settings_file
 
@@ -40,6 +41,13 @@ MAIL_HOOK_EVENTS = {
 CODEX_MAIL_HOOK_EVENTS = {
     "SessionStart": "session-start",
     "UserPromptSubmit": "user-prompt-submit",
+}
+COPILOT_MAIL_HOOK_EVENTS = {
+    "sessionStart": "session-start",
+    "userPromptSubmitted": "user-prompt-submit",
+    "sessionEnd": "session-end",
+    "postToolUse": "post-tool-use",
+    "notification": "user-prompt-submit",
 }
 
 _HOOK_URL_MARKER = "/api/v1/agent-mail/hooks/"
@@ -70,7 +78,11 @@ def codex_hooks_path() -> Path:
     return get_codex_home() / "hooks.json"
 
 
-def codex_hook_command(slug: str) -> str:
+def copilot_hooks_path() -> Path:
+    return get_copilot_home() / "hooks" / f"{MCP_SERVER_NAME}.json"
+
+
+def provider_hook_command(provider: str, slug: str) -> str:
     return " ".join(
         [
             shlex.quote(sys.executable),
@@ -78,11 +90,19 @@ def codex_hook_command(slug: str) -> str:
             "--deck-url",
             shlex.quote(deck_base_url()),
             "--provider",
-            "codex-cli",
+            shlex.quote(provider),
             "--event",
             shlex.quote(slug),
         ]
     )
+
+
+def codex_hook_command(slug: str) -> str:
+    return provider_hook_command("codex-cli", slug)
+
+
+def copilot_hook_command(slug: str) -> str:
+    return provider_hook_command("copilot-cli", slug)
 
 
 def _installed_mail_hooks() -> list:
@@ -141,6 +161,29 @@ def _load_codex_hooks_doc() -> dict:
 
 def _write_codex_hooks_doc(doc: dict) -> None:
     path = codex_hooks_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _load_copilot_hooks_doc() -> dict:
+    path = copilot_hooks_path()
+    if not path.exists():
+        return {"hooks": {}}
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            doc = json.load(file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read Copilot hooks file: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ValueError("Copilot hooks file must contain a JSON object")
+    hooks = doc.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("Copilot hooks file field 'hooks' must be a JSON object")
+    return doc
+
+
+def _write_copilot_hooks_doc(doc: dict) -> None:
+    path = copilot_hooks_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -215,6 +258,43 @@ def _codex_hook_matches_event(hook: object, slug: str) -> bool:
     return False
 
 
+def _copilot_hook_entry(event: str, slug: str) -> dict:
+    entry = {
+        "type": "command",
+        "command": copilot_hook_command(slug),
+        "timeoutSec": 2,
+    }
+    if event == "notification":
+        entry["matcher"] = "agent_idle"
+    return entry
+
+
+def _copilot_hook_entry_is_current(entry: object, event: str, slug: str) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("type") != "command":
+        return False
+    if entry.get("matcher") != ("agent_idle" if event == "notification" else None):
+        return False
+    return _codex_hook_matches_event(entry, slug)
+
+
+def installed_copilot_hooks() -> list[str]:
+    try:
+        doc = _load_copilot_hooks_doc()
+    except ValueError:
+        return []
+    hooks = doc.get("hooks", {})
+    installed = []
+    for event, slug in COPILOT_MAIL_HOOK_EVENTS.items():
+        entries = hooks.get(event, [])
+        if isinstance(entries, list) and any(
+            _copilot_hook_entry_is_current(entry, event, slug) for entry in entries
+        ):
+            installed.append(event)
+    return sorted(installed)
+
+
 def installed_codex_hooks() -> list[str]:
     try:
         doc = _load_codex_hooks_doc()
@@ -242,8 +322,23 @@ def _codex_executor():
         return None
 
 
+def _copilot_executor():
+    try:
+        from app.services.cli_executor import ProviderCLIExecutor
+
+        executor = ProviderCLIExecutor("copilot-cli")
+        return executor if executor.binary_path else None
+    except Exception as exc:
+        logger.debug("copilot executor unavailable: %s", exc)
+        return None
+
+
 def codex_cli_available() -> bool:
     return _codex_executor() is not None
+
+
+def copilot_cli_available() -> bool:
+    return _copilot_executor() is not None
 
 
 def codex_mcp_installed() -> bool:
@@ -258,6 +353,22 @@ def codex_mcp_installed() -> bool:
         return False
 
 
+def copilot_mcp_installed() -> bool:
+    executor = _copilot_executor()
+    if executor is None:
+        return False
+    try:
+        result = executor.execute("mcp", ["list", "--json"], timeout=30)
+        if result.exit_code != 0:
+            return False
+        data = json.loads(result.stdout or "{}")
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        return isinstance(servers, dict) and MCP_SERVER_NAME in servers
+    except Exception as exc:
+        logger.debug("copilot mcp list failed: %s", exc)
+        return False
+
+
 async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
     try:
         backup_dir = Path.home() / ".claude-registry" / "backups"
@@ -269,6 +380,11 @@ async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
             paths = [
                 get_codex_home() / "config.toml",
                 codex_hooks_path(),
+            ]
+        elif scope == "copilot":
+            paths = [
+                get_copilot_home() / "mcp-config.json",
+                copilot_hooks_path(),
             ]
         else:
             paths = [
@@ -323,6 +439,10 @@ async def get_install_status() -> AgentMailInstallStatus:
     missing = [event for event in MAIL_HOOK_EVENTS if event not in installed_events]
     codex_hook_events = installed_codex_hooks()
     codex_missing = [event for event in CODEX_MAIL_HOOK_EVENTS if event not in codex_hook_events]
+    copilot_hook_events = installed_copilot_hooks()
+    copilot_missing = [
+        event for event in COPILOT_MAIL_HOOK_EVENTS if event not in copilot_hook_events
+    ]
     server = await mcp_service.get_server(MCP_SERVER_NAME, "user")
     return AgentMailInstallStatus(
         claude_code_hooks=installed_events,
@@ -332,6 +452,10 @@ async def get_install_status() -> AgentMailInstallStatus:
         codex_mcp_installed=codex_mcp_installed(),
         codex_hooks=codex_hook_events,
         codex_hooks_missing=codex_missing,
+        copilot_cli_available=copilot_cli_available(),
+        copilot_mcp_installed=copilot_mcp_installed(),
+        copilot_hooks=copilot_hook_events,
+        copilot_hooks_missing=copilot_missing,
         curl_available=shutil.which("curl") is not None,
         shim_path=shim_path(),
         python_path=sys.executable,
@@ -339,6 +463,7 @@ async def get_install_status() -> AgentMailInstallStatus:
         claude_settings_path=str(get_claude_user_settings_file()),
         claude_mcp_config_path=str(get_claude_user_config_file()),
         codex_hooks_path=str(codex_hooks_path()),
+        copilot_hooks_path=str(copilot_hooks_path()),
     )
 
 
@@ -431,6 +556,53 @@ async def uninstall_codex(db: AsyncSession) -> AgentMailInstallStatus:
     return await get_install_status()
 
 
+async def apply_copilot_install(db: AsyncSession) -> AgentMailInstallStatus:
+    executor = _copilot_executor()
+    if executor is None:
+        raise ValueError("GitHub Copilot CLI is not available on this machine")
+    await _backup_before_mutation(db, "copilot")
+    if not copilot_mcp_installed():
+        args = [
+            "add",
+            "--env",
+            f"CLAUDE_DECK_URL={deck_base_url()}",
+            "--env",
+            "CLAUDE_DECK_PROVIDER=copilot-cli",
+            "--json",
+            MCP_SERVER_NAME,
+            "--",
+            sys.executable,
+            shim_path(),
+        ]
+        result = executor.execute("mcp", args, timeout=30)
+        if result.exit_code != 0:
+            raise ValueError(f"copilot mcp add failed: {(result.stderr or '')[:300]}")
+    doc = {"version": 1, "hooks": {}}
+    hooks = doc["hooks"]
+    for event, slug in COPILOT_MAIL_HOOK_EVENTS.items():
+        hooks[event] = [_copilot_hook_entry(event, slug)]
+    _write_copilot_hooks_doc(doc)
+    return await get_install_status()
+
+
+async def uninstall_copilot(db: AsyncSession) -> AgentMailInstallStatus:
+    executor = _copilot_executor()
+    should_backup = (
+        (executor is not None and copilot_mcp_installed())
+        or copilot_hooks_path().exists()
+        or bool(installed_copilot_hooks())
+    )
+    if should_backup:
+        await _backup_before_mutation(db, "copilot")
+    if executor is not None and copilot_mcp_installed():
+        executor.execute("mcp", ["remove", MCP_SERVER_NAME], timeout=30)
+    try:
+        copilot_hooks_path().unlink()
+    except FileNotFoundError:
+        pass
+    return await get_install_status()
+
+
 def get_snippets() -> AgentMailSnippets:
     toml = (
         f"[mcp_servers.{MCP_SERVER_NAME}]\n"
@@ -446,4 +618,37 @@ def get_snippets() -> AgentMailSnippets:
         "- Use `deck_request_context` to ask another repo's agent a question, and\n"
         "  `deck_create_handoff` to hand work over.\n"
     )
-    return AgentMailSnippets(codex_config_toml=toml, codex_agents_md=agents_md)
+    copilot_command = (
+        " ".join(
+            [
+                "copilot",
+                "mcp",
+                "add",
+                "--env",
+                shlex.quote(f"CLAUDE_DECK_URL={deck_base_url()}"),
+                "--env",
+                "CLAUDE_DECK_PROVIDER=copilot-cli",
+                MCP_SERVER_NAME,
+                "--",
+                shlex.quote(sys.executable),
+                shlex.quote(shim_path()),
+            ]
+        )
+    )
+    copilot_hooks_json = json.dumps(
+        {
+            "version": 1,
+            "hooks": {
+                event: [_copilot_hook_entry(event, slug)]
+                for event, slug in COPILOT_MAIL_HOOK_EVENTS.items()
+            },
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    return AgentMailSnippets(
+        codex_config_toml=toml,
+        codex_agents_md=agents_md,
+        copilot_mcp_command=copilot_command,
+        copilot_hooks_json=copilot_hooks_json,
+    )

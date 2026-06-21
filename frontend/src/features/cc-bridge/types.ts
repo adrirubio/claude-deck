@@ -52,6 +52,13 @@ export interface SpawnSessionRequest {
   aws_region?: string
   aws_profile?: string
   bedrock_model?: string
+  agent?: string
+  context_tier?: string
+  reasoning_effort?: string
+  plan?: boolean
+  remote?: boolean
+  allow_all?: boolean
+  no_ask_user?: boolean
 }
 
 export interface SpawnSessionResponse {

@@ -56,6 +56,11 @@ const CODEX_MODE_OPTIONS: { value: Mode; label: string }[] = [
   { value: 'fork', label: 'Fork' },
 ]
 
+const COPILOT_MODE_OPTIONS: { value: Mode; label: string }[] = [
+  { value: 'plain', label: 'New' },
+  { value: 'resume', label: 'Resume' },
+]
+
 const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
 const DEFAULT_SELECT_VALUE = '__default__'
 const CUSTOM_SELECT_VALUE = '__custom__'
@@ -136,6 +141,13 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [dangerousBypass, setDangerousBypass] = useState(false)
   const [codexSessionId, setCodexSessionId] = useState('')
   const [useLast, setUseLast] = useState(true)
+  const [copilotAgent, setCopilotAgent] = useState('')
+  const [copilotContextTier, setCopilotContextTier] = useState('')
+  const [copilotEffort, setCopilotEffort] = useState('')
+  const [copilotPlan, setCopilotPlan] = useState(false)
+  const [copilotRemote, setCopilotRemote] = useState(false)
+  const [copilotAllowAll, setCopilotAllowAll] = useState(false)
+  const [copilotNoAskUser, setCopilotNoAskUser] = useState(false)
   const [platform, setPlatform] = useState<Platform>('anthropic')
   const [awsRegion, setAwsRegion] = useState('')
   const [awsProfile, setAwsProfile] = useState('')
@@ -153,15 +165,18 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
 
   const { listSessions } = useSessionsApi()
   const { projects, activeProject } = useProjectContext()
+  const isClaude = provider === 'claude-code'
   const isCodex = provider === 'codex-cli'
-  const isBedrock = platform === 'bedrock'
+  const isCopilot = provider === 'copilot-cli'
+  const supportsPlatform = isClaude || isCodex
+  const isBedrock = supportsPlatform && platform === 'bedrock'
   const defaultPlatformLabel = isCodex ? 'OpenAI' : 'Anthropic'
   const bedrockHelpText = isCodex
     ? 'Codex uses Amazon Bedrock for this session. Credentials resolve from your shell or AWS config.'
     : 'Uses AWS credentials from the server environment. Region is usually required.'
   const bedrockModelLabel = isCodex ? 'Bedrock model ID (optional)' : 'Model ARN / ID (optional)'
   const bedrockModelPlaceholder = isCodex ? 'openai.gpt-5.5' : 'arn:aws:bedrock:...'
-  const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
+  const modeOptions = isCopilot ? COPILOT_MODE_OPTIONS : isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
   const filteredProjects = useMemo(
     () => projects.filter((project) => matchesProjectSearch(project, projectSearch)),
     [projects, projectSearch],
@@ -294,7 +309,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
-    if (mode !== 'resume' || isCodex) return
+    if (mode !== 'resume' || !isClaude) return
     let cancelled = false
     setSelectedSession(null)
     setRecentSessions([])
@@ -313,7 +328,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       .catch(() => { if (!cancelled) setRecentSessions([]) })
       .finally(() => { if (!cancelled) setLoadingSessions(false) })
     return () => { cancelled = true }
-  }, [mode, isCodex, listSessions, resumeProjectFolder])
+  }, [mode, isClaude, listSessions, resumeProjectFolder])
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -336,6 +351,13 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       setDangerousBypass(false)
       setCodexSessionId('')
       setUseLast(true)
+      setCopilotAgent('')
+      setCopilotContextTier('')
+      setCopilotEffort('')
+      setCopilotPlan(false)
+      setCopilotRemote(false)
+      setCopilotAllowAll(false)
+      setCopilotNoAskUser(false)
       setError(null)
       setSelectedSession(null)
       setRecentSessions([])
@@ -350,7 +372,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (isCodex && (mode === 'resume' || mode === 'fork')) {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
-    if (!isCodex && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
+    if (isCopilot && mode === 'resume') {
+      return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
+    }
+    if (isClaude && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
     return directory.trim().length > 0
   })()
 
@@ -359,18 +384,20 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     setSubmitting(true)
 
     try {
-      try {
-        localStorage.setItem(
-          PLATFORM_STORAGE_KEY,
-          JSON.stringify({
-            platform,
-            aws_region: awsRegion,
-            aws_profile: awsProfile,
-            bedrock_model: bedrockModel,
-          }),
-        )
-      } catch {
-        // Persisting the platform preference is best-effort; ignore storage failures.
+      if (supportsPlatform) {
+        try {
+          localStorage.setItem(
+            PLATFORM_STORAGE_KEY,
+            JSON.stringify({
+              platform,
+              aws_region: awsRegion,
+              aws_profile: awsProfile,
+              bedrock_model: bedrockModel,
+            }),
+          )
+        } catch {
+          // Persisting the platform preference is best-effort; ignore storage failures.
+        }
       }
       const request: SpawnSessionRequest = {
         provider,
@@ -383,7 +410,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         }),
         ...(provider === 'claude-code' && skipPermissions && { skip_permissions: true }),
         ...(isCodex && prompt.trim() && { prompt: prompt.trim() }),
+        ...(isCopilot && prompt.trim() && { prompt: prompt.trim() }),
         ...(isCodex && !isBedrock && model.trim() && { model: model.trim() }),
+        ...(isCopilot && model.trim() && { model: model.trim() }),
         ...(isCodex && profile.trim() && { profile: profile.trim() }),
         ...(isCodex && sandbox && { sandbox }),
         ...(isCodex && approvalPolicy && { approval_policy: approvalPolicy }),
@@ -394,6 +423,17 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
+        ...(isCopilot && mode === 'resume' && {
+          use_last: useLast,
+          ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
+        }),
+        ...(isCopilot && copilotAgent.trim() && { agent: copilotAgent.trim() }),
+        ...(isCopilot && copilotContextTier && { context_tier: copilotContextTier }),
+        ...(isCopilot && copilotEffort && { reasoning_effort: copilotEffort }),
+        ...(isCopilot && copilotPlan && { plan: true }),
+        ...(isCopilot && copilotRemote && { remote: true }),
+        ...(isCopilot && copilotAllowAll && { allow_all: true }),
+        ...(isCopilot && copilotNoAskUser && { no_ask_user: true }),
         ...(isBedrock && { platform: 'bedrock' as const }),
         ...(isBedrock && awsRegion.trim() && { aws_region: awsRegion.trim() }),
         ...(isBedrock && awsProfile.trim() && { aws_profile: awsProfile.trim() }),
@@ -433,6 +473,13 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                 setCustomModel(false)
                 setProfile('')
                 setCustomProfile(false)
+                setCopilotAgent('')
+                setCopilotContextTier('')
+                setCopilotEffort('')
+                setCopilotPlan(false)
+                setCopilotRemote(false)
+                setCopilotAllowAll(false)
+                setCopilotNoAskUser(false)
                 setError(null)
               }}
             >
@@ -545,18 +592,20 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Platform</Label>
-            <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="anthropic">{defaultPlatformLabel} (default)</SelectItem>
-                <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {supportsPlatform && (
+            <div className="space-y-1.5">
+              <Label>Platform</Label>
+              <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="anthropic">{defaultPlatformLabel} (default)</SelectItem>
+                  <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {isBedrock && (
             <div className="space-y-3 rounded-md border border-border p-3">
@@ -579,7 +628,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           )}
 
           {/* Worktree name (only in worktree mode) */}
-          {!isCodex && mode === 'worktree' && (
+          {isClaude && mode === 'worktree' && (
             <div className="space-y-1.5">
               <Label htmlFor="worktree-name">Worktree Name</Label>
               <Input
@@ -595,7 +644,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           )}
 
           {/* Resume session picker */}
-          {!isCodex && mode === 'resume' && (
+          {isClaude && mode === 'resume' && (
             <div className="space-y-1.5">
               <Label>Recent Sessions</Label>
               {loadingSessions ? (
@@ -640,7 +689,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {isCodex && (mode === 'resume' || mode === 'fork') && (
+          {(isCodex || isCopilot) && (mode === 'resume' || mode === 'fork') && (
             <div className="space-y-2">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -649,12 +698,12 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   onCheckedChange={(checked) => setUseLast(checked === true)}
                 />
                 <Label htmlFor="codex-use-last" className="cursor-pointer">
-                  Use last Codex session
+                  Use last {isCopilot ? 'Copilot' : 'Codex'} session
                 </Label>
               </div>
               {!useLast && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="codex-session-id">Codex Session ID</Label>
+                  <Label htmlFor="codex-session-id">{isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
                   <Input
                     id="codex-session-id"
                     value={codexSessionId}
@@ -761,7 +810,90 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {!isCodex && (
+          {isCopilot && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="copilot-model">Model</Label>
+                <Input
+                  id="copilot-model"
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  placeholder="Default"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="copilot-agent">Custom agent</Label>
+                <Input
+                  id="copilot-agent"
+                  value={copilotAgent}
+                  onChange={(event) => setCopilotAgent(event.target.value)}
+                  placeholder="Default"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Context</Label>
+                <Select
+                  value={copilotContextTier || 'default'}
+                  onValueChange={(value) => setCopilotContextTier(value === 'default' ? '' : value)}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default</SelectItem>
+                    <SelectItem value="long_context">Long context</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Reasoning effort</Label>
+                <Select
+                  value={copilotEffort || 'default'}
+                  onValueChange={(value) => setCopilotEffort(value === 'default' ? '' : value)}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="xhigh">XHigh</SelectItem>
+                    <SelectItem value="max">Max</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="copilot-prompt">Initial Prompt</Label>
+                <Input
+                  id="copilot-prompt"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="Optional prompt"
+                />
+              </div>
+              <div className="col-span-2 grid gap-2">
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="copilot-plan" checked={copilotPlan} onCheckedChange={(checked) => setCopilotPlan(checked === true)} />
+                  <Label htmlFor="copilot-plan" className="cursor-pointer">Start in plan mode</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="copilot-remote" checked={copilotRemote} onCheckedChange={(checked) => setCopilotRemote(checked === true)} />
+                  <Label htmlFor="copilot-remote" className="cursor-pointer">Enable Copilot remote control</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="copilot-allow-all" checked={copilotAllowAll} onCheckedChange={(checked) => setCopilotAllowAll(checked === true)} />
+                  <Label htmlFor="copilot-allow-all" className="cursor-pointer text-destructive">Allow all tools, paths, and URLs</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="copilot-no-ask" checked={copilotNoAskUser} onCheckedChange={(checked) => setCopilotNoAskUser(checked === true)} />
+                  <Label htmlFor="copilot-no-ask" className="cursor-pointer">Do not ask the user during automation</Label>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isClaude && (
             <div className="space-y-1">
               <div className="flex items-center space-x-2">
                 <Checkbox

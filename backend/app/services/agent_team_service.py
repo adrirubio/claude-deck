@@ -389,7 +389,7 @@ class AgentTeamService:
         discovered = self._discover_sessions()
         install_status = await agent_mail_install_service.get_install_status()
         reuse_group_counts = self._reuse_group_counts(slots)
-        unsafe_resume_last_slot_ids = self._unsafe_codex_resume_last_slot_ids(slots)
+        unsafe_resume_last_slot_ids = self._unsafe_resume_last_slot_ids(slots)
 
         items: list[AgentTeamLaunchPlanItem] = []
         used_matching_sessions: set[str] = set()
@@ -410,7 +410,7 @@ class AgentTeamService:
                 matching,
                 install_status,
                 unsafe_spawn_reason=(
-                    self._codex_resume_last_block_reason()
+                    self._resume_last_block_reason(slot.provider)
                     if matching is None and slot.id in unsafe_resume_last_slot_ids
                     else None
                 ),
@@ -661,7 +661,11 @@ class AgentTeamService:
 
         if block_code is None and unsafe_spawn_reason:
             reasons.append(unsafe_spawn_reason)
-            block_code = "unsafe_codex_resume_last"
+            block_code = (
+                "unsafe_copilot_continue"
+                if slot.provider == "copilot-cli"
+                else "unsafe_codex_resume_last"
+            )
 
         if block_code is None:
             validation_error = self._validate_spawn_options(slot)
@@ -711,12 +715,20 @@ class AgentTeamService:
             if install_status.codex_hooks_missing:
                 return "Codex Agent Mail hooks are missing"
             return None
+        if provider == "copilot-cli":
+            if not getattr(install_status, "copilot_cli_available", False):
+                return "GitHub Copilot CLI is not available on this machine"
+            if not getattr(install_status, "copilot_mcp_installed", False):
+                return "GitHub Copilot CLI Agent Mail MCP is not installed"
+            if getattr(install_status, "copilot_hooks_missing", []):
+                return "GitHub Copilot CLI Agent Mail hooks are missing"
+            return None
         return None
 
-    def _unsafe_codex_resume_last_slot_ids(self, slots: list[AgentTeamSlot]) -> set[int]:
+    def _unsafe_resume_last_slot_ids(self, slots: list[AgentTeamSlot]) -> set[int]:
         groups: dict[tuple[str, str], list[AgentTeamSlot]] = {}
         for slot in slots:
-            if not slot.enabled or not self._is_codex_resume_last_slot(slot):
+            if not slot.enabled or not self._is_resume_last_slot(slot):
                 continue
             key = (slot.provider, slot.repo_id)
             groups.setdefault(key, []).append(slot)
@@ -727,8 +739,8 @@ class AgentTeamService:
             for slot in grouped_slots
         }
 
-    def _is_codex_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
-        if slot.provider != "codex-cli":
+    def _is_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
+        if slot.provider not in {"codex-cli", "copilot-cli"}:
             return False
         if (slot.launch_mode or "plain").strip() != "resume":
             return False
@@ -741,9 +753,10 @@ class AgentTeamService:
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return False
 
-    def _codex_resume_last_block_reason(self) -> str:
+    def _resume_last_block_reason(self, provider: str) -> str:
+        label = "GitHub Copilot CLI --continue" if provider == "copilot-cli" else "Codex resume --last"
         return (
-            "Codex resume --last cannot be used for multiple same-repo team slots. "
+            f"{label} cannot be used for multiple same-repo team slots. "
             "Use fresh/plain sessions, or provide a distinct session_id per slot."
         )
 

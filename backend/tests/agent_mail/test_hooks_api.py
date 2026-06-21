@@ -63,6 +63,27 @@ async def test_codex_hook_registers_with_codex_session_key(client, db, tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_copilot_hook_registers_with_copilot_session_key(client, db, tmp_path):
+    cwd = tmp_path / "myrepo"
+    cwd.mkdir()
+
+    resp = await client.post(
+        "/api/v1/agent-mail/hooks/session-start",
+        json={
+            "provider": "copilot-cli",
+            "session_id": "copilot-session",
+            "cwd": str(cwd),
+            "pid": 123,
+        },
+    )
+
+    assert resp.status_code == 200
+    team = await agent_mail_service.list_team(db)
+    assert team[0].sessions[0].provider == "copilot-cli"
+    assert team[0].sessions[0].session_key == "copilot:copilot-session"
+
+
+@pytest.mark.asyncio
 async def test_codex_hook_session_key_is_team_slot_qualified(client, db, tmp_path):
     cwd = tmp_path / "myrepo"
     cwd.mkdir()

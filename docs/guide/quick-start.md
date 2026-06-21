@@ -44,7 +44,7 @@ Use **Discover Projects** when you want Claude Deck to find projects from local 
 
 ## Switch Providers
 
-Use the provider switcher in the sidebar to move between Claude Code and Codex CLI.
+Use the provider switcher in the sidebar to move between Claude Code, Codex CLI, and GitHub Copilot CLI.
 
 With Codex selected, start with:
 
@@ -74,7 +74,7 @@ The instance name appears in the header, browser tab title, Agent Bridge termina
 | **Hooks** | Configure pre/post tool use automation |
 | **Sessions** | Browse conversation transcripts |
 | **Usage** | View token costs and billing blocks |
-| **Agent Bridge** | Attach to live Claude Code and Codex terminals |
+| **Agent Bridge** | Attach to live Claude Code, Codex, and Copilot terminals |
 
 ## Production Build
 

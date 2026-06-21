@@ -25,6 +25,9 @@ def _ready_install_status():
         codex_cli_available=True,
         codex_mcp_installed=True,
         codex_hooks_missing=[],
+        copilot_cli_available=True,
+        copilot_mcp_installed=True,
+        copilot_hooks_missing=[],
     )
 
 
@@ -187,6 +190,46 @@ async def test_explicit_same_repo_codex_resume_sessions_are_allowed(db, tmp_path
     assert plan.can_launch is True
     assert plan.spawn_count == 2
     assert plan.blocked_count == 0
+
+
+@pytest.mark.asyncio
+async def test_multiple_same_repo_copilot_continue_slots_are_blocked(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Project team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Planner",
+                    provider="copilot-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": True},
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Implementer",
+                    provider="copilot-cli",
+                    repo_path=str(repo),
+                    launch_mode="resume",
+                    launch_options={"use_last": True},
+                ),
+            ],
+        ),
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(reuse_existing=False),
+    )
+
+    assert plan.can_launch is False
+    assert plan.spawn_count == 0
+    assert plan.blocked_count == 2
+    assert {item.block_code for item in plan.items} == {"unsafe_copilot_continue"}
+    assert all("Copilot CLI --continue cannot be used" in item.reasons[0] for item in plan.items)
 
 
 @pytest.mark.asyncio

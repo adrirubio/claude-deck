@@ -2003,6 +2003,10 @@ class AgentMailInstallStatus(BaseModel):
     codex_mcp_installed: bool
     codex_hooks: List[str] = Field(default_factory=list)
     codex_hooks_missing: List[str] = Field(default_factory=list)
+    copilot_cli_available: bool = False
+    copilot_mcp_installed: bool = False
+    copilot_hooks: List[str] = Field(default_factory=list)
+    copilot_hooks_missing: List[str] = Field(default_factory=list)
     curl_available: bool
     shim_path: str
     python_path: str
@@ -2010,11 +2014,14 @@ class AgentMailInstallStatus(BaseModel):
     claude_settings_path: Optional[str] = None
     claude_mcp_config_path: Optional[str] = None
     codex_hooks_path: Optional[str] = None
+    copilot_hooks_path: Optional[str] = None
 
 
 class AgentMailSnippets(BaseModel):
     codex_config_toml: str
     codex_agents_md: str
+    copilot_mcp_command: str = ""
+    copilot_hooks_json: str = ""
 
 
 # --- Agent Team Presets ---

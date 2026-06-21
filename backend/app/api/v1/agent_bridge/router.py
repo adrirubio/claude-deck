@@ -46,6 +46,13 @@ class SpawnRequest(BaseModel):
     aws_region: str | None = None
     aws_profile: str | None = None
     bedrock_model: str | None = None
+    agent: str | None = None
+    context_tier: str | None = None
+    reasoning_effort: str | None = None
+    plan: bool = False
+    remote: bool | None = None
+    allow_all: bool = False
+    no_ask_user: bool = False
 
 
 @router.get("/sessions")
@@ -141,6 +148,13 @@ def spawn_session_endpoint(request: SpawnRequest):
             aws_region=request.aws_region,
             aws_profile=request.aws_profile,
             bedrock_model=request.bedrock_model,
+            agent=request.agent,
+            context_tier=request.context_tier,
+            reasoning_effort=request.reasoning_effort,
+            plan=request.plan,
+            remote=request.remote,
+            allow_all=request.allow_all,
+            no_ask_user=request.no_ask_user,
         )
         return spawn_session(request.provider, options)
     except ValueError as exc:
@@ -150,4 +164,3 @@ def spawn_session_endpoint(request: SpawnRequest):
 @router.delete("/sessions/{target}")
 def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
     return kill_session(session_name=target, cleanup_worktree=cleanup_worktree)
-

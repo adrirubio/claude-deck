@@ -161,6 +161,6 @@ If `wake_state` is `wakeable`, Deck can nudge the visible tmux session when mail
 ## Safeguards
 
 - External actor tokens are distinct from Agent Mail members and are shown by name in the Agent Mail UI.
-- Non-tmux Claude Code and Codex sessions return `delivered_waiting`; they are not falsely reported as woken.
+- Non-tmux Claude Code, Codex, and Copilot sessions return `delivered_waiting`; they are not falsely reported as woken.
 - Per-actor message rate limits return `429` with a `Retry-After` header.
 - This is a local trust boundary, not a general network authentication system.

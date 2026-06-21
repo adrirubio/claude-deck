@@ -8,9 +8,10 @@ def test_provider_registry_contains_initial_providers():
 
     provider_ids = {provider.id for provider in get_providers()}
 
-    assert provider_ids == {"claude-code", "codex-cli"}
+    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli"}
     assert get_provider("claude-code").display_name == "Claude Code"
     assert get_provider("codex-cli").binary_name == "codex"
+    assert get_provider("copilot-cli").binary_name == "copilot"
 
 
 def test_provider_status_includes_central_capability_matrix():
@@ -30,6 +31,10 @@ def test_provider_status_includes_central_capability_matrix():
     assert codex["capability_matrix"]["mcp"]["state"] == "write_capable"
     assert codex["capability_matrix"]["usage"]["state"] == "unsupported"
     assert codex["capability_matrix"]["doctor"]["state"] == "read_only"
+    copilot = get_provider("copilot-cli").get_status()
+    assert copilot["capabilities"]["spawn"] is True
+    assert copilot["capability_matrix"]["mcp"]["state"] == "write_capable"
+    assert copilot["capability_matrix"]["config"]["state"] == "unsupported"
 
 
 def test_provider_capabilities_api_returns_matrix():
@@ -60,4 +65,17 @@ def test_codex_process_detection_matches_node_wrapper_descendant():
 
     with patch("app.services.providers.base.subprocess.run") as run:
         run.return_value = SimpleNamespace(stdout="456 /usr/local/bin/codex\n")
+        assert provider.is_process_match("node", "123") is True
+
+
+def test_copilot_process_detection_matches_binary_and_node_wrapper():
+    from app.services.providers import get_provider
+
+    provider = get_provider("copilot-cli")
+
+    assert provider.is_process_match("copilot", "123") is True
+    assert provider.is_process_match("/usr/local/bin/copilot", "123") is True
+    assert provider.is_process_match("copilot-language-server", "123") is False
+    with patch("app.services.providers.base.subprocess.run") as run:
+        run.return_value = SimpleNamespace(stdout="456 /usr/local/bin/copilot\n")
         assert provider.is_process_match("node", "123") is True

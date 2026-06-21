@@ -130,9 +130,64 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     try {
       const providerId = selectedProviderId;
       const providerDisplayName = selectedProvider?.display_name ?? (
-        providerId === 'codex-cli' ? 'Codex' : 'Claude Code'
+        providerId === 'codex-cli'
+          ? 'Codex'
+          : providerId === 'copilot-cli'
+            ? 'GitHub Copilot CLI'
+            : 'Claude Code'
       );
       const params = { project_path: activeProject?.path };
+
+      if (providerId !== 'claude-code' && providerId !== 'codex-cli') {
+        const warnings: string[] = [];
+        const bridgeSessionsData = await safeFetch(
+          apiClient<AgentBridgeSessionsResponse>(
+            buildEndpoint('agent-bridge/sessions', { provider: providerId }),
+          ),
+          { sessions: [], count: 0 },
+          `${providerDisplayName} live sessions unavailable`,
+          warnings,
+        );
+
+        if (currentFetchId !== fetchId.current) return;
+
+        const unsupportedFeatures = Object.entries(selectedProvider?.capability_matrix ?? {})
+          .filter(([, detail]) => detail?.state === 'unsupported' || detail?.state === 'unknown')
+          .map(([, detail]) => detail?.label)
+          .filter((label): label is string => Boolean(label));
+
+        setStats({
+          providerId,
+          providerDisplayName,
+          mcpServerCount: 0,
+          commandCount: null,
+          agentCount: null,
+          skillCount: null,
+          hookCount: null,
+          pluginCount: null,
+          permissionCount: null,
+          outputStyleCount: null,
+          allowRules: null,
+          denyRules: null,
+          settingsKeys: 0,
+          sessionCount: bridgeSessionsData.count ?? bridgeSessionsData.sessions.length,
+          sessionMetricKind: 'live',
+          sessionsToday: null,
+          sessionsThisWeek: null,
+          mostActiveProject: undefined,
+          totalMessages: null,
+          contextHighestPct: null,
+          contextHighestProject: undefined,
+          contextActiveCount: null,
+          planCount: 0,
+          featureFlagCount: null,
+          enabledFeatureFlagCount: null,
+          unsupportedFeatures,
+          warnings,
+        });
+        setLastFetched(new Date());
+        return;
+      }
 
       if (providerId === 'codex-cli') {
         const warnings: string[] = [];
