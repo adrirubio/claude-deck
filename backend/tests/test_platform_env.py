@@ -63,3 +63,26 @@ def test_bedrock_rejects_null_byte_in_value():
 
     with pytest.raises(ValueError):
         build_platform_env(PLATFORM_BEDROCK, model="bad\x00value")
+
+
+def test_codex_bedrock_only_sets_shared_aws_env():
+    from app.services.providers.platform_env import build_platform_env, PLATFORM_BEDROCK
+
+    env = build_platform_env(
+        PLATFORM_BEDROCK,
+        region="us-east-2",
+        aws_profile="codex-bedrock",
+        model="openai.gpt-5.5",
+        provider_id="codex-cli",
+    )
+
+    assert env == {
+        "AWS_REGION": "us-east-2",
+        "AWS_PROFILE": "codex-bedrock",
+    }
+
+
+def test_codex_bedrock_without_region_or_profile_has_no_env():
+    from app.services.providers.platform_env import build_platform_env, PLATFORM_BEDROCK
+
+    assert build_platform_env(PLATFORM_BEDROCK, provider_id="codex-cli") == {}

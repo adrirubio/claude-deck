@@ -10,6 +10,10 @@ from app.services.providers.base import (
     argv0_name,
     has_binary_descendant,
 )
+from app.services.providers.platform_env import PLATFORM_BEDROCK
+
+
+CODEX_BEDROCK_MODEL_PROVIDER = 'model_provider="amazon-bedrock"'
 
 
 def get_codex_home() -> Path:
@@ -78,8 +82,16 @@ class CodexCliProvider(AgentProvider):
             raise ValueError(f"Unsupported Codex mode: {options.mode}")
 
         command = ["codex", "--cd", options.directory]
-        if options.model:
-            command += ["--model", options.model]
+        if options.platform == PLATFORM_BEDROCK:
+            command += ["--config", CODEX_BEDROCK_MODEL_PROVIDER]
+
+        effective_model = (
+            options.bedrock_model
+            if options.platform == PLATFORM_BEDROCK and options.bedrock_model
+            else options.model
+        )
+        if effective_model:
+            command += ["--model", effective_model]
         if options.profile:
             command += ["--profile", options.profile]
         if options.profile_v2:

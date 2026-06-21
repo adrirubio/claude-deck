@@ -154,6 +154,13 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const { listSessions } = useSessionsApi()
   const { projects, activeProject } = useProjectContext()
   const isCodex = provider === 'codex-cli'
+  const isBedrock = platform === 'bedrock'
+  const defaultPlatformLabel = isCodex ? 'OpenAI' : 'Anthropic'
+  const bedrockHelpText = isCodex
+    ? 'Codex uses Amazon Bedrock for this session. Credentials resolve from your shell or AWS config.'
+    : 'Uses AWS credentials from the server environment. Region is usually required.'
+  const bedrockModelLabel = isCodex ? 'Bedrock model ID (optional)' : 'Model ARN / ID (optional)'
+  const bedrockModelPlaceholder = isCodex ? 'openai.gpt-5.5' : 'arn:aws:bedrock:...'
   const modeOptions = isCodex ? CODEX_MODE_OPTIONS : MODE_OPTIONS
   const filteredProjects = useMemo(
     () => projects.filter((project) => matchesProjectSearch(project, projectSearch)),
@@ -352,12 +359,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     setSubmitting(true)
 
     try {
-      const isBedrock = !isCodex && platform === 'bedrock'
       try {
         localStorage.setItem(
           PLATFORM_STORAGE_KEY,
           JSON.stringify({
-            platform: isCodex ? 'anthropic' : platform,
+            platform,
             aws_region: awsRegion,
             aws_profile: awsProfile,
             bedrock_model: bedrockModel,
@@ -377,7 +383,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         }),
         ...(provider === 'claude-code' && skipPermissions && { skip_permissions: true }),
         ...(isCodex && prompt.trim() && { prompt: prompt.trim() }),
-        ...(isCodex && model.trim() && { model: model.trim() }),
+        ...(isCodex && !isBedrock && model.trim() && { model: model.trim() }),
         ...(isCodex && profile.trim() && { profile: profile.trim() }),
         ...(isCodex && sandbox && { sandbox }),
         ...(isCodex && approvalPolicy && { approval_policy: approvalPolicy }),
@@ -539,6 +545,39 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             />
           </div>
 
+          <div className="space-y-1.5">
+            <Label>Platform</Label>
+            <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="anthropic">{defaultPlatformLabel} (default)</SelectItem>
+                <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {isBedrock && (
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <p className="text-xs text-muted-foreground">
+                {bedrockHelpText}
+              </p>
+              <div className="space-y-1.5">
+                <Label htmlFor="aws-region">AWS Region</Label>
+                <Input id="aws-region" value={awsRegion} onChange={(e) => setAwsRegion(e.target.value)} placeholder="e.g. us-east-1" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="aws-profile">AWS Profile (optional)</Label>
+                <Input id="aws-profile" value={awsProfile} onChange={(e) => setAwsProfile(e.target.value)} placeholder="e.g. bedrock-prod" />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="bedrock-model">{bedrockModelLabel}</Label>
+                <Input id="bedrock-model" value={bedrockModel} onChange={(e) => setBedrockModel(e.target.value)} placeholder={bedrockModelPlaceholder} />
+              </div>
+            </div>
+          )}
+
           {/* Worktree name (only in worktree mode) */}
           {!isCodex && mode === 'worktree' && (
             <div className="space-y-1.5">
@@ -629,33 +668,35 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
 
           {isCodex && (
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="codex-model">Model</Label>
-                <Select value={modelSelectValue} onValueChange={handleModelSelect}>
-                  <SelectTrigger id="codex-model">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_SELECT_VALUE}>{defaultModelLabel}</SelectItem>
-                    {modelOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {formatModelOption(option)}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value={CUSTOM_SELECT_VALUE}>Custom model</SelectItem>
-                  </SelectContent>
-                </Select>
-                {modelSelectValue === CUSTOM_SELECT_VALUE && (
-                  <Input
-                    id="codex-model-custom"
-                    value={model}
-                    onChange={(event) => setModel(event.target.value)}
-                    placeholder="model name"
-                    autoComplete="off"
-                    aria-label="Custom Codex model"
-                  />
-                )}
-              </div>
+              {!isBedrock && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="codex-model">Model</Label>
+                  <Select value={modelSelectValue} onValueChange={handleModelSelect}>
+                    <SelectTrigger id="codex-model">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={DEFAULT_SELECT_VALUE}>{defaultModelLabel}</SelectItem>
+                      {modelOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {formatModelOption(option)}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={CUSTOM_SELECT_VALUE}>Custom model</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {modelSelectValue === CUSTOM_SELECT_VALUE && (
+                    <Input
+                      id="codex-model-custom"
+                      value={model}
+                      onChange={(event) => setModel(event.target.value)}
+                      placeholder="model name"
+                      autoComplete="off"
+                      aria-label="Custom Codex model"
+                    />
+                  )}
+                </div>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="codex-profile">Profile</Label>
                 <Select value={profileSelectValue} onValueChange={handleProfileSelect}>
@@ -716,41 +757,6 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
               <div className="col-span-2 space-y-1.5">
                 <Label htmlFor="codex-prompt">Initial Prompt</Label>
                 <Input id="codex-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional prompt" />
-              </div>
-            </div>
-          )}
-
-          {!isCodex && (
-            <div className="space-y-1.5">
-              <Label>Platform</Label>
-              <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="anthropic">Anthropic (default)</SelectItem>
-                  <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {!isCodex && platform === 'bedrock' && (
-            <div className="space-y-3 rounded-md border border-border p-3">
-              <p className="text-xs text-muted-foreground">
-                Uses AWS credentials from the server environment. Region is usually required.
-              </p>
-              <div className="space-y-1.5">
-                <Label htmlFor="aws-region">AWS Region</Label>
-                <Input id="aws-region" value={awsRegion} onChange={(e) => setAwsRegion(e.target.value)} placeholder="e.g. us-east-1" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="aws-profile">AWS Profile (optional)</Label>
-                <Input id="aws-profile" value={awsProfile} onChange={(e) => setAwsProfile(e.target.value)} placeholder="e.g. bedrock-prod" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bedrock-model">Model ARN / ID (optional)</Label>
-                <Input id="bedrock-model" value={bedrockModel} onChange={(e) => setBedrockModel(e.target.value)} placeholder="arn:aws:bedrock:..." />
               </div>
             </div>
           )}

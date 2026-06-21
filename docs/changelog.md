@@ -2,6 +2,12 @@
 
 All notable changes to Claude Deck are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Added
+
+- Agent Bridge can launch Codex CLI sessions on Amazon Bedrock with a provider-aware platform selector, a per-session Codex `model_provider = "amazon-bedrock"` override, and optional AWS region/profile/model fields.
+
 ## 2.0.1 — 2026-06-20
 
 ### Added

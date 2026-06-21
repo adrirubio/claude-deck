@@ -1,5 +1,6 @@
 """Tests for provider-aware tmux spawning."""
 import json
+import shlex
 from types import SimpleNamespace
 
 
@@ -101,6 +102,46 @@ def test_bedrock_platform_injects_env_flags(monkeypatch, tmp_path):
     assert "CLAUDE_CODE_USE_BEDROCK=1" in argv
     assert "AWS_REGION=us-east-1" in argv
     assert "AWS_PROFILE=bedrock-prod" in argv
+    assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "bedrock"
+
+
+def test_codex_bedrock_platform_sets_config_override_and_aws_env(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "codex-cli",
+        SpawnCommandOptions(
+            directory=str(tmp_path),
+            mode="plain",
+            platform="bedrock",
+            aws_region="us-east-2",
+            aws_profile="codex-bedrock",
+            bedrock_model="openai.gpt-5.5",
+        ),
+    )
+
+    argv = calls[0]
+    assert argv[:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
+    assert "AWS_REGION=us-east-2" in argv
+    assert "AWS_PROFILE=codex-bedrock" in argv
+    assert "CLAUDE_CODE_USE_BEDROCK=1" not in argv
+    assert "ANTHROPIC_MODEL=openai.gpt-5.5" not in argv
+
+    command_parts = shlex.split(argv[-1])
+    assert command_parts[:3] == ["codex", "--cd", str(tmp_path)]
+    assert command_parts[command_parts.index("--config") + 1] == 'model_provider="amazon-bedrock"'
+    assert command_parts[command_parts.index("--model") + 1] == "openai.gpt-5.5"
     assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "bedrock"
 
 
