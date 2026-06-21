@@ -18,7 +18,7 @@ def test_ensure_registered_refreshes_cached_member(monkeypatch):
     monkeypatch.setitem(shim._state, "member_id", 7)
     monkeypatch.setitem(shim._state, "session_key", "mcp:test")
     monkeypatch.setattr(shim.os, "getcwd", lambda: "/tmp/repo")
-    monkeypatch.setattr(shim.os, "getpid", lambda: 1234)
+    monkeypatch.setattr(shim.os, "getppid", lambda: 1234)
 
     def fake_request(method, path, **kwargs):
         requests.append((method, path, kwargs))
@@ -121,6 +121,46 @@ def test_deck_reply_only_uses_answer_for_context_requests(monkeypatch):
     assert posted[0]["kind"] == "message"
 
 
+def test_deck_list_team_uses_cached_roster(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    shim._state["member_id"] = 7
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if path == "/team?sync=false":
+            return {
+                "ok": True,
+                "data": {
+                    "members": [
+                        {
+                            "id": 7,
+                            "display_name": "Planner",
+                            "participant_kind": "team_slot",
+                            "role": "Planner",
+                            "repo_name": "deck",
+                            "status": "connected",
+                            "charter": "Plan work",
+                            "team_preset_name": "Test team",
+                            "team_slot_name": "Planner",
+                        }
+                    ]
+                },
+            }
+        if path.startswith("/agent/inbox"):
+            return {"ok": True, "data": {"unread_count": 0, "pending_count": 0}}
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+
+    result = shim.deck_list_team()
+
+    assert result["ok"] is True
+    assert requests[0][1] == "/team?sync=false"
+
+
 def test_deck_check_inbox_returns_deck_unreachable_on_http_error(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
@@ -157,8 +197,8 @@ def test_mcp_request_uses_short_timeout_and_offline_backoff(monkeypatch):
     assert first["ok"] is False
     assert second["ok"] is False
     assert len(calls) == 1
-    assert calls[0].connect == 0.3
-    assert calls[0].read == 2.0
+    assert calls[0].connect == 0.5
+    assert calls[0].read == 15.0
 
 
 def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):

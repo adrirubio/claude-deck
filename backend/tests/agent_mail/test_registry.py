@@ -154,6 +154,96 @@ async def test_same_repo_team_slots_are_distinct_mail_participants(db, svc, tmp_
 
 
 @pytest.mark.asyncio
+async def test_mcp_registration_infers_slot_from_related_hook_process(
+    db,
+    svc,
+    tmp_path,
+    monkeypatch,
+):
+    cwd = tmp_path / "r"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Planner")
+    slot_member, hook_session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="hook",
+            provider="codex-cli",
+            cwd=str(cwd),
+            session_key="codex:planner",
+            pid=200,
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+    monkeypatch.setattr(svc, "_pids_related", lambda left, right: {left, right} == {300, 200})
+
+    mcp_member, mcp_session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp",
+            provider="codex-cli",
+            cwd=str(cwd),
+            session_key="mcp:planner",
+            pid=300,
+        ),
+    )
+
+    assert mcp_member.id == slot_member.id
+    assert mcp_session.member_id == slot_member.id
+    assert mcp_session.team_preset_id == preset.id
+    assert mcp_session.team_slot_id == slot.id
+    assert hook_session.team_slot_id == slot.id
+
+
+@pytest.mark.asyncio
+async def test_observed_tmux_session_infers_slot_from_related_hook_process(
+    db,
+    svc,
+    tmp_path,
+    monkeypatch,
+):
+    cwd = tmp_path / "r"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Planner")
+    slot_member, _hook_session = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="hook",
+            provider="codex-cli",
+            cwd=str(cwd),
+            session_key="codex:planner",
+            pid=200,
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        ),
+    )
+    monkeypatch.setattr(svc, "_pids_related", lambda left, right: {left, right} == {100, 200})
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "cwd": str(cwd),
+                "pane_id": "%1",
+                "pid": "100",
+                "tmux_target": "planner:0.0",
+            }
+        ],
+    )
+
+    await svc.sync_observed_sessions(db)
+
+    result = await db.execute(
+        select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+    )
+    observed = result.scalar_one()
+    assert observed.member_id == slot_member.id
+    assert observed.team_preset_id == preset.id
+    assert observed.team_slot_id == slot.id
+    assert observed.tmux_target == "planner:0.0"
+
+
+@pytest.mark.asyncio
 async def test_reused_session_key_clears_stale_team_slot_context(db, svc, tmp_path):
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"

@@ -79,6 +79,19 @@ async def _sqlite_has_unique_repo_id_index(conn) -> bool:
     return False
 
 
+async def _sqlite_agent_team_slots_has_unique_preset_repo_index(conn) -> bool:
+    result = await conn.execute(text("PRAGMA index_list(agent_team_slots)"))
+    for row in result.fetchall():
+        index_name = row[1]
+        is_unique = bool(row[2])
+        if not is_unique:
+            continue
+        info = await conn.execute(text(f"PRAGMA index_info({_sqlite_ident(index_name)})"))
+        if [index_row[2] for index_row in info.fetchall()] == ["preset_id", "repo_id"]:
+            return True
+    return False
+
+
 async def _sqlite_rebuild_mail_team_members(conn, columns: set[str]) -> None:
     """Replace the legacy repo-unique table without losing referencing rows."""
     await conn.commit()
@@ -184,6 +197,96 @@ async def _sqlite_rebuild_mail_team_members(conn, columns: set[str]) -> None:
     await conn.commit()
 
 
+async def _sqlite_rebuild_agent_team_slots(conn, columns: set[str]) -> None:
+    """Replace the legacy same-repo-unique slots table without losing slot ids."""
+    await conn.commit()
+    await conn.execute(text("PRAGMA foreign_keys=OFF"))
+    await conn.commit()
+
+    bootstrap_expr = "bootstrap_prompt" if "bootstrap_prompt" in columns else "NULL"
+    launch_mode_expr = "COALESCE(NULLIF(launch_mode, ''), 'plain')" if "launch_mode" in columns else "'plain'"
+    launch_options_expr = "launch_options" if "launch_options" in columns else "NULL"
+    enabled_expr = "COALESCE(enabled, 1)" if "enabled" in columns else "1"
+
+    await conn.execute(text("DROP TABLE IF EXISTS agent_team_slots_new"))
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE agent_team_slots_new (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                preset_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                display_name VARCHAR NOT NULL,
+                provider VARCHAR NOT NULL,
+                repo_id VARCHAR NOT NULL,
+                repo_path VARCHAR NOT NULL,
+                repo_name VARCHAR NOT NULL,
+                role VARCHAR,
+                charter VARCHAR,
+                bootstrap_prompt VARCHAR,
+                launch_mode VARCHAR NOT NULL,
+                launch_options JSON,
+                enabled BOOLEAN NOT NULL,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                FOREIGN KEY(preset_id) REFERENCES agent_team_presets (id) ON DELETE CASCADE
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            f"""
+            INSERT INTO agent_team_slots_new (
+                id,
+                preset_id,
+                position,
+                display_name,
+                provider,
+                repo_id,
+                repo_path,
+                repo_name,
+                role,
+                charter,
+                bootstrap_prompt,
+                launch_mode,
+                launch_options,
+                enabled,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                preset_id,
+                position,
+                display_name,
+                provider,
+                repo_id,
+                repo_path,
+                repo_name,
+                role,
+                charter,
+                {bootstrap_expr},
+                {launch_mode_expr},
+                {launch_options_expr},
+                {enabled_expr},
+                created_at,
+                updated_at
+            FROM agent_team_slots
+            """
+        )
+    )
+    await conn.execute(text("DROP TABLE agent_team_slots"))
+    await conn.execute(text("ALTER TABLE agent_team_slots_new RENAME TO agent_team_slots"))
+    await conn.execute(
+        text("CREATE INDEX ix_agent_team_slots_preset_id ON agent_team_slots (preset_id)")
+    )
+    await conn.execute(text("CREATE INDEX ix_agent_team_slots_repo_id ON agent_team_slots (repo_id)"))
+    await conn.commit()
+    await conn.execute(text("PRAGMA foreign_keys=ON"))
+    await conn.commit()
+
+
 async def _run_sqlite_compat_migrations(conn) -> None:
     columns = await _sqlite_columns(conn, "mail_team_members")
     if columns:
@@ -257,6 +360,9 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
     slot_columns = {row[1] for row in result.fetchall()}
+    if slot_columns and await _sqlite_agent_team_slots_has_unique_preset_repo_index(conn):
+        await _sqlite_rebuild_agent_team_slots(conn, slot_columns)
+        slot_columns = await _sqlite_columns(conn, "agent_team_slots")
     if slot_columns and "bootstrap_prompt" not in slot_columns:
         await conn.execute(
             text("ALTER TABLE agent_team_slots ADD COLUMN bootstrap_prompt VARCHAR")
