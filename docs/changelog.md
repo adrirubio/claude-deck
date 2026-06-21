@@ -11,6 +11,7 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 ### Fixed
 
 - Agent Teams now blocks unsafe multi-slot Codex `resume --last` launches in the same repository and keeps Codex hook session keys distinct per team slot.
+- Agent Mail Compose now labels offline and not-wakeable recipients clearly before storing mail for later delivery.
 
 ## 2.0.1 — 2026-06-20
 
