@@ -43,7 +43,7 @@ async def discover_projects(
     request: ProjectDiscoveryRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """Auto-discover Claude Code projects in the specified path."""
+    """Auto-discover project folders in the specified path."""
     service = ProjectService(db)
     discovered = service.discover_projects(request.base_path)
     return ProjectDiscoveryResponse(discovered=discovered)
