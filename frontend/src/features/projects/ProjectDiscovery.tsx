@@ -1,13 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useProjectContext } from '@/contexts/ProjectContext';
 import type { ProjectBase } from '@/types/projects';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Folder, FolderOpen, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Folder, FolderOpen, ChevronRight, ArrowLeft, Search } from 'lucide-react';
 import { apiClient } from '@/lib/api';
 import { MODAL_SIZES } from '@/lib/constants';
 
@@ -41,6 +42,14 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
   const [browseResult, setBrowseResult] = useState<BrowseResult | null>(null);
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+  const [directoryFilter, setDirectoryFilter] = useState('');
+
+  const filteredDirectories = useMemo(() => {
+    if (!browseResult) return [];
+    const query = directoryFilter.trim().toLowerCase();
+    if (!query) return browseResult.directories;
+    return browseResult.directories.filter((dir) => dir.toLowerCase().includes(query));
+  }, [browseResult, directoryFilter]);
 
   const handleDiscover = async () => {
     if (!searchPath.trim()) {
@@ -53,7 +62,7 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
       const discovered = await discoverProjects(searchPath);
       setDiscoveredProjects(discovered);
       if (discovered.length === 0) {
-        setError('No Claude Code projects found in this directory');
+        setError('No project folders found in this directory');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to discover projects');
@@ -89,6 +98,7 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
         `projects/browse?path=${encodeURIComponent(path)}`
       );
       setBrowseResult(result);
+      setDirectoryFilter('');
     } catch (err) {
       setBrowseError(err instanceof Error ? err.message : 'Failed to read directory');
     } finally {
@@ -113,7 +123,7 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
       <CardHeader>
         <CardTitle>Discover Projects</CardTitle>
         <CardDescription>
-          Enter a directory path to scan for Claude Code projects
+          Enter a directory path to find project folders
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -167,6 +177,8 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
                             <Badge variant="outline" className="border-green-500 text-green-600">Configured</Badge>
                           ) : project.source === "session_history" ? (
                             <Badge variant="outline" className="border-blue-500 text-blue-600">Session History</Badge>
+                          ) : project.source === "directory" ? (
+                            <Badge variant="outline">Folder</Badge>
                           ) : (
                             <Badge variant="outline">Discovered</Badge>
                           )}
@@ -222,6 +234,22 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
               <p className="text-sm text-destructive">{browseError}</p>
             )}
 
+            {browseResult && (
+              <div className="space-y-2">
+                <Label htmlFor="directory-filter">Filter directories</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="directory-filter"
+                    value={directoryFilter}
+                    onChange={(event) => setDirectoryFilter(event.target.value)}
+                    placeholder="Type a directory name"
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            )}
+
             {browseLoading && (
               <p className="text-sm text-muted-foreground text-center py-4">Loading…</p>
             )}
@@ -232,14 +260,18 @@ export function ProjectDiscovery({ onProjectsDiscovered }: ProjectDiscoveryProps
                 <p className="text-sm text-muted-foreground text-center py-4">
                   No subdirectories
                 </p>
+              ) : filteredDirectories.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  No directories match this filter
+                </p>
               ) : (
                 <ScrollArea className="h-64 rounded-md border">
                   <div className="p-1">
-                    {browseResult.directories.map((dir) => (
+                    {filteredDirectories.map((dir) => (
                       <button
                         key={dir}
                         type="button"
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded text-sm hover:bg-accent hover:text-accent-foreground transition-colors text-left cursor-pointer"
                         onClick={() => browseTo(`${browseResult.path}/${dir}`)}
                       >
                         <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />

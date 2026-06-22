@@ -23,7 +23,7 @@ export function ProjectsPage() {
             Projects
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage Claude Code project directories
+            Manage local project directories
           </p>
         </div>
         <div className="flex gap-2">

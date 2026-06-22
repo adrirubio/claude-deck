@@ -55,7 +55,7 @@ export function ProjectList({ projects, loading }: ProjectListProps) {
     return (
       <div className="text-center py-8 text-muted-foreground">
         <p>No projects tracked yet.</p>
-        <p className="text-sm mt-2">Use the discovery wizard to find Claude Code projects.</p>
+        <p className="text-sm mt-2">Use the discovery wizard to find project folders.</p>
       </div>
     );
   }
