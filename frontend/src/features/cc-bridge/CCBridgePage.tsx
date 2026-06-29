@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { MonitorPlay, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCCSessions } from './useCCSessions'
@@ -44,6 +44,10 @@ export function CCBridgePage() {
   const visibleSessions = providerFilter === 'all'
     ? sessions
     : sessions.filter((session) => session.provider === providerFilter)
+  const sessionsByTarget = useMemo(
+    () => new Map(sessions.map((session) => [session.tmux_target, session])),
+    [sessions]
+  )
 
   const providersById = providers.reduce<Partial<Record<AgentProviderId, AgentProviderStatus>>>((acc, provider) => {
     acc[provider.id] = provider
@@ -186,6 +190,7 @@ export function CCBridgePage() {
               {activeTargets.map((target) => {
                 const isThisFullscreen = fullscreenTarget === target
                 const hidden = isFullscreen && !isThisFullscreen
+                const session = sessionsByTarget.get(target) ?? null
                 return (
                   <div
                     key={target}
@@ -211,6 +216,7 @@ export function CCBridgePage() {
                         }
                         onClose={() => removeTarget(target)}
                         instance={instance}
+                        session={session}
                       />
                     </div>
                   </div>

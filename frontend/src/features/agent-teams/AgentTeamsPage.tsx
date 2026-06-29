@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
 import type {
   AgentTeamLaunchPlan,
@@ -78,6 +79,7 @@ type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
 type LaunchOptionsByProvider = Partial<Record<AgentProviderId, ProviderLaunchOptionsResponse>>
 
 const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli']
+const DEFAULT_SLOT_COLOR_VALUE = 'default'
 
 const emptySlot: AgentTeamSlotInput = {
   display_name: '',
@@ -85,6 +87,7 @@ const emptySlot: AgentTeamSlotInput = {
   repo_path: '',
   role: '',
   charter: '',
+  ui_color: '',
   bootstrap_prompt: '',
   launch_mode: 'plain',
   launch_options: {},
@@ -142,6 +145,7 @@ function slotToInput(slot: AgentTeamSlot): AgentTeamSlotInput {
     repo_path: slot.repo_path,
     role: slot.role ?? '',
     charter: slot.charter ?? '',
+    ui_color: slot.ui_color ?? '',
     bootstrap_prompt: slot.bootstrap_prompt ?? '',
     launch_mode: slot.launch_mode,
     launch_options: slot.launch_options ?? {},
@@ -382,7 +386,7 @@ function SlotDialog({
 
   useEffect(() => {
     if (!open || modeOptions.includes(form.launch_mode ?? 'plain')) return
-    update({ launch_mode: modeOptions[0] })
+    queueMicrotask(() => update({ launch_mode: modeOptions[0] }))
   }, [form.launch_mode, modeOptions, modeOptionsKey, open])
 
   const updateLaunchOptions = (launch_options: SlotLaunchOptions) => {
@@ -455,6 +459,27 @@ function SlotDialog({
               value={form.role ?? ''}
               onChange={(event) => update({ role: event.target.value })}
             />
+          </div>
+          <div className="grid gap-2">
+            <Label>Color</Label>
+            <Select
+              value={form.ui_color || DEFAULT_SLOT_COLOR_VALUE}
+              onValueChange={(ui_color) => update({
+                ui_color: ui_color === DEFAULT_SLOT_COLOR_VALUE ? '' : ui_color,
+              })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DEFAULT_SLOT_COLOR_VALUE}>Default</SelectItem>
+                {TEAM_SLOT_COLOR_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid gap-2">
             <Label>Launch mode</Label>
@@ -1025,18 +1050,25 @@ export function AgentTeamsPage() {
                     No slots in this team.
                   </div>
                 )}
-                {selectedPreset.slots.map((slot, index) => (
-                  <div key={slot.id} className="rounded-lg border p-4">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold">{slot.display_name}</p>
-                          <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
-                            {slot.enabled ? 'Enabled' : 'Disabled'}
-                          </Badge>
-                          <Badge variant="secondary">{slot.provider}</Badge>
-                          <Badge variant="secondary">{slot.launch_mode}</Badge>
-                        </div>
+                {selectedPreset.slots.map((slot, index) => {
+                  const colorClasses = getTeamSlotColorClasses(slot.ui_color)
+                  return (
+                    <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
+                      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold">{slot.display_name}</p>
+                            <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
+                              {slot.enabled ? 'Enabled' : 'Disabled'}
+                            </Badge>
+                            <Badge variant="secondary">{slot.provider}</Badge>
+                            <Badge variant="secondary">{slot.launch_mode}</Badge>
+                            {slot.ui_color && (
+                              <Badge variant="outline" className={colorClasses.badge}>
+                                {slot.ui_color}
+                              </Badge>
+                            )}
+                          </div>
                           <p className="mt-1 truncate text-sm text-muted-foreground">{slot.repo_path}</p>
                           <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
                             <div>
@@ -1054,44 +1086,45 @@ export function AgentTeamsPage() {
                             </div>
                           )}
                         </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => moveSlot(slot, -1)}
-                          disabled={index === 0}
-                        >
-                          <ArrowUp className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => moveSlot(slot, 1)}
-                          disabled={index === selectedPreset.slots.length - 1}
-                        >
-                          <ArrowDown className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openPlan([slot.id])}
-                          disabled={!slot.enabled}
-                        >
-                          <Play className="mr-2 h-4 w-4" />
-                          Launch
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setSlotDialog({ mode: 'edit', slot })}>
-                          <Edit className="mr-2 h-4 w-4" />
-                          Edit
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => removeSlot(slot)}>
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Delete
-                        </Button>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => moveSlot(slot, -1)}
+                            disabled={index === 0}
+                          >
+                            <ArrowUp className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => moveSlot(slot, 1)}
+                            disabled={index === selectedPreset.slots.length - 1}
+                          >
+                            <ArrowDown className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openPlan([slot.id])}
+                            disabled={!slot.enabled}
+                          >
+                            <Play className="mr-2 h-4 w-4" />
+                            Launch
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => setSlotDialog({ mode: 'edit', slot })}>
+                            <Edit className="mr-2 h-4 w-4" />
+                            Edit
+                          </Button>
+                          <Button variant="outline" size="sm" onClick={() => removeSlot(slot)}>
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}

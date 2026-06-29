@@ -98,6 +98,7 @@ async def _enrich_team_sessions(
                 team_slot_name=slot.display_name,
                 team_slot_role=slot.role,
                 team_slot_charter=slot.charter,
+                team_slot_color=slot.ui_color,
             )
         enriched.append(updated)
     return enriched

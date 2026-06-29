@@ -118,6 +118,66 @@ async def test_duplicate_enabled_repo_slots_are_allowed(db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_slot_ui_color_is_persisted_and_clearable(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Color team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Reviewer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    ui_color="purple",
+                )
+            ],
+        ),
+    )
+
+    assert preset.slots[0].ui_color == "purple"
+
+    updated = await agent_team_service.update_slot(
+        db,
+        preset.slots[0].id,
+        AgentTeamSlotUpdate(ui_color="cyan"),
+    )
+    assert updated.slots[0].ui_color == "cyan"
+
+    updated = await agent_team_service.update_slot(
+        db,
+        preset.slots[0].id,
+        AgentTeamSlotUpdate(ui_color=None),
+    )
+    assert updated.slots[0].ui_color is None
+
+
+@pytest.mark.asyncio
+async def test_slot_ui_color_rejects_unknown_palette_value(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Bad color",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="Reviewer",
+                        provider="codex-cli",
+                        repo_path=str(repo),
+                        ui_color="magenta",
+                    )
+                ],
+            ),
+        )
+
+    assert "Unsupported ui_color: magenta" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_create_slot_rejects_unknown_launch_option(db, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1033,6 +1093,7 @@ async def test_launch_requires_confirmed_plan_hash_and_passes_team_env(db, tmp_p
                     display_name="Dev agent",
                     provider="codex-cli",
                     repo_path=str(repo),
+                    ui_color="green",
                 )
             ],
         ),
@@ -1062,6 +1123,7 @@ async def test_launch_requires_confirmed_plan_hash_and_passes_team_env(db, tmp_p
     assert calls[0][0] == "codex-cli"
     assert calls[0][2]["CLAUDE_DECK_TEAM_PRESET_ID"] == str(preset.id)
     assert calls[0][2]["CLAUDE_DECK_TEAM_SLOT_ID"] == str(preset.slots[0].id)
+    assert calls[0][2]["CLAUDE_DECK_TEAM_SLOT_COLOR"] == "green"
 
 
 @pytest.mark.asyncio

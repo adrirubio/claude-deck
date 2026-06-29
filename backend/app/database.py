@@ -367,6 +367,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(
             text("ALTER TABLE agent_team_slots ADD COLUMN bootstrap_prompt VARCHAR")
         )
+    if slot_columns and "ui_color" not in slot_columns:
+        await conn.execute(text("ALTER TABLE agent_team_slots ADD COLUMN ui_color VARCHAR"))
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}

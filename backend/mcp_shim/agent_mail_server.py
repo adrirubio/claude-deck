@@ -405,7 +405,8 @@ def deck_create_team(
 
     Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.
     Common slot fields: display_name, provider, repo_path, role, charter,
-    launch_mode, launch_options. Provider launch modes/options:
+    ui_color, launch_mode, launch_options. ui_color values: blue, purple,
+    green, amber, red, cyan, slate. Provider launch modes/options:
     - claude-code: modes plain/worktree/resume; launch_options
       skip_permissions, platform, aws_region, aws_profile, bedrock_model,
       prompt, session_id, project_folder, worktree_name.

@@ -50,6 +50,7 @@ export interface AgentTeamSlot {
   repo_name: string
   role?: string | null
   charter?: string | null
+  ui_color?: string | null
   bootstrap_prompt?: string | null
   launch_mode: string
   launch_options: SlotLaunchOptions
@@ -79,6 +80,7 @@ export interface AgentTeamSlotInput {
   repo_path: string
   role?: string | null
   charter?: string | null
+  ui_color?: string | null
   bootstrap_prompt?: string | null
   launch_mode?: string
   launch_options?: SlotLaunchOptions
@@ -92,6 +94,7 @@ export interface AgentTeamSlotUpdate {
   repo_path?: string
   role?: string | null
   charter?: string | null
+  ui_color?: string | null
   bootstrap_prompt?: string | null
   launch_mode?: string
   launch_options?: SlotLaunchOptions

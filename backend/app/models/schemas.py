@@ -2057,6 +2057,7 @@ class AgentTeamSlotCreate(BaseModel):
     repo_path: str
     role: Optional[str] = None
     charter: Optional[str] = None
+    ui_color: Optional[str] = None
     bootstrap_prompt: Optional[str] = None
     launch_mode: str = "plain"
     launch_options: Dict[str, Any] = Field(default_factory=dict)
@@ -2070,6 +2071,7 @@ class AgentTeamSlotUpdate(BaseModel):
     repo_path: Optional[str] = None
     role: Optional[str] = None
     charter: Optional[str] = None
+    ui_color: Optional[str] = None
     bootstrap_prompt: Optional[str] = None
     launch_mode: Optional[str] = None
     launch_options: Optional[Dict[str, Any]] = None
@@ -2088,6 +2090,7 @@ class AgentTeamSlotResponse(BaseModel):
     repo_name: str
     role: Optional[str] = None
     charter: Optional[str] = None
+    ui_color: Optional[str] = None
     bootstrap_prompt: Optional[str] = None
     launch_mode: str
     launch_options: Dict[str, Any] = Field(default_factory=dict)

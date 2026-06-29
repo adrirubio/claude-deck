@@ -59,6 +59,7 @@ def test_discover_agent_sessions_includes_team_environment():
             "CLAUDE_DECK_TEAM_SLOT_ID=20",
             "CLAUDE_DECK_TEAM_SLOT_NAME=Lead Developer",
             "CLAUDE_DECK_TEAM_SLOT_ROLE=lead developer",
+            "CLAUDE_DECK_TEAM_SLOT_COLOR=green",
         ]
     )
 
@@ -88,5 +89,6 @@ def test_discover_agent_sessions_includes_team_environment():
             "team_slot_id": 20,
             "team_slot_name": "Lead Developer",
             "team_slot_role": "lead developer",
+            "team_slot_color": "green",
         }
     ]

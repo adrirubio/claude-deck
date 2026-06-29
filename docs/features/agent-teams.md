@@ -10,6 +10,7 @@ Each team has slots. A slot stores:
 - repository path
 - display name
 - role and charter
+- optional UI color for Agent Bridge cards and terminals
 - optional bootstrap prompt
 - launch mode and provider options
 - enabled or disabled state
