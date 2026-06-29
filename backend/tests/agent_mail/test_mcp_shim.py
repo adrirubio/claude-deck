@@ -278,6 +278,71 @@ def test_deck_create_team_posts_to_team_api(monkeypatch):
     assert requests[0][2]["json"]["slots"][0]["ui_color"] == "blue"
 
 
+def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp_path):
+    import mcp_shim.agent_mail_server as shim
+
+    image_path = tmp_path / "screen.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
+    requests = []
+
+    def fake_bridge_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if (method, path) == ("GET", "/token"):
+            return {"ok": True, "data": {"token": f"token-{len(requests)}"}}
+        assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"].startswith("token-")
+        if method == "POST" and path == "/sessions/snazzy%3A0.0/attachments":
+            assert kwargs["data"]["created_by"] == "mcp"
+            assert kwargs["data"]["prompt"] == "Inspect {path}"
+            assert kwargs["files"]["file"][0] == "screen.png"
+            return {"ok": True, "data": {"id": 7, "prompt_text": "Inspect /tmp/screen.png"}}
+        if method == "POST" and path == "/sessions/snazzy%3A0.0/attachments/7/paste":
+            assert kwargs["json"] == {"submit": True}
+            return {"ok": True, "data": {"pasted": True, "submitted": True, "target": "snazzy:0.0"}}
+        raise AssertionError((method, path))
+
+    monkeypatch.setattr(shim, "_bridge_request", fake_bridge_request)
+
+    result = shim.deck_attach_image_to_bridge_session(
+        "snazzy:0.0",
+        str(image_path),
+        submit=True,
+        prompt="Inspect {path}",
+    )
+
+    assert result["ok"] is True
+    assert result["attachment"]["id"] == 7
+    assert result["paste"]["submitted"] is True
+
+
+def test_deck_attach_image_to_bridge_session_rejects_missing_file():
+    import mcp_shim.agent_mail_server as shim
+
+    result = shim.deck_attach_image_to_bridge_session("snazzy:0.0", "/tmp/does-not-exist.png")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "image_file_not_found"
+
+
+def test_deck_list_bridge_attachments_uses_bridge_api(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+
+    def fake_bridge_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if (method, path) == ("GET", "/token"):
+            return {"ok": True, "data": {"token": "token"}}
+        assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"] == "token"
+        return {"ok": True, "data": {"attachments": [{"id": 1}]}}
+
+    monkeypatch.setattr(shim, "_bridge_request", fake_bridge_request)
+
+    result = shim.deck_list_bridge_attachments("snazzy:0.0")
+
+    assert result == {"ok": True, "attachments": [{"id": 1}]}
+    assert requests[1][0:2] == ("GET", "/sessions/snazzy%3A0.0/attachments")
+
+
 def test_deck_plan_team_launch_returns_plan_hash(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 

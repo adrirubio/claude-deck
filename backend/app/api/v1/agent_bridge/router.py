@@ -7,13 +7,22 @@ import time
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.database import AgentTeamPreset, AgentTeamSlot
+from app.models.schemas import (
+    BridgeAttachmentDeleteResponse,
+    BridgeAttachmentListResponse,
+    BridgeAttachmentPasteRequest,
+    BridgeAttachmentPasteResponse,
+    BridgeAttachmentResponse,
+)
+from app.config import settings
+from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
 from app.services.agent_bridge.pty_relay import PtyRelay
 from app.services.agent_bridge.spawn import kill_session, spawn_session
@@ -137,7 +146,7 @@ async def get_terminal_token():
     return {"token": token}
 
 
-def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
+def _is_same_origin_host(origin: str, request_host: str) -> bool:
     try:
         origin_host = urlparse(origin).netloc.lower()
     except ValueError:
@@ -145,15 +154,29 @@ def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
     if not origin_host:
         return False
 
-    request_host = (websocket.headers.get("host") or "").lower()
     if request_host and origin_host == request_host:
         return True
     return origin_host.split(":")[0] in {"localhost", "127.0.0.1", "[::1]"}
 
 
+def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
+    return _is_same_origin_host(origin, (websocket.headers.get("host") or "").lower())
+
+
 def _validate_token(token: str) -> bool:
     issued_at = _tokens.pop(token, None)
     return issued_at is not None and (time.time() - issued_at) <= _TOKEN_TTL
+
+
+def _require_attachment_access(
+    request: Request,
+    token: str,
+) -> None:
+    origin = request.headers.get("origin", "")
+    if origin and not _is_same_origin_host(origin, (request.headers.get("host") or "").lower()):
+        raise HTTPException(status_code=403, detail="Invalid origin")
+    if not _validate_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 @router.websocket("/sessions/{target:path}/terminal")
@@ -174,6 +197,91 @@ async def session_terminal(
 
     relay = PtyRelay(target=target, read_only=mode != "interactive")
     await relay.run(websocket)
+
+
+@router.post("/sessions/{target:path}/attachments", response_model=BridgeAttachmentResponse)
+async def upload_session_attachment(
+    target: str,
+    request: Request,
+    file: UploadFile = File(...),
+    template: str | None = Form(default=None),
+    prompt: str | None = Form(default=None),
+    created_by: str | None = Form(default="deck-ui"),
+    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_attachment_access(request, token)
+    try:
+        content = await file.read(settings.bridge_attachment_max_bytes + 1)
+        return await agent_bridge_attachment_service.create_attachment(
+            db,
+            target=target,
+            content=content,
+            original_filename=file.filename,
+            prompt=prompt,
+            template=template,
+            created_by=created_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/sessions/{target:path}/attachments", response_model=BridgeAttachmentListResponse)
+async def list_session_attachments(
+    target: str,
+    request: Request,
+    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_attachment_access(request, token)
+    attachments = await agent_bridge_attachment_service.list_attachments(db, target=target)
+    return BridgeAttachmentListResponse(attachments=attachments)
+
+
+@router.post(
+    "/sessions/{target:path}/attachments/{attachment_id}/paste",
+    response_model=BridgeAttachmentPasteResponse,
+)
+async def paste_session_attachment(
+    target: str,
+    attachment_id: int,
+    paste_request: BridgeAttachmentPasteRequest,
+    request: Request,
+    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_attachment_access(request, token)
+    try:
+        return await agent_bridge_attachment_service.paste_attachment(
+            db,
+            target=target,
+            attachment_id=attachment_id,
+            request=paste_request,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/sessions/{target:path}/attachments/{attachment_id}",
+    response_model=BridgeAttachmentDeleteResponse,
+)
+async def delete_session_attachment(
+    target: str,
+    attachment_id: int,
+    request: Request,
+    token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_attachment_access(request, token)
+    try:
+        return await agent_bridge_attachment_service.delete_attachment(
+            db,
+            target=target,
+            attachment_id=attachment_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/sessions")

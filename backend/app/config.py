@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     # Database settings
     database_url: str = "sqlite+aiosqlite:///./claude_registry.db"
 
+    # Agent Bridge attachment settings
+    bridge_attachment_dir: str = "~/.claude-registry/bridge-attachments"
+    bridge_attachment_agent_root: str | None = None
+    bridge_attachment_max_bytes: int = 10 * 1024 * 1024
+    bridge_attachment_retention_days: int = 7
+    bridge_attachment_max_per_session_per_day: int = 100
+
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000

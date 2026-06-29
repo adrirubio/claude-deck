@@ -78,6 +78,44 @@ export interface KillSessionResponse {
   error?: string
 }
 
+export interface BridgeAttachment {
+  id: number
+  target: string
+  session_name?: string | null
+  provider?: string | null
+  original_filename?: string | null
+  mime_type: string
+  size_bytes: number
+  sha256: string
+  agent_path: string
+  prompt_text: string
+  created_by?: string | null
+  created_at: string
+  expires_at?: string | null
+}
+
+export interface BridgeAttachmentListResponse {
+  attachments: BridgeAttachment[]
+}
+
+export interface BridgeAttachmentPasteRequest {
+  submit?: boolean
+  prefix?: string
+  suffix?: string
+}
+
+export interface BridgeAttachmentPasteResponse {
+  pasted: boolean
+  submitted: boolean
+  target: string
+}
+
+export interface BridgeAttachmentDeleteResponse {
+  deleted: boolean
+  target: string
+  attachment_id: number
+}
+
 export interface CodexLaunchModelOption {
   value: string
   label: string
