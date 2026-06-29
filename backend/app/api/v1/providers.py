@@ -10,10 +10,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
-from app.services.codex_config_service import CodexConfigService
 from app.services.codex_history_service import CodexHistoryService
 from app.services.codex_usage_context_service import CodexUsageContextService
 from app.services.providers import get_provider, get_providers
+from app.services.providers.launch_options import build_provider_launch_options
 
 router = APIRouter()
 
@@ -156,8 +156,7 @@ def get_provider_capabilities(provider_id: str):
 
 @router.get("/providers/{provider_id}/launch-options")
 def get_provider_launch_options(provider_id: str):
-    _require_codex_provider(provider_id, "launch options")
-    return CodexConfigService().get_launch_options()
+    return build_provider_launch_options(_get_provider_or_404(provider_id))
 
 
 def _get_provider_or_404(provider_id: str):

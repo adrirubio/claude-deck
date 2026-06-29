@@ -118,6 +118,212 @@ async def test_duplicate_enabled_repo_slots_are_allowed(db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_slot_rejects_unknown_launch_option(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Bad options",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="Dev",
+                        provider="codex-cli",
+                        repo_path=str(repo),
+                        launch_options={"reasoning_efort": "xhigh"},
+                    )
+                ],
+            ),
+        )
+
+    assert "Unsupported launch_options for codex-cli" in str(exc_info.value)
+    assert "reasoning_efort" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_rejects_provider_launch_mode_mismatch(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Bad mode",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="OpenCode",
+                        provider="opencode-cli",
+                        repo_path=str(repo),
+                        launch_mode="fork",
+                    )
+                ],
+            ),
+        )
+
+    assert "Unsupported launch_mode for opencode-cli: fork" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_rejects_opencode_reasoning_effort(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Bad effort",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="OpenCode",
+                        provider="opencode-cli",
+                        repo_path=str(repo),
+                        launch_options={"reasoning_effort": "xhigh"},
+                    )
+                ],
+            ),
+        )
+
+    assert getattr(exc_info.value, "block_code", None) == "reasoning_effort_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_create_slot_rejects_copilot_bedrock_options(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Bad copilot bedrock",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="Copilot",
+                        provider="copilot-cli",
+                        repo_path=str(repo),
+                        launch_options={
+                            "platform": "bedrock",
+                            "aws_profile": "jrubio",
+                        },
+                    )
+                ],
+            ),
+        )
+
+    assert "copilot-cli does not support Bedrock launch options" in str(exc_info.value)
+    assert "aws_profile" in str(exc_info.value)
+    assert "platform" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_launch_plan_warnings_are_included_in_plan_hash(db, tmp_path, monkeypatch):
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Warn team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Reviewer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    launch_options={
+                        "platform": "bedrock",
+                        "bedrock_model": "openai.gpt-5.5",
+                    },
+                )
+            ],
+        ),
+    )
+
+    first_plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest())
+    assert first_plan.items[0].warnings
+
+    await agent_team_service.update_slot(
+        db,
+        preset.slots[0].id,
+        AgentTeamSlotUpdate(
+            launch_options={
+                "platform": "bedrock",
+                "aws_region": "us-east-1",
+                "aws_profile": "bedrock-prod",
+                "bedrock_model": "openai.gpt-5.5",
+            }
+        ),
+    )
+    second_plan = await agent_team_service.plan_launch(db, preset.id, AgentTeamLaunchRequest())
+
+    assert second_plan.items[0].warnings != first_plan.items[0].warnings
+    assert second_plan.plan_hash != first_plan.plan_hash
+
+
+@pytest.mark.asyncio
+async def test_create_slot_rejects_malformed_model_id(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as exc_info:
+        await agent_team_service.create_preset(
+            db,
+            AgentTeamPresetCreate(
+                name="Malformed model",
+                slots=[
+                    AgentTeamSlotCreate(
+                        display_name="Reviewer",
+                        provider="codex-cli",
+                        repo_path=str(repo),
+                        launch_options={
+                            "platform": "bedrock",
+                            "bedrock_model": "OpenAI Pro GPT-5.5",
+                        },
+                    )
+                ],
+            ),
+        )
+
+    assert "launch_options.bedrock_model must be a concrete provider model ID" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_create_slot_warns_on_well_formed_unknown_codex_bedrock_model(db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Unknown model",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Reviewer",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    launch_options={
+                        "platform": "bedrock",
+                        "aws_region": "us-east-1",
+                        "aws_profile": "jrubio",
+                        "bedrock_model": "openai.not-a-real-model",
+                    },
+                )
+            ],
+        ),
+    )
+
+    assert preset.slots[0].warnings == [
+        "Codex Bedrock model requires an AWS account or gateway that exposes this model."
+    ]
+
+
+@pytest.mark.asyncio
 async def test_multiple_same_repo_codex_resume_last_slots_are_blocked(db, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

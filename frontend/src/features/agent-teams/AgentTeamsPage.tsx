@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  ChevronDown,
   Copy,
   Edit,
   GitBranch,
@@ -20,6 +21,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -47,7 +49,9 @@ import type {
   AgentTeamPreset,
   AgentTeamSlot,
   AgentTeamSlotInput,
+  SlotLaunchOptions,
 } from '@/types/agentTeams'
+import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
   createAgentTeamFromBridge,
@@ -64,11 +68,16 @@ import {
   updateAgentTeamSlot,
 } from './api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
+import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
 import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
+import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
 
 type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
+type LaunchOptionsByProvider = Partial<Record<AgentProviderId, ProviderLaunchOptionsResponse>>
+
+const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli']
 
 const emptySlot: AgentTeamSlotInput = {
   display_name: '',
@@ -98,14 +107,32 @@ function actionBadgeClass(action: AgentTeamLaunchPlanItem['action']) {
   return 'border-muted-foreground/50 text-muted-foreground'
 }
 
-function parseLaunchOptions(raw: string): Record<string, unknown> {
+function parseLaunchOptions(raw: string): SlotLaunchOptions {
   const text = raw.trim()
   if (!text) return {}
   const parsed = JSON.parse(text)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Launch options must be a JSON object')
   }
-  return parsed as Record<string, unknown>
+  return parsed as SlotLaunchOptions
+}
+
+function modeOptionsFor(
+  provider: AgentProviderId | string,
+  launchOptionsByProvider: LaunchOptionsByProvider
+) {
+  const modes = launchOptionsByProvider[provider as AgentProviderId]?.supported_launch_modes
+  return modes && modes.length > 0 ? modes : ['plain']
+}
+
+function normalizeModeForProvider(
+  provider: AgentProviderId | string,
+  launchMode: string | undefined,
+  launchOptionsByProvider: LaunchOptionsByProvider
+) {
+  const modes = modeOptionsFor(provider, launchOptionsByProvider)
+  const current = launchMode || 'plain'
+  return modes.includes(current) ? current : modes[0]
 }
 
 function slotToInput(slot: AgentTeamSlot): AgentTeamSlotInput {
@@ -321,15 +348,24 @@ function SlotDialog({
   state,
   onOpenChange,
   onSave,
+  launchOptionsByProvider,
 }: {
   state: SlotDialogState
   onOpenChange: (state: SlotDialogState) => void
   onSave: (input: AgentTeamSlotInput) => Promise<void>
+  launchOptionsByProvider: LaunchOptionsByProvider
 }) {
   const [form, setForm] = useState<AgentTeamSlotInput>(emptySlot)
   const [launchOptionsText, setLaunchOptionsText] = useState('{}')
   const [saving, setSaving] = useState(false)
   const open = state !== null
+  const selectedProvider = form.provider as AgentProviderId
+  const descriptor = launchOptionsByProvider[selectedProvider]
+  const modeOptions = useMemo(
+    () => modeOptionsFor(form.provider, launchOptionsByProvider),
+    [form.provider, launchOptionsByProvider]
+  )
+  const modeOptionsKey = modeOptions.join('|')
 
   useEffect(() => {
     if (!state) return
@@ -342,6 +378,16 @@ function SlotDialog({
 
   const update = (patch: Partial<AgentTeamSlotInput>) => {
     setForm((current) => ({ ...current, ...patch }))
+  }
+
+  useEffect(() => {
+    if (!open || modeOptions.includes(form.launch_mode ?? 'plain')) return
+    update({ launch_mode: modeOptions[0] })
+  }, [form.launch_mode, modeOptions, modeOptionsKey, open])
+
+  const updateLaunchOptions = (launch_options: SlotLaunchOptions) => {
+    update({ launch_options })
+    setLaunchOptionsText(JSON.stringify(launch_options, null, 2))
   }
 
   const submit = async () => {
@@ -376,7 +422,13 @@ function SlotDialog({
           </div>
           <div className="grid gap-2">
             <Label>Provider</Label>
-            <Select value={form.provider} onValueChange={(provider) => update({ provider })}>
+            <Select
+              value={form.provider}
+              onValueChange={(provider) => update({
+                provider,
+                launch_mode: normalizeModeForProvider(provider, form.launch_mode, launchOptionsByProvider),
+              })}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -411,10 +463,11 @@ function SlotDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="plain">Plain</SelectItem>
-                <SelectItem value="worktree">Worktree</SelectItem>
-                <SelectItem value="resume">Resume</SelectItem>
-                <SelectItem value="fork">Fork</SelectItem>
+                {modeOptions.map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {mode[0].toUpperCase() + mode.slice(1)}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -434,14 +487,32 @@ function SlotDialog({
               onChange={(event) => update({ bootstrap_prompt: event.target.value })}
             />
           </div>
-          <div className="grid gap-2 md:col-span-2">
-            <Label htmlFor="slot-options">Launch options JSON</Label>
-            <Textarea
-              id="slot-options"
-              className="min-h-[120px] font-mono"
-              value={launchOptionsText}
-              onChange={(event) => setLaunchOptionsText(event.target.value)}
+          <div className="grid gap-3 md:col-span-2">
+            <Label>Launch options</Label>
+            <ProviderLaunchOptionsFields
+              provider={form.provider}
+              value={form.launch_options ?? {}}
+              onChange={updateLaunchOptions}
+              descriptor={descriptor}
+              disabled={saving}
             />
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <Button type="button" variant="ghost" size="sm" className="w-fit px-0">
+                  <ChevronDown className="mr-1 h-4 w-4" />
+                  Advanced raw JSON
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="grid gap-2">
+                <Label htmlFor="slot-options">Launch options JSON</Label>
+                <Textarea
+                  id="slot-options"
+                  className="min-h-[120px] font-mono"
+                  value={launchOptionsText}
+                  onChange={(event) => setLaunchOptionsText(event.target.value)}
+                />
+              </CollapsibleContent>
+            </Collapsible>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox
@@ -511,6 +582,11 @@ function LaunchPlanDialog({
                 {item.reasons.length > 0 && (
                   <p className="mt-3 text-sm text-muted-foreground">{item.reasons.join('; ')}</p>
                 )}
+                {item.warnings && item.warnings.length > 0 && (
+                  <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
+                    {item.warnings.join('; ')}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -560,6 +636,7 @@ export function AgentTeamsPage() {
   const [launching, setLaunching] = useState(false)
   const [plannedSlotIds, setPlannedSlotIds] = useState<number[] | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [launchOptionsByProvider, setLaunchOptionsByProvider] = useState<LaunchOptionsByProvider>({})
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId),
@@ -583,15 +660,33 @@ export function AgentTeamsPage() {
     }
   }, [])
 
+  const loadProviderLaunchOptions = useCallback(async () => {
+    try {
+      const descriptors = await Promise.all(
+        PROVIDER_IDS.map((providerId) => fetchProviderLaunchOptions(providerId))
+      )
+      setLaunchOptionsByProvider(
+        Object.fromEntries(
+          descriptors.map((descriptor) => [descriptor.provider, descriptor])
+        ) as LaunchOptionsByProvider
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load provider launch options')
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     queueMicrotask(() => {
-      if (!cancelled) void loadPresets()
+      if (!cancelled) {
+        void loadPresets()
+        void loadProviderLaunchOptions()
+      }
     })
     return () => {
       cancelled = true
     }
-  }, [loadPresets])
+  }, [loadPresets, loadProviderLaunchOptions])
 
   const stats = useMemo(() => {
     const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
@@ -942,18 +1037,23 @@ export function AgentTeamsPage() {
                           <Badge variant="secondary">{slot.provider}</Badge>
                           <Badge variant="secondary">{slot.launch_mode}</Badge>
                         </div>
-                        <p className="mt-1 truncate text-sm text-muted-foreground">{slot.repo_path}</p>
-                        <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
-                          <div>
-                            <p className="text-xs uppercase text-muted-foreground">Repo</p>
-                            <p>{slot.repo_name}</p>
+                          <p className="mt-1 truncate text-sm text-muted-foreground">{slot.repo_path}</p>
+                          <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
+                            <div>
+                              <p className="text-xs uppercase text-muted-foreground">Repo</p>
+                              <p>{slot.repo_name}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs uppercase text-muted-foreground">Role</p>
+                              <p>{slot.role || 'Unassigned'}</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-xs uppercase text-muted-foreground">Role</p>
-                            <p>{slot.role || 'Unassigned'}</p>
-                          </div>
+                          {slot.warnings && slot.warnings.length > 0 && (
+                            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
+                              {slot.warnings.join('; ')}
+                            </div>
+                          )}
                         </div>
-                      </div>
                       <div className="flex flex-wrap gap-2">
                         <Button
                           variant="outline"
@@ -999,7 +1099,12 @@ export function AgentTeamsPage() {
       </div>
 
       <NewPresetDialog mode={presetDialog} onOpenChange={setPresetDialog} onCreate={createPreset} />
-      <SlotDialog state={slotDialog} onOpenChange={setSlotDialog} onSave={saveSlot} />
+      <SlotDialog
+        state={slotDialog}
+        onOpenChange={setSlotDialog}
+        onSave={saveSlot}
+        launchOptionsByProvider={launchOptionsByProvider}
+      />
       <AgentTeamsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       <LaunchPlanDialog
         plan={plan}

@@ -22,15 +22,15 @@ import { MODAL_SIZES } from '@/lib/constants'
 import { claudeProjectFolderFromPath, cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import type { ProjectResponse } from '@/types/projects'
-import { fetchCodexLaunchOptions, spawnSession } from './api'
+import { spawnSession } from './api'
 import { useSessionsApi } from '@/hooks/useSessionsApi'
+import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
 import { useProjectContext } from '@/contexts/ProjectContext'
 import { useProviderContext } from '@/contexts/ProviderContext'
-import type { AgentProviderId } from '@/types/providers'
+import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
+import type { SlotLaunchOptions } from '@/types/agentTeams'
+import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
 import type {
-  CodexLaunchModelOption,
-  CodexLaunchOptionsResponse,
-  CodexLaunchProfileOption,
   SpawnSessionRequest,
 } from './types'
 import type { SessionSummary } from '@/types/sessions'
@@ -67,10 +67,7 @@ const OPENCODE_MODE_OPTIONS: { value: Mode; label: string }[] = [
 ]
 
 const PLATFORM_STORAGE_KEY = 'cc-bridge.platform'
-const DEFAULT_SELECT_VALUE = '__default__'
-const CUSTOM_SELECT_VALUE = '__custom__'
-const EMPTY_MODEL_OPTIONS: CodexLaunchModelOption[] = []
-const EMPTY_PROFILE_OPTIONS: CodexLaunchProfileOption[] = []
+const DEFAULT_LAUNCH_OPTIONS: SlotLaunchOptions = { no_alt_screen: true }
 
 type Platform = 'anthropic' | 'bedrock'
 
@@ -111,18 +108,17 @@ function matchesProjectSearch(project: ProjectResponse, query: string) {
   return terms.every((term) => searchable.includes(term))
 }
 
-function optionValues<T extends { value: string }>(options: T[]) {
-  return new Set(options.map((option) => option.value))
+function stringOption(options: SlotLaunchOptions, key: keyof SlotLaunchOptions) {
+  const value = options[key]
+  return typeof value === 'string' ? value : ''
 }
 
-function formatModelOption(option: CodexLaunchModelOption) {
-  return option.label && option.label !== option.value
-    ? `${option.label} (${option.value})`
-    : option.value
+function boolOption(options: SlotLaunchOptions, key: keyof SlotLaunchOptions) {
+  return options[key] === true
 }
 
-function formatProfileOption(option: CodexLaunchProfileOption) {
-  return option.active ? `${option.label} (active)` : option.label
+function withDefaultLaunchOptions(options: SlotLaunchOptions = {}) {
+  return { ...DEFAULT_LAUNCH_OPTIONS, ...options }
 }
 
 export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvider }: NewSessionDialogProps) {
@@ -135,36 +131,17 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [worktreeName, setWorktreeName] = useState('')
   const [skipPermissions, setSkipPermissions] = useState(false)
   const [prompt, setPrompt] = useState('')
-  const [model, setModel] = useState('')
-  const [customModel, setCustomModel] = useState(false)
-  const [profile, setProfile] = useState('')
-  const [customProfile, setCustomProfile] = useState(false)
-  const [sandbox, setSandbox] = useState('')
-  const [approvalPolicy, setApprovalPolicy] = useState('')
-  const [search, setSearch] = useState(false)
-  const [noAltScreen, setNoAltScreen] = useState(true)
-  const [dangerousBypass, setDangerousBypass] = useState(false)
+  const [launchOptions, setLaunchOptions] = useState<SlotLaunchOptions>(() => ({ ...DEFAULT_LAUNCH_OPTIONS }))
   const [codexSessionId, setCodexSessionId] = useState('')
   const [useLast, setUseLast] = useState(true)
-  const [copilotAgent, setCopilotAgent] = useState('')
-  const [copilotContextTier, setCopilotContextTier] = useState('')
-  const [copilotEffort, setCopilotEffort] = useState('')
-  const [copilotPlan, setCopilotPlan] = useState(false)
-  const [copilotRemote, setCopilotRemote] = useState(false)
-  const [copilotAllowAll, setCopilotAllowAll] = useState(false)
-  const [copilotNoAskUser, setCopilotNoAskUser] = useState(false)
-  const [platform, setPlatform] = useState<Platform>('anthropic')
-  const [awsRegion, setAwsRegion] = useState('')
-  const [awsProfile, setAwsProfile] = useState('')
-  const [bedrockModel, setBedrockModel] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([])
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null)
   const [loadingSessions, setLoadingSessions] = useState(false)
-  const [codexLaunchOptions, setCodexLaunchOptions] = useState<CodexLaunchOptionsResponse | null>(null)
-  const [codexLaunchOptionsError, setCodexLaunchOptionsError] = useState<string | null>(null)
+  const [launchDescriptor, setLaunchDescriptor] = useState<ProviderLaunchOptionsResponse | null>(null)
+  const [launchDescriptorError, setLaunchDescriptorError] = useState<string | null>(null)
   const projectSearchRef = useRef<HTMLInputElement>(null)
   const projectOptionRefs = useRef<Array<HTMLButtonElement | null>>([])
 
@@ -174,14 +151,8 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const isCodex = provider === 'codex-cli'
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
-  const supportsPlatform = isClaude || isCodex
-  const isBedrock = supportsPlatform && platform === 'bedrock'
-  const defaultPlatformLabel = isCodex ? 'OpenAI' : 'Anthropic'
-  const bedrockHelpText = isCodex
-    ? 'Codex uses Amazon Bedrock for this session. Credentials resolve from your shell or AWS config.'
-    : 'Uses AWS credentials from the server environment. Region is usually required.'
-  const bedrockModelLabel = isCodex ? 'Bedrock model ID (optional)' : 'Model ARN / ID (optional)'
-  const bedrockModelPlaceholder = isCodex ? 'openai.gpt-5.5' : 'arn:aws:bedrock:...'
+  const supportsPlatform = launchDescriptor?.bedrock_supported ?? false
+  const isBedrock = supportsPlatform && launchOptions.platform === 'bedrock'
   const modeOptions = isOpenCode
     ? OPENCODE_MODE_OPTIONS
     : isCopilot
@@ -193,22 +164,6 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     () => projects.filter((project) => matchesProjectSearch(project, projectSearch)),
     [projects, projectSearch],
   )
-  const modelOptions = codexLaunchOptions?.model_options ?? EMPTY_MODEL_OPTIONS
-  const profileOptions = codexLaunchOptions?.profile_options ?? EMPTY_PROFILE_OPTIONS
-  const knownModelValues = useMemo(() => optionValues(modelOptions), [modelOptions])
-  const knownProfileValues = useMemo(() => optionValues(profileOptions), [profileOptions])
-  const modelSelectValue = customModel || (model && !knownModelValues.has(model))
-    ? CUSTOM_SELECT_VALUE
-    : model || DEFAULT_SELECT_VALUE
-  const profileSelectValue = customProfile || (profile && !knownProfileValues.has(profile))
-    ? CUSTOM_SELECT_VALUE
-    : profile || DEFAULT_SELECT_VALUE
-  const defaultModelLabel = codexLaunchOptions?.default_model
-    ? `Default (${codexLaunchOptions.default_model})`
-    : 'Default'
-  const defaultProfileLabel = codexLaunchOptions?.default_profile
-    ? `Default (${codexLaunchOptions.default_profile})`
-    : 'Default'
   const resumeProjectPath = directory.trim()
   const resumeProjectFolder = resumeProjectPath
     ? claudeProjectFolderFromPath(resumeProjectPath)
@@ -254,36 +209,6 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     }
   }
 
-  function handleModelSelect(value: string) {
-    if (value === DEFAULT_SELECT_VALUE) {
-      setCustomModel(false)
-      setModel('')
-      return
-    }
-    if (value === CUSTOM_SELECT_VALUE) {
-      setCustomModel(true)
-      setModel('')
-      return
-    }
-    setCustomModel(false)
-    setModel(value)
-  }
-
-  function handleProfileSelect(value: string) {
-    if (value === DEFAULT_SELECT_VALUE) {
-      setCustomProfile(false)
-      setProfile('')
-      return
-    }
-    if (value === CUSTOM_SELECT_VALUE) {
-      setCustomProfile(true)
-      setProfile('')
-      return
-    }
-    setCustomProfile(false)
-    setProfile(value)
-  }
-
   useEffect(() => {
     if (open && !directory.trim() && activeProject?.path) {
       setDirectory(activeProject.path)
@@ -294,30 +219,35 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   useEffect(() => {
     if (!open) return
     const remembered = loadRememberedPlatform()
-    setPlatform(remembered.platform)
-    setAwsRegion(remembered.aws_region)
-    setAwsProfile(remembered.aws_profile)
-    setBedrockModel(remembered.bedrock_model)
+    setLaunchOptions((current) => withDefaultLaunchOptions({
+      ...current,
+      platform: remembered.platform,
+      aws_region: remembered.aws_region,
+      aws_profile: remembered.aws_profile,
+      bedrock_model: remembered.bedrock_model,
+    }))
   }, [open])
 
   useEffect(() => {
-    if (!open || !isCodex) return
+    if (!open) return
     let cancelled = false
-    fetchCodexLaunchOptions()
-      .then((options) => {
+    setLaunchDescriptor(null)
+    setLaunchDescriptorError(null)
+    fetchProviderLaunchOptions(provider)
+      .then((descriptor) => {
         if (!cancelled) {
-          setCodexLaunchOptions(options)
-          setCodexLaunchOptionsError(null)
+          setLaunchDescriptor(descriptor)
+          setLaunchDescriptorError(null)
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          setCodexLaunchOptions(null)
-          setCodexLaunchOptionsError(err instanceof Error ? err.message : 'Failed to load Codex options')
+          setLaunchDescriptor(null)
+          setLaunchDescriptorError(err instanceof Error ? err.message : 'Failed to load provider options')
         }
       })
     return () => { cancelled = true }
-  }, [open, isCodex])
+  }, [open, provider])
 
   // Fetch sessions when switching to resume mode
   useEffect(() => {
@@ -352,29 +282,14 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       setWorktreeName('')
       setSkipPermissions(false)
       setPrompt('')
-      setModel('')
-      setCustomModel(false)
-      setProfile('')
-      setCustomProfile(false)
-      setSandbox('')
-      setApprovalPolicy('')
-      setSearch(false)
-      setNoAltScreen(true)
-      setDangerousBypass(false)
+      setLaunchOptions({ ...DEFAULT_LAUNCH_OPTIONS })
       setCodexSessionId('')
       setUseLast(true)
-      setCopilotAgent('')
-      setCopilotContextTier('')
-      setCopilotEffort('')
-      setCopilotPlan(false)
-      setCopilotRemote(false)
-      setCopilotAllowAll(false)
-      setCopilotNoAskUser(false)
       setError(null)
       setSelectedSession(null)
       setRecentSessions([])
-      setCodexLaunchOptions(null)
-      setCodexLaunchOptionsError(null)
+      setLaunchDescriptor(null)
+      setLaunchDescriptorError(null)
       setSubmitting(false)
     }
   }, [open, defaultProvider])
@@ -399,15 +314,28 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     setSubmitting(true)
 
     try {
+      const optionModel = stringOption(launchOptions, 'model').trim()
+      const optionProfile = stringOption(launchOptions, 'profile').trim()
+      const optionProfileV2 = stringOption(launchOptions, 'profile_v2').trim()
+      const optionSandbox = stringOption(launchOptions, 'sandbox').trim()
+      const optionApprovalPolicy = stringOption(launchOptions, 'approval_policy').trim()
+      const optionAgent = stringOption(launchOptions, 'agent').trim()
+      const optionContextTier = stringOption(launchOptions, 'context_tier').trim()
+      const optionReasoningEffort = stringOption(launchOptions, 'reasoning_effort').trim()
+      const optionAwsRegion = stringOption(launchOptions, 'aws_region').trim()
+      const optionAwsProfile = stringOption(launchOptions, 'aws_profile').trim()
+      const optionBedrockModel = stringOption(launchOptions, 'bedrock_model').trim()
+      const optionPlatform = stringOption(launchOptions, 'platform') === 'bedrock' ? 'bedrock' : 'anthropic'
+
       if (supportsPlatform) {
         try {
           localStorage.setItem(
             PLATFORM_STORAGE_KEY,
             JSON.stringify({
-              platform,
-              aws_region: awsRegion,
-              aws_profile: awsProfile,
-              bedrock_model: bedrockModel,
+              platform: optionPlatform,
+              aws_region: optionAwsRegion,
+              aws_profile: optionAwsProfile,
+              bedrock_model: optionBedrockModel,
             }),
           )
         } catch {
@@ -426,14 +354,17 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         ...(provider === 'claude-code' && skipPermissions && { skip_permissions: true }),
         ...(isCodex && prompt.trim() && { prompt: prompt.trim() }),
         ...((isCopilot || isOpenCode) && prompt.trim() && { prompt: prompt.trim() }),
-        ...(isCodex && !isBedrock && model.trim() && { model: model.trim() }),
-        ...((isCopilot || isOpenCode) && model.trim() && { model: model.trim() }),
-        ...(isCodex && profile.trim() && { profile: profile.trim() }),
-        ...(isCodex && sandbox && { sandbox }),
-        ...(isCodex && approvalPolicy && { approval_policy: approvalPolicy }),
-        ...(isCodex && search && { search: true }),
-        ...(isCodex && { no_alt_screen: noAltScreen }),
-        ...(isCodex && dangerousBypass && { dangerously_bypass_approvals_and_sandbox: true }),
+        ...(isCodex && !isBedrock && optionModel && { model: optionModel }),
+        ...((isCopilot || isOpenCode) && optionModel && { model: optionModel }),
+        ...(isCodex && optionProfile && { profile: optionProfile }),
+        ...(isCodex && optionProfileV2 && { profile_v2: optionProfileV2 }),
+        ...(isCodex && optionSandbox && { sandbox: optionSandbox }),
+        ...(isCodex && optionApprovalPolicy && { approval_policy: optionApprovalPolicy }),
+        ...(isCodex && boolOption(launchOptions, 'search') && { search: true }),
+        ...(isCodex && { no_alt_screen: boolOption(launchOptions, 'no_alt_screen') }),
+        ...(isCodex && boolOption(launchOptions, 'dangerously_bypass_approvals_and_sandbox') && {
+          dangerously_bypass_approvals_and_sandbox: true,
+        }),
         ...(isCodex && (mode === 'resume' || mode === 'fork') && {
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
@@ -446,17 +377,17 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
-        ...((isCopilot || isOpenCode) && copilotAgent.trim() && { agent: copilotAgent.trim() }),
-        ...(isCopilot && copilotContextTier && { context_tier: copilotContextTier }),
-        ...(isCopilot && copilotEffort && { reasoning_effort: copilotEffort }),
-        ...(isCopilot && copilotPlan && { plan: true }),
-        ...(isCopilot && copilotRemote && { remote: true }),
-        ...(isCopilot && copilotAllowAll && { allow_all: true }),
-        ...(isCopilot && copilotNoAskUser && { no_ask_user: true }),
+        ...((isCopilot || isOpenCode) && optionAgent && { agent: optionAgent }),
+        ...(isCopilot && optionContextTier && { context_tier: optionContextTier }),
+        ...((isCodex || isCopilot) && optionReasoningEffort && { reasoning_effort: optionReasoningEffort }),
+        ...(isCopilot && boolOption(launchOptions, 'plan') && { plan: true }),
+        ...(isCopilot && boolOption(launchOptions, 'remote') && { remote: true }),
+        ...(isCopilot && boolOption(launchOptions, 'allow_all') && { allow_all: true }),
+        ...(isCopilot && boolOption(launchOptions, 'no_ask_user') && { no_ask_user: true }),
         ...(isBedrock && { platform: 'bedrock' as const }),
-        ...(isBedrock && awsRegion.trim() && { aws_region: awsRegion.trim() }),
-        ...(isBedrock && awsProfile.trim() && { aws_profile: awsProfile.trim() }),
-        ...(isBedrock && bedrockModel.trim() && { bedrock_model: bedrockModel.trim() }),
+        ...(isBedrock && optionAwsRegion && { aws_region: optionAwsRegion }),
+        ...(isBedrock && optionAwsProfile && { aws_profile: optionAwsProfile }),
+        ...(isBedrock && (isClaude || isCodex) && optionBedrockModel && { bedrock_model: optionBedrockModel }),
       }
 
       const response = await spawnSession(request)
@@ -488,17 +419,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                 setProvider(value as AgentProviderId)
                 setMode('plain')
                 setSelectedSession(null)
-                setModel('')
-                setCustomModel(false)
-                setProfile('')
-                setCustomProfile(false)
-                setCopilotAgent('')
-                setCopilotContextTier('')
-                setCopilotEffort('')
-                setCopilotPlan(false)
-                setCopilotRemote(false)
-                setCopilotAllowAll(false)
-                setCopilotNoAskUser(false)
+                setLaunchOptions({ ...DEFAULT_LAUNCH_OPTIONS })
                 setError(null)
               }}
             >
@@ -611,41 +532,6 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             />
           </div>
 
-          {supportsPlatform && (
-            <div className="space-y-1.5">
-              <Label>Platform</Label>
-              <Select value={platform} onValueChange={(value) => setPlatform(value as Platform)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="anthropic">{defaultPlatformLabel} (default)</SelectItem>
-                  <SelectItem value="bedrock">Amazon Bedrock</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {isBedrock && (
-            <div className="space-y-3 rounded-md border border-border p-3">
-              <p className="text-xs text-muted-foreground">
-                {bedrockHelpText}
-              </p>
-              <div className="space-y-1.5">
-                <Label htmlFor="aws-region">AWS Region</Label>
-                <Input id="aws-region" value={awsRegion} onChange={(e) => setAwsRegion(e.target.value)} placeholder="e.g. us-east-1" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="aws-profile">AWS Profile (optional)</Label>
-                <Input id="aws-profile" value={awsProfile} onChange={(e) => setAwsProfile(e.target.value)} placeholder="e.g. bedrock-prod" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bedrock-model">{bedrockModelLabel}</Label>
-                <Input id="bedrock-model" value={bedrockModel} onChange={(e) => setBedrockModel(e.target.value)} placeholder={bedrockModelPlaceholder} />
-              </div>
-            </div>
-          )}
-
           {/* Worktree name (only in worktree mode) */}
           {isClaude && mode === 'worktree' && (
             <div className="space-y-1.5">
@@ -734,187 +620,31 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {isCodex && (
-            <div className="grid grid-cols-2 gap-3">
-              {!isBedrock && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="codex-model">Model</Label>
-                  <Select value={modelSelectValue} onValueChange={handleModelSelect}>
-                    <SelectTrigger id="codex-model">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={DEFAULT_SELECT_VALUE}>{defaultModelLabel}</SelectItem>
-                      {modelOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {formatModelOption(option)}
-                        </SelectItem>
-                      ))}
-                      <SelectItem value={CUSTOM_SELECT_VALUE}>Custom model</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {modelSelectValue === CUSTOM_SELECT_VALUE && (
-                    <Input
-                      id="codex-model-custom"
-                      value={model}
-                      onChange={(event) => setModel(event.target.value)}
-                      placeholder="model name"
-                      autoComplete="off"
-                      aria-label="Custom Codex model"
-                    />
-                  )}
-                </div>
-              )}
-              <div className="space-y-1.5">
-                <Label htmlFor="codex-profile">Profile</Label>
-                <Select value={profileSelectValue} onValueChange={handleProfileSelect}>
-                  <SelectTrigger id="codex-profile">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DEFAULT_SELECT_VALUE}>{defaultProfileLabel}</SelectItem>
-                    {profileOptions.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {formatProfileOption(option)}
-                      </SelectItem>
-                    ))}
-                    <SelectItem value={CUSTOM_SELECT_VALUE}>Custom profile</SelectItem>
-                  </SelectContent>
-                </Select>
-                {profileSelectValue === CUSTOM_SELECT_VALUE && (
-                  <Input
-                    id="codex-profile-custom"
-                    value={profile}
-                    onChange={(event) => setProfile(event.target.value)}
-                    placeholder="profile name"
-                    autoComplete="off"
-                    aria-label="Custom Codex profile"
-                  />
-                )}
-              </div>
-              {codexLaunchOptionsError && (
-                <p className="col-span-2 text-xs text-destructive">
-                  Could not load Codex models and profiles. Custom values are still available.
-                </p>
-              )}
-              <div className="space-y-1.5">
-                <Label>Sandbox</Label>
-                <Select value={sandbox || 'default'} onValueChange={(value) => setSandbox(value === 'default' ? '' : value)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="read-only">Read-only</SelectItem>
-                    <SelectItem value="workspace-write">Workspace write</SelectItem>
-                    <SelectItem value="danger-full-access">Full access</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Approval</Label>
-                <Select value={approvalPolicy || 'default'} onValueChange={(value) => setApprovalPolicy(value === 'default' ? '' : value)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="untrusted">Untrusted</SelectItem>
-                    <SelectItem value="on-failure">On failure</SelectItem>
-                    <SelectItem value="on-request">On request</SelectItem>
-                    <SelectItem value="never">Never</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="codex-prompt">Initial Prompt</Label>
-                <Input id="codex-prompt" value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional prompt" />
-              </div>
-            </div>
+          {launchDescriptor && (
+            <ProviderLaunchOptionsFields
+              provider={provider}
+              value={launchOptions}
+              onChange={setLaunchOptions}
+              descriptor={launchDescriptor}
+              disabled={submitting}
+            />
           )}
 
-          {(isCopilot || isOpenCode) && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="copilot-model">Model</Label>
-                <Input
-                  id="copilot-model"
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
-                  placeholder="Default"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="copilot-agent">Custom agent</Label>
-                <Input
-                  id="copilot-agent"
-                  value={copilotAgent}
-                  onChange={(event) => setCopilotAgent(event.target.value)}
-                  placeholder="Default"
-                  autoComplete="off"
-                />
-              </div>
-              {isCopilot && (
-                <div className="space-y-1.5">
-                  <Label>Context</Label>
-                  <Select
-                    value={copilotContextTier || 'default'}
-                    onValueChange={(value) => setCopilotContextTier(value === 'default' ? '' : value)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">Default</SelectItem>
-                      <SelectItem value="long_context">Long context</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              {isCopilot && (
-                <div className="space-y-1.5">
-                  <Label>Reasoning effort</Label>
-                  <Select
-                    value={copilotEffort || 'default'}
-                    onValueChange={(value) => setCopilotEffort(value === 'default' ? '' : value)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">Default</SelectItem>
-                      <SelectItem value="none">None</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                      <SelectItem value="xhigh">XHigh</SelectItem>
-                      <SelectItem value="max">Max</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="copilot-prompt">Initial Prompt</Label>
-                <Input
-                  id="copilot-prompt"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Optional prompt"
-                />
-              </div>
-              {isCopilot && (
-                <div className="col-span-2 grid gap-2">
-                <div className="flex items-center space-x-2">
-                  <Checkbox id="copilot-plan" checked={copilotPlan} onCheckedChange={(checked) => setCopilotPlan(checked === true)} />
-                  <Label htmlFor="copilot-plan" className="cursor-pointer">Start in plan mode</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox id="copilot-remote" checked={copilotRemote} onCheckedChange={(checked) => setCopilotRemote(checked === true)} />
-                  <Label htmlFor="copilot-remote" className="cursor-pointer">Enable Copilot remote control</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox id="copilot-allow-all" checked={copilotAllowAll} onCheckedChange={(checked) => setCopilotAllowAll(checked === true)} />
-                  <Label htmlFor="copilot-allow-all" className="cursor-pointer text-destructive">Allow all tools, paths, and URLs</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox id="copilot-no-ask" checked={copilotNoAskUser} onCheckedChange={(checked) => setCopilotNoAskUser(checked === true)} />
-                  <Label htmlFor="copilot-no-ask" className="cursor-pointer">Do not ask the user during automation</Label>
-                </div>
-                </div>
-              )}
+          {launchDescriptorError && (
+            <p className="text-xs text-destructive">
+              Could not load provider launch options. {launchDescriptorError}
+            </p>
+          )}
+
+          {(isCodex || isCopilot || isOpenCode) && (
+            <div className="space-y-1.5">
+              <Label htmlFor="session-prompt">Initial Prompt</Label>
+              <Input
+                id="session-prompt"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Optional prompt"
+              />
             </div>
           )}
 
@@ -933,23 +663,6 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
               <p className="text-xs text-destructive/80 ml-6">
                 Allows Claude to run tools without asking for confirmation
               </p>
-            </div>
-          )}
-
-          {isCodex && (
-            <div className="space-y-2">
-              <div className="flex items-center space-x-2">
-                <Checkbox id="codex-search" checked={search} onCheckedChange={(checked) => setSearch(checked === true)} />
-                <Label htmlFor="codex-search" className="cursor-pointer">Enable web search</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox id="codex-no-alt-screen" checked={noAltScreen} onCheckedChange={(checked) => setNoAltScreen(checked === true)} />
-                <Label htmlFor="codex-no-alt-screen" className="cursor-pointer">Disable alternate screen</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox id="codex-dangerous" checked={dangerousBypass} onCheckedChange={(checked) => setDangerousBypass(checked === true)} />
-                <Label htmlFor="codex-dangerous" className="cursor-pointer text-destructive">Bypass approvals and sandbox</Label>
-              </div>
             </div>
           )}
 

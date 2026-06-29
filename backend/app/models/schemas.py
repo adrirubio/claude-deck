@@ -2091,6 +2091,7 @@ class AgentTeamSlotResponse(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
     enabled: bool
     created_at: datetime
     updated_at: datetime
@@ -2150,6 +2151,7 @@ class AgentTeamLaunchPlanItem(BaseModel):
     reasons: List[str] = Field(default_factory=list)
     matching_session: Optional[Dict[str, Any]] = None
     block_code: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
 
 
 class AgentTeamLaunchPlan(BaseModel):
@@ -2187,6 +2189,7 @@ class AgentTeamLaunchResultItem(BaseModel):
     message: Optional[str] = None
     block_code: Optional[str] = None
     error: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
 
 
 class AgentTeamLaunchResult(BaseModel):

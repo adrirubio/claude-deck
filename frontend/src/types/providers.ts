@@ -49,6 +49,47 @@ export interface ProvidersResponse {
   count: number
 }
 
+export interface ProviderLaunchOption {
+  value: string
+  label: string
+  source?: string
+  description?: string
+  priority?: number
+}
+
+export interface ProviderLaunchProfileOption {
+  value: string
+  label: string
+  sources?: string[]
+  active?: boolean
+  parse_error?: string | null
+}
+
+export interface ProviderLaunchOptionsResponse {
+  provider: AgentProviderId
+  provider_display_name?: string
+  supported_launch_modes: string[]
+  supported_launch_options: string[]
+  platform_options: Array<'anthropic' | 'bedrock' | string>
+  default_platform: 'anthropic' | 'bedrock' | string
+  bedrock_supported: boolean
+  reasoning_effort_supported: boolean
+  reasoning_effort_options: ProviderLaunchOption[]
+  context_tier_options: ProviderLaunchOption[]
+  model_options: ProviderLaunchOption[]
+  profile_options: ProviderLaunchProfileOption[]
+  model_examples: ProviderLaunchOption[]
+  warnings: string[]
+  config_path?: string
+  models_cache_path?: string
+  config_exists?: boolean
+  config_parse_error?: string | null
+  models_cache_exists?: boolean
+  models_cache_parse_error?: string | null
+  default_model?: string | null
+  default_profile?: string | null
+}
+
 export type ProviderDoctorStatus = 'ok' | 'warn' | 'error' | 'unknown' | string
 
 export interface ProviderDoctorCheck {

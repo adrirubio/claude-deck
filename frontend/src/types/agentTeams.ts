@@ -12,6 +12,33 @@ export type AgentTeamLaunchStatus =
   | 'blocked_provider_unavailable'
   | 'blocked_agent_mail_not_configured'
 
+export interface SlotLaunchOptions {
+  model?: string
+  profile?: string
+  profile_v2?: string
+  sandbox?: string
+  approval_policy?: string
+  search?: boolean
+  no_alt_screen?: boolean
+  dangerously_bypass_approvals_and_sandbox?: boolean
+  use_last?: boolean
+  session_id?: string
+  platform?: 'anthropic' | 'bedrock' | string
+  aws_region?: string
+  aws_profile?: string
+  bedrock_model?: string
+  agent?: string
+  context_tier?: string
+  reasoning_effort?: string
+  plan?: boolean
+  remote?: boolean
+  allow_all?: boolean
+  no_ask_user?: boolean
+  skip_permissions?: boolean
+  prompt?: string
+  [key: string]: unknown
+}
+
 export interface AgentTeamSlot {
   id: number
   preset_id: number
@@ -25,7 +52,8 @@ export interface AgentTeamSlot {
   charter?: string | null
   bootstrap_prompt?: string | null
   launch_mode: string
-  launch_options: Record<string, unknown>
+  launch_options: SlotLaunchOptions
+  warnings?: string[]
   enabled: boolean
   created_at: string
   updated_at: string
@@ -53,7 +81,7 @@ export interface AgentTeamSlotInput {
   charter?: string | null
   bootstrap_prompt?: string | null
   launch_mode?: string
-  launch_options?: Record<string, unknown>
+  launch_options?: SlotLaunchOptions
   enabled?: boolean
   position?: number | null
 }
@@ -66,7 +94,7 @@ export interface AgentTeamSlotUpdate {
   charter?: string | null
   bootstrap_prompt?: string | null
   launch_mode?: string
-  launch_options?: Record<string, unknown>
+  launch_options?: SlotLaunchOptions
   enabled?: boolean
   position?: number
 }
@@ -116,6 +144,7 @@ export interface AgentTeamLaunchPlanItem {
   reasons: string[]
   matching_session?: Record<string, unknown> | null
   block_code?: string | null
+  warnings?: string[]
 }
 
 export interface AgentTeamLaunchPlan {
@@ -144,6 +173,7 @@ export interface AgentTeamLaunchResultItem {
   message?: string | null
   block_code?: string | null
   error?: string | null
+  warnings?: string[]
 }
 
 export interface AgentTeamLaunchResult {

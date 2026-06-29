@@ -10,7 +10,8 @@ from mcp.server.fastmcp import FastMCP
 
 DECK_URL = os.environ.get("CLAUDE_DECK_URL", "http://127.0.0.1:8000").rstrip("/")
 PROVIDER = os.environ.get("CLAUDE_DECK_PROVIDER", "unknown")
-API = f"{DECK_URL}/api/v1/agent-mail"
+DECK_API = f"{DECK_URL}/api/v1"
+API = f"{DECK_API}/agent-mail"
 DECK_HTTP_TIMEOUT = httpx.Timeout(connect=0.5, read=15.0, write=5.0, pool=0.5)
 OFFLINE_BACKOFF_SECONDS = 2.0
 HEARTBEAT_INTERVAL_SECONDS = 60.0
@@ -45,20 +46,63 @@ def _unreachable_result(message: str) -> dict:
     }
 
 
-def _request(method: str, path: str, **kwargs) -> dict:
+def _http_error_result(exc: httpx.HTTPStatusError) -> dict:
+    response = exc.response
+    message = response.text
+    block_code = None
+    try:
+        body = response.json()
+        detail = body.get("detail") if isinstance(body, dict) else body
+        if isinstance(detail, str):
+            message = detail
+        elif isinstance(detail, dict):
+            message = str(detail.get("message") or detail)
+            block_code = detail.get("block_code")
+        elif detail is not None:
+            message = str(detail)
+    except ValueError:
+        pass
+    error = {
+        "code": "deck_http_error",
+        "status_code": response.status_code,
+        "message": message,
+    }
+    if block_code:
+        error["block_code"] = block_code
+    return {
+        "ok": False,
+        "error": error,
+    }
+
+
+def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
     now = time.monotonic()
     if now < _state.get("offline_until", 0.0):
         return _unreachable_result(_state.get("last_error") or "Claude Deck is unavailable.")
+    normalized_path = path if path.startswith("/") else f"/{path}"
+    url = f"{DECK_API}/{api_prefix.strip('/')}{normalized_path}"
     try:
-        response = httpx.request(method, f"{API}{path}", timeout=DECK_HTTP_TIMEOUT, **kwargs)
+        response = httpx.request(method, url, timeout=DECK_HTTP_TIMEOUT, **kwargs)
         response.raise_for_status()
         _state["offline_until"] = 0.0
         _state["last_error"] = None
         return {"ok": True, "data": response.json()}
+    except httpx.HTTPStatusError as exc:
+        _state["offline_until"] = 0.0
+        _state["last_error"] = None
+        return _http_error_result(exc)
     except httpx.HTTPError as exc:
         _state["offline_until"] = time.monotonic() + OFFLINE_BACKOFF_SECONDS
         _state["last_error"] = str(exc)
         return _unreachable_result(str(exc))
+
+
+def _request(method: str, path: str, **kwargs) -> dict:
+    return _deck_request(method, "agent-mail", path, **kwargs)
+
+
+def _team_request(method: str, path: str, **kwargs) -> dict:
+    return _deck_request(method, "agent-teams", path, **kwargs)
 
 
 def _ensure_registered() -> dict:
@@ -339,6 +383,115 @@ def deck_create_handoff(
     if not result["ok"]:
         return result
     return {"ok": True, "handoff_id": result["data"]["id"], **_counts()}
+
+
+@mcp.tool()
+def deck_list_teams() -> dict:
+    """List saved Claude Deck Agent Team presets. Returns preset ids, names,
+    descriptions, and slots with launch options and validation warnings."""
+    result = _team_request("GET", "/presets")
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"]}
+
+
+@mcp.tool()
+def deck_create_team(
+    name: str,
+    description: str = "",
+    slots: Optional[list[dict[str, Any]]] = None,
+) -> dict:
+    """Create an Agent Team preset.
+
+    Valid providers: claude-code, codex-cli, copilot-cli, opencode-cli.
+    Common slot fields: display_name, provider, repo_path, role, charter,
+    launch_mode, launch_options. Provider launch modes/options:
+    - claude-code: modes plain/worktree/resume; launch_options
+      skip_permissions, platform, aws_region, aws_profile, bedrock_model,
+      prompt, session_id, project_folder, worktree_name.
+    - codex-cli: modes plain/resume/fork; launch_options model, profile,
+      profile_v2, sandbox, approval_policy, search, no_alt_screen,
+      dangerously_bypass_approvals_and_sandbox, use_last, session_id,
+      platform, aws_region, aws_profile, bedrock_model, reasoning_effort,
+      prompt. reasoning_effort: low/medium/high/xhigh.
+    - copilot-cli: modes plain/resume; launch_options model, agent,
+      context_tier, reasoning_effort, plan, remote, allow_all, no_ask_user,
+      skip_permissions, dangerously_bypass_approvals_and_sandbox, use_last,
+      session_id, prompt. reasoning_effort: none/low/medium/high/xhigh/max;
+      context_tier: default/long_context. Bedrock launch options are not
+      supported for copilot-cli.
+    - opencode-cli: modes plain/resume; launch_options model, agent,
+      use_last, session_id, platform, aws_region, aws_profile, prompt.
+      OpenCode TUI launch does not support reasoning_effort.
+    Use deck_plan_team_launch before launch.
+    """
+    payload = {
+        "name": name,
+        "description": description or None,
+        "created_by": "mcp",
+        "slots": slots or [],
+    }
+    result = _team_request("POST", "/presets", json=payload)
+    if not result["ok"]:
+        return result
+    return {"ok": True, "preset": result["data"]}
+
+
+@mcp.tool()
+def deck_plan_team_launch(
+    preset_id: int,
+    reuse_existing: bool = True,
+    slot_ids: Optional[list[int]] = None,
+    include_disabled: bool = False,
+) -> dict:
+    """Plan an Agent Team launch and return the plan_hash required by
+    deck_launch_team. Review blocked items and warnings before launching."""
+    payload = {
+        "reuse_existing": reuse_existing,
+        "slot_ids": slot_ids,
+        "include_disabled": include_disabled,
+    }
+    result = _team_request("POST", f"/presets/{preset_id}/plan-launch", json=payload)
+    if not result["ok"]:
+        return result
+    return {"ok": True, "plan": result["data"]}
+
+
+@mcp.tool()
+def deck_launch_team(
+    preset_id: int,
+    confirm_plan_hash: str = "",
+    reuse_existing: bool = True,
+    slot_ids: Optional[list[int]] = None,
+    force_without_plan: bool = False,
+) -> dict:
+    """Launch an Agent Team preset.
+
+    Call deck_plan_team_launch first and pass its plan_hash as
+    confirm_plan_hash. force_without_plan bypasses that safety check only when
+    explicitly set true. Launch behavior uses the per-provider launch_options
+    accepted by deck_create_team; validation errors include machine-readable
+    block_code values when available.
+    """
+    if not confirm_plan_hash and not force_without_plan:
+        return {
+            "ok": False,
+            "error": {
+                "code": "plan_hash_required",
+                "message": "Call deck_plan_team_launch first and pass confirm_plan_hash.",
+            },
+        }
+    payload = {
+        "requested_by": "mcp",
+        "reuse_existing": reuse_existing,
+        "slot_ids": slot_ids,
+        "confirm_plan_hash": confirm_plan_hash or None,
+        "skip_plan_confirmation": force_without_plan,
+    }
+    result = _team_request("POST", f"/presets/{preset_id}/launch", json=payload)
+    if not result["ok"]:
+        return result
+    return {"ok": True, "launch": result["data"]}
 
 
 if __name__ == "__main__":

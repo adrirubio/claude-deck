@@ -6,10 +6,12 @@ from pathlib import Path
 
 from app.services.providers.base import (
     AgentProvider,
+    ProviderLaunchError,
     SpawnCommandOptions,
     argv0_name,
     has_binary_descendant,
 )
+from app.services.providers.launch_contract import CODEX_REASONING_EFFORTS
 from app.services.providers.platform_env import PLATFORM_BEDROCK
 
 
@@ -84,6 +86,15 @@ class CodexCliProvider(AgentProvider):
         command = ["codex", "--cd", options.directory]
         if options.platform == PLATFORM_BEDROCK:
             command += ["--config", CODEX_BEDROCK_MODEL_PROVIDER]
+        if options.reasoning_effort:
+            if options.reasoning_effort not in CODEX_REASONING_EFFORTS:
+                allowed = ", ".join(CODEX_REASONING_EFFORTS)
+                raise ProviderLaunchError(
+                    f"Unsupported Codex reasoning_effort: {options.reasoning_effort}. "
+                    f"Expected one of: {allowed}",
+                    "invalid_reasoning_effort",
+                )
+            command += ["--config", f'model_reasoning_effort="{options.reasoning_effort}"']
 
         effective_model = (
             options.bedrock_model

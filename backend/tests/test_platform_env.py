@@ -86,3 +86,41 @@ def test_codex_bedrock_without_region_or_profile_has_no_env():
     from app.services.providers.platform_env import build_platform_env, PLATFORM_BEDROCK
 
     assert build_platform_env(PLATFORM_BEDROCK, provider_id="codex-cli") == {}
+
+
+def test_opencode_bedrock_only_sets_shared_aws_env():
+    from app.services.providers.platform_env import build_platform_env, PLATFORM_BEDROCK
+
+    env = build_platform_env(
+        PLATFORM_BEDROCK,
+        region="us-west-2",
+        aws_profile="opencode-bedrock",
+        model="anthropic/claude-opus-4.8",
+        provider_id="opencode-cli",
+    )
+
+    assert env == {
+        "AWS_REGION": "us-west-2",
+        "AWS_PROFILE": "opencode-bedrock",
+    }
+    assert "CLAUDE_CODE_USE_BEDROCK" not in env
+    assert "ANTHROPIC_MODEL" not in env
+
+
+def test_copilot_bedrock_does_not_receive_claude_code_env():
+    from app.services.providers.platform_env import build_platform_env, PLATFORM_BEDROCK
+
+    env = build_platform_env(
+        PLATFORM_BEDROCK,
+        region="us-west-2",
+        aws_profile="copilot-bedrock",
+        model="gpt-5.5",
+        provider_id="copilot-cli",
+    )
+
+    assert env == {
+        "AWS_REGION": "us-west-2",
+        "AWS_PROFILE": "copilot-bedrock",
+    }
+    assert "CLAUDE_CODE_USE_BEDROCK" not in env
+    assert "ANTHROPIC_MODEL" not in env

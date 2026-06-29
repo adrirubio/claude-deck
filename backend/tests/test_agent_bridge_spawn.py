@@ -145,6 +145,54 @@ def test_codex_bedrock_platform_sets_config_override_and_aws_env(monkeypatch, tm
     assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "bedrock"
 
 
+def test_codex_spawn_sets_reasoning_effort(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    spawn.spawn_session(
+        "codex-cli",
+        SpawnCommandOptions(
+            directory=str(tmp_path),
+            mode="plain",
+            reasoning_effort="xhigh",
+        ),
+    )
+
+    command_parts = shlex.split(calls[0][-1])
+    config_values = [
+        command_parts[index + 1]
+        for index, part in enumerate(command_parts)
+        if part == "--config"
+    ]
+    assert 'model_reasoning_effort="xhigh"' in config_values
+
+
+def test_codex_spawn_rejects_invalid_reasoning_effort(tmp_path):
+    from app.services.providers import get_provider
+    from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+
+    provider = get_provider("codex-cli")
+
+    try:
+        provider.build_spawn_command(
+            SpawnCommandOptions(directory=str(tmp_path), reasoning_effort="minimal")
+        )
+    except ProviderLaunchError as exc:
+        assert exc.block_code == "invalid_reasoning_effort"
+    else:
+        raise AssertionError("expected invalid Codex reasoning effort to be rejected")
+
+
 def test_copilot_spawn_builds_cli_flags(monkeypatch, tmp_path):
     from app.services.agent_bridge import spawn
     from app.services.providers.base import SpawnCommandOptions
@@ -223,6 +271,7 @@ def test_opencode_spawn_builds_cli_flags(monkeypatch, tmp_path):
     assert command_parts[command_parts.index("--model") + 1] == "anthropic/claude-sonnet-4.6"
     assert command_parts[command_parts.index("--agent") + 1] == "planner"
     assert command_parts[command_parts.index("--prompt") + 1] == "Review the plan"
+    assert "--variant" not in command_parts
 
 
 def test_opencode_spawn_rejects_unsupported_tui_flags(tmp_path):
@@ -236,7 +285,8 @@ def test_opencode_spawn_rejects_unsupported_tui_flags(tmp_path):
             SpawnCommandOptions(directory=str(tmp_path), reasoning_effort="high")
         )
     except ValueError as exc:
-        assert "does not support model variants" in str(exc)
+        assert "does not support reasoning_effort" in str(exc)
+        assert getattr(exc, "block_code", None) == "reasoning_effort_unsupported"
     else:
         raise AssertionError("expected OpenCode variant launch to be rejected")
 
