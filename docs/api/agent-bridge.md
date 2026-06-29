@@ -24,12 +24,21 @@ GET /api/v1/agent-bridge/sessions?provider={provider_id}
       "pane_id": "%1",
       "cwd": "/home/user/repo",
       "pid": "12345",
-      "status": "active"
+      "status": "active",
+      "team_preset_id": 10,
+      "team_preset_name": "Release validation",
+      "team_slot_id": 20,
+      "team_slot_name": "Reviewer",
+      "team_slot_role": "planner-reviewer",
+      "team_slot_charter": "Review the plan and implementation against release goals.",
+      "team_slot_color": "purple"
     }
   ],
   "count": 1
 }
 ```
+
+Team fields are present only for sessions launched from Agent Teams. Manual tmux sessions fall back to provider, repo, and tmux metadata with no team slot color.
 
 ### Get Preview
 

@@ -27,6 +27,7 @@ _TEAM_ENV_KEYS = {
     "CLAUDE_DECK_TEAM_SLOT_ID": "team_slot_id",
     "CLAUDE_DECK_TEAM_SLOT_NAME": "team_slot_name",
     "CLAUDE_DECK_TEAM_SLOT_ROLE": "team_slot_role",
+    "CLAUDE_DECK_TEAM_SLOT_COLOR": "team_slot_color",
 }
 
 

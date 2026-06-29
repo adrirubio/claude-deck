@@ -1,9 +1,11 @@
-import { useRef, useEffect } from 'react'
+import { useMemo, useRef, useEffect } from 'react'
 import { Monitor, Maximize2, Minimize2, X } from 'lucide-react'
 import { useTerminal } from './useTerminal'
 import { Button } from '@/components/ui/button'
+import { getTeamSlotColorClasses, getTeamSlotTerminalTheme } from '@/lib/agentTeamColors'
 import { getInstanceAccentClasses } from '@/lib/instanceAccent'
 import { cn } from '@/lib/utils'
+import type { CCSession } from './types'
 import type { InstanceIdentity } from '@/types/status'
 
 interface TerminalViewProps {
@@ -12,14 +14,19 @@ interface TerminalViewProps {
   onToggleFullscreen?: () => void
   onClose?: () => void
   instance?: InstanceIdentity | null
+  session?: CCSession | null
 }
 
-export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, instance }: TerminalViewProps) {
+export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, instance, session }: TerminalViewProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef)
+  const slotColor = session?.team_slot_color
+  const terminalTheme = useMemo(() => getTeamSlotTerminalTheme(slotColor), [slotColor])
+  const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef, terminalTheme)
   const accentClasses = getInstanceAccentClasses(instance?.accent)
+  const colorClasses = getTeamSlotColorClasses(slotColor)
   const modeLabel = readOnly ? 'Read-only' : 'Interactive'
+  const sessionLabel = session?.team_slot_name || session?.session_name || target
 
   useEffect(() => {
     if (target) {
@@ -31,7 +38,7 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, 
 
   return (
     <div className="flex flex-col h-full">
-      <div ref={wrapperRef} className="flex-1 relative overflow-hidden">
+      <div ref={wrapperRef} className={cn('relative flex-1 overflow-hidden', colorClasses.terminalWrapper)}>
         {!target && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground bg-background">
             <Monitor className="h-12 w-12 mb-3" />
@@ -48,7 +55,7 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, 
       </div>
 
       {target && (
-        <div className={cn("flex items-center justify-between gap-3 px-3 py-2 border-t bg-background", accentClasses.terminal)}>
+        <div className={cn("flex items-center justify-between gap-3 px-3 py-2 border-t bg-background", accentClasses.terminal, colorClasses.terminalBar)}>
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex items-center gap-2 text-sm">
               <button
@@ -84,7 +91,7 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, 
               className="text-xs text-muted-foreground truncate"
               title={instance ? `${modeLabel} on ${instance.name} (${instance.hostname}) · ${target}` : target}
             >
-              {instance ? `${modeLabel} on ${instance.name}` : target}
+              {instance ? `${modeLabel} on ${instance.name}` : sessionLabel}
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">

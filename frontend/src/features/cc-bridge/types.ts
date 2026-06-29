@@ -16,6 +16,7 @@ export interface AgentSession {
   team_slot_name?: string | null
   team_slot_role?: string | null
   team_slot_charter?: string | null
+  team_slot_color?: string | null
 }
 
 export type CCSession = AgentSession

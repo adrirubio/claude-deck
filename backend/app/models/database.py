@@ -150,6 +150,7 @@ class AgentTeamSlot(Base):
     repo_name: Mapped[str] = mapped_column(String, nullable=False)
     role: Mapped[str | None] = mapped_column(String, nullable=True)
     charter: Mapped[str | None] = mapped_column(String, nullable=True)
+    ui_color: Mapped[str | None] = mapped_column(String, nullable=True)
     bootstrap_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
     launch_mode: Mapped[str] = mapped_column(String, default="plain", nullable=False)
     launch_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)

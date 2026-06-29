@@ -5,14 +5,24 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { fetchTerminalToken, buildTerminalWsUrl } from './api'
+import type { TeamSlotTerminalTheme } from '@/lib/agentTeamColors'
+
+const DEFAULT_TERMINAL_THEME: TeamSlotTerminalTheme = {
+  background: '#1e1e2e',
+  foreground: '#cdd6f4',
+  cursor: '#f5e0dc',
+  selectionBackground: '#585b7066',
+}
 
 export function useTerminal(
   containerRef: React.RefObject<HTMLDivElement | null>,
   wrapperRef: React.RefObject<HTMLDivElement | null>,
+  terminalTheme?: TeamSlotTerminalTheme | null,
 ) {
   const termRef = useRef<Terminal | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const themeRef = useRef<TeamSlotTerminalTheme>(terminalTheme ?? DEFAULT_TERMINAL_THEME)
   const [connected, setConnected] = useState(false)
   const [readOnly, setReadOnly] = useState(true)
   const readOnlyRef = useRef(true)
@@ -31,11 +41,7 @@ export function useTerminal(
       cursorBlink: true,
       fontSize: 14,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      theme: {
-        background: '#1e1e2e',
-        foreground: '#cdd6f4',
-        cursor: '#f5e0dc',
-      },
+      theme: themeRef.current,
     })
 
     const fitAddon = new FitAddon()
@@ -54,6 +60,12 @@ export function useTerminal(
     termRef.current = term
     fitAddonRef.current = fitAddon
   }, [containerRef])
+
+  useEffect(() => {
+    themeRef.current = terminalTheme ?? DEFAULT_TERMINAL_THEME
+    if (!termRef.current) return
+    termRef.current.options.theme = themeRef.current
+  }, [terminalTheme])
 
   const attach = useCallback(async (target: string) => {
     if (wsRef.current) {

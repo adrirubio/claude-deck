@@ -2,6 +2,7 @@ import { Trash2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { CLICKABLE_CARD } from '@/lib/constants'
+import { getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
 import type { CCSession } from './types'
 import type { InstanceIdentity } from '@/types/status'
@@ -24,6 +25,7 @@ export function SessionCard({ session, gridPosition, onClick, onKill, instance }
   const teamSlotLabel = session.team_slot_name?.trim()
   const teamRoleLabel = session.team_slot_role?.trim()
   const teamName = session.team_preset_name?.trim()
+  const colorClasses = getTeamSlotColorClasses(session.team_slot_color)
   const primaryLabel = teamSlotLabel || session.session_name
   const showRole = Boolean(
     teamRoleLabel && normalizeLabel(teamRoleLabel) !== normalizeLabel(teamSlotLabel)
@@ -40,6 +42,7 @@ export function SessionCard({ session, gridPosition, onClick, onKill, instance }
     <Card
       className={cn(
         CLICKABLE_CARD,
+        colorClasses.card,
         isActive && 'border-primary bg-primary/5'
       )}
       onClick={onClick}
@@ -54,12 +57,20 @@ export function SessionCard({ session, gridPosition, onClick, onKill, instance }
     >
       <CardContent className="p-3">
         <div className="flex items-center justify-between">
-          <span
-            className="text-sm font-medium truncate"
-            title={teamSlotLabel ? `${session.session_name} · ${session.tmux_target}` : session.tmux_target}
-          >
-            {primaryLabel}
-          </span>
+          <div className="flex min-w-0 items-center gap-2">
+            {session.team_slot_color && (
+              <span
+                className={cn('h-2 w-2 shrink-0 rounded-full', colorClasses.dot)}
+                title={`Slot color: ${session.team_slot_color}`}
+              />
+            )}
+            <span
+              className="truncate text-sm font-medium"
+              title={teamSlotLabel ? `${session.session_name} · ${session.tmux_target}` : session.tmux_target}
+            >
+              {primaryLabel}
+            </span>
+          </div>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground/50 hover:text-destructive transition-colors"

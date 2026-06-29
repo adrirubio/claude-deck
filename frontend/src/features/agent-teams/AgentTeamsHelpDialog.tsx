@@ -45,7 +45,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
           <HelpSection icon={UsersRound} title="What a team slot is">
             <p>
               A team is a saved roster of named slots. Each slot stores a provider, repository,
-              role, charter, and optional bootstrap prompt. When launched from Agent Teams, each
+              role, charter, UI color, and optional bootstrap prompt. When launched from Agent Teams, each
               slot receives its own Agent Mail identity.
             </p>
             <div className="flex flex-wrap gap-2">
@@ -53,6 +53,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               <Badge variant="outline">Repo</Badge>
               <Badge variant="outline">Role</Badge>
               <Badge variant="outline">Charter</Badge>
+              <Badge variant="outline">Color</Badge>
             </div>
           </HelpSection>
 

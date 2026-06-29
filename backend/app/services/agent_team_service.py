@@ -64,6 +64,7 @@ _PROVIDER_IDS = {provider.id for provider in get_providers()}
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$")
 _CONCRETE_MODEL_MARKERS = (".", "/", ":")
 _BEDROCK_LAUNCH_OPTION_KEYS = {"platform", "aws_region", "aws_profile", "bedrock_model"}
+_TEAM_SLOT_UI_COLORS = {"blue", "purple", "green", "amber", "red", "cyan", "slate"}
 
 
 class AgentTeamService:
@@ -327,6 +328,8 @@ class AgentTeamService:
             updates["role"] = self._clean_optional(request.role)
         if request.charter is not None:
             updates["charter"] = self._clean_optional(request.charter)
+        if "ui_color" in request.model_fields_set:
+            updates["ui_color"] = self._clean_ui_color(request.ui_color)
         if request.bootstrap_prompt is not None:
             updates["bootstrap_prompt"] = self._clean_optional(request.bootstrap_prompt)
         if request.launch_mode is not None:
@@ -584,6 +587,7 @@ class AgentTeamService:
                     "CLAUDE_DECK_TEAM_SLOT_ID": str(slot.id),
                     "CLAUDE_DECK_TEAM_SLOT_NAME": slot.display_name,
                     **({"CLAUDE_DECK_TEAM_SLOT_ROLE": slot.role} if slot.role else {}),
+                    **({"CLAUDE_DECK_TEAM_SLOT_COLOR": slot.ui_color} if slot.ui_color else {}),
                 },
             )
             result = AgentTeamLaunchResultItem(
@@ -1126,6 +1130,7 @@ class AgentTeamService:
             repo_name=slot.repo_name,
             role=slot.role,
             charter=slot.charter,
+            ui_color=slot.ui_color,
             bootstrap_prompt=slot.bootstrap_prompt,
             launch_mode=slot.launch_mode,
             launch_options=slot.launch_options or {},
@@ -1210,6 +1215,7 @@ class AgentTeamService:
             "repo_name": ident["repo_name"],
             "role": self._clean_optional(slot.role),
             "charter": self._clean_optional(slot.charter),
+            "ui_color": self._clean_ui_color(slot.ui_color),
             "bootstrap_prompt": self._clean_optional(slot.bootstrap_prompt),
             "launch_mode": launch_mode,
             "launch_options": launch_options,
@@ -1366,6 +1372,15 @@ class AgentTeamService:
             return None
         text = str(value).strip()
         return text or None
+
+    def _clean_ui_color(self, value: Any) -> str | None:
+        color = self._clean_optional(value)
+        if color is None:
+            return None
+        if color not in _TEAM_SLOT_UI_COLORS:
+            allowed = ", ".join(sorted(_TEAM_SLOT_UI_COLORS))
+            raise ValueError(f"Unsupported ui_color: {color}. Expected one of: {allowed}")
+        return color
 
 
 agent_team_service = AgentTeamService()
