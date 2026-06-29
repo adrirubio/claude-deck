@@ -12,6 +12,7 @@ import type {
   CodexPluginMutationRequest,
   CodexPluginMutationResponse,
   ProviderDoctorResponse,
+  ProviderLaunchOptionsResponse,
   ProvidersResponse,
 } from '@/types/providers'
 
@@ -45,6 +46,12 @@ export function useProviders() {
 
 export async function fetchProviderDoctor(providerId: AgentProviderId): Promise<ProviderDoctorResponse> {
   return apiClient<ProviderDoctorResponse>(`providers/${providerId}/doctor`)
+}
+
+export async function fetchProviderLaunchOptions(
+  providerId: AgentProviderId
+): Promise<ProviderLaunchOptionsResponse> {
+  return apiClient<ProviderLaunchOptionsResponse>(`providers/${providerId}/launch-options`)
 }
 
 export async function updateCodexConfig(request: CodexConfigUpdateRequest): Promise<unknown> {

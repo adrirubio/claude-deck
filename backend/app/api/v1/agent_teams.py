@@ -21,11 +21,17 @@ from app.models.schemas import (
     AgentTeamSlotUpdate,
 )
 from app.services.agent_team_service import PlanConflictError, agent_team_service
+from app.services.providers.base import ProviderLaunchError
 
 router = APIRouter()
 
 
 def _bad_request(exc: ValueError) -> HTTPException:
+    if isinstance(exc, ProviderLaunchError):
+        return HTTPException(
+            status_code=400,
+            detail={"message": str(exc), "block_code": exc.block_code},
+        )
     return HTTPException(status_code=400, detail=str(exc))
 
 

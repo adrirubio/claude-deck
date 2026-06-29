@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.services.providers.base import (
     AgentProvider,
+    ProviderLaunchError,
     SpawnCommandOptions,
     argv0_name,
     has_binary_descendant,
@@ -64,7 +65,10 @@ class OpenCodeCliProvider(AgentProvider):
             raise ValueError(f"Unsupported OpenCode CLI mode: {options.mode}")
 
         if options.reasoning_effort:
-            raise ValueError("OpenCode TUI launch does not support model variants")
+            raise ProviderLaunchError(
+                "OpenCode TUI launch does not support reasoning_effort",
+                "reasoning_effort_unsupported",
+            )
         if options.dangerously_bypass_approvals_and_sandbox or options.skip_permissions:
             raise ValueError("OpenCode TUI launch does not support permission bypass flags")
 
@@ -73,8 +77,6 @@ class OpenCodeCliProvider(AgentProvider):
             command += ["--model", options.model]
         if options.agent:
             command += ["--agent", options.agent]
-        if options.reasoning_effort:
-            command += ["--variant", options.reasoning_effort]
         if options.dangerously_bypass_approvals_and_sandbox or options.skip_permissions:
             command.append("--dangerously-skip-permissions")
 

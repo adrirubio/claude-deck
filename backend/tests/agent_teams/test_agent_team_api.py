@@ -85,3 +85,29 @@ async def test_launch_conflict_returns_updated_plan(client, db, tmp_path):
     detail = launch_response.json()["detail"]
     assert detail["message"] == "Launch plan changed; review the latest plan before launching"
     assert detail["plan"]["plan_hash"] != old_hash
+
+
+@pytest.mark.asyncio
+async def test_create_preset_validation_error_includes_block_code(client, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={
+            "name": "Invalid effort team",
+            "slots": [
+                {
+                    "display_name": "Architect",
+                    "provider": "opencode-cli",
+                    "repo_path": str(repo),
+                    "launch_options": {"reasoning_effort": "xhigh"},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "opencode-cli does not support reasoning_effort"
+    assert detail["block_code"] == "reasoning_effort_unsupported"

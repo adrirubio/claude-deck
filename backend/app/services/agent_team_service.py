@@ -39,7 +39,15 @@ from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_bridge.spawn import spawn_session
 from app.services.agent_mail_service import agent_mail_service
 from app.services.providers import get_provider, get_providers
-from app.services.providers.base import SpawnCommandOptions
+from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+from app.services.providers.launch_contract import (
+    PROVIDER_CODEX_CLI,
+    launch_modes_for,
+    option_keys_for,
+    reasoning_efforts_for,
+    supports_bedrock,
+)
+from app.services.providers.platform_env import PLATFORM_BEDROCK
 from app.utils.repo_utils import derive_repo_identity
 
 
@@ -53,6 +61,9 @@ class PlanConflictError(ValueError):
 
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
 _PROVIDER_IDS = {provider.id for provider in get_providers()}
+_MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}$")
+_CONCRETE_MODEL_MARKERS = (".", "/", ":")
+_BEDROCK_LAUNCH_OPTION_KEYS = {"platform", "aws_region", "aws_profile", "bedrock_model"}
 
 
 class AgentTeamService:
@@ -321,11 +332,20 @@ class AgentTeamService:
         if request.launch_mode is not None:
             updates["launch_mode"] = request.launch_mode.strip() or "plain"
         if request.launch_options is not None:
-            updates["launch_options"] = self._clean_launch_options(request.launch_options)
+            provider_for_options = updates.get("provider", slot.provider)
+            updates["launch_options"] = self._clean_launch_options(
+                request.launch_options,
+                provider=provider_for_options,
+            )
         if request.enabled is not None:
             updates["enabled"] = request.enabled
         if request.position is not None:
             updates["position"] = request.position
+
+        candidate_provider = updates.get("provider", slot.provider)
+        candidate_mode = updates.get("launch_mode", slot.launch_mode)
+        candidate_options = updates.get("launch_options", slot.launch_options or {})
+        self._validate_slot_options(candidate_provider, candidate_mode, candidate_options)
 
         identity_changed = (
             ("repo_id" in updates and updates["repo_id"] != slot.repo_id)
@@ -518,6 +538,7 @@ class AgentTeamService:
                 tmux_target=plan_item.matching_session.get("tmux_target") if plan_item.matching_session else None,
                 agent_mail_member_id=agent_mail_member_id,
                 message="A matching wakeable tmux session was reused",
+                warnings=plan_item.warnings,
             )
             self._record_launch_item(db, launch_id, result)
             return result
@@ -532,6 +553,7 @@ class AgentTeamService:
                 repo_path=slot.repo_path,
                 message="Slot is disabled",
                 error="; ".join(plan_item.reasons) or None,
+                warnings=plan_item.warnings,
             )
             self._record_launch_item(db, launch_id, result)
             return result
@@ -546,6 +568,7 @@ class AgentTeamService:
                 repo_path=slot.repo_path,
                 block_code=plan_item.block_code,
                 error="; ".join(plan_item.reasons) or "Blocked by launch plan",
+                warnings=plan_item.warnings,
             )
             self._record_launch_item(db, launch_id, result)
             return result
@@ -572,6 +595,7 @@ class AgentTeamService:
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
                 message="Session spawned; waiting for Agent Mail registration",
+                warnings=plan_item.warnings,
             )
         except Exception as exc:
             result = AgentTeamLaunchResultItem(
@@ -582,6 +606,7 @@ class AgentTeamService:
                 provider=slot.provider,
                 repo_path=slot.repo_path,
                 error=str(exc),
+                warnings=plan_item.warnings,
             )
         self._record_launch_item(db, launch_id, result)
         return result
@@ -616,6 +641,7 @@ class AgentTeamService:
         *,
         unsafe_spawn_reason: str | None = None,
     ) -> AgentTeamLaunchPlanItem:
+        warnings = self._slot_launch_warnings(slot.provider, slot.launch_options or {})
         if not slot.enabled:
             return AgentTeamLaunchPlanItem(
                 slot_id=slot.id,
@@ -627,6 +653,7 @@ class AgentTeamService:
                 action="skip",
                 status="skipped",
                 reasons=["Slot is disabled"],
+                warnings=warnings,
             )
 
         reasons: list[str] = []
@@ -657,6 +684,7 @@ class AgentTeamService:
                 status="ready",
                 reasons=["A matching running session is already available"],
                 matching_session=matching_session,
+                warnings=warnings,
             )
 
         if block_code is None and unsafe_spawn_reason:
@@ -688,6 +716,7 @@ class AgentTeamService:
                 reasons=reasons,
                 matching_session=matching_session,
                 block_code=block_code,
+                warnings=warnings,
             )
 
         return AgentTeamLaunchPlanItem(
@@ -700,6 +729,7 @@ class AgentTeamService:
             action="spawn",
             status="ready",
             reasons=["No matching running session found"],
+            warnings=warnings,
         )
 
     def _agent_mail_ready_reason(self, provider: str, install_status: Any) -> str | None:
@@ -1054,6 +1084,7 @@ class AgentTeamService:
                     "action": item.action,
                     "status": item.status,
                     "reasons": item.reasons,
+                    "warnings": item.warnings,
                     "matching_session": {
                         key: value
                         for key, value in (item.matching_session or {}).items()
@@ -1097,6 +1128,7 @@ class AgentTeamService:
             bootstrap_prompt=slot.bootstrap_prompt,
             launch_mode=slot.launch_mode,
             launch_options=slot.launch_options or {},
+            warnings=self._slot_launch_warnings(slot.provider, slot.launch_options or {}),
             enabled=slot.enabled,
             created_at=slot.created_at,
             updated_at=slot.updated_at,
@@ -1164,18 +1196,22 @@ class AgentTeamService:
         fallback_position: int,
     ) -> dict[str, Any]:
         repo_path, ident = self._normalize_repo(slot.repo_path)
+        provider = self._validate_provider(slot.provider)
+        launch_mode = slot.launch_mode.strip() or "plain"
+        launch_options = self._clean_launch_options(slot.launch_options, provider=provider)
+        self._validate_slot_options(provider, launch_mode, launch_options)
         return {
             "position": fallback_position if slot.position is None else slot.position,
             "display_name": self._clean_required(slot.display_name, "Slot name"),
-            "provider": self._validate_provider(slot.provider),
+            "provider": provider,
             "repo_id": ident["repo_id"],
             "repo_path": repo_path,
             "repo_name": ident["repo_name"],
             "role": self._clean_optional(slot.role),
             "charter": self._clean_optional(slot.charter),
             "bootstrap_prompt": self._clean_optional(slot.bootstrap_prompt),
-            "launch_mode": slot.launch_mode.strip() or "plain",
-            "launch_options": self._clean_launch_options(slot.launch_options),
+            "launch_mode": launch_mode,
+            "launch_options": launch_options,
             "enabled": slot.enabled,
         }
 
@@ -1208,10 +1244,115 @@ class AgentTeamService:
             raise ValueError(f"Unknown provider: {provider}")
         return provider
 
-    def _clean_launch_options(self, value: dict[str, Any] | None) -> dict[str, Any]:
+    def _clean_launch_options(
+        self,
+        value: dict[str, Any] | None,
+        *,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
         if not value:
             return {}
+        if provider is not None:
+            allowed = set(option_keys_for(provider))
+            if not supports_bedrock(provider):
+                allowed |= _BEDROCK_LAUNCH_OPTION_KEYS
+            unknown = sorted(key for key in value if key not in allowed)
+            if unknown:
+                raise ValueError(f"Unsupported launch_options for {provider}: {', '.join(unknown)}")
         return {key: option for key, option in value.items() if key in _OPTION_FIELDS}
+
+    def _validate_slot_options(
+        self,
+        provider: str,
+        launch_mode: str,
+        launch_options: dict[str, Any] | None,
+    ) -> None:
+        options = launch_options or {}
+        unsupported_bedrock_keys = sorted(
+            key for key in _BEDROCK_LAUNCH_OPTION_KEYS if key in options
+        )
+        if unsupported_bedrock_keys and not supports_bedrock(provider):
+            raise ValueError(
+                f"{provider} does not support Bedrock launch options: "
+                f"{', '.join(unsupported_bedrock_keys)}"
+            )
+
+        allowed_keys = set(option_keys_for(provider))
+        if not supports_bedrock(provider):
+            allowed_keys |= _BEDROCK_LAUNCH_OPTION_KEYS
+        unknown = sorted(key for key in options if key not in allowed_keys)
+        if unknown:
+            raise ValueError(f"Unsupported launch_options for {provider}: {', '.join(unknown)}")
+
+        if launch_mode not in launch_modes_for(provider):
+            allowed_modes = ", ".join(launch_modes_for(provider))
+            raise ValueError(
+                f"Unsupported launch_mode for {provider}: {launch_mode}. "
+                f"Expected one of: {allowed_modes}"
+            )
+
+        platform = self._clean_optional(options.get("platform"))
+        if platform == PLATFORM_BEDROCK and not supports_bedrock(provider):
+            raise ValueError(f"{provider} does not support platform=bedrock")
+
+        reasoning_effort = self._clean_optional(options.get("reasoning_effort"))
+        if reasoning_effort:
+            allowed_efforts = reasoning_efforts_for(provider)
+            if not allowed_efforts:
+                raise ProviderLaunchError(
+                    f"{provider} does not support reasoning_effort",
+                    "reasoning_effort_unsupported",
+                )
+            if reasoning_effort not in allowed_efforts:
+                raise ProviderLaunchError(
+                    f"Unsupported reasoning_effort for {provider}: {reasoning_effort}. "
+                    f"Expected one of: {', '.join(allowed_efforts)}",
+                    "invalid_reasoning_effort",
+                )
+
+        for key in ("model", "bedrock_model"):
+            value = self._clean_optional(options.get(key))
+            if value and any(char in value for char in ("\n", "\r", "\x00")):
+                raise ValueError(f"launch_options.{key} must not contain control characters")
+            if value:
+                self._validate_model_id(key, value)
+
+    def _slot_launch_warnings(self, provider: str, launch_options: dict[str, Any]) -> list[str]:
+        warnings: list[str] = []
+        platform = self._clean_optional(launch_options.get("platform"))
+        if platform != PLATFORM_BEDROCK:
+            return warnings
+
+        aws_region = self._clean_optional(launch_options.get("aws_region"))
+        aws_profile = self._clean_optional(launch_options.get("aws_profile"))
+        has_ambient_region = bool(os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"))
+        has_ambient_profile = bool(os.environ.get("AWS_PROFILE") or os.environ.get("AWS_DEFAULT_PROFILE"))
+        if not (aws_region or has_ambient_region) or not (aws_profile or has_ambient_profile):
+            warnings.append(
+                "Bedrock launch relies on ambient AWS configuration; set aws_region/aws_profile "
+                "if the host environment does not provide them."
+            )
+
+        effective_model = self._clean_optional(
+            launch_options.get("bedrock_model") or launch_options.get("model")
+        )
+        if provider == PROVIDER_CODEX_CLI and effective_model and not effective_model.startswith("anthropic."):
+            warnings.append(
+                "Codex Bedrock model requires an AWS account or gateway that exposes this model."
+            )
+        return warnings
+
+    def _validate_model_id(self, key: str, value: str) -> None:
+        if not _MODEL_ID_PATTERN.fullmatch(value):
+            raise ValueError(
+                f"launch_options.{key} must be a concrete provider model ID, not a display name"
+            )
+        if not any(char.isdigit() for char in value) and not any(
+            marker in value for marker in _CONCRETE_MODEL_MARKERS
+        ):
+            raise ValueError(
+                f"launch_options.{key} must be a concrete provider model ID, not a display name"
+            )
 
     def _clean_required(self, value: str, label: str) -> str:
         value = value.strip()

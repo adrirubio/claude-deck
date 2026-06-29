@@ -10,6 +10,8 @@ PLATFORM_ANTHROPIC = "anthropic"
 PLATFORM_BEDROCK = "bedrock"
 PROVIDER_CLAUDE_CODE = "claude-code"
 PROVIDER_CODEX_CLI = "codex-cli"
+PROVIDER_COPILOT_CLI = "copilot-cli"
+PROVIDER_OPENCODE_CLI = "opencode-cli"
 
 
 def _clean(value: str | None) -> str | None:
@@ -43,11 +45,14 @@ def build_platform_env(
     if cleaned_profile:
         env["AWS_PROFILE"] = cleaned_profile
 
-    if provider_id == PROVIDER_CODEX_CLI:
+    if provider_id in {PROVIDER_CODEX_CLI, PROVIDER_COPILOT_CLI, PROVIDER_OPENCODE_CLI}:
         return env
 
-    env = {"CLAUDE_CODE_USE_BEDROCK": "1", **env}
-    cleaned_model = _clean(model)
-    if cleaned_model:
-        env["ANTHROPIC_MODEL"] = cleaned_model
+    if provider_id == PROVIDER_CLAUDE_CODE:
+        env = {"CLAUDE_CODE_USE_BEDROCK": "1", **env}
+        cleaned_model = _clean(model)
+        if cleaned_model:
+            env["ANTHROPIC_MODEL"] = cleaned_model
+        return env
+
     return env

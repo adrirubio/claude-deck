@@ -44,17 +44,25 @@ def test_provider_mcp_inventory_wrong_provider_returns_contract_error():
     assert exc_info.value.detail["supported_providers"] == ["codex-cli"]
 
 
-def test_provider_launch_options_wrong_provider_returns_contract_error():
+def test_provider_launch_options_supports_non_codex_provider():
     from app.api.v1 import providers as providers_api
 
-    with pytest.raises(providers_api.HTTPException) as exc_info:
-        providers_api.get_provider_launch_options("claude-code")
+    response = providers_api.get_provider_launch_options("claude-code")
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail["code"] == "unsupported_provider_operation"
-    assert exc_info.value.detail["provider"] == "claude-code"
-    assert exc_info.value.detail["operation"] == "launch options"
-    assert exc_info.value.detail["supported_providers"] == ["codex-cli"]
+    assert response["provider"] == "claude-code"
+    assert response["supported_launch_modes"] == ["plain", "worktree", "resume"]
+    assert response["bedrock_supported"] is True
+
+
+def test_provider_launch_options_excludes_copilot_bedrock_options():
+    from app.api.v1 import providers as providers_api
+
+    response = providers_api.get_provider_launch_options("copilot-cli")
+
+    assert response["provider"] == "copilot-cli"
+    assert response["bedrock_supported"] is False
+    assert "aws_profile" not in response["supported_launch_options"]
+    assert "bedrock_model" not in response["supported_launch_options"]
 
 
 def test_provider_launch_options_uses_codex_config_service(monkeypatch):
@@ -68,13 +76,16 @@ def test_provider_launch_options_uses_codex_config_service(monkeypatch):
                 "profile_options": [{"value": "reviewer", "label": "reviewer"}],
             }
 
-    monkeypatch.setattr(providers_api, "CodexConfigService", FakeCodexConfigService)
+    from app.services.providers import launch_options
+
+    monkeypatch.setattr(launch_options, "CodexConfigService", FakeCodexConfigService)
 
     response = providers_api.get_provider_launch_options("codex-cli")
 
     assert response["provider"] == "codex-cli"
     assert response["model_options"][0]["value"] == "gpt-5-codex"
     assert response["profile_options"][0]["value"] == "reviewer"
+    assert response["reasoning_effort_options"][-1]["value"] == "xhigh"
 
 
 def test_provider_cli_disallowed_command_returns_contract_error(monkeypatch):

@@ -48,6 +48,14 @@ class SpawnCommandOptions:
     no_ask_user: bool = False
 
 
+class ProviderLaunchError(ValueError):
+    """Provider launch validation error with a stable machine-readable code."""
+
+    def __init__(self, message: str, block_code: str):
+        super().__init__(message)
+        self.block_code = block_code
+
+
 def argv0_name(command: str) -> str:
     """Return the executable basename from a command or argv0 string."""
     if not command:
