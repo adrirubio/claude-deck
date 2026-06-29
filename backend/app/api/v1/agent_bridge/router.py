@@ -4,12 +4,16 @@ from __future__ import annotations
 import logging
 import secrets
 import time
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
+from app.models.database import AgentTeamPreset, AgentTeamSlot
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
 from app.services.agent_bridge.pty_relay import PtyRelay
 from app.services.agent_bridge.spawn import kill_session, spawn_session
@@ -55,12 +59,60 @@ class SpawnRequest(BaseModel):
     no_ask_user: bool = False
 
 
+async def _enrich_team_sessions(
+    sessions: list[dict[str, Any]],
+    db: AsyncSession,
+) -> list[dict[str, Any]]:
+    slot_ids = {
+        int(session["team_slot_id"])
+        for session in sessions
+        if isinstance(session.get("team_slot_id"), int)
+    }
+    if not slot_ids:
+        return sessions
+
+    slots = {
+        slot.id: slot
+        for slot in (
+            await db.execute(select(AgentTeamSlot).where(AgentTeamSlot.id.in_(slot_ids)))
+        ).scalars().all()
+    }
+    preset_ids = {slot.preset_id for slot in slots.values()}
+    presets = {
+        preset.id: preset
+        for preset in (
+            await db.execute(select(AgentTeamPreset).where(AgentTeamPreset.id.in_(preset_ids)))
+        ).scalars().all()
+    } if preset_ids else {}
+
+    enriched: list[dict[str, Any]] = []
+    for session in sessions:
+        updated = dict(session)
+        slot_id = updated.get("team_slot_id")
+        slot = slots.get(slot_id) if isinstance(slot_id, int) else None
+        if slot is not None:
+            preset = presets.get(slot.preset_id)
+            updated.update(
+                team_preset_id=slot.preset_id,
+                team_preset_name=preset.name if preset is not None else updated.get("team_preset_name"),
+                team_slot_name=slot.display_name,
+                team_slot_role=slot.role,
+                team_slot_charter=slot.charter,
+            )
+        enriched.append(updated)
+    return enriched
+
+
 @router.get("/sessions")
-def list_sessions(provider: str | None = Query(default=None)):
+async def list_sessions(
+    provider: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         sessions = discover_agent_sessions(provider)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    sessions = await _enrich_team_sessions(sessions, db)
     return {"sessions": sessions, "count": len(sessions)}
 
 
