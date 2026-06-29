@@ -14,9 +14,27 @@ interface SessionCardProps {
   instance?: InstanceIdentity | null
 }
 
+function normalizeLabel(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ')
+}
+
 export function SessionCard({ session, gridPosition, onClick, onKill, instance }: SessionCardProps) {
   const projectName = session.cwd.split('/').pop() || session.cwd
   const isActive = gridPosition !== null
+  const teamSlotLabel = session.team_slot_name?.trim()
+  const teamRoleLabel = session.team_slot_role?.trim()
+  const teamName = session.team_preset_name?.trim()
+  const primaryLabel = teamSlotLabel || session.session_name
+  const showRole = Boolean(
+    teamRoleLabel && normalizeLabel(teamRoleLabel) !== normalizeLabel(teamSlotLabel)
+  )
+  const showProject = !teamName || normalizeLabel(projectName) !== normalizeLabel(teamName)
+  const contextLine = teamName
+    ? `${teamName}${showProject ? ` · ${projectName}` : ''}`
+    : projectName
+  const contextTitle = teamName
+    ? `Team: ${teamName}${showProject ? ` · Repo: ${projectName}` : ''}`
+    : session.cwd
 
   return (
     <Card
@@ -36,13 +54,19 @@ export function SessionCard({ session, gridPosition, onClick, onKill, instance }
     >
       <CardContent className="p-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium truncate">{session.session_name}</span>
+          <span
+            className="text-sm font-medium truncate"
+            title={teamSlotLabel ? `${session.session_name} · ${session.tmux_target}` : session.tmux_target}
+          >
+            {primaryLabel}
+          </span>
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground/50 hover:text-destructive transition-colors"
               onClick={(e) => { e.stopPropagation(); onKill(session) }}
               onKeyDown={(e) => e.stopPropagation()}
               title="Kill session"
+              aria-label={`Kill ${primaryLabel}`}
             >
               <Trash2 className="h-3 w-3" />
             </button>
@@ -55,11 +79,18 @@ export function SessionCard({ session, gridPosition, onClick, onKill, instance }
             )}
           </div>
         </div>
-        <Badge variant="outline" className="mt-2 max-w-full truncate">
-          {session.provider_display_name}
-        </Badge>
-        <p className="text-xs text-muted-foreground truncate mt-1" title={session.cwd}>
-          {projectName}
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Badge variant="outline" className="max-w-full truncate">
+            {session.provider_display_name}
+          </Badge>
+          {showRole && (
+            <Badge variant="secondary" className="max-w-full truncate" title={`Role: ${teamRoleLabel}`}>
+              {teamRoleLabel}
+            </Badge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground truncate mt-1" title={contextTitle}>
+          {contextLine}
         </p>
         <p
           className="text-xs text-muted-foreground mt-0.5 truncate"

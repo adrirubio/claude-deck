@@ -46,3 +46,47 @@ def test_discover_agent_sessions_can_filter_provider():
 
     assert len(sessions) == 1
     assert sessions[0]["provider"] == "codex-cli"
+
+
+def test_discover_agent_sessions_includes_team_environment():
+    from app.services.agent_bridge.discovery import discover_agent_sessions
+
+    tmux_output = "snazzyemail:0.0|snazzyemail|main|%1|/repo/a|111|codex"
+    env_output = "\n".join(
+        [
+            "CLAUDE_DECK_TEAM_PRESET_ID=10",
+            "CLAUDE_DECK_TEAM_PRESET_NAME=SnazzyEmail",
+            "CLAUDE_DECK_TEAM_SLOT_ID=20",
+            "CLAUDE_DECK_TEAM_SLOT_NAME=Lead Developer",
+            "CLAUDE_DECK_TEAM_SLOT_ROLE=lead developer",
+        ]
+    )
+
+    def fake_run(args, **_kwargs):
+        if args[:2] == ["tmux", "list-panes"]:
+            return SimpleNamespace(returncode=0, stdout=tmux_output, stderr="")
+        if args[:2] == ["tmux", "show-environment"]:
+            return SimpleNamespace(returncode=0, stdout=env_output, stderr="")
+        raise AssertionError(args)
+
+    with patch("app.services.agent_bridge.discovery.subprocess.run", side_effect=fake_run):
+        sessions = discover_agent_sessions("codex-cli")
+
+    assert sessions == [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "snazzyemail:0.0",
+            "session_name": "snazzyemail",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": "/repo/a",
+            "pid": "111",
+            "status": "active",
+            "team_preset_id": 10,
+            "team_preset_name": "SnazzyEmail",
+            "team_slot_id": 20,
+            "team_slot_name": "Lead Developer",
+            "team_slot_role": "lead developer",
+        }
+    ]

@@ -583,6 +583,7 @@ class AgentTeamService:
                     "CLAUDE_DECK_TEAM_PRESET_NAME": preset.name,
                     "CLAUDE_DECK_TEAM_SLOT_ID": str(slot.id),
                     "CLAUDE_DECK_TEAM_SLOT_NAME": slot.display_name,
+                    **({"CLAUDE_DECK_TEAM_SLOT_ROLE": slot.role} if slot.role else {}),
                 },
             )
             result = AgentTeamLaunchResultItem(

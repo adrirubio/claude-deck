@@ -21,6 +21,53 @@ _PANE_FORMAT = (
     "|#{pane_current_command}"
 )
 
+_TEAM_ENV_KEYS = {
+    "CLAUDE_DECK_TEAM_PRESET_ID": "team_preset_id",
+    "CLAUDE_DECK_TEAM_PRESET_NAME": "team_preset_name",
+    "CLAUDE_DECK_TEAM_SLOT_ID": "team_slot_id",
+    "CLAUDE_DECK_TEAM_SLOT_NAME": "team_slot_name",
+    "CLAUDE_DECK_TEAM_SLOT_ROLE": "team_slot_role",
+}
+
+
+def _clean_int(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _parse_tmux_environment(stdout: str) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    for line in stdout.splitlines():
+        if not line or line.startswith("-") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        target = _TEAM_ENV_KEYS.get(key)
+        if target is None:
+            continue
+        context[target] = _clean_int(value) if target.endswith("_id") else value
+    return context
+
+
+def _team_context_for_session(session_name: str, cache: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    if session_name in cache:
+        return cache[session_name]
+    try:
+        result = subprocess.run(
+            ["tmux", "show-environment", "-t", session_name],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        cache[session_name] = {}
+        return cache[session_name]
+    cache[session_name] = _parse_tmux_environment(result.stdout) if result.returncode == 0 else {}
+    return cache[session_name]
+
 
 def _build_session_info_from_parts(
     *,
@@ -31,6 +78,7 @@ def _build_session_info_from_parts(
     cwd: str,
     pid: str,
     provider: AgentProvider,
+    team_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "provider": provider.id,
@@ -42,6 +90,7 @@ def _build_session_info_from_parts(
         "cwd": cwd,
         "pid": pid,
         "status": SessionStatus.ACTIVE,
+        **(team_context or {}),
     }
 
 
@@ -66,6 +115,7 @@ def discover_agent_sessions(provider_id: str | None = None) -> list[dict[str, An
         return []
 
     sessions: list[dict[str, Any]] = []
+    team_context_cache: dict[str, dict[str, Any]] = {}
     for line in result.stdout.strip().splitlines():
         parts = line.split("|", 6)
         if len(parts) != 7:
@@ -73,6 +123,7 @@ def discover_agent_sessions(provider_id: str | None = None) -> list[dict[str, An
         target, session_name, window_name, pane_id, cwd, pid, command = parts
         for provider in providers:
             if provider.is_process_match(command, pid):
+                team_context = _team_context_for_session(session_name, team_context_cache)
                 sessions.append(
                     _build_session_info_from_parts(
                         target=target,
@@ -82,6 +133,7 @@ def discover_agent_sessions(provider_id: str | None = None) -> list[dict[str, An
                         cwd=cwd,
                         pid=pid,
                         provider=provider,
+                        team_context=team_context,
                     )
                 )
                 break
@@ -100,4 +152,3 @@ def capture_pane_preview(target: str) -> str:
         return result.stdout if result.returncode == 0 else ""
     except Exception:
         return ""
-
