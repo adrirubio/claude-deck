@@ -105,6 +105,7 @@ async def _enrich_team_sessions(
                 team_preset_id=slot.preset_id,
                 team_preset_name=preset.name if preset is not None else updated.get("team_preset_name"),
                 team_slot_name=slot.display_name,
+                team_slot_position=slot.position,
                 team_slot_role=slot.role,
                 team_slot_charter=slot.charter,
                 team_slot_color=slot.ui_color,

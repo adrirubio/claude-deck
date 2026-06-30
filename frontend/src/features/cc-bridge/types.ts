@@ -14,6 +14,7 @@ export interface AgentSession {
   team_preset_name?: string | null
   team_slot_id?: number | null
   team_slot_name?: string | null
+  team_slot_position?: number | null
   team_slot_role?: string | null
   team_slot_charter?: string | null
   team_slot_color?: string | null

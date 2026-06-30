@@ -44,6 +44,7 @@ async def test_agent_bridge_sessions_enrich_team_role_from_db(db, tmp_path):
     assert sessions[0]["team_preset_id"] == preset.id
     assert sessions[0]["team_preset_name"] == "SnazzyEmail"
     assert sessions[0]["team_slot_name"] == "Architect"
+    assert sessions[0]["team_slot_position"] == 0
     assert sessions[0]["team_slot_role"] == "architect"
     assert sessions[0]["team_slot_charter"] == "Own architecture"
     assert sessions[0]["team_slot_color"] == "purple"
