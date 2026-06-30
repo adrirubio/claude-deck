@@ -14,6 +14,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 const MAX_GRID_PANES = 4
 type ProviderFilter = 'all' | AgentProviderId
+type TeamFilter = 'all' | number
+
+interface TeamFilterOption {
+  id: number
+  name: string
+  count: number
+}
 
 const PROVIDER_FILTERS: { value: ProviderFilter; label: string }[] = [
   { value: 'all', label: 'All agents' },
@@ -31,6 +38,7 @@ function addTarget(prev: string[], target: string): string[] {
 
 export function CCBridgePage() {
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all')
+  const [teamFilter, setTeamFilter] = useState<TeamFilter>('all')
   const { providers, selectedProviderId } = useProviderContext()
   const status = useSystemStatus()
   const instance = status?.instance ?? null
@@ -42,18 +50,45 @@ export function CCBridgePage() {
   const [killSession, setKillSession] = useState<CCSession | null>(null)
 
   const isFullscreen = fullscreenTarget !== null
-  const visibleSessions = providerFilter === 'all'
-    ? sessions
-    : sessions.filter((session) => session.provider === providerFilter)
   const sessionsByTarget = useMemo(
     () => new Map(sessions.map((session) => [session.tmux_target, session])),
     [sessions]
   )
 
-  const providersById = providers.reduce<Partial<Record<AgentProviderId, AgentProviderStatus>>>((acc, provider) => {
+  const providersById = useMemo(() => providers.reduce<Partial<Record<AgentProviderId, AgentProviderStatus>>>((acc, provider) => {
     acc[provider.id] = provider
     return acc
-  }, {})
+  }, {}), [providers])
+
+  const teamOptions = useMemo<TeamFilterOption[]>(() => {
+    const teams = new Map<number, TeamFilterOption>()
+    for (const session of sessions) {
+      if (typeof session.team_preset_id !== 'number') continue
+      const current = teams.get(session.team_preset_id)
+      if (current) {
+        current.count += 1
+      } else {
+        teams.set(session.team_preset_id, {
+          id: session.team_preset_id,
+          name: session.team_preset_name ?? `Team ${session.team_preset_id}`,
+          count: 1,
+        })
+      }
+    }
+    return [...teams.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }, [sessions])
+
+  const teamFilterAvailable = teamFilter === 'all' || teamOptions.some((team) => team.id === teamFilter)
+  const effectiveTeamFilter = teamFilterAvailable ? teamFilter : 'all'
+
+  const visibleSessions = useMemo(() => sessions.filter((session) => (
+    (providerFilter === 'all' || session.provider === providerFilter)
+    && (effectiveTeamFilter === 'all' || session.team_preset_id === effectiveTeamFilter)
+  )), [effectiveTeamFilter, providerFilter, sessions])
+
+  const selectedTeamLabel = effectiveTeamFilter === 'all'
+    ? null
+    : teamOptions.find((team) => team.id === effectiveTeamFilter)?.name ?? `Team ${effectiveTeamFilter}`
 
   const canProviderSpawn = (provider: AgentProviderStatus | undefined) => (
     Boolean(provider?.installed)
@@ -87,6 +122,23 @@ export function CCBridgePage() {
   const initialDialogProvider = providerFilter === 'all' ? selectedProviderId : providerFilter
 
   useEffect(() => {
+    if (teamFilterAvailable) return
+    const resetId = window.setTimeout(() => setTeamFilter('all'), 0)
+    return () => window.clearTimeout(resetId)
+  }, [teamFilterAvailable])
+
+  const applyTeamFilter = useCallback((nextTeamFilter: TeamFilter) => {
+    setTeamFilter(nextTeamFilter)
+    if (nextTeamFilter === 'all') return
+    const sessionInSelectedTeam = (target: string) => (
+      sessionsByTarget.get(target)?.team_preset_id === nextTeamFilter
+    )
+    setActiveTargets((prev) => prev.filter(sessionInSelectedTeam))
+    setFullscreenTarget((cur) => (cur && !sessionInSelectedTeam(cur) ? null : cur))
+    setFocusedTarget((cur) => (cur && !sessionInSelectedTeam(cur) ? null : cur))
+  }, [sessionsByTarget])
+
+  useEffect(() => {
     if (!isFullscreen) return
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setFullscreenTarget(null)
@@ -109,6 +161,7 @@ export function CCBridgePage() {
 
   const handleSpawned = (tmuxTarget: string) => {
     refresh()
+    if (effectiveTeamFilter !== 'all') return
     setActiveTargets((prev) => addTarget(prev, tmuxTarget))
   }
 
@@ -157,6 +210,42 @@ export function CCBridgePage() {
               ))}
             </div>
           </div>
+          {teamOptions.length > 0 && (
+            <div className="px-4 pb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xs font-medium text-muted-foreground shrink-0">Teams</span>
+                <div className="flex rounded-md bg-background border p-0.5 shrink-0 max-w-full overflow-x-auto">
+                  <button
+                    type="button"
+                    className={cn(
+                      'px-2.5 py-1 text-xs rounded-sm transition-colors whitespace-nowrap',
+                      effectiveTeamFilter === 'all'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                    onClick={() => applyTeamFilter('all')}
+                  >
+                    All teams <span className="opacity-70">({sessions.length})</span>
+                  </button>
+                  {teamOptions.map((team) => (
+                    <button
+                      key={team.id}
+                      type="button"
+                      className={cn(
+                        'px-2.5 py-1 text-xs rounded-sm transition-colors whitespace-nowrap',
+                        effectiveTeamFilter === team.id
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                      onClick={() => applyTeamFilter(team.id)}
+                    >
+                      {team.name} <span className="opacity-70">({team.count})</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           {agentCliWarning && (
             <div className="px-4 pb-3">
               <Alert variant="destructive" className="py-3">
@@ -184,6 +273,7 @@ export function CCBridgePage() {
               onNewSession={() => setNewSessionOpen(true)}
               onKillSession={setKillSession}
               providerFilter={providerFilter}
+              teamLabel={selectedTeamLabel}
               canCreateSession={canCreateSession}
               createDisabledReason={canCreateSession ? null : createDisabledReason}
               instance={instance}
