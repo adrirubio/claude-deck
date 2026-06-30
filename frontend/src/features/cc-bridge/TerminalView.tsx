@@ -14,6 +14,7 @@ import type { InstanceIdentity } from '@/types/status'
 interface TerminalViewProps {
   target: string | null
   fullscreen?: boolean
+  inLanes?: boolean
   onToggleFullscreen?: () => void
   onClose?: () => void
   instance?: InstanceIdentity | null
@@ -53,7 +54,7 @@ function imageFromClipboard(event: React.ClipboardEvent<HTMLDivElement>): File |
   return null
 }
 
-export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, instance, session }: TerminalViewProps) {
+export function TerminalView({ target, fullscreen, inLanes, onToggleFullscreen, onClose, instance, session }: TerminalViewProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [draggingImage, setDraggingImage] = useState(false)
@@ -233,7 +234,7 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, 
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {onToggleFullscreen && (
+            {onToggleFullscreen && !inLanes && (
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onToggleFullscreen} title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
                 {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
               </Button>

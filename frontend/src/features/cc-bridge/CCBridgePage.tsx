@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { useCCSessions } from './useCCSessions'
 import { SessionList } from './SessionList'
 import { TerminalView } from './TerminalView'
+import { TeamLanesView } from './TeamLanesView'
 import { NewSessionDialog } from './NewSessionDialog'
 import { KillSessionDialog } from './KillSessionDialog'
 import type { CCSession } from './types'
@@ -15,6 +16,10 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 const MAX_GRID_PANES = 4
 type ProviderFilter = 'all' | AgentProviderId
 type TeamFilter = 'all' | number
+type LayoutMode =
+  | { kind: 'grid' }
+  | { kind: 'single'; target: string }
+  | { kind: 'lanes'; teamId: number }
 
 interface TeamFilterOption {
   id: number
@@ -36,6 +41,21 @@ function addTarget(prev: string[], target: string): string[] {
   return [...prev, target]
 }
 
+function slotOrderValue(session: CCSession): number {
+  if (typeof session.team_slot_position === 'number') return session.team_slot_position
+  return typeof session.team_slot_id === 'number' ? session.team_slot_id : Number.MAX_SAFE_INTEGER
+}
+
+function compareTeamLaneSessions(a: CCSession, b: CCSession): number {
+  const slotOrder = slotOrderValue(a) - slotOrderValue(b)
+  if (slotOrder !== 0) return slotOrder
+  const roleOrder = (a.team_slot_role ?? '').localeCompare(b.team_slot_role ?? '')
+  if (roleOrder !== 0) return roleOrder
+  const nameOrder = (a.team_slot_name ?? '').localeCompare(b.team_slot_name ?? '')
+  if (nameOrder !== 0) return nameOrder
+  return a.tmux_target.localeCompare(b.tmux_target)
+}
+
 export function CCBridgePage() {
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all')
   const [teamFilter, setTeamFilter] = useState<TeamFilter>('all')
@@ -44,12 +64,13 @@ export function CCBridgePage() {
   const instance = status?.instance ?? null
   const { sessions, loading, error, refresh } = useCCSessions()
   const [activeTargets, setActiveTargets] = useState<string[]>([])
-  const [fullscreenTarget, setFullscreenTarget] = useState<string | null>(null)
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>({ kind: 'grid' })
   const [focusedTarget, setFocusedTarget] = useState<string | null>(null)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [killSession, setKillSession] = useState<CCSession | null>(null)
 
-  const isFullscreen = fullscreenTarget !== null
+  const isFullscreen = layoutMode.kind !== 'grid'
+  const laneTeamId = layoutMode.kind === 'lanes' ? layoutMode.teamId : null
   const sessionsByTarget = useMemo(
     () => new Map(sessions.map((session) => [session.tmux_target, session])),
     [sessions]
@@ -90,6 +111,21 @@ export function CCBridgePage() {
     ? null
     : teamOptions.find((team) => team.id === effectiveTeamFilter)?.name ?? `Team ${effectiveTeamFilter}`
 
+  const laneTeamLabel = laneTeamId === null
+    ? null
+    : teamOptions.find((team) => team.id === laneTeamId)?.name ?? `Team ${laneTeamId}`
+
+  const teamLanes = useMemo(() => {
+    if (laneTeamId === null) return { sessions: [], overflowCount: 0 }
+    const teamSessions = sessions
+      .filter((session) => session.team_preset_id === laneTeamId)
+      .sort(compareTeamLaneSessions)
+    return {
+      sessions: teamSessions.slice(0, MAX_GRID_PANES),
+      overflowCount: Math.max(0, teamSessions.length - MAX_GRID_PANES),
+    }
+  }, [laneTeamId, sessions])
+
   const canProviderSpawn = (provider: AgentProviderStatus | undefined) => (
     Boolean(provider?.installed)
     && provider?.capability_details?.spawn?.state !== 'unsupported'
@@ -129,34 +165,61 @@ export function CCBridgePage() {
 
   const applyTeamFilter = useCallback((nextTeamFilter: TeamFilter) => {
     setTeamFilter(nextTeamFilter)
-    if (nextTeamFilter === 'all') return
+    if (nextTeamFilter === 'all') {
+      setLayoutMode((cur) => (cur.kind === 'lanes' ? { kind: 'grid' } : cur))
+      return
+    }
     const sessionInSelectedTeam = (target: string) => (
       sessionsByTarget.get(target)?.team_preset_id === nextTeamFilter
     )
     setActiveTargets((prev) => prev.filter(sessionInSelectedTeam))
-    setFullscreenTarget((cur) => (cur && !sessionInSelectedTeam(cur) ? null : cur))
+    setLayoutMode((cur) => {
+      if (cur.kind === 'lanes' && cur.teamId !== nextTeamFilter) return { kind: 'grid' }
+      if (cur.kind === 'single' && !sessionInSelectedTeam(cur.target)) return { kind: 'grid' }
+      return cur
+    })
     setFocusedTarget((cur) => (cur && !sessionInSelectedTeam(cur) ? null : cur))
   }, [sessionsByTarget])
+
+  const openTeamLanes = useCallback(() => {
+    if (effectiveTeamFilter === 'all') return
+    setLayoutMode({ kind: 'lanes', teamId: effectiveTeamFilter })
+    setFocusedTarget(null)
+  }, [effectiveTeamFilter])
+
+  const exitFullscreen = useCallback(() => {
+    setLayoutMode({ kind: 'grid' })
+  }, [])
 
   useEffect(() => {
     if (!isFullscreen) return
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFullscreenTarget(null)
+      if (e.key === 'Escape') exitFullscreen()
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [isFullscreen])
+  }, [exitFullscreen, isFullscreen])
+
+  const shouldExitEmptyLanes = layoutMode.kind === 'lanes' && teamLanes.sessions.length === 0
+
+  useEffect(() => {
+    if (!shouldExitEmptyLanes) return
+    const exitId = window.setTimeout(() => {
+      setLayoutMode((cur) => (cur.kind === 'lanes' ? { kind: 'grid' } : cur))
+    }, 0)
+    return () => window.clearTimeout(exitId)
+  }, [shouldExitEmptyLanes])
 
   const toggleTarget = useCallback((target: string) => {
     setActiveTargets((prev) =>
       prev.includes(target) ? prev.filter((t) => t !== target) : addTarget(prev, target)
     )
-    setFullscreenTarget((cur) => (cur === target ? null : cur))
+    setLayoutMode((cur) => (cur.kind === 'single' && cur.target === target ? { kind: 'grid' } : cur))
   }, [])
 
   const removeTarget = useCallback((target: string) => {
     setActiveTargets((prev) => prev.filter((t) => t !== target))
-    setFullscreenTarget((cur) => (cur === target ? null : cur))
+    setLayoutMode((cur) => (cur.kind === 'single' && cur.target === target ? { kind: 'grid' } : cur))
   }, [])
 
   const handleSpawned = (tmuxTarget: string) => {
@@ -243,6 +306,20 @@ export function CCBridgePage() {
                     </button>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  className={cn(
+                    'px-2.5 py-1 text-xs rounded-md border transition-colors whitespace-nowrap shrink-0',
+                    effectiveTeamFilter === 'all'
+                      ? 'bg-muted text-muted-foreground cursor-not-allowed opacity-60'
+                      : 'bg-background text-foreground hover:bg-muted'
+                  )}
+                  disabled={effectiveTeamFilter === 'all'}
+                  onClick={openTeamLanes}
+                  title={selectedTeamLabel ? `Show ${selectedTeamLabel} in fullscreen lanes` : 'Select a team to open team lanes'}
+                >
+                  Team lanes
+                </button>
               </div>
             </div>
           )}
@@ -282,7 +359,17 @@ export function CCBridgePage() {
         )}
 
         <div className="flex-1 min-w-0 relative">
-          {activeTargets.length === 0 ? (
+          {layoutMode.kind === 'lanes' ? (
+            <TeamLanesView
+              sessions={teamLanes.sessions}
+              overflowCount={teamLanes.overflowCount}
+              teamLabel={laneTeamLabel}
+              focusedTarget={focusedTarget}
+              onFocusTarget={setFocusedTarget}
+              onExit={exitFullscreen}
+              instance={instance}
+            />
+          ) : activeTargets.length === 0 ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground bg-background">
               <Monitor className="h-12 w-12 mb-3" />
               <p className="text-sm">Select a session to attach</p>
@@ -293,7 +380,7 @@ export function CCBridgePage() {
               isFullscreen ? 'grid-cols-1' : gridCols
             )}>
               {activeTargets.map((target) => {
-                const isThisFullscreen = fullscreenTarget === target
+                const isThisFullscreen = layoutMode.kind === 'single' && layoutMode.target === target
                 const hidden = isFullscreen && !isThisFullscreen
                 const session = sessionsByTarget.get(target) ?? null
                 return (
@@ -317,7 +404,7 @@ export function CCBridgePage() {
                         target={target}
                         fullscreen={isThisFullscreen}
                         onToggleFullscreen={() =>
-                          setFullscreenTarget(isThisFullscreen ? null : target)
+                          setLayoutMode(isThisFullscreen ? { kind: 'grid' } : { kind: 'single', target })
                         }
                         onClose={() => removeTarget(target)}
                         instance={instance}

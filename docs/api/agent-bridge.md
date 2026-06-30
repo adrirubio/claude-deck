@@ -1,6 +1,6 @@
 # Agent Bridge API
 
-Provider-aware live terminal monitoring for Claude Code, Codex CLI, and GitHub Copilot CLI tmux sessions.
+Provider-aware live terminal monitoring for Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI tmux sessions.
 
 ## Endpoints
 
@@ -10,7 +10,7 @@ Provider-aware live terminal monitoring for Claude Code, Codex CLI, and GitHub C
 GET /api/v1/agent-bridge/sessions?provider={provider_id}
 ```
 
-`provider` is optional. Supported values are `claude-code`, `codex-cli`, and `copilot-cli`.
+`provider` is optional. Supported values are `claude-code`, `codex-cli`, `copilot-cli`, and `opencode-cli`.
 
 ```json
 {
@@ -29,6 +29,7 @@ GET /api/v1/agent-bridge/sessions?provider={provider_id}
       "team_preset_name": "Release validation",
       "team_slot_id": 20,
       "team_slot_name": "Reviewer",
+      "team_slot_position": 2,
       "team_slot_role": "planner-reviewer",
       "team_slot_charter": "Review the plan and implementation against release goals.",
       "team_slot_color": "purple"
