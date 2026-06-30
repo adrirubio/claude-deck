@@ -38,15 +38,23 @@ export interface AgentProviderStatus {
   installed: boolean
   binary_path: string | null
   version: string | null
+  unavailable_reason?: string | null
+  unavailable_code?: string | null
   capabilities: AgentProviderCapabilities
   capability_matrix: Partial<Record<keyof AgentProviderCapabilities, AgentProviderCapabilityDetail>>
   capability_details?: Partial<Record<keyof AgentProviderCapabilities, AgentProviderCapabilityDetail>>
   config_paths: Record<string, string>
 }
 
+export interface RuntimeEnvironmentStatus {
+  containerized: boolean
+  agent_cli_warning?: string | null
+}
+
 export interface ProvidersResponse {
   providers: AgentProviderStatus[]
   count: number
+  environment?: RuntimeEnvironmentStatus
 }
 
 export interface ProviderLaunchOption {

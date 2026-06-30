@@ -1799,6 +1799,7 @@ class SystemStatusResponse(BaseModel):
     active_sessions: int = 0
     providers: Dict[str, Any] = Field(default_factory=dict)
     instance: Optional[InstanceIdentity] = None
+    environment: Dict[str, Any] = Field(default_factory=dict)
 
 
 # --- Agent Mail ---

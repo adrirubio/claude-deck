@@ -53,6 +53,33 @@ def test_provider_capabilities_api_returns_matrix():
     assert response["capability_matrix"]["commands"]["state"] == "unsupported"
 
 
+def test_provider_list_warns_when_containerized_without_agent_clis(monkeypatch):
+    from app.api.v1 import providers as providers_api
+    from app.services import runtime_environment
+
+    class FakeProvider:
+        id = "claude-code"
+        binary_name = "claude"
+
+        def get_status(self):
+            return {
+                "id": self.id,
+                "display_name": "Claude Code",
+                "binary_name": self.binary_name,
+                "installed": False,
+            }
+
+    monkeypatch.setattr(runtime_environment, "is_containerized", lambda: True)
+    monkeypatch.setattr(providers_api, "get_providers", lambda: [FakeProvider()])
+
+    response = providers_api.list_providers()
+
+    assert response["environment"]["containerized"] is True
+    assert response["environment"]["agent_cli_warning"] == runtime_environment.CONTAINER_AGENT_CLI_WARNING
+    assert response["providers"][0]["unavailable_code"] == "container_agent_clis_missing"
+    assert response["providers"][0]["unavailable_reason"] == runtime_environment.CONTAINER_AGENT_CLI_WARNING
+
+
 def test_codex_process_detection_matches_interactive_binary():
     from app.services.providers import get_provider
 

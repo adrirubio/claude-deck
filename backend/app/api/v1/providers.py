@@ -14,6 +14,10 @@ from app.services.codex_history_service import CodexHistoryService
 from app.services.codex_usage_context_service import CodexUsageContextService
 from app.services.providers import get_provider, get_providers
 from app.services.providers.launch_options import build_provider_launch_options
+from app.services.runtime_environment import (
+    agent_cli_warning_for_binaries,
+    annotate_provider_statuses,
+)
 
 router = APIRouter()
 
@@ -134,8 +138,10 @@ class CodexPluginMutationRequest(BaseModel):
 
 @router.get("/providers")
 def list_providers():
-    providers = [provider.get_status() for provider in get_providers()]
-    return {"providers": providers, "count": len(providers)}
+    providers, environment = annotate_provider_statuses(
+        provider.get_status() for provider in get_providers()
+    )
+    return {"providers": providers, "count": len(providers), "environment": environment}
 
 
 @router.get("/providers/{provider_id}/status")
@@ -187,10 +193,13 @@ def _require_capability(provider, capability: str, operation: str) -> None:
 def _require_provider_binary(executor: ProviderCLIExecutor, operation: str) -> None:
     if executor.binary_path:
         return
+    container_warning = agent_cli_warning_for_binaries(
+        provider.binary_name for provider in get_providers()
+    )
     raise _provider_error(
         500,
-        "provider_binary_missing",
-        f"{executor.provider.display_name} binary not found in PATH.",
+        "container_agent_clis_missing" if container_warning else "provider_binary_missing",
+        container_warning or f"{executor.provider.display_name} binary not found in PATH.",
         provider_id=executor.provider_id,
         operation=operation,
     )

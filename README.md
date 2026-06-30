@@ -102,33 +102,25 @@ Codex support remains explicit about provider boundaries: usage/context parity a
 | UI Components | shadcn/ui + Tailwind CSS |
 | Charts | Recharts (via shadcn/ui) |
 | Database | SQLite (async via SQLAlchemy + aiosqlite) |
-| Containerization | Docker + Docker Compose |
 
-## Quick Start with Docker
+## Installation
 
-```bash
-git clone https://github.com/adrirubio/claude-deck.git
-cd claude-deck
-docker compose up
-```
+Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Use the native install path below; Docker is not supported because containers cannot see host-installed CLIs, tmux sessions, native agent credentials, or your real repository environment.
 
-This builds and starts Claude Deck at http://localhost:8000, mounting your `~/.claude` directory and `~/.claude.json` configuration file. Codex support reads `$CODEX_HOME`, defaulting to `~/.codex`, when available in the runtime environment.
+**Prerequisites**:
 
-> [!WARNING]
-> Claude Deck is not a mock viewer. It works with your real local agent files, so changes made in the UI can change your working setup.
-
-> [!NOTE]
-> The container mounts your home directory's Claude Code configuration. The container runs as root to access these files; adjust permissions if running as a non-root user.
-
-## Manual Installation
-
-**Prerequisites**: Python 3.11+, Node.js 18+
+- Python 3.11+
+- Node.js 18+
+- At least one supported local agent CLI installed on the same host: Claude Code, Codex CLI, GitHub Copilot CLI, or OpenCode CLI
 
 ```bash
 git clone https://github.com/adrirubio/claude-deck.git
 cd claude-deck
 ./scripts/install.sh
 ```
+
+> [!WARNING]
+> Claude Deck is not a mock viewer. It works with your real local agent files, so changes made in the UI can change your working setup.
 
 ## Development
 
@@ -154,6 +146,8 @@ To make the dev environment reachable from another machine on your LAN or tailne
 ```
 
 Both servers will then bind to all interfaces.
+
+Remote use should still be native: run Claude Deck on the remote host where the agents, credentials, repositories, and tmux sessions exist, then connect from your browser over a trusted tunnel or network route.
 
 ### Naming a Claude Deck instance
 
