@@ -2230,6 +2230,7 @@ class BridgeAttachmentPasteRequest(BaseModel):
     submit: bool = False
     prefix: str = ""
     suffix: str = ""
+    require_interactive_relay: bool = False
 
 
 class BridgeAttachmentPasteResponse(BaseModel):

@@ -101,11 +101,14 @@ X-Claude-Deck-Terminal-Token: {token}
 
 ```json
 {
-  "submit": false
+  "submit": false,
+  "require_interactive_relay": true
 }
 ```
 
 `submit: true` sends Enter after a short delay. Generated prompt text strips newlines so `submit: false` cannot submit accidentally.
+
+When `require_interactive_relay` is `true`, the backend rejects the paste with `409` unless an active websocket relay for that target exists and is currently interactive. The web UI sets this flag so read-only mode is enforced server-side for UI paste actions.
 
 ```http
 GET /api/v1/agent-bridge/sessions/{target}/attachments
@@ -127,6 +130,8 @@ Agentic interfaces can use the MCP shim tools:
 - `deck_attach_image_to_bridge_session(target, file_path, submit, prompt)`
 - `deck_list_bridge_attachments(target)`
 - `deck_paste_bridge_attachment(target, attachment_id, submit)`
+
+MCP tools intentionally omit `require_interactive_relay`; MCP callers are trusted agentic callers and may paste into a live tmux target without an attached browser relay. `file_path` is resolved on the MCP host and may point to any image readable by that trusted MCP process; the backend validates the image and copies it into the attachment store before generating the agent-visible prompt.
 
 ### Spawn Session
 

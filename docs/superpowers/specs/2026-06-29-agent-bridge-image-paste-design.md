@@ -172,11 +172,12 @@ If the terminal is read-only:
 - pasting/dropping can still upload the image and show the generated prompt,
 - the final `Paste reference` / `Paste and submit` action should be disabled until the user switches to interactive mode, or offer a one-click "Switch to interactive and paste" action.
 
-Important implementation detail: read-only is currently per-websocket relay state (`PtyRelay.read_only`), not a persisted server-side session policy. The REST paste endpoint cannot infer which browser tab's read-only toggle should govern a target, and it should remain usable even when no browser is attached. Therefore:
+Important implementation detail: read-only is currently per-websocket relay state (`PtyRelay.read_only`), not a persisted server-side session policy. The paste API should support both browser-driven paste actions and trusted agentic callers. Therefore:
 
-- read-only is a UI/client affordance, not an API authorization boundary,
-- the frontend must not call the paste endpoint from a read-only terminal unless the user explicitly switches to interactive mode,
-- the backend paste endpoint is protected by the terminal token/same-origin write contract in §6.6, not by read-only relay state.
+- the paste request may set `require_interactive_relay=true` to require a live interactive websocket relay for the target,
+- the web UI must set `require_interactive_relay=true` so the backend rejects paste from a read-only or detached terminal,
+- MCP/agentic callers may omit `require_interactive_relay` because they are intentionally privileged and may operate without an attached browser relay,
+- all paste calls remain protected by the terminal token/same-origin write contract in §6.6.
 
 ---
 
@@ -329,6 +330,7 @@ Body:
 ```json
 {
   "submit": false,
+  "require_interactive_relay": true,
   "prefix": "",
   "suffix": ""
 }
@@ -512,7 +514,7 @@ This is useful when an agent has already created an image file on the Deck host.
 
 Security constraints:
 
-- file must be under an allowed root,
+- `file_path` is resolved by the trusted MCP process; deployments that expose MCP to less-trusted callers should wrap this tool with an allowed-root policy,
 - image MIME/signature validation still applies,
 - copy file into the Deck attachment store instead of referencing arbitrary paths directly.
 
@@ -532,7 +534,7 @@ deck_paste_bridge_attachment(
 ) -> dict
 ```
 
-MCP should surface backend validation errors verbatim, including file size/type and path-visibility errors.
+MCP should surface validation errors verbatim, including local source-file errors and backend file size/type errors.
 
 ---
 

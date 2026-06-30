@@ -169,6 +169,36 @@ async def test_paste_attachment_sends_literal_text_then_delayed_enter(client, mo
 
 
 @pytest.mark.asyncio
+async def test_paste_attachment_can_require_interactive_relay(client, monkeypatch):
+    upload = await client.post(
+        "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        files={"file": ("screen.png", PNG_BYTES, "image/png")},
+    )
+    attachment_id = upload.json()["id"]
+    calls = []
+
+    monkeypatch.setattr(
+        "app.api.v1.agent_bridge.router.is_target_interactive",
+        lambda _target: False,
+    )
+    monkeypatch.setattr(
+        "app.services.agent_bridge.attachments.subprocess.run",
+        lambda args, **_kwargs: calls.append(args),
+    )
+
+    response = await client.post(
+        f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{attachment_id}/paste",
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        json={"submit": False, "require_interactive_relay": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Terminal relay is read-only or not attached"
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_delete_attachment_removes_file_and_row(client, db):
     upload = await client.post(
         "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",

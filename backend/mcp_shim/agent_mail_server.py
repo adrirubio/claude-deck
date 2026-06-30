@@ -422,7 +422,7 @@ def deck_attach_image_to_bridge_session(
     """Upload a local image file to an Agent Bridge tmux session, paste the
     generated image-path prompt, and optionally submit it. target is the
     tmux target from Agent Bridge, such as "repo-1234:0.0". file_path must
-    point to an image readable by this MCP server process."""
+    point to an image readable by this trusted MCP server process."""
     expanded_path = os.path.abspath(os.path.expanduser(file_path))
     if not os.path.isfile(expanded_path):
         return {

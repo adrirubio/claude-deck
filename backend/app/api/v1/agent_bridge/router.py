@@ -24,7 +24,7 @@ from app.models.schemas import (
 from app.config import settings
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
-from app.services.agent_bridge.pty_relay import PtyRelay
+from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
 from app.services.agent_bridge.spawn import kill_session, spawn_session
 from app.services.providers import get_provider
 from app.services.providers.base import SpawnCommandOptions
@@ -251,6 +251,8 @@ async def paste_session_attachment(
     db: AsyncSession = Depends(get_db),
 ):
     _require_attachment_access(request, token)
+    if paste_request.require_interactive_relay and not is_target_interactive(target):
+        raise HTTPException(status_code=409, detail="Terminal relay is read-only or not attached")
     try:
         return await agent_bridge_attachment_service.paste_attachment(
             db,

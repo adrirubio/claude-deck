@@ -148,7 +148,7 @@ export function TerminalView({ target, fullscreen, onToggleFullscreen, onClose, 
     const attachment = imageAttachment.attachment
     setImageAttachment((current) => current ? { ...current, pasting: true, error: null } : current)
     try {
-      await pasteBridgeAttachment(target, attachment.id, { submit })
+      await pasteBridgeAttachment(target, attachment.id, { submit, require_interactive_relay: true })
       toast.success(submit ? 'Image prompt pasted and submitted' : 'Image prompt pasted')
       closeImageAttachment()
     } catch (error) {
