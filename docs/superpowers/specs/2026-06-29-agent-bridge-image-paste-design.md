@@ -209,9 +209,9 @@ Example:
 
 The saved path returned to the frontend must be the path visible to the agent process. By default, this is the absolute host path.
 
-### 6.2 Docker / namespace path mapping
+### 6.2 Filesystem namespace path mapping
 
-Add optional config for deployments where the backend and tmux agent do not share the same filesystem namespace:
+Add optional config for advanced deployments where the backend and tmux agent do not share the same filesystem namespace:
 
 ```
 Settings.bridge_attachment_agent_root
@@ -226,14 +226,7 @@ storage_path: /app/data/bridge-attachments/session/img.png
 agent_path:   /home/user/.claude-registry/bridge-attachments/session/img.png
 ```
 
-This supports Docker bind mounts:
-
-```
-host:      ~/.claude-registry/bridge-attachments
-container: /app/data/bridge-attachments
-```
-
-If no shared path exists, the API should return a clear configuration error instead of generating a path the agent cannot read.
+Docker is not a supported Claude Deck deployment target. This setting exists only for explicit non-container namespace mappings where the operator knows the agent-visible path. If no shared path exists, the API should return a clear configuration error instead of generating a path the agent cannot read.
 
 ### 6.3 File validation
 
@@ -585,9 +578,7 @@ Add a scheduled or startup cleanup task:
 |---|---|---|---|
 | local host | same local browser | same host | Upload saves locally; pasted path works. |
 | remote host | local browser over HTTPS/tunnel | same remote host | Upload saves remotely; pasted remote path works. |
-| Docker container | browser anywhere | tmux inside same container | Container path works. |
-| Docker container | browser anywhere | tmux on host | Requires bind mount + `CLAUDE_DECK_BRIDGE_ATTACHMENT_AGENT_ROOT`; otherwise block with config error. |
-| host backend | browser anywhere | agent inside separate container | Requires bind mount path visible inside container; otherwise block/warn. |
+| host backend | browser anywhere | agent in another explicit filesystem namespace | Requires an operator-configured path visible to the agent; otherwise block/warn. |
 | remote SSH-only tmux not on Deck host | browser anywhere | different machine | Out of scope unless Deck gains a remote file transfer backend. |
 
 Key rule:
@@ -659,7 +650,7 @@ Key rule:
 - Paste endpoint uses `tmux send-keys -l`.
 - Paste strips newlines from final prompt text.
 - `submit=true` waits `TMUX_ENTER_DELAY_SECONDS` and then sends Enter.
-- Docker path mapping produces correct `agent_path`.
+- Configured namespace path mapping produces correct `agent_path`.
 - Delete refuses paths outside attachment root.
 - Cleanup removes expired rows/files.
 

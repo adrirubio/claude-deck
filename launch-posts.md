@@ -191,7 +191,6 @@ If you use Claude Code, this gives you a local UI for the config files and metad
 - no telemetry
 - SQLite
 - reads and writes existing Claude Code config files
-- Docker / Docker Compose support
 - FastAPI + React frontend
 
 **What it manages:**

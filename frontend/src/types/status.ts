@@ -1,4 +1,4 @@
-import type { AgentProviderStatus } from './providers'
+import type { AgentProviderStatus, RuntimeEnvironmentStatus } from './providers'
 
 export type InstanceAccent =
   | 'blue'
@@ -24,4 +24,5 @@ export interface SystemStatusResponse {
   active_sessions: number
   providers?: Record<string, AgentProviderStatus>
   instance?: InstanceIdentity
+  environment?: RuntimeEnvironmentStatus
 }

@@ -52,6 +52,24 @@ def test_provider_cli_executor_rejects_unsafe_codex_command():
     assert executor.validate_command("doctor") is True
 
 
+def test_provider_cli_executor_uses_container_message_when_no_agent_clis(monkeypatch):
+    from app.services import runtime_environment
+    from app.services.cli_executor import ProviderCLIExecutor
+
+    monkeypatch.setattr(runtime_environment, "is_containerized", lambda: True)
+    monkeypatch.setattr("app.services.cli_executor.shutil.which", lambda _name: None)
+    monkeypatch.setattr("app.services.runtime_environment.shutil.which", lambda _name: None)
+
+    executor = ProviderCLIExecutor("codex-cli")
+
+    try:
+        executor.execute("doctor", ["--json"])
+    except ValueError as exc:
+        assert str(exc) == runtime_environment.CONTAINER_AGENT_CLI_WARNING
+    else:
+        raise AssertionError("Expected missing binary error")
+
+
 def test_legacy_cli_executor_defaults_to_claude_code():
     from app.services.cli_executor import CLIExecutor
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { MonitorPlay, Monitor } from 'lucide-react'
+import { AlertTriangle, MonitorPlay, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCCSessions } from './useCCSessions'
 import { SessionList } from './SessionList'
@@ -10,6 +10,7 @@ import type { CCSession } from './types'
 import { useProviderContext } from '@/contexts/ProviderContext'
 import { useSystemStatus } from '@/hooks/useSystemStatus'
 import type { AgentProviderId, AgentProviderStatus } from '@/types/providers'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 const MAX_GRID_PANES = 4
 type ProviderFilter = 'all' | AgentProviderId
@@ -65,12 +66,13 @@ export function CCBridgePage() {
   const canCreateSession = providerFilter === 'all'
     ? providers.some(canProviderSpawn)
     : canProviderSpawn(selectedFilterProvider ?? undefined)
+  const agentCliWarning = status?.environment?.agent_cli_warning ?? null
   const createDisabledReason = providerFilter === 'all'
-    ? 'No installed provider can launch sessions.'
+    ? agentCliWarning ?? 'No installed provider can launch sessions.'
     : !selectedFilterProvider
       ? 'Provider metadata is not available.'
       : !selectedFilterProvider.installed
-        ? `${selectedFilterProvider.display_name} is not installed.`
+        ? selectedFilterProvider.unavailable_reason ?? `${selectedFilterProvider.display_name} is not installed.`
         : selectedFilterProvider.capability_details?.spawn?.reason
           ?? `${selectedFilterProvider.display_name} cannot launch sessions from Agent Bridge.`
 
@@ -128,31 +130,44 @@ export function CCBridgePage() {
         : 'h-[calc(100vh-8.5rem)] border rounded-lg overflow-hidden'
     )}>
       {!isFullscreen && (
-        <div className="flex items-center gap-3 px-4 py-3 border-b shrink-0 bg-muted/30">
-          <MonitorPlay className="h-5 w-5 shrink-0" />
-          <div className="flex items-baseline gap-2 flex-wrap min-w-0">
-            <h1 className="text-base font-semibold">Agent Bridge</h1>
-            <span className="text-xs text-muted-foreground">
-              Discover and observe Claude Code, Codex, and Copilot sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
-            </span>
+        <div className="border-b shrink-0 bg-muted/30">
+          <div className="flex items-center gap-3 px-4 py-3">
+            <MonitorPlay className="h-5 w-5 shrink-0" />
+            <div className="flex items-baseline gap-2 flex-wrap min-w-0">
+              <h1 className="text-base font-semibold">Agent Bridge</h1>
+              <span className="text-xs text-muted-foreground">
+                Discover and observe Claude Code, Codex, and Copilot sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
+              </span>
+            </div>
+            <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">
+              {PROVIDER_FILTERS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={cn(
+                    'px-2.5 py-1 text-xs rounded-sm transition-colors',
+                    providerFilter === value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  onClick={() => setProviderFilter(value)}
+                >
+                  {label} <span className="opacity-70">({filterCounts[value]})</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">
-            {PROVIDER_FILTERS.map(({ value, label }) => (
-              <button
-                key={value}
-                type="button"
-                className={cn(
-                  'px-2.5 py-1 text-xs rounded-sm transition-colors',
-                  providerFilter === value
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-                onClick={() => setProviderFilter(value)}
-              >
-                {label} <span className="opacity-70">({filterCounts[value]})</span>
-              </button>
-            ))}
-          </div>
+          {agentCliWarning && (
+            <div className="px-4 pb-3">
+              <Alert variant="destructive" className="py-3">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Agent CLIs unavailable in this runtime</AlertTitle>
+                <AlertDescription>
+                  {agentCliWarning} Run Claude Deck natively on the host where Claude Code, Codex, Copilot, or OpenCode are installed.
+                </AlertDescription>
+              </Alert>
+            </div>
+          )}
         </div>
       )}
 

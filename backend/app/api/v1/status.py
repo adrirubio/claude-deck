@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.models.schemas import SystemStatusResponse
 from app.services.instance_identity import get_instance_identity
 from app.services.providers import get_provider, get_providers
+from app.services.runtime_environment import annotate_provider_statuses
 
 router = APIRouter()
 
@@ -35,24 +36,27 @@ async def _get_claude_code_version() -> Optional[str]:
         return version
 
 
-async def _get_provider_statuses() -> dict[str, Any]:
-    statuses = await asyncio.gather(
+async def _get_provider_statuses() -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_statuses = await asyncio.gather(
         *(asyncio.to_thread(provider.get_status) for provider in get_providers())
     )
-    return {status["id"]: status for status in statuses}
+    statuses, environment = annotate_provider_statuses(raw_statuses)
+    return {status["id"]: status for status in statuses}, environment
 
 
 @router.get("/status", response_model=SystemStatusResponse)
 async def get_system_status():
     """Return system status for header indicators."""
-    version, provider_statuses = await asyncio.gather(
+    version, provider_result = await asyncio.gather(
         _get_claude_code_version(),
         _get_provider_statuses(),
     )
+    provider_statuses, environment = provider_result
 
     return SystemStatusResponse(
         claude_code_version=version,
         active_sessions=0,
         providers=provider_statuses,
         instance=get_instance_identity(),
+        environment=environment,
     )

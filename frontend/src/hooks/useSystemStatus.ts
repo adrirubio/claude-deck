@@ -7,6 +7,7 @@ interface SystemStatus {
   activeSessions: number
   providers: SystemStatusResponse['providers']
   instance: InstanceIdentity | null
+  environment: SystemStatusResponse['environment'] | null
 }
 
 function parseStatus(res: SystemStatusResponse): SystemStatus {
@@ -15,6 +16,7 @@ function parseStatus(res: SystemStatusResponse): SystemStatus {
     activeSessions: res.active_sessions,
     providers: res.providers ?? {},
     instance: res.instance ?? null,
+    environment: res.environment ?? null,
   }
 }
 

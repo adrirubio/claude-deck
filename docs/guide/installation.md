@@ -1,27 +1,18 @@
 # Installation
 
-## Docker (Recommended)
+Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Docker is not supported because containers cannot see host-installed CLIs, host tmux sessions, native agent credentials, or your real repository environment.
 
-The fastest way to run Claude Deck:
-
-```bash
-git clone https://github.com/adrirubio/claude-deck.git
-cd claude-deck
-docker compose up
-```
-
-This builds and starts Claude Deck at `http://localhost:8000`, mounting your `~/.claude` and `~/.claude.json` configuration files.
-
-::: tip
-The container mounts your home directory's Claude Code configuration. The container runs as root to access these files; adjust permissions if running as a non-root user.
-:::
-
-## Manual Installation
+## Native Installation
 
 ### Prerequisites
 
 - **Python 3.11+**
 - **Node.js 18+**
+- At least one supported local agent CLI installed on the same host:
+  - Claude Code
+  - Codex CLI
+  - GitHub Copilot CLI
+  - OpenCode CLI
 
 ### Steps
 
@@ -39,13 +30,22 @@ cd claude-deck
 ```
 
 This script:
+
 - Creates a Python virtual environment in `backend/venv/`
 - Installs Python dependencies from `backend/requirements.txt`
 - Installs Node.js dependencies in `frontend/`
 - Installs documentation dependencies in `docs/`
 - Creates required directories
 
-3. Verify the installation:
+3. Start Claude Deck:
+
+```bash
+./scripts/dev.sh
+```
+
+Claude Deck starts the backend at `http://localhost:8000` and the frontend dev server at `http://localhost:5173`.
+
+4. Verify the installation:
 
 ```bash
 # Check backend
@@ -58,6 +58,10 @@ This script:
 ## Configuration
 
 Claude Deck requires no configuration files — all settings have sensible defaults defined in `backend/app/config.py`. The SQLite database is created automatically on first run at `backend/claude_registry.db`.
+
+## Remote Use
+
+For remote access, install and run Claude Deck natively on the remote host where the agents, credentials, repositories, and tmux sessions exist. Then connect from your browser over a trusted tunnel or network route.
 
 ## What Gets Read
 

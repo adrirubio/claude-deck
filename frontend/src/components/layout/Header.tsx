@@ -63,6 +63,7 @@ export function Header() {
                 <Badge
                   key={provider.id}
                   variant="outline"
+                  title={provider.unavailable_reason ?? undefined}
                   className={cn(
                     "gap-1 text-xs",
                     provider.installed ? "font-mono" : "border-destructive/40 text-destructive"
@@ -77,6 +78,16 @@ export function Header() {
                   {provider.version ? ` v${provider.version}` : provider.installed ? " ready" : " missing"}
                 </Badge>
               ))}
+              {status.environment?.agent_cli_warning && (
+                <Badge
+                  variant="outline"
+                  className="gap-1 text-xs border-destructive/40 text-destructive max-w-[22rem]"
+                  title={status.environment.agent_cli_warning}
+                >
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  <span className="truncate">Container cannot see host agent CLIs</span>
+                </Badge>
+              )}
             </>
           )}
           <ThemeToggle />

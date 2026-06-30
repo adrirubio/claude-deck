@@ -5,8 +5,9 @@ import shutil
 import re
 from typing import List, Optional, Dict
 from ..models.schemas import CLIResult
-from .providers import get_provider
+from .providers import get_provider, get_providers
 from .providers.base import AgentProvider
+from .runtime_environment import agent_cli_warning_for_binaries
 
 
 class ProviderCLIExecutor:
@@ -81,9 +82,15 @@ class ProviderCLIExecutor:
             )
 
         if not self.binary_path:
+            container_warning = agent_cli_warning_for_binaries(
+                provider.binary_name for provider in get_providers()
+            )
             raise ValueError(
-                f"{self.provider.display_name} binary not found in PATH. "
-                f"Please ensure {self.provider.display_name} is installed and accessible."
+                container_warning
+                or (
+                    f"{self.provider.display_name} binary not found in PATH. "
+                    f"Please ensure {self.provider.display_name} is installed and accessible."
+                )
             )
 
         safe_args = self._validate_args(args)
