@@ -1,10 +1,10 @@
 # Agent Bridge
 
-Agent Bridge discovers and manages local agent CLIs running inside tmux. It supports mixed Claude Code, Codex CLI, and GitHub Copilot CLI sessions in the same view.
+Agent Bridge discovers and manages local agent CLIs running inside tmux. It supports mixed Claude Code, Codex CLI, GitHub Copilot CLI, and OpenCode CLI sessions in the same view.
 
 ## Overview
 
-The bridge performs a provider-aware tmux discovery pass and classifies each matching pane as `claude-code`, `codex-cli`, or `copilot-cli`. The UI can show all sessions together or filter to one provider.
+The bridge performs a provider-aware tmux discovery pass and classifies each matching pane as `claude-code`, `codex-cli`, `copilot-cli`, or `opencode-cli`. The UI can show all sessions together or filter to one provider.
 
 Session cards include:
 
@@ -18,10 +18,13 @@ The terminal grid is shared across providers. Read-only and interactive modes wo
 
 Provider filters are explicit:
 
-- **All** — mixed Claude Code, Codex, and Copilot sessions
+- **All** — mixed Claude Code, Codex, Copilot, and OpenCode sessions
 - **Claude Code** — Claude Code panes only
 - **Codex** — Codex panes only
 - **Copilot** — GitHub Copilot CLI panes only
+- **OpenCode** — OpenCode CLI panes only
+
+When Agent Team sessions are running, Agent Bridge also shows a team filter row. Team filters compose with provider filters, so selecting a team and a provider shows only matching session cards. Selecting a specific team also detaches any open terminal panes that do not belong to that team; it does not auto-attach that team's sessions or kill any tmux sessions. New sessions launched from Agent Bridge remain standalone and are not attached while a specific team filter is active.
 
 ## New Sessions
 

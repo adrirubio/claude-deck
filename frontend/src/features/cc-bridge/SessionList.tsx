@@ -18,6 +18,7 @@ interface SessionListProps {
   onNewSession: () => void
   onKillSession: (session: CCSession) => void
   providerFilter: ProviderFilter
+  teamLabel?: string | null
   canCreateSession: boolean
   createDisabledReason: string | null
   instance?: InstanceIdentity | null
@@ -33,6 +34,7 @@ export function SessionList({
   onNewSession,
   onKillSession,
   providerFilter,
+  teamLabel,
   canCreateSession,
   createDisabledReason,
   instance,
@@ -46,10 +48,19 @@ export function SessionList({
         : providerFilter === 'opencode-cli'
           ? 'OpenCode'
           : 'Claude Code'
+  const emptyTitle = teamLabel
+    ? providerFilter === 'all'
+      ? `No sessions in ${teamLabel}`
+      : `No ${emptyName} sessions in ${teamLabel}`
+    : `No ${emptyName} sessions found`
   const emptyHint = createDisabledReason
-    ?? (providerFilter === 'all'
+    ?? (teamLabel
+      ? `Use Agent Teams to launch more sessions for ${teamLabel}. New Agent Bridge sessions are standalone and stay hidden while this team filter is active.`
+      : providerFilter === 'all'
       ? 'Launch or start a supported CLI in tmux.'
       : `Launch ${emptyName} from Agent Bridge or start it in tmux.`)
+  const newSessionTitle = createDisabledReason
+    ?? (teamLabel ? `New standalone session (hidden until All teams is selected)` : 'New session')
 
   return (
     <div className="flex flex-col h-full">
@@ -64,7 +75,7 @@ export function SessionList({
             className="h-7 w-7"
             onClick={onNewSession}
             disabled={!canCreateSession}
-            title={createDisabledReason ?? 'New session'}
+            title={newSessionTitle}
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
@@ -88,7 +99,7 @@ export function SessionList({
         {!loading && !error && sessions.length === 0 && (
           <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
             <MonitorX className="h-8 w-8 mb-2" />
-            <p className="text-sm">No {emptyName} sessions found</p>
+            <p className="text-sm">{emptyTitle}</p>
             <p className="text-xs mt-1 text-center px-3">{emptyHint}</p>
           </div>
         )}
