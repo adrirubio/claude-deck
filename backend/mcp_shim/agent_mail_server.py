@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -103,6 +104,32 @@ def _request(method: str, path: str, **kwargs) -> dict:
 
 def _team_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-teams", path, **kwargs)
+
+
+def _bridge_request(method: str, path: str, **kwargs) -> dict:
+    return _deck_request(method, "agent-bridge", path, **kwargs)
+
+
+def _bridge_request_with_token(method: str, path: str, **kwargs) -> dict:
+    token_result = _bridge_request("GET", "/token")
+    if not token_result["ok"]:
+        return token_result
+    token = token_result["data"].get("token")
+    if not token:
+        return {
+            "ok": False,
+            "error": {
+                "code": "missing_terminal_token",
+                "message": "Claude Deck did not return an Agent Bridge terminal token.",
+            },
+        }
+    headers = dict(kwargs.pop("headers", {}) or {})
+    headers["X-Claude-Deck-Terminal-Token"] = token
+    return _bridge_request(method, path, headers=headers, **kwargs)
+
+
+def _bridge_session_path(target: str) -> str:
+    return f"/sessions/{quote(target, safe='')}"
 
 
 def _ensure_registered() -> dict:
@@ -383,6 +410,78 @@ def deck_create_handoff(
     if not result["ok"]:
         return result
     return {"ok": True, "handoff_id": result["data"]["id"], **_counts()}
+
+
+@mcp.tool()
+def deck_attach_image_to_bridge_session(
+    target: str,
+    file_path: str,
+    submit: bool = False,
+    prompt: str = "",
+) -> dict:
+    """Upload a local image file to an Agent Bridge tmux session, paste the
+    generated image-path prompt, and optionally submit it. target is the
+    tmux target from Agent Bridge, such as "repo-1234:0.0". file_path must
+    point to an image readable by this trusted MCP server process."""
+    expanded_path = os.path.abspath(os.path.expanduser(file_path))
+    if not os.path.isfile(expanded_path):
+        return {
+            "ok": False,
+            "error": {
+                "code": "image_file_not_found",
+                "message": f"Image file not found: {expanded_path}",
+            },
+        }
+
+    data = {"created_by": "mcp"}
+    if prompt:
+        data["prompt"] = prompt
+    with open(expanded_path, "rb") as handle:
+        upload = _bridge_request_with_token(
+            "POST",
+            f"{_bridge_session_path(target)}/attachments",
+            files={"file": (os.path.basename(expanded_path), handle)},
+            data=data,
+        )
+    if not upload["ok"]:
+        return upload
+
+    attachment = upload["data"]
+    paste = _bridge_request_with_token(
+        "POST",
+        f"{_bridge_session_path(target)}/attachments/{attachment['id']}/paste",
+        json={"submit": submit},
+    )
+    if not paste["ok"]:
+        return {"ok": False, "attachment": attachment, "error": paste["error"]}
+    return {"ok": True, "attachment": attachment, "paste": paste["data"]}
+
+
+@mcp.tool()
+def deck_list_bridge_attachments(target: str) -> dict:
+    """List recent image attachments for an Agent Bridge tmux target."""
+    result = _bridge_request_with_token("GET", f"{_bridge_session_path(target)}/attachments")
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"]}
+
+
+@mcp.tool()
+def deck_paste_bridge_attachment(
+    target: str,
+    attachment_id: int,
+    submit: bool = False,
+) -> dict:
+    """Paste an existing Agent Bridge attachment prompt into a tmux session,
+    optionally submitting it with Enter."""
+    result = _bridge_request_with_token(
+        "POST",
+        f"{_bridge_session_path(target)}/attachments/{attachment_id}/paste",
+        json={"submit": submit},
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "paste": result["data"]}
 
 
 @mcp.tool()

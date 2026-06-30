@@ -2204,3 +2204,42 @@ class AgentTeamLaunchResult(BaseModel):
     launched_at: datetime
     completed_at: datetime
     items: List[AgentTeamLaunchResultItem] = Field(default_factory=list)
+
+
+class BridgeAttachmentResponse(BaseModel):
+    id: int
+    target: str
+    session_name: Optional[str] = None
+    provider: Optional[str] = None
+    original_filename: Optional[str] = None
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    agent_path: str
+    prompt_text: str
+    created_by: Optional[str] = None
+    created_at: datetime
+    expires_at: Optional[datetime] = None
+
+
+class BridgeAttachmentListResponse(BaseModel):
+    attachments: List[BridgeAttachmentResponse] = Field(default_factory=list)
+
+
+class BridgeAttachmentPasteRequest(BaseModel):
+    submit: bool = False
+    prefix: str = ""
+    suffix: str = ""
+    require_interactive_relay: bool = False
+
+
+class BridgeAttachmentPasteResponse(BaseModel):
+    pasted: bool
+    submitted: bool
+    target: str
+
+
+class BridgeAttachmentDeleteResponse(BaseModel):
+    deleted: bool
+    target: str
+    attachment_id: int

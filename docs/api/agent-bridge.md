@@ -64,6 +64,75 @@ WS /api/v1/agent-bridge/sessions/{target}/terminal?token={token}&mode={mode}
 
 `mode` can be `readonly` or `interactive`.
 
+### Image Attachments
+
+Use image attachments to upload a screenshot or mockup to the Claude Deck host, then paste a file-path prompt into a live tmux session.
+
+All attachment endpoints require a fresh token from `GET /api/v1/agent-bridge/token` in the `X-Claude-Deck-Terminal-Token` header.
+
+```http
+POST /api/v1/agent-bridge/sessions/{target}/attachments
+Content-Type: multipart/form-data
+X-Claude-Deck-Terminal-Token: {token}
+```
+
+Multipart fields:
+
+- `file`: PNG, JPEG, WebP, or GIF image
+- `prompt`: optional prompt template containing `{path}`
+- `created_by`: optional source label
+
+```json
+{
+  "id": 123,
+  "target": "repo-1234:0.0",
+  "provider": "codex-cli",
+  "mime_type": "image/png",
+  "size_bytes": 482103,
+  "agent_path": "/home/user/.claude-registry/bridge-attachments/repo-1234/2026-06-29/185422-a1b2c3d4.png",
+  "prompt_text": "Please inspect this image: /home/user/.claude-registry/bridge-attachments/repo-1234/2026-06-29/185422-a1b2c3d4.png"
+}
+```
+
+```http
+POST /api/v1/agent-bridge/sessions/{target}/attachments/{attachment_id}/paste
+X-Claude-Deck-Terminal-Token: {token}
+```
+
+```json
+{
+  "submit": false,
+  "require_interactive_relay": true
+}
+```
+
+`submit: true` sends Enter after a short delay. Generated prompt text strips newlines so `submit: false` cannot submit accidentally.
+
+When `require_interactive_relay` is `true`, the backend rejects the paste with `409` unless an active websocket relay for that target exists and is currently interactive. The web UI sets this flag so read-only mode is enforced server-side for UI paste actions.
+
+```http
+GET /api/v1/agent-bridge/sessions/{target}/attachments
+DELETE /api/v1/agent-bridge/sessions/{target}/attachments/{attachment_id}
+```
+
+Attachments are stored by default under `~/.claude-registry/bridge-attachments`. In remote deployments, this path is on the Claude Deck host and must be readable by the tmux agent process.
+
+Configuration:
+
+- `BRIDGE_ATTACHMENT_DIR`: host storage directory
+- `BRIDGE_ATTACHMENT_AGENT_ROOT`: optional agent-visible root to use in pasted paths
+- `BRIDGE_ATTACHMENT_MAX_BYTES`: maximum accepted upload size
+- `BRIDGE_ATTACHMENT_RETENTION_DAYS`: retention window for startup cleanup
+- `BRIDGE_ATTACHMENT_MAX_PER_SESSION_PER_DAY`: per-session daily upload limit
+
+Agentic interfaces can use the MCP shim tools:
+
+- `deck_attach_image_to_bridge_session(target, file_path, submit, prompt)`
+- `deck_list_bridge_attachments(target)`
+- `deck_paste_bridge_attachment(target, attachment_id, submit)`
+
+MCP tools intentionally omit `require_interactive_relay`; MCP callers are trusted agentic callers and may paste into a live tmux target without an attached browser relay. `file_path` is resolved on the MCP host and may point to any image readable by that trusted MCP process; the backend validates the image and copies it into the attachment store before generating the agent-visible prompt.
+
 ### Spawn Session
 
 ```http

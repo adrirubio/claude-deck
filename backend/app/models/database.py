@@ -200,6 +200,27 @@ class AgentTeamLaunchItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class BridgeSessionAttachment(Base):
+    """Image attachment uploaded for an Agent Bridge tmux session."""
+
+    __tablename__ = "bridge_session_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    session_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String, nullable=True)
+    original_filename: Mapped[str | None] = mapped_column(String, nullable=True)
+    mime_type: Mapped[str] = mapped_column(String, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String, nullable=False)
+    agent_path: Mapped[str] = mapped_column(String, nullable=False)
+    prompt_text: Mapped[str] = mapped_column(String, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class MailTeamMember(Base):
     """Durable Agent Mail routable participant, grouped by repository."""
 

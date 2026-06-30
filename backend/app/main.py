@@ -1,14 +1,19 @@
 """FastAPI application entry point."""
+import logging
+import os
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-from app.config import settings
-from app.database import init_db
-from app.api.v1.router import router as api_v1_router
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
-import os
+
+from app.api.v1.router import router as api_v1_router
+from app.config import settings
+from app.database import AsyncSessionLocal, init_db
+from app.services.agent_bridge.attachments import agent_bridge_attachment_service
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -16,6 +21,11 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup: Initialize database
     await init_db()
+    try:
+        async with AsyncSessionLocal() as db:
+            await agent_bridge_attachment_service.cleanup_expired(db)
+    except Exception:
+        logger.exception("Failed to clean up expired Agent Bridge attachments")
     # Clean up any orphaned relay processes from previous runs
     from app.services.cc_bridge.pty_relay import close_all_relays, cleanup_orphaned_relays
     cleanup_orphaned_relays()

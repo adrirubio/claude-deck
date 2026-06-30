@@ -24,6 +24,12 @@ _active_relays: dict[str, "PtyRelay"] = {}
 _PR_SET_PDEATHSIG = 1
 
 
+def is_target_interactive(target: str) -> bool:
+    """Return whether a live relay for target currently accepts input."""
+    relay = _active_relays.get(target)
+    return relay is not None and not relay.read_only
+
+
 def _child_preexec() -> None:
     """Set up the child process: new session + death signal."""
     os.setsid()
