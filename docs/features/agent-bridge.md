@@ -28,6 +28,17 @@ When Agent Team sessions are running, Agent Bridge also shows a team filter row.
 
 With a specific team selected, the **Team lanes** action opens a fullscreen vertical-lane layout for that team. Lane mode shows up to four live team sessions side by side, ordered by configured team slot position, without changing the normal grid attachments. Press `Esc` or the exit button to return to the previous grid; if more than four members are live, Agent Bridge shows how many are not displayed.
 
+## Keyboard Controls
+
+When a bridge terminal is focused, press `Ctrl+Space` to arm the Agent Bridge leader. The hint overlay lists the available follow-up keys:
+
+- `←` / `→` — focus the previous or next displayed pane, wrapping in on-screen order.
+- `1`-`4` — jump to displayed pane 1-4; out-of-range numbers do nothing.
+- `r` — toggle the focused pane between read-only and interactive mode.
+- `Esc` — cancel the leader.
+
+The displayed order is the grid attachment order, the team-lane slot order, or the single fullscreen pane. If the next key is not a shortcut, Agent Bridge forwards the `Ctrl+Space` terminal input and the following key in interactive mode; read-only panes intentionally drop input. Some OS or input-method configurations reserve `Ctrl+Space` before it reaches the browser.
+
 ## New Sessions
 
 The new session dialog starts with a provider choice.
