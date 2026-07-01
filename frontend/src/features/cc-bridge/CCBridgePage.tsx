@@ -5,9 +5,10 @@ import { useCCSessions } from './useCCSessions'
 import { SessionList } from './SessionList'
 import { TerminalView } from './TerminalView'
 import { TeamLanesView } from './TeamLanesView'
+import { LeaderHintOverlay } from './LeaderHintOverlay'
 import { NewSessionDialog } from './NewSessionDialog'
 import { KillSessionDialog } from './KillSessionDialog'
-import type { CCSession } from './types'
+import type { CCSession, LeaderNavigationDirection } from './types'
 import { useProviderContext } from '@/contexts/ProviderContext'
 import { useSystemStatus } from '@/hooks/useSystemStatus'
 import type { AgentProviderId, AgentProviderStatus } from '@/types/providers'
@@ -66,6 +67,7 @@ export function CCBridgePage() {
   const [activeTargets, setActiveTargets] = useState<string[]>([])
   const [layoutMode, setLayoutMode] = useState<LayoutMode>({ kind: 'grid' })
   const [focusedTarget, setFocusedTarget] = useState<string | null>(null)
+  const [leaderHintTarget, setLeaderHintTarget] = useState<string | null>(null)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [killSession, setKillSession] = useState<CCSession | null>(null)
 
@@ -125,6 +127,12 @@ export function CCBridgePage() {
       overflowCount: Math.max(0, teamSessions.length - MAX_GRID_PANES),
     }
   }, [laneTeamId, sessions])
+
+  const displayedTargets = useMemo(() => {
+    if (layoutMode.kind === 'lanes') return teamLanes.sessions.map((session) => session.tmux_target)
+    if (layoutMode.kind === 'single') return [layoutMode.target]
+    return activeTargets
+  }, [activeTargets, layoutMode, teamLanes.sessions])
 
   const canProviderSpawn = (provider: AgentProviderStatus | undefined) => (
     Boolean(provider?.installed)
@@ -191,6 +199,32 @@ export function CCBridgePage() {
     setLayoutMode({ kind: 'grid' })
   }, [])
 
+  const handleLeaderNavigate = useCallback((sourceTarget: string, direction: LeaderNavigationDirection) => {
+    setFocusedTarget(sourceTarget)
+    const sourceIndex = displayedTargets.indexOf(sourceTarget)
+    if (sourceIndex === -1) return
+
+    if (typeof direction === 'number') {
+      const target = displayedTargets[direction - 1]
+      if (target) setFocusedTarget(target)
+      return
+    }
+
+    if (displayedTargets.length === 0) return
+    const delta = direction === 'next' ? 1 : -1
+    const nextIndex = (sourceIndex + delta + displayedTargets.length) % displayedTargets.length
+    setFocusedTarget(displayedTargets[nextIndex])
+  }, [displayedTargets])
+
+  const handleLeaderStateChange = useCallback((sourceTarget: string, active: boolean) => {
+    if (active) {
+      setFocusedTarget(sourceTarget)
+      setLeaderHintTarget(sourceTarget)
+      return
+    }
+    setLeaderHintTarget((current) => (current === sourceTarget ? null : current))
+  }, [])
+
   useEffect(() => {
     if (!isFullscreen) return
     const handleKey = (e: KeyboardEvent) => {
@@ -237,6 +271,7 @@ export function CCBridgePage() {
   }
 
   const gridCols = activeTargets.length <= 1 ? 'grid-cols-1' : 'grid-cols-2'
+  const showLeaderHint = leaderHintTarget !== null && displayedTargets.includes(leaderHintTarget)
 
   return (
     <div className={cn(
@@ -245,6 +280,8 @@ export function CCBridgePage() {
         ? 'fixed inset-0 z-50 bg-background'
         : 'h-[calc(100vh-8.5rem)] border rounded-lg overflow-hidden'
     )}>
+      {showLeaderHint && <LeaderHintOverlay />}
+
       {!isFullscreen && (
         <div className="border-b shrink-0 bg-muted/30">
           <div className="flex items-center gap-3 px-4 py-3">
@@ -366,6 +403,8 @@ export function CCBridgePage() {
               teamLabel={laneTeamLabel}
               focusedTarget={focusedTarget}
               onFocusTarget={setFocusedTarget}
+              onLeaderNavigate={handleLeaderNavigate}
+              onLeaderStateChange={handleLeaderStateChange}
               onExit={exitFullscreen}
               instance={instance}
             />
@@ -403,6 +442,9 @@ export function CCBridgePage() {
                       <TerminalView
                         target={target}
                         fullscreen={isThisFullscreen}
+                        focused={focusedTarget === target}
+                        onLeaderNavigate={handleLeaderNavigate}
+                        onLeaderStateChange={handleLeaderStateChange}
                         onToggleFullscreen={() =>
                           setLayoutMode(isThisFullscreen ? { kind: 'grid' } : { kind: 'single', target })
                         }

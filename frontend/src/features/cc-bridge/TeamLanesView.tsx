@@ -2,7 +2,7 @@ import { Monitor, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { TerminalView } from './TerminalView'
-import type { CCSession } from './types'
+import type { CCSession, LeaderNavigationDirection } from './types'
 import type { InstanceIdentity } from '@/types/status'
 
 interface TeamLanesViewProps {
@@ -11,6 +11,8 @@ interface TeamLanesViewProps {
   teamLabel?: string | null
   focusedTarget: string | null
   onFocusTarget: (target: string) => void
+  onLeaderNavigate: (sourceTarget: string, direction: LeaderNavigationDirection) => void
+  onLeaderStateChange: (sourceTarget: string, active: boolean) => void
   onExit: () => void
   instance?: InstanceIdentity | null
 }
@@ -25,6 +27,8 @@ export function TeamLanesView({
   teamLabel,
   focusedTarget,
   onFocusTarget,
+  onLeaderNavigate,
+  onLeaderStateChange,
   onExit,
   instance,
 }: TeamLanesViewProps) {
@@ -78,6 +82,9 @@ export function TeamLanesView({
                   <TerminalView
                     target={session.tmux_target}
                     inLanes
+                    focused={focusedTarget === session.tmux_target}
+                    onLeaderNavigate={onLeaderNavigate}
+                    onLeaderStateChange={onLeaderStateChange}
                     instance={instance}
                     session={session}
                   />

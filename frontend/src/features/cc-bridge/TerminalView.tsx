@@ -8,15 +8,18 @@ import { Button } from '@/components/ui/button'
 import { getTeamSlotColorClasses, getTeamSlotTerminalTheme } from '@/lib/agentTeamColors'
 import { getInstanceAccentClasses } from '@/lib/instanceAccent'
 import { cn } from '@/lib/utils'
-import type { BridgeAttachment, CCSession } from './types'
+import type { BridgeAttachment, CCSession, LeaderNavigationDirection } from './types'
 import type { InstanceIdentity } from '@/types/status'
 
 interface TerminalViewProps {
   target: string | null
   fullscreen?: boolean
   inLanes?: boolean
+  focused?: boolean
   onToggleFullscreen?: () => void
   onClose?: () => void
+  onLeaderNavigate?: (sourceTarget: string, direction: LeaderNavigationDirection) => void
+  onLeaderStateChange?: (sourceTarget: string, active: boolean) => void
   instance?: InstanceIdentity | null
   session?: CCSession | null
 }
@@ -54,14 +57,30 @@ function imageFromClipboard(event: React.ClipboardEvent<HTMLDivElement>): File |
   return null
 }
 
-export function TerminalView({ target, fullscreen, inLanes, onToggleFullscreen, onClose, instance, session }: TerminalViewProps) {
+export function TerminalView({
+  target,
+  fullscreen,
+  inLanes,
+  focused,
+  onToggleFullscreen,
+  onClose,
+  onLeaderNavigate,
+  onLeaderStateChange,
+  instance,
+  session,
+}: TerminalViewProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [draggingImage, setDraggingImage] = useState(false)
   const [imageAttachment, setImageAttachment] = useState<ImageAttachmentState | null>(null)
   const slotColor = session?.team_slot_color
   const terminalTheme = useMemo(() => getTeamSlotTerminalTheme(slotColor), [slotColor])
-  const { connected, readOnly, setReadOnly, attach, detach } = useTerminal(containerRef, wrapperRef, terminalTheme)
+  const { connected, readOnly, setReadOnly, attach, detach, focusTerminal } = useTerminal(
+    containerRef,
+    wrapperRef,
+    terminalTheme,
+    { target, onLeaderNavigate, onLeaderStateChange }
+  )
   const accentClasses = getInstanceAccentClasses(instance?.accent)
   const colorClasses = getTeamSlotColorClasses(slotColor)
   const modeLabel = readOnly ? 'Read-only' : 'Interactive'
@@ -74,6 +93,11 @@ export function TerminalView({ target, fullscreen, inLanes, onToggleFullscreen, 
       detach()
     }
   }, [target, attach, detach])
+
+  useEffect(() => {
+    if (!focused || !target) return
+    focusTerminal()
+  }, [focused, focusTerminal, target])
 
   useEffect(() => {
     const previewUrl = imageAttachment?.previewUrl
