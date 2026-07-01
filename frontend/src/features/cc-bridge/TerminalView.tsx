@@ -244,7 +244,7 @@ export function TerminalView({
                   'px-2 py-0.5 rounded text-xs font-medium transition-colors',
                   readOnly
                     ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
+                    : 'text-foreground/80 hover:bg-muted hover:text-foreground'
                 )}
                 onClick={() => setReadOnly(true)}
               >
@@ -255,7 +255,7 @@ export function TerminalView({
                   'px-2 py-0.5 rounded text-xs font-medium transition-colors',
                   !readOnly
                     ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
+                    : 'text-foreground/80 hover:bg-muted hover:text-foreground'
                 )}
                 onClick={() => setReadOnly(false)}
               >
@@ -264,13 +264,13 @@ export function TerminalView({
             </div>
             <span className={cn(
               'text-xs shrink-0',
-              connected ? 'text-green-500' : 'text-muted-foreground'
+              connected ? 'text-green-500' : 'text-foreground/70'
             )}>
               {connected ? 'Connected' : 'Disconnected'}
             </span>
             <button
               type="button"
-              className="inline-flex h-6 shrink-0 items-center gap-1 rounded border bg-muted/40 px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+              className="inline-flex h-6 shrink-0 items-center gap-1 rounded border bg-background px-1.5 text-[11px] text-foreground/80 transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
               aria-label="Keyboard shortcuts"
               title={`Keyboard shortcuts (${LEADER_PREFIX_LABEL})`}
               onMouseDown={stopShortcutButtonPropagation}
@@ -280,7 +280,7 @@ export function TerminalView({
               <span className="hidden lg:inline">{LEADER_PREFIX_LABEL}</span>
             </button>
             <span
-              className="text-xs text-muted-foreground truncate"
+              className="text-xs text-foreground truncate"
               title={instance ? `${modeLabel} on ${instance.name} (${instance.hostname}) · ${target}` : target}
             >
               {instance ? `${modeLabel} on ${instance.name}` : sessionLabel}

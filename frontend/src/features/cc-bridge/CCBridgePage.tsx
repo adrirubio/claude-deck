@@ -15,6 +15,8 @@ import type { AgentProviderId, AgentProviderStatus } from '@/types/providers'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
 const MAX_GRID_PANES = 4
+const FOCUSED_PANE_RING_CLASS =
+  "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:ring-2 after:ring-primary after:ring-inset after:content-['']"
 type ProviderFilter = 'all' | AgentProviderId
 type TeamFilter = 'all' | number
 type LayoutMode =
@@ -430,7 +432,7 @@ export function CCBridgePage() {
                         ? 'hidden'
                         : 'relative min-h-0 min-w-0 overflow-hidden',
                       !isFullscreen && !hidden && 'border-b border-r last:border-r-0',
-                      !hidden && (focusedTarget === target ? 'bg-primary/60' : 'bg-border/30'),
+                      !hidden && focusedTarget === target && FOCUSED_PANE_RING_CLASS,
                     )}
                     onMouseDown={() => setFocusedTarget(target)}
                     onFocusCapture={() => setFocusedTarget(target)}
