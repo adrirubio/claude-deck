@@ -5,6 +5,9 @@ import { TerminalView } from './TerminalView'
 import type { CCSession, LeaderNavigationDirection } from './types'
 import type { InstanceIdentity } from '@/types/status'
 
+const FOCUSED_PANE_RING_CLASS =
+  "after:pointer-events-none after:absolute after:inset-0 after:z-10 after:ring-2 after:ring-primary after:ring-inset after:content-['']"
+
 interface TeamLanesViewProps {
   sessions: CCSession[]
   overflowCount: number
@@ -62,7 +65,7 @@ export function TeamLanesView({
               key={session.pane_id}
               className={cn(
                 'relative flex min-w-0 flex-1 flex-col overflow-hidden border-r last:border-r-0',
-                focusedTarget === session.tmux_target ? 'bg-primary/60' : 'bg-border/30'
+                focusedTarget === session.tmux_target && FOCUSED_PANE_RING_CLASS
               )}
               onMouseDown={() => onFocusTarget(session.tmux_target)}
               onFocusCapture={() => onFocusTarget(session.tmux_target)}
