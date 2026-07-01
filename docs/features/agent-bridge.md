@@ -30,6 +30,8 @@ With a specific team selected, the **Team lanes** action opens a fullscreen vert
 
 ## Keyboard Controls
 
+Each terminal bar includes a keyboard shortcut chip. Click it to open the in-app shortcut reference; the dialog is available in the normal grid, single fullscreen, and team-lanes layouts.
+
 When a bridge terminal is focused, press `Ctrl+Space` to arm the Agent Bridge leader. The hint overlay lists the available follow-up keys:
 
 - `←` / `→` — focus the previous or next displayed pane, wrapping in on-screen order.
