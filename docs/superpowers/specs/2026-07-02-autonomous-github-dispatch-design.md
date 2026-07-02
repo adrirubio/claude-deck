@@ -2,18 +2,18 @@
 
 **Status:** Design spec (no implementation committed)
 **Date:** 2026-07-02
-**Scope:** Give Claude Deck an optional "brain" that watches labeled GitHub issues on one or more repos per Agent Team, dispatches them to the team's leader slot, waits for local + CI verification, and applies a merge policy — with zero human interaction beyond labeling issues and (optionally) merging.
+**Scope:** Give Claude Deck an optional "brain" that watches labeled GitHub issues on one or more repos per Agent Team, routes each issue to the team's subject-matter-expert slot (mimicking how a real team triages — the specialist looks at it first, not the lead), has that slot check in with the team leader before starting work, waits for local + CI verification, and applies a merge policy — with zero human interaction beyond labeling issues and (optionally) merging.
 
 ---
 
 ## 1. Problem & Motivation
 
-Claude Deck today is a **human-driven** control surface: a person decides what a team should work on and calls Agent Teams launch APIs (via UI, curl, or an external tool like OpenClaw) to make it happen. The goal of this spec is to let a human instead manage a **GitHub issue backlog** — labeling issues that are ready for a Claude Deck team to pick up — and have Claude Deck run the rest of the loop unattended: detect the label, dispatch the team's leader, let the team triage/route internally (as it already does via Agent Mail), verify the resulting work, and apply a per-repo merge policy.
+Claude Deck today is a **human-driven** control surface: a person decides what a team should work on and calls Agent Teams launch APIs (via UI, curl, or an external tool like OpenClaw) to make it happen. The goal of this spec is to let a human instead manage a **GitHub issue backlog** — labeling issues that are ready for a Claude Deck team to pick up — and have Claude Deck run the rest of the loop unattended: detect the label, route the issue to the team's subject-matter-expert slot (mimicking a real team, where the specialist triages before the lead), have that owner check in with the leader before starting, verify the resulting work, and apply a per-repo merge policy.
 
 This is explicitly framed as "an actor using existing rails," not a new orchestration engine:
 
 - **Agent Teams** (`agent_team_service.py`, `POST /presets/{id}/plan-launch` → `/launch`) already does provider-aware dispatch with a plan-hash confirmation safety gate.
-- **Agent Mail** (`agent_mail_service.py`) already lets a dispatched leader triage and route to other slots without any code changes.
+- **Agent Mail** (`agent_mail_service.py`) already lets a dispatched slot message and route to other slots without any code changes — the SME-to-leader ack exchange (§5b) is just another use of tools that already exist.
 - **External Agent Mail** (`external_agent_mail.py`, bearer-token actors) already lets an outside process drive both of the above — this is the precedent for "the brain is just another actor," established by OpenClaw's own `docs/plans/2026-03-06-agent-orchestration-design.md` proposal.
 
 What's missing, and what this spec adds: something that polls labeled GitHub issues, turns them into `launch` calls scoped to the *right* repo (a team can span multiple repos), and closes the loop with verification + merge — while staying inside the existing actor/permission model rather than inventing a new one.
@@ -21,7 +21,7 @@ What's missing, and what this spec adds: something that polls labeled GitHub iss
 **Out of scope for this spec** (deliberately deferred, not forgotten):
 - GitHub webhooks (polling only for v1 — lower operational surface, no inbound exposure required).
 - CI failures / stale PRs as *dispatch* triggers (see §9 — kept as future scope-entry toggles, not required for v1's labeled-issue flow).
-- A brain-side relevance/triage LLM pass — the human's label *is* the relevance decision; the brain does no semantic judgment before dispatch.
+- A brain-side *relevance* judgment — the human's `dispatch_label` is still the entire filter for "should Claude Deck act on this at all." The one semantic step this revision *does* add is narrower: a cheap fallback classification for *which slot* should own an issue when no area label is present (§5) — routing, not relevance.
 - Fine-tuned models, a dedicated "developer brain" product surface, or anything beyond an actor using the APIs that already exist.
 
 ---
@@ -78,6 +78,19 @@ class TeamGithubScope(Base):
 - `repo_path` here is the **default working directory override** used at dispatch time (§5), decoupled from any single slot's saved `repo_path`.
 - `merge_policy` is per scope entry (per repo), not per team — a team spanning a low-stakes repo and a critical one can auto-merge on one and require a human on the other.
 
+### 3.1a `AgentTeamSlot` gains an expertise declaration
+
+Two new nullable columns on the **existing** `AgentTeamSlot` table (`backend/app/models/database.py:136`), additive and optional — existing teams/slots are unaffected until a human fills them in:
+
+```python
+area_labels: Mapped[list | None] = mapped_column(JSON, nullable=True)   # e.g. ["area:backend", "area:billing"]
+expertise: Mapped[str | None] = mapped_column(String, nullable=True)     # freeform, used only as classifier fallback input
+```
+
+- `area_labels` is the **mechanical** match target (§5 step 1) — a slot claims one or more GitHub area labels it owns.
+- `expertise` is a short freeform blurb ("owns the billing/Stripe integration and the subscription state machine") consumed **only** by the fallback classifier (§5 step 2) when no `area_labels` match. It is not surfaced to GitHub and does not affect mechanical routing.
+- Both are edited alongside the existing `role`/`charter` fields in the slot editor (§10) — same form, two more optional inputs, no new page.
+
 ### 3.2 `GithubWorkItem` (new table)
 
 Dedup ledger so the watcher doesn't re-dispatch the same issue every poll cycle.
@@ -99,6 +112,10 @@ class GithubWorkItem(Base):
     launch_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_team_launches.id", ondelete="SET NULL"), nullable=True
     )
+    owner_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    routing_method: Mapped[str | None] = mapped_column(String, nullable=True)  # "label" | "classified" | "leader_fallback"
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -120,7 +137,7 @@ class GithubWorkItem(Base):
   repo_path_override: Optional[str] = None
   ```
 - `agent_team_service.py`'s launch path: when `repo_path_override` is set, the slot(s) being launched use the override for `SpawnCommandOptions.directory` (and for the resulting `AgentTeamLaunchResultItem.repo_path` / Agent Mail member registration) **instead of** the slot's saved `repo_path`, for that launch only. The slot's own saved `repo_path` is never mutated.
-- Scope: applies to the **leader slot only** for v1 (the slot the brain dispatches to — see §5). Non-leader slots continue to use their saved `repo_path` when they join via internal team routing, since only the leader's working directory needs to match the triggering issue's repo at dispatch time.
+- Scope: applies to the **slot the brain dispatches to** — the routed SME slot, not necessarily the leader (see §5, revised for SME-first routing). Any other slot that joins later via internal Agent Mail routing (including the leader, when it gets looped in for the ack step) continues to use its own saved `repo_path` unless it too needs a same-repo override, which is out of scope for v1 (a leader ack is a message exchange, not a second `launch` call — see §5).
 - Backward compatibility: field is optional and defaults to `None` — every existing single-repo team, and every human/OpenClaw-driven launch that doesn't pass it, is unaffected.
 
 ---
@@ -143,14 +160,25 @@ Per poll cycle, for a given repo:
 
 **New file:** `backend/app/services/github_dispatch_service.py`, invoked by the same scheduler tick right after a watcher poll (or on its own shorter interval — implementation detail, not a design decision).
 
-For each `GithubWorkItem` with `dispatch_status="pending"`:
-1. Resolve its `TeamGithubScope` → `preset_id`, `repo_path` override, and identify the **leader slot** — the first `enabled` slot by `position` in the preset (matches existing Agent Teams convention where slot order encodes seniority; no new field needed).
-2. Build a bootstrap prompt: issue number, title, body, URL, and a fixed preamble identifying this as a Claude-Deck-dispatched task (so the leader's own system/role framing, not a novel prompt template, drives what happens next).
-3. Call `plan-launch` for the preset scoped to just the leader slot (`slot_ids=[leader_slot_id]`), with `repo_path_override` set to the scope's `repo_path`.
-4. Call `launch` with the returned `plan_hash` as `confirm_plan_hash` — **the brain never sets `skip_plan_confirmation=true`**, matching the plan-review precedent already established for external actors (§2). If the plan is blocked (`can_launch=false`), mark the work item `dispatch_status="escalated"` and emit an Agent Mail broadcast / Deck notification rather than retrying blindly.
-5. On successful launch: `dispatch_status="dispatched"`, store `launch_id`.
+This is the section most changed from the original "always hit the leader" model. The goal is to mimic how a real team triages: the specialist looks at it first, and loops the lead in before starting — not the other way around.
 
-From here, **the team's own internal Agent Mail routing takes over** — the leader triages and routes to other slots exactly as it would for a human-dispatched task. Claude Deck's brain does not participate in or observe that internal routing; it only re-enters the loop at verification (§6).
+### 5a. Routing: pick the owning slot
+
+For each `GithubWorkItem` with `dispatch_status="pending"`:
+1. **Mechanical match**: fetch the issue's GitHub labels. If any label matches a slot's `area_labels` (§3.1a) within the preset, that slot is the **owner**. If more than one slot matches, pick the first by `position` (same seniority-by-order convention used elsewhere) — do not silently multi-dispatch; log which one was picked so the choice is inspectable (§10 activity feed).
+2. **Classification fallback**: if no label match, run one cheap classification call — issue title + body against each enabled slot's `expertise` blurb (§3.1a) — to pick the best-matching owner. If the team has no `expertise` set on any slot (nothing to classify against), fall back to the leader slot (first enabled by `position`) rather than blocking. This is the one semantic judgment call in the whole pipeline, scoped narrowly to "who owns this," never to "should we act on this."
+3. Store the resolved owner as `GithubWorkItem.owner_slot_id` (new nullable FK column, `agent_team_slots.id`, `ondelete="SET NULL"`) so routing is recorded, not just acted on transiently.
+
+### 5b. Dispatch to the owner, then leader ack before work starts
+
+4. Build a bootstrap prompt for the **owner slot**: issue number, title, body, URL, a fixed preamble identifying this as a Claude-Deck-dispatched task, and an explicit instruction — *triage this issue, then send the team leader a short plan (what you understand the issue to need, your intended approach) via Agent Mail and wait for an acknowledgment before starting implementation.* This is a prompt-level instruction, not new backend plumbing — the leader-ack exchange happens entirely over existing Agent Mail `deck_send_message`/`deck_reply` tool calls between the two already-registered members.
+5. Call `plan-launch` for the preset scoped to just the owner slot (`slot_ids=[owner_slot_id]`), with `repo_path_override` set to the scope's `repo_path`.
+6. Call `launch` with the returned `plan_hash` as `confirm_plan_hash` — **the brain never sets `skip_plan_confirmation=true`**, matching the plan-review precedent already established for external actors (§2). If the plan is blocked (`can_launch=false`), mark the work item `dispatch_status="escalated"` and emit an Agent Mail broadcast / Deck notification rather than retrying blindly.
+7. On successful launch: `dispatch_status="dispatched"`, store `launch_id`.
+
+**Note on the leader:** the leader slot is *not* separately launched by the brain here — if the leader isn't already running (e.g. reused from a prior dispatch, or launched once and kept alive), the owner's ack message will sit undelivered/unread until the leader is active. This is the same `wake_state` semantics (`wakeable` / `delivered_waiting` / `offline`) that Agent Mail already models for any recipient (§2) — no new delivery mechanism is introduced. If the team's leader is never running, ack will never arrive; this is covered by the idle-timeout escalation in §6, not a new guardrail.
+
+From here, **the team's own internal Agent Mail routing takes over**: owner triages, messages the leader, waits for ack, then proceeds (or the leader redirects — e.g. "actually this touches your area too, coordinate with X" — exactly as a human-driven team would, using tools the owner and leader already have). Claude Deck's brain does not participate in or observe the ack exchange's content; it only re-enters the loop at verification (§6/§7), watching for the same "idle too long" and "PR opened" signals regardless of what internal back-and-forth produced them.
 
 ---
 
@@ -158,8 +186,9 @@ From here, **the team's own internal Agent Mail routing takes over** — the lea
 
 The brain does not need a bespoke monitoring protocol — it reuses the same visibility any Agent Mail actor already has:
 
-- Periodically (same scheduler cadence), for each `dispatch_status="dispatched"` item, check the leader's Agent Mail member state (idle time, last activity) via the existing `agent_mail_service` queries.
-- If idle beyond a threshold with no PR opened yet, send one re-steer Agent Mail message ("status check" nudge) — not a retry of the whole dispatch. If still idle after a second check, escalate (§8) rather than nudge indefinitely.
+- Periodically (same scheduler cadence), for each `dispatch_status="dispatched"` item, check the **owner slot's** Agent Mail member state (idle time, last activity) via the existing `agent_mail_service` queries.
+- If idle beyond a threshold with no PR opened yet, send one re-steer Agent Mail message to the owner ("status check" nudge) — not a retry of the whole dispatch. If still idle after a second check, escalate (§8) rather than nudge indefinitely.
+- **Leader-ack stall is a distinct, common case** the threshold must cover explicitly: the owner may be sitting fully idle *waiting on the leader's ack* (§5b), which looks identical to "stuck" from the outside — both are "owner idle, no PR yet." The brain does not need to distinguish the two causes; the same idle-timeout-then-nudge-then-escalate handling applies either way, and the nudge message itself (sent to the owner, who can re-ping the leader) is sufficient without the brain reasoning about *why* the owner stalled.
 
 This section is intentionally thin: monitoring is "watch for stuck," not "supervise correctness" — correctness is verification's job (§7).
 
@@ -167,17 +196,17 @@ This section is intentionally thin: monitoring is "watch for stuck," not "superv
 
 ## 7. Verification → Merge
 
-The team's bootstrap prompt (§5) instructs the leader to, as part of its normal workflow:
+The bootstrap prompt (§5b) instructs the **owner** to, as part of its normal workflow (after the leader ack, or after the leader's redirect is resolved):
 1. Run the project's existing local test/build/lint commands before pushing anything.
 2. Push a branch and open a **draft PR** once local checks pass.
-3. Report the PR number back via Agent Mail (a `handoff`-kind message addressed to... itself is awkward; concretely: the leader calls the existing `deck_create_handoff` or a plain status message that the brain's monitoring pass (§6) reads back off the Agent Mail thread to capture `pr_number` onto the `GithubWorkItem`).
+3. Report the PR number back via Agent Mail (a `handoff`-kind message addressed to... itself is awkward; concretely: the owner calls the existing `deck_create_handoff` or a plain status message that the brain's monitoring pass (§6) reads back off the Agent Mail thread to capture `pr_number` onto the `GithubWorkItem`).
 
 Once a `pr_number` is captured, `dispatch_status="verifying"`:
 - The brain polls `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` (or `GET /pulls/{pr_number}` merge-ability + `GET /pulls/{pr_number}/checks`) on the same polling cadence as the watcher.
 - **All checks green** → `dispatch_status="ready_for_review"`; brain calls `PATCH /pulls/{pr_number}` to flip draft → ready for review.
   - `merge_policy="human"` → stop here. Emit an Agent Mail broadcast + Deck UI notification ("PR #N ready for review"). A human merges via GitHub as normal — Claude Deck does not touch the merge button.
   - `merge_policy="auto"` → the **brain itself** (using its own `GITHUB_TOKEN`, not any team session's credentials) calls `PUT /pulls/{pr_number}/merge`. On success, `dispatch_status="merged"`.
-- **Any check failed** → send the failure detail back to the leader via Agent Mail (which check, which log line if available) and increment `retry_count`. If `retry_count` is within budget (§8), stay in `verifying`/return to `dispatched` for another pass; if the budget is exhausted, `dispatch_status="escalated"`.
+- **Any check failed** → send the failure detail back to the owner via Agent Mail (which check, which log line if available) and increment `retry_count`. If `retry_count` is within budget (§8), stay in `verifying`/return to `dispatched` for another pass; if the budget is exhausted, `dispatch_status="escalated"`.
 
 This is the "PR open = the checkpoint" model: everything up to and including opening the PR happens with zero human interaction; the only two human touchpoints are (a) applying the dispatch label originally, and (b) clicking merge, and (b) is itself optional per repo.
 
@@ -215,7 +244,8 @@ Unchanged from the earlier discussion in this design conversation, restated for 
 
 - Toggle: `autonomy_enabled` on/off.
 - List of `TeamGithubScope` entries (add/edit/remove): repo owner/name, local `repo_path`, `dispatch_label`, `merge_policy`, `enabled`.
-- Activity feed: recent `GithubWorkItem` rows for this preset's scopes — issue title/link, `dispatch_status`, PR link once available, retry count, escalation reason if any. Read-only in v1 — no manual retry/dismiss actions from the UI (use GitHub directly: remove/reapply the label, or close the issue).
+- Slot editor gains two optional fields alongside the existing `role`/`charter` inputs (§3.1a): `area_labels` (tag input) and `expertise` (short freeform text) — so setting up SME routing is part of the normal slot-editing flow, not a separate surface.
+- Activity feed: recent `GithubWorkItem` rows for this preset's scopes — issue title/link, `dispatch_status`, **routed owner slot + `routing_method`** (label / classified / leader_fallback, §5a) so a human can sanity-check routing decisions, PR link once available, retry count, escalation reason if any. Read-only in v1 — no manual retry/dismiss/reroute actions from the UI (use GitHub directly: remove/reapply the label, or close the issue).
 
 This reuses the existing Agent Teams page and the visual pattern already established by the (unbuilt but designed) Activity Dashboard in `docs/plans/2026-03-05-http-hooks-integration-design.md` — same shape (stats + timeline + filters), new data source.
 
@@ -224,11 +254,13 @@ This reuses the existing Agent Teams page and the visual pattern already establi
 ## 11. Open Questions / Risks
 
 1. **GitHub token scope.** A single `GITHUB_TOKEN` covers all watched repos across all teams. If different repos need different GitHub identities (e.g. separate orgs), this needs to become per-scope-entry credentials — deferred until a real multi-org need arises (YAGNI for v1; the field can be added to `TeamGithubScope` later without breaking anything).
-2. **Leader-slot ambiguity.** "First enabled slot by position" is a convention, not an explicit field. If a team wants a non-first slot to be the GitHub-dispatch target, this needs an explicit `is_dispatch_leader` flag on `AgentTeamSlot`. Not added in v1 because every team observed so far orders architect/lead first; revisit if that assumption breaks.
-3. **PR-number capture mechanism (§7).** Reading `pr_number` back from an Agent Mail message is a bit indirect — a cleaner path might be a dedicated small MCP tool (`deck_report_pr`) the leader calls explicitly. Left as an implementation-time decision; both fit the existing MCP shim pattern without new architecture.
+2. **Leader identification is still a convention.** "First enabled slot by position" identifies the leader for the ack step (§5b) and the classification-fallback owner (§5a step 2). If a team wants a non-first slot to be the leader, this needs an explicit `is_team_leader` flag on `AgentTeamSlot`. Not added in v1 because every team observed so far orders architect/lead first; revisit if that assumption breaks.
+3. **PR-number capture mechanism (§7).** Reading `pr_number` back from an Agent Mail message is a bit indirect — a cleaner path might be a dedicated small MCP tool (`deck_report_pr`) the owner calls explicitly. Left as an implementation-time decision; both fit the existing MCP shim pattern without new architecture.
 4. **CI-check API shape.** GitHub's check-runs vs. combined-status APIs have overlapping but not identical semantics depending on how the repo's Actions are configured. Implementation should probe both and document which one this repo's / a given watched repo's Actions setup actually needs — not assumed here.
 5. **External-mode parity for the watcher (§9).** Deferred; noted as a explicit gap, not silently dropped.
 6. **CI-failure / stale-PR triggers (§1 out-of-scope).** The original brainstorm considered these as dispatch triggers alongside labeled issues. This spec's `TeamGithubScope` schema leaves room for `watch_failed_ci` / `watch_stale_prs` boolean columns to be added later, but v1 implements only the labeled-issue path — CI-failure-as-trigger conflates with CI-as-verification-gate (§7) in ways that need their own design pass to avoid the brain fixing its own verification loop's failures as if they were new work items.
+7. **Leader-ack failure mode.** §5b's ack step relies entirely on prompt-level instruction (the owner is *told* to wait for ack) rather than a backend-enforced gate — nothing stops a misbehaving or under-instructed owner session from starting work before the leader replies. This is an accepted v1 limitation (no new enforcement plumbing), consistent with the design's "prompt instruction, not new backend plumbing" choice, but worth flagging: the leader-ack step is a convention the owner is asked to follow, not one Claude Deck verifies.
+8. **Classification-fallback cost and quality.** §5a step 2's cheap classification call needs a real model choice and a fallback-of-the-fallback (leader) when `expertise` blurbs are absent — both are implementation-time decisions, but the *quality* of routing when relying on freeform `expertise` text (vs. mechanical label match) is unverified until tried against real slot descriptions.
 
 ---
 
@@ -236,7 +268,8 @@ This reuses the existing Agent Teams page and the visual pattern already establi
 
 - Implementing any of §3–§10 (this is a design spec only).
 - GitHub webhooks (§1).
-- Any semantic/LLM-driven relevance triage before dispatch (§1) — the label is the entire filter.
+- Any semantic/LLM-driven judgment of *whether* to act on an issue (§1) — the `dispatch_label` is the entire relevance filter. The classification pass in §5a is scoped strictly to *routing* (which slot owns it), never relevance.
+- A backend-enforced leader-ack gate (§11.7) — v1 relies on prompt-level instruction only; no new API/state machine enforces that the owner actually waited.
 - External-mode watcher parity (§9, §11.5).
 - Multi-org / per-scope GitHub credentials (§11.1).
 - A configurable dispatch-leader flag (§11.2) — first-enabled-slot convention only.
