@@ -206,6 +206,7 @@ export const AGENT_TOOLS = [
 export const AGENT_MODELS = [
   { value: "sonnet", label: "Claude Sonnet", description: "Fast and capable" },
   { value: "opus", label: "Claude Opus", description: "Most capable" },
+  { value: "fable", label: "Claude Fable", description: "Creative and capable" },
   { value: "haiku", label: "Claude Haiku", description: "Fastest, lightweight" },
 ] as const;
 

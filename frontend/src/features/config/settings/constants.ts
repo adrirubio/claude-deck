@@ -1,4 +1,5 @@
 export const MODEL_OPTIONS = [
+  { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
   { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
   { value: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
   { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
@@ -59,6 +60,7 @@ export const HOOK_MODEL_OPTIONS = [
   { value: 'fast-model', label: 'Fast Model (default)' },
   { value: 'haiku', label: 'Haiku' },
   { value: 'sonnet', label: 'Sonnet' },
+  { value: 'fable', label: 'Fable' },
   { value: 'opus', label: 'Opus' },
 ]
 

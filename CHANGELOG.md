@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs**: Refreshed release, Config, and Dashboard docs to describe the 2.0.1 stabilization fixes.
 
 ### Fixed
-- **Usage costs**: Claude Code usage dashboards now calculate costs for current Claude model aliases such as Opus 4.6/4.7/4.8, Sonnet 4.6, Haiku 4.5, and Fable 5 instead of showing `$0.00` with non-zero token usage.
+- **Usage costs**: Claude Code usage dashboards now calculate costs for current Claude model aliases such as Sonnet 5, Fable 5, Opus 4.6/4.7/4.8, Sonnet 4.6, and Haiku 4.5 instead of showing `$0.00` with non-zero token usage.
 - **Usage cache**: Usage cache keys now include the pricing table version, avoiding stale zero-cost aggregates after pricing support changes.
 - **Config defaults**: Corrected stale UI defaults/descriptions for auto-updates, sandbox auto-allow, thinking summaries, plan auto-mode, and turn duration.
 

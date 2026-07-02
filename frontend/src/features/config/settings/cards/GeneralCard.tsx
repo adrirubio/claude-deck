@@ -38,7 +38,7 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
           <ListEditor
             value={getSetting<string[]>('fallbackModel', [])}
             onChange={(v) => updateSetting('fallbackModel', v)}
-            placeholder="e.g., claude-sonnet-4-6 or default"
+            placeholder="e.g., claude-sonnet-5 or claude-fable-5"
           />
         </div>
 
@@ -61,7 +61,7 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
         <SelectSetting
           id="effortLevel"
           label="Effort Level"
-          description="Persist the effort level across sessions. Supported on Opus 4.6+ and Sonnet 4.6. Note: Opus 4.8 defaults to high."
+          description="Persist the effort level across sessions. Supported on current Sonnet, Opus, and Fable models where Claude Code exposes effort controls."
           value={getSetting<string>('effortLevel', '')}
           onValueChange={(v) => updateSetting('effortLevel', v)}
           placeholder="Select effort level"
@@ -90,7 +90,7 @@ export function GeneralCard({ getSetting, updateSetting }: SettingsCardProps) {
           <ListEditor
             value={getSetting<string[]>('availableModels', [])}
             onChange={(v) => updateSetting('availableModels', v)}
-            placeholder="e.g., claude-sonnet-4-6"
+            placeholder="e.g., claude-sonnet-5"
           />
         </div>
 

@@ -28,6 +28,9 @@ from app.utils.path_utils import get_claude_projects_dir, get_project_display_na
 # Model context window limits (input tokens). Keys are normalized
 # substrings — `_normalize_model` strips dated suffixes before lookup.
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
+    # Claude 5.x
+    "claude-sonnet-5": 1_000_000,
+    "claude-fable-5": 200_000,
     # Claude 4.7 — 1M window
     "claude-opus-4-7": 1_000_000,
     # Claude 4.6
@@ -81,10 +84,11 @@ def get_context_limit(model: str) -> int:
     # Exact match first
     if normalized in MODEL_CONTEXT_LIMITS:
         return MODEL_CONTEXT_LIMITS[normalized]
-    # Longest-prefix match so claude-opus-4-7 picks the 4-7 entry over 4 entry
+    # Longest match so claude-opus-4-7 picks the 4-7 entry over 4,
+    # including provider-prefixed model IDs such as Bedrock names.
     best: tuple[int, int] = (-1, DEFAULT_CONTEXT_LIMIT)
     for key, limit in MODEL_CONTEXT_LIMITS.items():
-        if normalized.startswith(key) and len(key) > best[0]:
+        if (normalized.startswith(key) or key in normalized) and len(key) > best[0]:
             best = (len(key), limit)
     return best[1]
 

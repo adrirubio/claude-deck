@@ -76,7 +76,7 @@ PUT /api/v1/config/settings
 ```json
 {
   "scope": "user",
-  "settings": { "model": "claude-sonnet-4-6" },
+  "settings": { "model": "claude-sonnet-5" },
   "project_path": "/path/to/project"
 }
 ```
