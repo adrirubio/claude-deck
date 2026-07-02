@@ -271,6 +271,7 @@ export const HOOK_EVENTS: HookEventMetadata[] = [
 export const AGENT_MODELS = [
   { value: "haiku", label: "Haiku (Fast)" },
   { value: "sonnet", label: "Sonnet (Balanced)" },
+  { value: "fable", label: "Fable (Creative)" },
   { value: "opus", label: "Opus (Powerful)" },
 ];
 

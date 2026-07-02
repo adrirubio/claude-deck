@@ -11,7 +11,7 @@ class PricingService:
     """Service for model pricing and cost calculation."""
 
     # Bump when MODEL_PRICING changes so cached usage aggregates are recalculated.
-    PRICING_VERSION = "2026-06-20"
+    PRICING_VERSION = "2026-07-02"
 
     # Default token threshold for tiered pricing (200k tokens)
     TIERED_THRESHOLD = 200_000
@@ -19,6 +19,13 @@ class PricingService:
     # Model pricing data (costs per token)
     # Based on LiteLLM pricing data
     MODEL_PRICING = {
+        # Claude Sonnet 5 (June 2026)
+        "claude-sonnet-5": {
+            "input": 3.00 / 1_000_000,
+            "output": 15.00 / 1_000_000,
+            "cache_creation": 3.75 / 1_000_000,
+            "cache_read": 0.30 / 1_000_000,
+        },
         # Claude Fable 5 (June 2026)
         "claude-fable-5": {
             "input": 10.00 / 1_000_000,

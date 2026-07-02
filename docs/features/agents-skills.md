@@ -30,7 +30,7 @@ description: Code review specialist
 tools: Read, Grep, Glob
 disallowed-tools: Write, Bash
 permission-mode: default
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 skills: code-review, testing
 memory: user
 ---

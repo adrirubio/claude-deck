@@ -89,6 +89,15 @@ class TestPricingService:
 
     def test_current_claude_code_alias_pricing(self):
         """Test current Claude Code model aliases have non-zero pricing."""
+        sonnet_5_cost = self.pricing.calculate_cost(
+            input_tokens=1000,
+            output_tokens=500,
+            cache_creation_tokens=200,
+            cache_read_tokens=1000,
+            model="claude-sonnet-5",
+        )
+        assert sonnet_5_cost == pytest.approx(0.01155, rel=1e-3)
+
         sonnet_cost = self.pricing.calculate_cost(
             input_tokens=1000,
             output_tokens=500,
@@ -116,7 +125,7 @@ class TestPricingService:
 
     def test_current_alias_matching_with_provider_style_name(self):
         """Test provider-prefixed current aliases resolve."""
-        pricing = self.pricing.get_model_pricing("anthropic.claude-sonnet-4-6-v1:0")
+        pricing = self.pricing.get_model_pricing("anthropic.claude-sonnet-5-20260620-v1:0")
         assert pricing is not None
         assert pricing["input"] == pytest.approx(3.00 / 1_000_000)
 
@@ -125,6 +134,7 @@ class TestPricingService:
         models = self.pricing.get_supported_models()
         assert len(models) > 0
         assert "claude-sonnet-4-20250514" in models
+        assert "claude-sonnet-5" in models
         assert "claude-sonnet-4-6" in models
         assert "claude-opus-4-7" in models
         assert "claude-fable-5" in models

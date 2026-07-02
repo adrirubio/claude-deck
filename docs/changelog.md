@@ -33,7 +33,7 @@ All notable changes to Claude Deck are documented here. The format follows [Keep
 
 ### Fixed
 
-- Claude Code usage dashboards now calculate costs for current model aliases such as Opus 4.6/4.7/4.8, Sonnet 4.6, Haiku 4.5, and Fable 5 instead of showing `$0.00` with non-zero token usage.
+- Claude Code usage dashboards now calculate costs for current model aliases such as Sonnet 5, Fable 5, Opus 4.6/4.7/4.8, Sonnet 4.6, and Haiku 4.5 instead of showing `$0.00` with non-zero token usage.
 - Usage cache keys now include the pricing table version, preventing stale zero-cost aggregates after pricing support changes.
 - Several settings defaults and descriptions were corrected to match current Claude Code behavior.
 

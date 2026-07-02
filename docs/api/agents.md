@@ -29,7 +29,7 @@ POST /api/v1/agents?project_path={path}
   "description": "Code review specialist",
   "tools": ["Read", "Grep", "Glob"],
   "disallowed_tools": ["Write", "Bash"],
-  "model": "claude-sonnet-4-6",
+  "model": "claude-sonnet-5",
   "permission_mode": "default",
   "skills": ["code-review"],
   "memory": "user",

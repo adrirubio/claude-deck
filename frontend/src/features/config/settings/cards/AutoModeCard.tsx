@@ -12,7 +12,7 @@ export function AutoModeCard({ getSetting, updateSetting, scope }: SettingsCardP
       <CardHeader>
         <CardTitle>Auto Mode</CardTitle>
         <CardDescription>
-          Configure the AI safety classifier for auto mode (requires Team/Enterprise + Sonnet 4.6+/Opus 4.6+)
+          Configure the AI safety classifier for auto mode (requires Team/Enterprise and a supported current Claude model)
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
