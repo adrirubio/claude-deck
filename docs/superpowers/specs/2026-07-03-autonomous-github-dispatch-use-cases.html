@@ -117,6 +117,7 @@
   .status-pill.ok { background: rgba(63,185,80,0.15); color: var(--ok); border: 1px solid rgba(63,185,80,0.4); }
   .status-pill.partial { background: rgba(210,153,34,0.15); color: var(--partial); border: 1px solid rgba(210,153,34,0.4); }
   .status-pill.gap { background: rgba(248,81,73,0.15); color: var(--gap); border: 1px solid rgba(248,81,73,0.4); }
+  .status-pill.fixed { background: rgba(63,185,80,0.22); color: var(--ok); border: 1px solid rgba(63,185,80,0.6); }
 
   .trigger {
     font-size: 13.5px;
@@ -200,6 +201,7 @@
 <header>
   <h1>Autonomous GitHub Dispatch — Use Cases &amp; Required UX</h1>
   <p>Companion to <code>2026-07-02-autonomous-github-dispatch-design.md</code> and <code>2026-07-03-autonomous-github-dispatch-workflows.md</code>. Each use case below asks one question: <b>what does a human have to configure, up front, so the brain + agent team can make the right call unattended</b> — and where the spec, as written, leaves that decision uncodified (the agent is left to guess, stall, or silently do the wrong thing).</p>
+  <p><b>Revised:</b> V1–V7 and UC11 are now fixed in the design spec — those use cases below are marked <span class="status-pill fixed" style="margin:0 2px;">Fixed</span> with the fix explained in place of the original gap callout. V8 and the undocumented <code>failed</code>-state producer remain open, called out as such rather than silently marked resolved.</p>
   <p>References to <code>V1–V8</code> and <code>B1/B2/C1–C3/D</code> point back to findings from the two companion pressure-test documents.</p>
 </header>
 
@@ -272,7 +274,7 @@
   </section>
 
   <section class="usecase" id="uc2">
-    <div class="uc-head"><h2><span class="uc-id">UC2</span>Simple defect, auto-merge policy</h2><span class="status-pill partial">Partially codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC2</span>Simple defect, auto-merge policy</h2><span class="status-pill fixed">Fixed</span></div>
     <p class="trigger">Trigger: same as UC1, but scope's <code>merge_policy=auto</code>.</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -288,15 +290,15 @@
         <ul>
           <li><code>merge_policy="auto"</code> — codifies the human's blanket risk tolerance for the repo.</li>
           <li>Daily auto-merge cap — codifies a volume ceiling.</li>
-          <li><b>Nothing</b> codifies what to do on a merge-call failure (branch protection, stale branch, required-review-not-met).</li>
+          <li><b>Now codified:</b> merge-call failures branch into transient (retry, shares the CI-failure budget) vs. durable (fall back to the human-review path, no escalation) — §7a.</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (V2).</b> "Auto-merge" as a policy answers "should I try," not "what do I do if trying fails." There's no config surface for retry-vs-escalate-vs-fallback-to-human-review on a failed merge attempt — the brain has no decision procedure here, only a happy-path action.</div>
+    <div class="failure none"><b>Fixed (V2).</b> "Auto-merge" now has a decision procedure for the failure path, not just the happy path: a transient mergeability failure retries; a durable policy block (branch protection, unmet required review) falls back to treating the item exactly as <code>merge_policy="human"</code> would — a normal outcome, not a pipeline error.</div>
   </section>
 
   <section class="usecase" id="uc3">
-    <div class="uc-head"><h2><span class="uc-id">UC3</span>Feature spanning two areas, mid-task reassignment</h2><span class="status-pill gap">Not codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC3</span>Feature spanning two areas, mid-task reassignment</h2><span class="status-pill fixed">Fixed</span></div>
     <p class="trigger">Trigger: backend SME starts work, discovers the issue also needs frontend changes.</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -311,18 +313,18 @@
       <div class="uc-block">
         <h3>UX that codifies each decision</h3>
         <ul>
-          <li><code>reassign_to_slot_id</code> on <code>deck_report_dispatch_status</code> — codifies <i>that</i> a reassignment happened.</li>
-          <li><b>Nothing</b> codifies split-vs-handoff as a strategy choice — left to the owner's judgment, unobserved.</li>
-          <li><b>Nothing</b> confirms the new owner is running or accepted the handoff (V4).</li>
-          <li><b>Nothing</b> holds the original slot reserved during the handoff window (V5).</li>
+          <li>Split-vs-handoff remains the owner's judgment call, unobserved — unchanged, and reasonably so (not every judgment call needs codifying).</li>
+          <li><b>Now codified:</b> a two-phase protocol — <code>handoff_initiated</code> (owner) then <code>handoff_accepted</code> (target, not assumed) — confirms the new owner actually picked it up (V4).</li>
+          <li><b>Now codified:</b> the per-slot busy-check reserves <i>both</i> slots while <code>handoff_state="pending"</code>, closing the window where the original slot read as free mid-handoff (V5).</li>
+          <li><b>Now codified:</b> an unaccepted handoff times out to <code>escalated</code> (<code>handoff_not_accepted</code>) instead of sitting silently unresolved.</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (B1, V4, V5).</b> Reassignment is a database write, not a verified state transition. The UX problem isn't "add a field" — it's that there's no notion of a <i>pending handoff</i> state distinct from <i>reassigned and confirmed</i>, so the brain can't tell "in flight" from "done," and can't safely decide when the vacated slot is truly free.</div>
+    <div class="failure none"><b>Fixed (B1, V4, V5).</b> Reassignment is now a two-message verified state transition, not a single bookkeeping write. The brain can tell "handoff in flight" from "handoff done," and the vacated slot is only freed once acceptance is confirmed — not assumed the instant the handoff was requested.</div>
   </section>
 
   <section class="usecase" id="uc4">
-    <div class="uc-head"><h2><span class="uc-id">UC4</span>Design/brainstorming issue → spec doc merged via PR</h2><span class="status-pill partial">Partially codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC4</span>Design/brainstorming issue → spec doc merged via PR</h2><span class="status-pill partial">Partially fixed</span></div>
     <p class="trigger">Trigger: issue labeled <code>claude-deck-ready</code> + <code>claude-deck-design</code>.</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -338,13 +340,13 @@
         <h3>UX that codifies each decision</h3>
         <ul>
           <li><code>design_label</code> — mechanical, unambiguous.</li>
-          <li>Prompt instruction naming the leader as delegated approver — codified as <i>text</i>, not as an enforced gate (V3, §11.7).</li>
+          <li>Prompt instruction naming the leader as delegated approver — still codified as <i>text</i>, not an enforced backend gate (§11.7, unchanged this round).</li>
           <li><code>awaiting_human_review</code> state — codifies "a real human, not CI, decides."</li>
-          <li><b>Nothing</b> caps or times the pre-dispatch approval back-and-forth (V3).</li>
+          <li><b>Now codified (fixes V3):</b> <code>max_approval_rounds</code> caps the back-and-forth; reaching it escalates instead of looping forever.</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (C1 mitigation is real, but V3 remains).</b> The pipeline fork itself is solid UX — label-driven, mechanical, no ambiguity about which path an issue takes. What's missing is a bounded-rounds or timeout config for the leader-approval exchange specifically, since "keep discussing until approved" is unobjectionable in principle but has no stop condition in practice.</div>
+    <div class="failure"><b>Partially fixed.</b> V3 (no bound on the approval loop) is fixed. The deeper C1 weakness flagged in §11.7 is not: nothing stops a misbehaving owner from skipping the wait entirely and proceeding without leader approval — the round cap bounds a <i>legitimate</i> back-and-forth, it doesn't enforce that one happens. This is called out honestly in the spec as the single weakest link in how C1 is resolved, not glossed over.</div>
   </section>
 
   <section class="usecase" id="uc5">
@@ -370,7 +372,7 @@
   </section>
 
   <section class="usecase" id="uc6">
-    <div class="uc-head"><h2><span class="uc-id">UC6</span>Two same-area issues land in one poll cycle</h2><span class="status-pill partial">Partially codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC6</span>Two same-area issues land in one poll cycle</h2><span class="status-pill fixed">Fixed</span></div>
     <p class="trigger">Trigger: issues #50 and #51 both match <code>area:backend</code> in the same poll.</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -384,15 +386,15 @@
         <h3>UX that codifies each decision</h3>
         <ul>
           <li>Hard per-slot concurrency cap of 1 — correctly codifies "one slot, one active task," no judgment needed.</li>
-          <li><b>Nothing</b> distinguishes <i>queued-behind-a-busy-slot</i> from <i>freshly-discovered</i> in the visible state (V6) — both read as <code>pending</code>.</li>
+          <li><b>Now codified:</b> <code>pending_reason</code> ("queued_slot_busy" vs. null) distinguishes queued-behind-a-busy-slot from freshly-discovered in the activity feed (V6).</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (V6).</b> This isn't a decision the brain gets wrong — the brain's queueing behavior is correct. It's a decision a <i>human operator</i> can't make correctly, because the dashboard's UX doesn't expose the information needed to tell "stuck" from "queued" apart. A human might intervene on a perfectly healthy queued item, or fail to notice a genuinely stuck one, because both look identical.</div>
+    <div class="failure none"><b>Fixed (V6).</b> The brain's queueing behavior was always correct — the gap was purely that a human operator couldn't tell "stuck" from "queued" apart. The new <code>pending_reason</code> column closes that: the activity feed now reads "pending · queued behind Backend SME" instead of a bare, ambiguous "pending."</div>
   </section>
 
   <section class="usecase" id="uc7">
-    <div class="uc-head"><h2><span class="uc-id">UC7</span>Leader never comes online</h2><span class="status-pill partial">Partially codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC7</span>Leader never comes online</h2><span class="status-pill fixed">Fixed</span></div>
     <p class="trigger">Trigger: owner sends a triage/approval message; leader's slot is offline or unresponsive.</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -405,17 +407,17 @@
       <div class="uc-block">
         <h3>UX that codifies each decision</h3>
         <ul>
-          <li>Idle-timeout threshold, with a documented (but not concretely fixed) design-issue multiplier — a real knob, just under-specified.</li>
-          <li><b>Nothing</b> distinguishes "leader is offline" from "leader is legitimately slow-reviewing" (V7) — same timeout, same treatment.</li>
+          <li>Idle-timeout threshold, with a design-issue multiplier — now correctly scoped to only the genuinely ambiguous case.</li>
+          <li><b>Now codified:</b> monitoring checks Agent Mail <code>wake_state</code> first — an offline leader escalates in one poll cycle; only a reachable-but-unresponsive leader falls through to the idle-timeout multiplier (V7).</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (V7).</b> The spec correctly recognizes that design approvals need more patience than code acks, but a single blanket multiplier can't distinguish cause. There's no UX for "is the leader's session actually alive" as a distinct signal from "is the owner idle" — the two get conflated into one timeout.</div>
+    <div class="failure none"><b>Fixed (V7).</b> The generous multiplier now applies only where it was actually meant to — a leader that's reachable but might be reviewing carefully. An actually offline leader no longer waits out that same generosity; it's detected and escalated the very next poll, since <code>wake_state="offline"</code> is a fact the brain can observe directly.</div>
   </section>
 
   <section class="usecase" id="uc8">
-    <div class="uc-head"><h2><span class="uc-id">UC8</span>Item escalates (any reason)</h2><span class="status-pill gap">Not codified</span></div>
-    <p class="trigger">Trigger: any escalation path — blocked plan, idle timeout, retry budget exhausted, zero check-runs.</p>
+    <div class="uc-head"><h2><span class="uc-id">UC8</span>Item escalates (any reason)</h2><span class="status-pill fixed">Fixed</span></div>
+    <p class="trigger">Trigger: any escalation path — blocked plan, idle timeout, retry budget exhausted, zero check-runs, approval rounds exhausted, handoff not accepted, label removed.</p>
     <div class="uc-grid">
       <div class="uc-block">
         <h3>Decisions the brain must make</h3>
@@ -427,16 +429,17 @@
       <div class="uc-block">
         <h3>UX that codifies each decision</h3>
         <ul>
-          <li>Notification on escalation — codified (Agent Mail broadcast + activity feed row).</li>
-          <li><b>Nothing</b> — no UI action, no watcher reset rule, no re-dispatch trigger of any kind targets <code>escalated</code> specifically (V1).</li>
+          <li>Notification on escalation — codified (Agent Mail broadcast + activity feed row + <code>escalation_reason</code>).</li>
+          <li><b>Now codified:</b> a watcher rule resets <code>escalated → pending</code> on a fresh <code>github_updated_at</code>, mirroring the existing <code>failed</code> rule (§4 step 3a).</li>
+          <li><b>Now codified:</b> a narrow "Retry" UI action wraps that same recovery rule, so a human doesn't have to go touch the GitHub issue by hand (§10).</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (V1) — the most serious one found so far.</b> Every use case above eventually funnels failures into <code>escalated</code>. This is the single highest-leverage UX gap in the whole design: a "retry" button, or a "remove label, re-add label" documented recovery path, or an explicit watcher rule resetting <code>escalated → pending</code> on a fresh <code>github_updated_at</code> (mirroring the existing <code>failed</code> rule) would fix every one of UC2/UC7/UC8's dead ends at once.</div>
+    <div class="failure none"><b>Fixed (V1) — was the highest-leverage gap found, now the highest-leverage fix.</b> Every escalation trigger across every other use case now feeds into a state that knows how to recover, instead of a dead end. This is also why the number of things that can escalate could safely <i>grow</i> in this revision (approval-round exhaustion, handoff timeout, label removal) without each one needing its own bespoke recovery path — they all reuse this one.</div>
   </section>
 
   <section class="usecase" id="uc9">
-    <div class="uc-head"><h2><span class="uc-id">UC9</span>Auto-merge API call itself fails</h2><span class="status-pill gap">Not codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC9</span>Auto-merge API call itself fails</h2><span class="status-pill fixed">Fixed</span></div>
     <p class="trigger">Trigger: all checks green, brain calls <code>PUT .../merge</code>, GitHub returns a non-200 (branch protection, stale head, required review unmet).</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -448,11 +451,12 @@
       <div class="uc-block">
         <h3>UX that codifies each decision</h3>
         <ul>
-          <li><b>None.</b> §7a documents only the success path.</li>
+          <li><b>Now codified:</b> transient failures (405/409/unstable mergeable_state) retry next poll, sharing §7a's existing CI-failure retry budget rather than a new counter.</li>
+          <li><b>Now codified:</b> durable failures (403 required review, branch protection) fall back to the human-review notification path — no escalation, since this is the repo's own rules correctly requiring a human.</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap (V2).</b> Same root cause as UC2, called out separately because the fix is narrow and concrete: a merge-failure branch needs its own small decision tree — likely "re-check mergeability once next poll, then fall back to notifying a human as if <code>merge_policy=human</code>" — which doesn't exist today even as a documented intention.</div>
+    <div class="failure none"><b>Fixed (V2) — same fix as UC2.</b> §7a now has exactly the small decision tree this use case was missing, and reuses existing infrastructure (the retry budget, the human-review notification) rather than inventing new machinery for it.</div>
   </section>
 
   <section class="usecase" id="uc10">
@@ -476,7 +480,7 @@
   </section>
 
   <section class="usecase" id="uc11">
-    <div class="uc-head"><h2><span class="uc-id">UC11</span>Human removes <code>dispatch_label</code> after dispatch already happened</h2><span class="status-pill gap">Not codified</span></div>
+    <div class="uc-head"><h2><span class="uc-id">UC11</span>Human removes <code>dispatch_label</code> after dispatch already happened</h2><span class="status-pill fixed">Fixed</span></div>
     <p class="trigger">Trigger: a human has second thoughts after Deck already dispatched and the owner is mid-implementation.</p>
     <div class="uc-grid">
       <div class="uc-block">
@@ -488,11 +492,11 @@
       <div class="uc-block">
         <h3>UX that codifies each decision</h3>
         <ul>
-          <li><b>None.</b> §4's watcher logic only reads labels to find new/failed-reset candidates — it never re-checks a label's continued presence on an already-`dispatched` item.</li>
+          <li><b>Now codified:</b> the watcher makes one extra call per poll re-checking label presence on already-active items by number (independent of the label-scoped query), and escalates with a notify-the-owner Agent Mail message if the label's gone (§4 step 3b).</li>
         </ul>
       </div>
     </div>
-    <div class="failure"><b>Gap — not previously identified in the workflows doc.</b> A human's most natural "stop this" gesture — removing the label — is not wired to anything once dispatch has happened. The only documented way to actually stop a running dispatch is out-of-band (killing the tmux session directly), which bypasses the entire state machine and would leave the <code>GithubWorkItem</code> permanently stuck mid-flight with no watcher able to reconcile it.</div>
+    <div class="failure none"><b>Fixed, with an honest limit.</b> Removing the label now reliably notifies the owner and escalates the item — a human's natural "stop this" gesture finally does something. It's deliberately "notify, don't kill": Claude Deck still can't safely force-terminate a mid-task tmux session (no clean way to avoid a half-written commit or dangling branch), so the owner's own judgment decides how to wind down. Flagged as an accepted tradeoff in the design spec, not oversold as a hard guarantee.</div>
   </section>
 
   <section class="usecase" id="uc12">
@@ -518,17 +522,25 @@
   </section>
 
   <section class="punchlist" id="punchlist">
-    <h2>Punch list — new UX needed, ranked by how many use cases it unblocks</h2>
+    <h2>Punch list — status after this revision</h2>
     <table class="punch">
-      <thead><tr><th>Priority</th><th>New UX/config needed</th><th>Unblocks</th></tr></thead>
+      <thead><tr><th>Priority</th><th>New UX/config needed</th><th>Unblocked</th><th>Status</th></tr></thead>
       <tbody>
-        <tr><td>1</td><td>A defined recovery path out of <code>escalated</code> — minimally, a watcher rule resetting it to <code>pending</code> on a fresh <code>github_updated_at</code>, mirroring the existing <code>failed</code> rule; ideally also a UI action.</td><td>UC2, UC7, UC8, UC9 — every escalation dead-ends without this</td></tr>
-        <tr><td>2</td><td>A merge-failure decision tree for <code>merge_policy=auto</code> (retry mergeability check → fall back to human notification).</td><td>UC2, UC9</td></tr>
-        <tr><td>3</td><td>A distinct visible state (or sub-flag) for "routed but queued behind a busy slot," separate from "freshly discovered."</td><td>UC6</td></tr>
-        <tr><td>4</td><td>A liveness check on the leader's session distinct from idle-time, so "offline" and "slow review" aren't treated identically.</td><td>UC4, UC7</td></tr>
-        <tr><td>5</td><td>A round cap or timeout on the pre-dispatch owner↔leader approval exchange, independent of idle-detection.</td><td>UC3, UC4</td></tr>
-        <tr><td>6</td><td>A "pending handoff" sub-state for reassignment, confirmed only once the new owner acknowledges — plus a grace period before the vacated slot is considered free.</td><td>UC3</td></tr>
-        <tr><td>7</td><td>Watcher logic that re-checks <code>dispatch_label</code> presence on already-dispatched items, with a defined stop/cancel action when it's removed.</td><td>UC11</td></tr>
+        <tr><td>1</td><td>A defined recovery path out of <code>escalated</code> — a watcher rule resetting it to <code>pending</code> on a fresh <code>github_updated_at</code>, mirroring the existing <code>failed</code> rule, plus a UI action.</td><td>UC2, UC7, UC8, UC9</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+        <tr><td>2</td><td>A merge-failure decision tree for <code>merge_policy=auto</code> (retry mergeability check → fall back to human notification).</td><td>UC2, UC9</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+        <tr><td>3</td><td>A distinct visible state (or sub-flag) for "routed but queued behind a busy slot," separate from "freshly discovered."</td><td>UC6</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+        <tr><td>4</td><td>A liveness check on the leader's session distinct from idle-time, so "offline" and "slow review" aren't treated identically.</td><td>UC7 (UC4 partially — see below)</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+        <tr><td>5</td><td>A round cap or timeout on the pre-dispatch owner↔leader approval exchange, independent of idle-detection.</td><td>UC3, UC4</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+        <tr><td>6</td><td>A "pending handoff" sub-state for reassignment, confirmed only once the new owner acknowledges — plus a grace period before the vacated slot is considered free.</td><td>UC3</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+        <tr><td>7</td><td>Watcher logic that re-checks <code>dispatch_label</code> presence on already-dispatched items, with a defined stop/cancel action when it's removed.</td><td>UC11</td><td><span class="status-pill fixed">Fixed</span></td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:16px; font-size:13.5px; color:var(--muted);">All seven original punch-list items are now fixed. Two things remain deliberately open, not silently closed:</p>
+    <table class="punch">
+      <thead><tr><th>Item</th><th>Why it's still open</th></tr></thead>
+      <tbody>
+        <tr><td>No backend-enforced leader-ack/approval gate (UC4)</td><td>The round cap (item 5) bounds a <i>legitimate</i> back-and-forth; it doesn't stop an owner from skipping the wait entirely. Flagged in the design spec's §11.7 as the single weakest link in resolving C1 — an accepted v1 limitation, not an oversight.</td></tr>
+        <tr><td><code>failed</code> has a recovery rule but no producer anywhere in the spec</td><td>Schema and recovery logic both exist; nothing in the dispatch/verify flow ever sets <code>dispatch_status="failed"</code>. Either name the intended producer (e.g. "owner session crashed") or remove the unused state — a documentation gap, not a behavioral one.</td></tr>
       </tbody>
     </table>
   </section>
