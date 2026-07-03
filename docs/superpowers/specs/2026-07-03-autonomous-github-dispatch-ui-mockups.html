@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Autonomous GitHub Dispatch — Deck UI Mockups</title>
+<style>
+  /* Palette lifted from frontend/src/index.css .dark block, so these mockups
+     read as "the actual app" rather than a generic dark theme. */
+  :root {
+    --background: #0f0f0f;
+    --foreground: #e5e5e5;
+    --card: #171717;
+    --card-foreground: #e5e5e5;
+    --primary: #22c55e;
+    --primary-foreground: #0f0f0f;
+    --secondary: #1f1f1f;
+    --secondary-foreground: #d9d9d9;
+    --muted: #242424;
+    --muted-foreground: #8c8c8c;
+    --destructive: #e5484d;
+    --destructive-foreground: #fff;
+    --warning: #f5c542;
+    --warning-foreground: #0f0f0f;
+    --info: #4db8e8;
+    --info-foreground: #fff;
+    --border: #2e2e2e;
+    --ring: #22c55e;
+    --radius: 8px;
+    --docs-bg: #0a0a0a;
+    --docs-panel: #131313;
+    --docs-accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--docs-bg);
+    color: var(--foreground);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    line-height: 1.5;
+  }
+  header {
+    padding: 32px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--docs-panel);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; color: #fff; }
+  header p { margin: 0 0 4px; color: var(--muted-foreground); font-size: 14px; max-width: 980px; }
+  header code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; color: #d9d9d9; }
+
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 40px;
+    background: var(--docs-panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  nav a {
+    color: var(--foreground);
+    text-decoration: none;
+    font-size: 12.5px;
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--docs-bg);
+    white-space: nowrap;
+  }
+  nav a:hover { border-color: var(--docs-accent); color: var(--docs-accent); }
+
+  main { padding: 26px 40px 70px; max-width: 1180px; margin: 0 auto; }
+
+  section.screen {
+    margin-bottom: 40px;
+  }
+  section.screen .screen-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+  section.screen h2 {
+    font-size: 16px;
+    margin: 0;
+    color: #fff;
+  }
+  section.screen .uc-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .uc-tag {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(88,166,255,0.14);
+    color: var(--docs-accent);
+    border: 1px solid rgba(88,166,255,0.35);
+  }
+  section.screen .screen-note {
+    font-size: 13px;
+    color: var(--muted-foreground);
+    margin: 0 0 14px;
+    max-width: 900px;
+  }
+
+  /* --- the "app frame" the mockups live inside --- */
+  .app-frame {
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+  }
+  .app-titlebar {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--muted-foreground);
+  }
+  .app-titlebar .dots { display: flex; gap: 6px; }
+  .app-titlebar .dot { width: 10px; height: 10px; border-radius: 50%; background: #3a3a3a; }
+  .app-body { padding: 22px; color: var(--foreground); font-size: 14px; }
+
+  .app-h1 { font-size: 18px; font-weight: 600; color: #fff; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .app-sub { font-size: 13px; color: var(--muted-foreground); margin: 0 0 18px; }
+
+  .app-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .app-card.accent-border { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.04); }
+
+  .app-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .app-row + .app-row { margin-top: 10px; }
+
+  .app-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+  }
+  .app-badge.outline { background: transparent; border-color: var(--primary); color: var(--primary); }
+  .app-badge.destructive { background: var(--destructive); color: var(--destructive-foreground); border-color: var(--destructive); }
+  .app-badge.warning { background: var(--warning); color: var(--warning-foreground); border-color: var(--warning); }
+  .app-badge.info { background: var(--info); color: var(--info-foreground); border-color: var(--info); }
+  .app-badge.new { background: rgba(34,197,94,0.15); color: var(--primary); border-color: rgba(34,197,94,0.5); }
+
+  .app-toggle {
+    width: 38px; height: 21px; border-radius: 999px; position: relative; flex-shrink: 0;
+    border: 1px solid var(--border);
+  }
+  .app-toggle.on { background: var(--primary); border-color: var(--primary); }
+  .app-toggle.off { background: var(--muted); }
+  .app-toggle .knob {
+    position: absolute; top: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff;
+    transition: none;
+  }
+  .app-toggle.on .knob { left: 20px; }
+  .app-toggle.off .knob { left: 2px; }
+
+  .app-field { margin-bottom: 12px; }
+  .app-field label {
+    display: block; font-size: 12px; font-weight: 500; color: var(--muted-foreground);
+    margin-bottom: 5px; text-transform: none;
+  }
+  .app-input, .app-select {
+    width: 100%;
+    background: var(--secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 13px;
+    color: var(--foreground);
+  }
+  .app-input.disabled { opacity: 0.5; }
+  .app-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .app-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 700px) { .app-grid-2, .app-grid-3 { grid-template-columns: 1fr; } }
+
+  .app-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 500;
+    padding: 7px 14px; border-radius: 6px; cursor: default;
+    border: 1px solid var(--border);
+    background: var(--secondary); color: var(--secondary-foreground);
+  }
+  .app-btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+  .app-btn.destructive-outline { background: transparent; border-color: var(--destructive); color: var(--destructive); }
+  .app-btn.sm { padding: 4px 10px; font-size: 12px; }
+
+  .app-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .app-tab {
+    font-size: 13px; padding: 8px 14px; color: var(--muted-foreground);
+    border-bottom: 2px solid transparent; cursor: default;
+  }
+  .app-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+
+  .app-help { font-size: 12px; color: var(--muted-foreground); margin-top: 3px; }
+  .app-help.warn { color: var(--warning); }
+
+  .app-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .app-table th, .app-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .app-table th { color: var(--muted-foreground); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .app-table tr:last-child td { border-bottom: none; }
+
+  .app-callout {
+    border-radius: 6px; border: 1px solid rgba(34,197,94,0.3); background: rgba(34,197,94,0.05);
+    padding: 10px 12px; font-size: 12.5px; color: var(--muted-foreground); margin-bottom: 14px;
+  }
+
+  .anno {
+    margin-top: 14px;
+    padding: 14px 16px;
+    background: var(--docs-panel);
+    border-left: 3px solid var(--docs-accent);
+    border-radius: 6px;
+    font-size: 13.5px;
+    color: var(--foreground);
+  }
+  .anno ul { margin: 6px 0 0; padding-left: 20px; }
+  .anno li { margin-bottom: 6px; }
+  .anno code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+
+  .chip-input {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    background: var(--secondary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+  }
+  .chip {
+    background: var(--muted); border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 8px; font-size: 12px; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .chip .x { color: var(--muted-foreground); cursor: default; }
+  .chip-input .add-chip { font-size: 12px; color: var(--muted-foreground); }
+
+  table.api-vs-ui { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  table.api-vs-ui th, table.api-vs-ui td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  table.api-vs-ui th { background: var(--docs-panel); color: var(--muted-foreground); }
+  table.api-vs-ui td:first-child { white-space: nowrap; font-weight: 600; }
+
+  .icon { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Autonomous GitHub Dispatch — Deck UI Mockups</h1>
+  <p>Companion to <code>2026-07-02-autonomous-github-dispatch-design.md</code>, <code>2026-07-03-autonomous-github-dispatch-workflows.md</code>, and <code>2026-07-03-autonomous-github-dispatch-use-cases.html</code>. There are two ways to configure a team for autonomous GitHub work: the <b>Deck UI</b> (mockups below) and the <b>API/agentic interface</b> (REST + the <code>deck_report_dispatch_status</code> MCP tool an owner slot calls). This document mocks up the UI side only — every field shown here maps 1:1 to a field an API caller could set directly; the UI is a convenience layer over the same schema, not a separate capability.</p>
+  <p>Screens are annotated with which use case(s) from the use-case doc they exist to satisfy, and rendered against Claude Deck's actual color palette (dark theme, matrix-green primary) so they read as the real app rather than a generic mockup.</p>
+</header>
+
+<nav>
+  <a href="#s0">0. API vs UI</a>
+  <a href="#s1">1. Preset list</a>
+  <a href="#s2">2. Autonomy tab</a>
+  <a href="#s3">3. Add/edit scope</a>
+  <a href="#s4">4. Slot editor</a>
+  <a href="#s5">5. Activity feed</a>
+  <a href="#s6">6. Escalated detail</a>
+  <a href="#s7">7. Handoff in flight</a>
+</nav>
+
+<main>
+
+  <section class="screen" id="s0">
+    <div class="screen-label"><h2>0. Two configuration paths, one schema</h2></div>
+    <p class="screen-note">Before the mockups: nothing below is UI-only capability. Every field a human sets in these screens is a column on <code>TeamGithubScope</code> or <code>AgentTeamSlot</code> that an external actor (OpenClaw, a script, the MCP shim) can set via the same REST endpoints the UI calls. The UI's job is discoverability and validation, not gatekeeping a capability the API doesn't have.</p>
+    <table class="api-vs-ui">
+      <thead><tr><th>Configuration</th><th>Via Deck UI</th><th>Via API / agentic interface</th></tr></thead>
+      <tbody>
+        <tr><td>Enable autonomy for a preset</td><td>Toggle on the Autonomy tab (Screen 2)</td><td><code>PATCH /agent-teams/presets/{id}</code> — <code>autonomy_enabled: true</code></td></tr>
+        <tr><td>Add a watched repo + labels + merge policy</td><td>"Add scope" dialog (Screen 3)</td><td><code>POST /agent-teams/presets/{id}/github-scopes</code></td></tr>
+        <tr><td>Declare a slot's area ownership / expertise</td><td>Slot editor's new fields (Screen 4)</td><td><code>PATCH /agent-teams/slots/{id}</code> — <code>area_labels</code>, <code>expertise</code></td></tr>
+        <tr><td>Report triage/approval/PR/handoff status</td><td><i>Not exposed in the UI at all</i> — this is agent-to-brain, not human-to-Deck</td><td><code>deck_report_dispatch_status(...)</code> MCP tool, called by the owner slot itself</td></tr>
+        <tr><td>Retry an escalated item</td><td>"Retry" button on the activity feed (Screen 6)</td><td><code>POST /agent-teams/github-work-items/{id}/retry</code></td></tr>
+      </tbody>
+    </table>
+    <div class="anno">
+      The one row worth calling out: <b>status reporting has no UI equivalent</b>, on purpose. A human never manually sets "this item's PR is open" — only the dispatched agent knows that, and the design spec (§5d) makes the agent report it explicitly rather than have the brain infer it from prose. The UI only ever <i>displays</i> the result of those reports (Screens 5–7); it never originates them.
+    </div>
+  </section>
+
+  <section class="screen" id="s1">
+    <div class="screen-label">
+      <h2>1. Agent Teams — preset list (existing screen, one new element)</h2>
+      <div class="uc-tags"><span class="uc-tag">Entry point</span></div>
+    </div>
+    <p class="screen-note">The existing Agent Teams page, unchanged except for a small "Autonomy" badge on presets that have it enabled — so a human scanning the list can tell at a glance which teams are running unattended.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Claude Deck — Agent Teams</div>
+      <div class="app-body">
+        <div class="app-h1">Agent Teams</div>
+        <p class="app-sub">Saved rosters for launching or reusing local Claude Code, Codex CLI, and GitHub Copilot CLI sessions.</p>
+
+        <div class="app-card accent-border">
+          <div class="app-row">
+            <div>
+              <span style="font-weight:600;">SnazzyEmail Core</span>
+              <span class="app-badge" style="margin-left:8px;">3 slots</span>
+              <span class="app-badge new" style="margin-left:6px;">⚡ Autonomy on</span>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <span class="app-btn sm">Plan launch</span>
+              <span class="app-btn sm primary">Launch</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="app-card">
+          <div class="app-row">
+            <div>
+              <span style="font-weight:600;">Claude Deck — Release Validation</span>
+              <span class="app-badge" style="margin-left:8px;">2 slots</span>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <span class="app-btn sm">Plan launch</span>
+              <span class="app-btn sm primary">Launch</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="anno">The <code>⚡ Autonomy on</code> badge is the only change to this screen — reads directly from <code>AgentTeamPreset.autonomy_enabled</code>. Clicking into "SnazzyEmail Core" opens the existing preset detail view, which now has a new tab (Screen 2).</div>
+  </section>
+
+  <section class="screen" id="s2">
+    <div class="screen-label">
+      <h2>2. Preset detail — new "Autonomy" tab</h2>
+      <div class="uc-tags"><span class="uc-tag">UC1</span><span class="uc-tag">UC12</span></div>
+    </div>
+    <p class="screen-note">The main new surface. A new tab alongside the existing "Slots" and "Launches" tabs on the preset detail page. This is where a human turns autonomy on and manages the list of watched repos (a team can watch more than one — UC12).</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Claude Deck — SnazzyEmail Core</div>
+      <div class="app-body">
+        <div class="app-h1">SnazzyEmail Core</div>
+        <div class="app-tabs">
+          <div class="app-tab">Slots</div>
+          <div class="app-tab active">Autonomy</div>
+          <div class="app-tab">Launches</div>
+        </div>
+
+        <div class="app-card">
+          <div class="app-row">
+            <div>
+              <div style="font-weight:600;">Autonomous GitHub dispatch</div>
+              <div class="app-help">When on, Claude Deck polls the repos below for labeled issues and dispatches them to this team without a human clicking Launch.</div>
+            </div>
+            <div class="app-toggle on"><div class="knob"></div></div>
+          </div>
+        </div>
+
+        <div class="app-row" style="margin: 18px 0 10px;">
+          <div style="font-weight:600; font-size:13px;">Watched repos <span class="app-badge" style="margin-left:6px;">2</span></div>
+          <span class="app-btn sm primary">+ Add repo</span>
+        </div>
+
+        <div class="app-card">
+          <div class="app-row">
+            <div>
+              <span style="font-weight:600;">adrirubio/snazzyemail</span>
+              <span class="app-badge outline" style="margin-left:8px;">claude-deck-ready</span>
+              <span class="app-badge" style="margin-left:6px;">claude-deck-design</span>
+              <span class="app-badge warning" style="margin-left:6px;">merge: human</span>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <span class="app-btn sm">Edit</span>
+              <span class="app-btn sm destructive-outline">Remove</span>
+            </div>
+          </div>
+          <div class="app-help" style="margin-top:8px;">Local checkout: <code>/home/juan/work/repos/adrirubio/snazzyemail</code> · Max approval rounds: 3 · Last polled 2 min ago</div>
+        </div>
+
+        <div class="app-card">
+          <div class="app-row">
+            <div>
+              <span style="font-weight:600;">adrirubio/snazzyemail-infra</span>
+              <span class="app-badge outline" style="margin-left:8px;">claude-deck-ready</span>
+              <span class="app-badge" style="margin-left:6px;">claude-deck-design</span>
+              <span class="app-badge new" style="margin-left:6px;">merge: auto</span>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <span class="app-btn sm">Edit</span>
+              <span class="app-btn sm destructive-outline">Remove</span>
+            </div>
+          </div>
+          <div class="app-help" style="margin-top:8px;">Local checkout: <code>/home/juan/work/repos/adrirubio/snazzyemail-infra</code> · Max approval rounds: 3 · Last polled 2 min ago</div>
+        </div>
+
+        <div class="app-callout">
+          One team, two repos. Issues on either repo dispatch into the same roster — the leader and any SME slots are shared, but each launch uses <code>repo_path_override</code> to work in whichever repo the triggering issue actually lives in (see the design spec §3.3).
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Field-to-schema map:</b>
+      <ul>
+        <li>The top toggle is <code>AgentTeamPreset.autonomy_enabled</code> — off by default for every existing team (§9).</li>
+        <li>Each repo card is one <code>TeamGithubScope</code> row — <code>repo_owner</code>/<code>repo_name</code>, <code>dispatch_label</code>, <code>design_label</code>, <code>merge_policy</code>, <code>repo_path</code>, <code>max_approval_rounds</code>.</li>
+        <li>The <code>merge: human</code> vs. <code>merge: auto</code> badge uses the warning color for human-gated and the primary/green "new" color for auto — a deliberate visual cue that auto-merge is the more consequential setting, not the safer-looking one.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="screen" id="s3">
+    <div class="screen-label">
+      <h2>3. Add / edit scope dialog</h2>
+      <div class="uc-tags"><span class="uc-tag">UC1</span><span class="uc-tag">UC2</span><span class="uc-tag">UC4</span></div>
+    </div>
+    <p class="screen-note">Opened by "+ Add repo" or "Edit" on Screen 2. This is where every <code>TeamGithubScope</code> field is set, including the two guardrails a human is most likely to want to tune (approval rounds, merge policy) surfaced right next to the fields they govern rather than buried in a separate settings page.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Add watched repo</div>
+      <div class="app-body">
+        <div class="app-h1" style="font-size:16px;">Add watched repo</div>
+        <p class="app-sub">This team will poll this repo for labeled issues and dispatch them automatically.</p>
+
+        <div class="app-grid-2">
+          <div class="app-field">
+            <label>Repo owner</label>
+            <div class="app-input">adrirubio</div>
+          </div>
+          <div class="app-field">
+            <label>Repo name</label>
+            <div class="app-input">snazzyemail-infra</div>
+          </div>
+        </div>
+
+        <div class="app-field">
+          <label>Local checkout path</label>
+          <div class="app-input">/home/juan/work/repos/adrirubio/snazzyemail-infra</div>
+          <div class="app-help">Used as <code>repo_path_override</code> at dispatch time — decoupled from any slot's own saved repo path (§3.1).</div>
+        </div>
+
+        <div class="app-grid-2">
+          <div class="app-field">
+            <label>Dispatch label</label>
+            <div class="app-input">claude-deck-ready</div>
+            <div class="app-help">The only relevance filter. Apply this label to a GitHub issue to hand it to this team.</div>
+          </div>
+          <div class="app-field">
+            <label>Design label</label>
+            <div class="app-input">claude-deck-design</div>
+            <div class="app-help">Add alongside the dispatch label to route through the design pipeline instead of code (§7b).</div>
+          </div>
+        </div>
+
+        <div class="app-field">
+          <label>Merge policy</label>
+          <div class="app-select" style="display:flex; align-items:center; justify-content:space-between;">
+            <span>Human reviews and merges</span>
+            <span style="color:var(--muted-foreground);">▾</span>
+          </div>
+          <div class="app-help warn">⚠ Applies to the code pipeline only. Design-pipeline PRs always require a human — this setting can't override that (§7b, fixes D).</div>
+        </div>
+
+        <div class="app-field">
+          <label>Max approval rounds before dispatch</label>
+          <div class="app-input" style="width:80px;">3</div>
+          <div class="app-help">Caps how many triage/revision round-trips the owner and leader can exchange before a human is pulled in (fixes V3). Applies to both pipelines.</div>
+        </div>
+
+        <div class="app-row" style="margin-top:18px; justify-content:flex-end;">
+          <span class="app-btn" style="margin-right:8px;">Cancel</span>
+          <span class="app-btn primary">Save repo</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Why the merge-policy warning is inline, not in a tooltip:</b> UC4's pressure-test finding was exactly this kind of setting being misread as more powerful than it is. Putting the design-pipeline caveat directly under the field, always visible, is cheaper than relying on a human to hover a tooltip before assuming "auto-merge" means "auto-merge everything this scope touches."
+    </div>
+  </section>
+
+  <section class="screen" id="s4">
+    <div class="screen-label">
+      <h2>4. Slot editor — two new fields</h2>
+      <div class="uc-tags"><span class="uc-tag">UC3</span><span class="uc-tag">UC10</span></div>
+    </div>
+    <p class="screen-note">The existing slot add/edit dialog (role, charter, provider, launch mode, etc.), with <code>area_labels</code> and <code>expertise</code> added alongside the fields it already has — not a new dialog, an addition to the one that exists.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Edit slot — Backend SME</div>
+      <div class="app-body">
+        <div class="app-h1" style="font-size:16px;">Edit slot</div>
+
+        <div class="app-grid-2">
+          <div class="app-field">
+            <label>Display name</label>
+            <div class="app-input">Backend SME</div>
+          </div>
+          <div class="app-field">
+            <label>Provider</label>
+            <div class="app-select">codex-cli</div>
+          </div>
+        </div>
+
+        <div class="app-field">
+          <label>Role</label>
+          <div class="app-input">backend-implementer</div>
+        </div>
+        <div class="app-field">
+          <label>Charter</label>
+          <div class="app-input" style="height:44px;">Owns the FastAPI backend, SQLAlchemy models, and background job services.</div>
+        </div>
+
+        <div class="app-card" style="background:rgba(34,197,94,0.04); border-color:rgba(34,197,94,0.3); margin-top:16px;">
+          <div class="app-badge new" style="margin-bottom:10px;">New — GitHub dispatch routing</div>
+
+          <div class="app-field">
+            <label>Area labels <span style="color:var(--muted-foreground); font-weight:400;">— mechanical match, checked first</span></label>
+            <div class="chip-input">
+              <span class="chip">area:backend <span class="x">✕</span></span>
+              <span class="chip">area:api <span class="x">✕</span></span>
+              <span class="add-chip">+ add label</span>
+            </div>
+            <div class="app-help">If an incoming issue carries one of these GitHub labels, it routes to this slot directly — no judgment call (§5a step 1).</div>
+          </div>
+
+          <div class="app-field">
+            <label>Expertise <span style="color:var(--muted-foreground); font-weight:400;">— fallback classifier input only</span></label>
+            <div class="app-input" style="height:40px;">Owns the backend API, database models, and background jobs. Not the frontend or infra/deploy scripts.</div>
+            <div class="app-help">Used only when no area label matches — one cheap classification call reads this to guess the best owner (§5a step 2). Never sent to GitHub.</div>
+          </div>
+        </div>
+
+        <div class="app-row" style="margin-top:18px; justify-content:flex-end;">
+          <span class="app-btn" style="margin-right:8px;">Cancel</span>
+          <span class="app-btn primary">Save slot</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Why area labels and expertise are grouped in their own highlighted card, not just two more plain fields:</b> UC10's finding was that a team that never fills these in silently gets zero routing benefit and every issue piles onto the leader. Visually separating "GitHub dispatch routing" from the slot's general identity fields is meant to make the omission noticeable — an empty highlighted card reads as "you skipped something," where two blank fields blending into a long form don't.
+    </div>
+  </section>
+
+  <section class="screen" id="s5">
+    <div class="screen-label">
+      <h2>5. Autonomy tab — activity feed</h2>
+      <div class="uc-tags"><span class="uc-tag">UC6</span><span class="uc-tag">UC8</span></div>
+    </div>
+    <p class="screen-note">Scrolled further down the same Autonomy tab from Screen 2. Shows recent <code>GithubWorkItem</code> rows with enough state surfaced that a human can distinguish "working normally," "queued," and "needs you" without opening GitHub.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Claude Deck — SnazzyEmail Core — Autonomy</div>
+      <div class="app-body">
+        <div class="app-row" style="margin-bottom:10px;">
+          <div style="font-weight:600; font-size:13px;">Activity</div>
+          <div class="app-help">Auto-refreshes every 5s</div>
+        </div>
+
+        <table class="app-table">
+          <thead><tr><th>Issue</th><th>Type</th><th>Status</th><th>Owner</th><th>PR</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td>#142 — CSV export truncates at 10k rows</td>
+              <td><span class="app-badge">code</span></td>
+              <td><span class="app-badge outline">verifying</span></td>
+              <td>Backend SME <span style="color:var(--muted-foreground);">(label match)</span></td>
+              <td><a href="#" style="color:var(--docs-accent);">#301</a></td>
+              <td></td>
+            </tr>
+            <tr>
+              <td>#139 — Add dark mode to settings page</td>
+              <td><span class="app-badge">code</span></td>
+              <td>
+                <span class="app-badge">pending</span>
+                <div class="app-help" style="margin-top:2px;">queued · behind Frontend SME</div>
+              </td>
+              <td>Frontend SME <span style="color:var(--muted-foreground);">(label match)</span></td>
+              <td>—</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td>#138 — Explore push notifications for mobile</td>
+              <td><span class="app-badge info">design</span></td>
+              <td><span class="app-badge new">awaiting human review</span></td>
+              <td>Architect <span style="color:var(--muted-foreground);">(classified)</span></td>
+              <td><a href="#" style="color:var(--docs-accent);">#299</a></td>
+              <td></td>
+            </tr>
+            <tr>
+              <td>#135 — Webhook signature validation bug</td>
+              <td><span class="app-badge">code</span></td>
+              <td><span class="app-badge destructive">escalated</span></td>
+              <td>Backend SME <span style="color:var(--muted-foreground);">(label match)</span></td>
+              <td><a href="#" style="color:var(--docs-accent);">#296</a></td>
+              <td><span class="app-btn sm">View →</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Two rows worth pointing at specifically:</b>
+      <ul>
+        <li><b>#139</b> shows <code>pending_reason="queued_slot_busy"</code> as a qualifier line under the status badge — this is the direct fix for UC6/V6: without it, #139 would look identical to a freshly-discovered, unrouted item.</li>
+        <li><b>#135</b> is escalated with a "View →" action, leading to Screen 6 — the one write action this feed exposes (§10, fixes V1's punch-list item).</li>
+      </ul>
+      Owner column shows <code>routing_method</code> in parentheses (label match / classified / reassigned) so a human can sanity-check the brain's routing decisions inline, per §5a/§10.
+    </div>
+  </section>
+
+  <section class="screen" id="s6">
+    <div class="screen-label">
+      <h2>6. Escalated item detail + retry</h2>
+      <div class="uc-tags"><span class="uc-tag">UC8</span></div>
+    </div>
+    <p class="screen-note">Opened by "View →" on an escalated row. Shows the <code>escalation_reason</code> in plain language and the narrow retry action — deliberately not a general edit/reroute panel (§12).</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Issue #135 — escalated</div>
+      <div class="app-body">
+        <div class="app-row">
+          <div class="app-h1" style="font-size:16px; margin-bottom:2px;">#135 — Webhook signature validation bug</div>
+          <span class="app-badge destructive">escalated</span>
+        </div>
+        <p class="app-sub"><a href="#" style="color:var(--docs-accent);">github.com/adrirubio/snazzyemail/issues/135</a> · dispatched 3h ago</p>
+
+        <div class="app-card" style="border-color:rgba(229,72,77,0.4); background:rgba(229,72,77,0.06);">
+          <div style="font-weight:600; margin-bottom:6px; color:#f2a3a6;">Why this escalated</div>
+          <div style="font-size:13px;">retry_count_exhausted</div>
+          <div class="app-help" style="margin-top:6px;">CI checks failed 2 times in a row on PR #296. The last failure: <code>test_webhook_signature.py::test_hmac_mismatch — AssertionError</code>. Retry budget for this repo (2) is exhausted — see the repo's <code>max verification retries</code> setting on the Autonomy tab.</div>
+        </div>
+
+        <div class="app-card">
+          <div style="font-weight:600; margin-bottom:6px;">Routing history</div>
+          <table class="app-table">
+            <tr><td style="white-space:nowrap; color:var(--muted-foreground);">Owner</td><td>Backend SME <span class="app-badge" style="margin-left:6px;">label match</span></td></tr>
+            <tr><td style="white-space:nowrap; color:var(--muted-foreground);">Dispatched</td><td>Today, 09:14</td></tr>
+            <tr><td style="white-space:nowrap; color:var(--muted-foreground);">PR opened</td><td>#296, today 09:41</td></tr>
+            <tr><td style="white-space:nowrap; color:var(--muted-foreground);">Retries</td><td>2 / 2</td></tr>
+          </table>
+        </div>
+
+        <div class="app-row" style="margin-top:16px;">
+          <div class="app-help">Fix the underlying test failure, then Retry — Deck will pick this back up on the next poll.</div>
+          <span class="app-btn primary">↻ Retry</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>What "Retry" actually does (per the design spec §10):</b> it's a thin wrapper around the same recovery rule the watcher already applies on its own — reset to <code>pending</code>, clear <code>escalation_reason</code>/<code>retry_count</code>/<code>approval_round_count</code>, re-route from scratch. There is deliberately no "edit and resubmit" or "force dispatch" button here — fixing the actual problem (the failing test, in this example) still happens in the code/issue, not in this dialog.
+    </div>
+  </section>
+
+  <section class="screen" id="s7">
+    <div class="screen-label">
+      <h2>7. Handoff in flight — activity feed detail</h2>
+      <div class="uc-tags"><span class="uc-tag">UC3</span></div>
+    </div>
+    <p class="screen-note">What a human sees while a mid-task reassignment (§5c's two-phase handoff) is pending — distinct from both "working normally" and "escalated," so it doesn't get misread as either.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Issue #144 — handoff pending</div>
+      <div class="app-body">
+        <div class="app-row">
+          <div class="app-h1" style="font-size:16px; margin-bottom:2px;">#144 — Add CSV export to Usage page</div>
+          <span class="app-badge">dispatched</span>
+        </div>
+        <p class="app-sub">Backend SME determined this also needs frontend work and is handing off.</p>
+
+        <div class="app-card" style="border-color:rgba(88,166,255,0.4); background:rgba(88,166,255,0.06);">
+          <div style="display:flex; align-items:center; gap:10px; font-size:13px;">
+            <span style="font-weight:600;">Backend SME</span>
+            <span style="color:var(--muted-foreground);">→ handoff pending →</span>
+            <span style="font-weight:600;">Frontend SME</span>
+            <span class="app-badge info" style="margin-left:auto;">handoff_state: pending</span>
+          </div>
+          <div class="app-help" style="margin-top:8px;">Both slots are reserved until Frontend SME confirms acceptance (§5b rule 2, fixes V5) — no other issue can dispatch into either slot right now.</div>
+        </div>
+
+        <table class="app-table" style="margin-top:6px;">
+          <tr><td style="white-space:nowrap; color:var(--muted-foreground);">Initiated</td><td>4 min ago by Backend SME</td></tr>
+          <tr><td style="white-space:nowrap; color:var(--muted-foreground);">Waiting on</td><td>Frontend SME to call <code>handoff_accepted</code></td></tr>
+          <tr><td style="white-space:nowrap; color:var(--muted-foreground);">Timeout</td><td>Escalates as <code>handoff_not_accepted</code> if unresolved past the idle threshold</td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="anno">
+      This screen exists specifically because of V4/V5: before the two-phase handoff fix, there was nothing to show here — a reassignment was invisible bookkeeping. Now there's a real, named state a human can watch resolve (or, if it times out, watch turn into an escalation with a specific, legible reason instead of a generic "stuck").
+    </div>
+  </section>
+
+</main>
+</body>
+</html>
