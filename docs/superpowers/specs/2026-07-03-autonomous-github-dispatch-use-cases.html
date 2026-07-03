@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Autonomous GitHub Dispatch — Use Cases &amp; Required UX</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2129;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --ok: #3fb950;
+    --partial: #d29922;
+    --gap: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    line-height: 1.55;
+  }
+  header {
+    padding: 32px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; }
+  header p { margin: 0 0 4px; color: var(--muted); font-size: 14px; max-width: 900px; }
+  header a { color: var(--accent); }
+
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 40px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  nav a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 12.5px;
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #0d1117;
+    white-space: nowrap;
+  }
+  nav a:hover { border-color: var(--accent); color: var(--accent); }
+
+  main { padding: 24px 40px 70px; max-width: 1180px; margin: 0 auto; }
+
+  section.intro {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 26px;
+    margin-bottom: 26px;
+  }
+  section.intro h2 { margin-top: 0; font-size: 16px; }
+  section.intro p { font-size: 14px; color: var(--text); }
+  section.intro .legend { display: flex; gap: 18px; margin-top: 14px; flex-wrap: wrap; font-size: 13px; }
+  section.intro .legend span { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.ok { background: var(--ok); }
+  .dot.partial { background: var(--partial); }
+  .dot.gap { background: var(--gap); }
+
+  table.inventory {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 10px;
+  }
+  table.inventory th, table.inventory td {
+    border: 1px solid var(--border);
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  table.inventory th { background: #0d1117; color: var(--muted); font-weight: 600; }
+  table.inventory code { font-size: 0.92em; }
+
+  section.usecase {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 26px;
+    margin-bottom: 22px;
+  }
+  section.usecase .uc-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  section.usecase h2 { margin: 0; font-size: 17px; }
+  section.usecase .uc-id { color: var(--muted); font-weight: 500; margin-right: 8px; }
+
+  .status-pill {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+  }
+  .status-pill.ok { background: rgba(63,185,80,0.15); color: var(--ok); border: 1px solid rgba(63,185,80,0.4); }
+  .status-pill.partial { background: rgba(210,153,34,0.15); color: var(--partial); border: 1px solid rgba(210,153,34,0.4); }
+  .status-pill.gap { background: rgba(248,81,73,0.15); color: var(--gap); border: 1px solid rgba(248,81,73,0.4); }
+
+  .trigger {
+    font-size: 13.5px;
+    color: var(--muted);
+    margin: 8px 0 16px;
+    font-style: italic;
+  }
+
+  .uc-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 800px) { .uc-grid { grid-template-columns: 1fr; } }
+
+  .uc-block {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .uc-block h3 {
+    margin: 0 0 8px;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .uc-block ul { margin: 0; padding-left: 18px; font-size: 13.5px; }
+  .uc-block li { margin-bottom: 6px; }
+  .uc-block li:last-child { margin-bottom: 0; }
+
+  .failure {
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: rgba(248,81,73,0.08);
+    border-left: 3px solid var(--gap);
+    border-radius: 6px;
+    font-size: 13.5px;
+  }
+  .failure.none {
+    background: rgba(63,185,80,0.08);
+    border-left-color: var(--ok);
+  }
+  .failure b { color: var(--gap); }
+  .failure.none b { color: var(--ok); }
+
+  code {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+
+  section.punchlist {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px 26px;
+  }
+  section.punchlist h2 { margin-top: 0; font-size: 16px; }
+  table.punch {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 10px;
+  }
+  table.punch th, table.punch td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  table.punch th { background: #0d1117; color: var(--muted); }
+  table.punch td:nth-child(1) { white-space: nowrap; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Autonomous GitHub Dispatch — Use Cases &amp; Required UX</h1>
+  <p>Companion to <code>2026-07-02-autonomous-github-dispatch-design.md</code> and <code>2026-07-03-autonomous-github-dispatch-workflows.md</code>. Each use case below asks one question: <b>what does a human have to configure, up front, so the brain + agent team can make the right call unattended</b> — and where the spec, as written, leaves that decision uncodified (the agent is left to guess, stall, or silently do the wrong thing).</p>
+  <p>References to <code>V1–V8</code> and <code>B1/B2/C1–C3/D</code> point back to findings from the two companion pressure-test documents.</p>
+</header>
+
+<nav>
+  <a href="#inventory">UX inventory</a>
+  <a href="#uc1">UC1 Simple defect</a>
+  <a href="#uc2">UC2 Auto-merge defect</a>
+  <a href="#uc3">UC3 Cross-area feature</a>
+  <a href="#uc4">UC4 Design issue</a>
+  <a href="#uc5">UC5 CI failure retry</a>
+  <a href="#uc6">UC6 Same-slot concurrency</a>
+  <a href="#uc7">UC7 Leader offline</a>
+  <a href="#uc8">UC8 Escalation dead-end</a>
+  <a href="#uc9">UC9 Merge API failure</a>
+  <a href="#uc10">UC10 Ambiguous routing</a>
+  <a href="#uc11">UC11 Label removed mid-flight</a>
+  <a href="#uc12">UC12 Multi-repo overlap</a>
+  <a href="#punchlist">Punch list</a>
+</nav>
+
+<main>
+
+  <section class="intro" id="inventory">
+    <h2>Current UX/config inventory — what a human can actually codify today</h2>
+    <p>Before judging any use case, here's the full surface of decisions a human can currently pin down via config, versus what's left to inference or prompt-level instruction.</p>
+    <table class="inventory">
+      <thead><tr><th>Knob</th><th>Where it lives</th><th>Decision it codifies</th></tr></thead>
+      <tbody>
+        <tr><td><code>dispatch_label</code></td><td><code>TeamGithubScope</code></td><td>Which issues Deck is allowed to touch at all (relevance filter).</td></tr>
+        <tr><td><code>design_label</code></td><td><code>TeamGithubScope</code></td><td>Which pipeline (code vs. design) an issue takes once dispatched.</td></tr>
+        <tr><td><code>area_labels</code></td><td><code>AgentTeamSlot</code></td><td>Mechanical SME ownership — which slot a label maps to.</td></tr>
+        <tr><td><code>expertise</code></td><td><code>AgentTeamSlot</code></td><td>Fallback classifier input when no area label matches.</td></tr>
+        <tr><td><code>merge_policy</code></td><td><code>TeamGithubScope</code></td><td>Human-gated vs. auto-merge — code pipeline only.</td></tr>
+        <tr><td>"first enabled slot by position"</td><td>convention, not a field</td><td>Who the team leader / approval authority is.</td></tr>
+        <tr><td>Guardrail defaults (concurrency, retries, daily merges)</td><td><code>TeamGithubScope</code> columns</td><td>How much autonomy runs before a human is pulled in.</td></tr>
+        <tr><td>Bootstrap prompt text</td><td>generated at dispatch time, not human-editable per team</td><td>How the owner is told to behave — triage, ack-wait, verification steps.</td></tr>
+      </tbody>
+    </table>
+    <div class="legend">
+      <span><span class="dot ok"></span> Codified — a config field exists and drives the decision directly</span>
+      <span><span class="dot partial"></span> Partially codified — a convention or prompt instruction stands in for real config</span>
+      <span><span class="dot gap"></span> Not codified — no UX exists; the brain has nothing to consult and must guess, stall, or fail</span>
+    </div>
+  </section>
+
+  <section class="usecase" id="uc1">
+    <div class="uc-head"><h2><span class="uc-id">UC1</span>Simple defect, single area, human-merge policy</h2><span class="status-pill ok">Codified</span></div>
+    <p class="trigger">Trigger: issue labeled <code>claude-deck-ready</code> + <code>area:backend</code>, scope's <code>merge_policy=human</code>.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Is this issue in scope at all?</li>
+          <li>Which slot owns it?</li>
+          <li>Is the fix verified before a human sees it?</li>
+          <li>Should the brain click merge? (No — always defer.)</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><code>dispatch_label</code> presence — mechanical yes/no.</li>
+          <li><code>area_labels</code> exact match — mechanical, no judgment.</li>
+          <li>CI check-run polling — an external, objective signal.</li>
+          <li><code>merge_policy="human"</code> — explicit, unambiguous.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure none"><b>No gap.</b> This is the case the design was built around — every decision has a direct, mechanical input.</div>
+  </section>
+
+  <section class="usecase" id="uc2">
+    <div class="uc-head"><h2><span class="uc-id">UC2</span>Simple defect, auto-merge policy</h2><span class="status-pill partial">Partially codified</span></div>
+    <p class="trigger">Trigger: same as UC1, but scope's <code>merge_policy=auto</code>.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Everything in UC1, plus:</li>
+          <li>Is it actually safe to click merge on this specific PR right now?</li>
+          <li>What happens if the merge call itself fails?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><code>merge_policy="auto"</code> — codifies the human's blanket risk tolerance for the repo.</li>
+          <li>Daily auto-merge cap — codifies a volume ceiling.</li>
+          <li><b>Nothing</b> codifies what to do on a merge-call failure (branch protection, stale branch, required-review-not-met).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (V2).</b> "Auto-merge" as a policy answers "should I try," not "what do I do if trying fails." There's no config surface for retry-vs-escalate-vs-fallback-to-human-review on a failed merge attempt — the brain has no decision procedure here, only a happy-path action.</div>
+  </section>
+
+  <section class="usecase" id="uc3">
+    <div class="uc-head"><h2><span class="uc-id">UC3</span>Feature spanning two areas, mid-task reassignment</h2><span class="status-pill gap">Not codified</span></div>
+    <p class="trigger">Trigger: backend SME starts work, discovers the issue also needs frontend changes.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Should this be split into two dispatches, or handed off wholesale?</li>
+          <li>Is the new owner actually available and running?</li>
+          <li>Did the handoff's context actually transfer?</li>
+          <li>Is the original owner's slot safe to reuse immediately?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><code>reassign_to_slot_id</code> on <code>deck_report_dispatch_status</code> — codifies <i>that</i> a reassignment happened.</li>
+          <li><b>Nothing</b> codifies split-vs-handoff as a strategy choice — left to the owner's judgment, unobserved.</li>
+          <li><b>Nothing</b> confirms the new owner is running or accepted the handoff (V4).</li>
+          <li><b>Nothing</b> holds the original slot reserved during the handoff window (V5).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (B1, V4, V5).</b> Reassignment is a database write, not a verified state transition. The UX problem isn't "add a field" — it's that there's no notion of a <i>pending handoff</i> state distinct from <i>reassigned and confirmed</i>, so the brain can't tell "in flight" from "done," and can't safely decide when the vacated slot is truly free.</div>
+  </section>
+
+  <section class="usecase" id="uc4">
+    <div class="uc-head"><h2><span class="uc-id">UC4</span>Design/brainstorming issue → spec doc merged via PR</h2><span class="status-pill partial">Partially codified</span></div>
+    <p class="trigger">Trigger: issue labeled <code>claude-deck-ready</code> + <code>claude-deck-design</code>.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Which pipeline applies (code vs. design)?</li>
+          <li>Who satisfies the human-approval gate the owner's own brainstorming skill requires?</li>
+          <li>When is the design "verified" (since CI proves nothing)?</li>
+          <li>When has the approval loop gone on too long?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><code>design_label</code> — mechanical, unambiguous.</li>
+          <li>Prompt instruction naming the leader as delegated approver — codified as <i>text</i>, not as an enforced gate (V3, §11.7).</li>
+          <li><code>awaiting_human_review</code> state — codifies "a real human, not CI, decides."</li>
+          <li><b>Nothing</b> caps or times the pre-dispatch approval back-and-forth (V3).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (C1 mitigation is real, but V3 remains).</b> The pipeline fork itself is solid UX — label-driven, mechanical, no ambiguity about which path an issue takes. What's missing is a bounded-rounds or timeout config for the leader-approval exchange specifically, since "keep discussing until approved" is unobjectionable in principle but has no stop condition in practice.</div>
+  </section>
+
+  <section class="usecase" id="uc5">
+    <div class="uc-head"><h2><span class="uc-id">UC5</span>CI check fails after PR opened</h2><span class="status-pill ok">Codified</span></div>
+    <p class="trigger">Trigger: owner's PR has a red check-run.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Retry, or give up?</li>
+          <li>How many retries before it's not worth the owner's time (or cost)?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><code>retry_count</code> + per-scope retry budget — explicit, numeric, human-settable.</li>
+          <li>Escalation on exhaustion — explicit downstream state.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure none"><b>No gap in the decision itself</b> — though see UC8: the state it escalates <i>to</i> has its own problem.</div>
+  </section>
+
+  <section class="usecase" id="uc6">
+    <div class="uc-head"><h2><span class="uc-id">UC6</span>Two same-area issues land in one poll cycle</h2><span class="status-pill partial">Partially codified</span></div>
+    <p class="trigger">Trigger: issues #50 and #51 both match <code>area:backend</code> in the same poll.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Can both be worked at once, or must one wait?</li>
+          <li>How should a human reading the dashboard distinguish "waiting because busy" from "not yet processed"?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li>Hard per-slot concurrency cap of 1 — correctly codifies "one slot, one active task," no judgment needed.</li>
+          <li><b>Nothing</b> distinguishes <i>queued-behind-a-busy-slot</i> from <i>freshly-discovered</i> in the visible state (V6) — both read as <code>pending</code>.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (V6).</b> This isn't a decision the brain gets wrong — the brain's queueing behavior is correct. It's a decision a <i>human operator</i> can't make correctly, because the dashboard's UX doesn't expose the information needed to tell "stuck" from "queued" apart. A human might intervene on a perfectly healthy queued item, or fail to notice a genuinely stuck one, because both look identical.</div>
+  </section>
+
+  <section class="usecase" id="uc7">
+    <div class="uc-head"><h2><span class="uc-id">UC7</span>Leader never comes online</h2><span class="status-pill partial">Partially codified</span></div>
+    <p class="trigger">Trigger: owner sends a triage/approval message; leader's slot is offline or unresponsive.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>How long to wait before treating this as stuck?</li>
+          <li>Should the wait differ for a code ack (low stakes) vs. a design approval (a real gate)?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li>Idle-timeout threshold, with a documented (but not concretely fixed) design-issue multiplier — a real knob, just under-specified.</li>
+          <li><b>Nothing</b> distinguishes "leader is offline" from "leader is legitimately slow-reviewing" (V7) — same timeout, same treatment.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (V7).</b> The spec correctly recognizes that design approvals need more patience than code acks, but a single blanket multiplier can't distinguish cause. There's no UX for "is the leader's session actually alive" as a distinct signal from "is the owner idle" — the two get conflated into one timeout.</div>
+  </section>
+
+  <section class="usecase" id="uc8">
+    <div class="uc-head"><h2><span class="uc-id">UC8</span>Item escalates (any reason)</h2><span class="status-pill gap">Not codified</span></div>
+    <p class="trigger">Trigger: any escalation path — blocked plan, idle timeout, retry budget exhausted, zero check-runs.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>What should happen after a human looks at an escalated item?</li>
+          <li>How does the item re-enter the pipeline once the human fixes whatever was wrong?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li>Notification on escalation — codified (Agent Mail broadcast + activity feed row).</li>
+          <li><b>Nothing</b> — no UI action, no watcher reset rule, no re-dispatch trigger of any kind targets <code>escalated</code> specifically (V1).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (V1) — the most serious one found so far.</b> Every use case above eventually funnels failures into <code>escalated</code>. This is the single highest-leverage UX gap in the whole design: a "retry" button, or a "remove label, re-add label" documented recovery path, or an explicit watcher rule resetting <code>escalated → pending</code> on a fresh <code>github_updated_at</code> (mirroring the existing <code>failed</code> rule) would fix every one of UC2/UC7/UC8's dead ends at once.</div>
+  </section>
+
+  <section class="usecase" id="uc9">
+    <div class="uc-head"><h2><span class="uc-id">UC9</span>Auto-merge API call itself fails</h2><span class="status-pill gap">Not codified</span></div>
+    <p class="trigger">Trigger: all checks green, brain calls <code>PUT .../merge</code>, GitHub returns a non-200 (branch protection, stale head, required review unmet).</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Retry the merge call? Wait and re-check mergeability? Fall back to notifying a human?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><b>None.</b> §7a documents only the success path.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap (V2).</b> Same root cause as UC2, called out separately because the fix is narrow and concrete: a merge-failure branch needs its own small decision tree — likely "re-check mergeability once next poll, then fall back to notifying a human as if <code>merge_policy=human</code>" — which doesn't exist today even as a documented intention.</div>
+  </section>
+
+  <section class="usecase" id="uc10">
+    <div class="uc-head"><h2><span class="uc-id">UC10</span>Issue matches no area label, no slot has an expertise blurb</h2><span class="status-pill partial">Partially codified</span></div>
+    <p class="trigger">Trigger: an issue with no recognized area label, on a team where no slot has filled in <code>expertise</code>.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Who owns this if nothing distinguishes any slot?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li>Explicit fallback: route to the leader — codified, no ambiguity in the <i>decision</i> itself.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure none"><b>No decision gap</b> — the fallback is well-defined. Worth flagging only that a team that never fills in <code>expertise</code> silently gets zero benefit from the classification step and every un-labeled issue piles onto the leader's slot, which is a capacity problem more than a decision problem (and one an operator would want surfaced, not just a routing default).</div>
+  </section>
+
+  <section class="usecase" id="uc11">
+    <div class="uc-head"><h2><span class="uc-id">UC11</span>Human removes <code>dispatch_label</code> after dispatch already happened</h2><span class="status-pill gap">Not codified</span></div>
+    <p class="trigger">Trigger: a human has second thoughts after Deck already dispatched and the owner is mid-implementation.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Does removing the label mean "stop the running agent," or does it only affect future polls?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><b>None.</b> §4's watcher logic only reads labels to find new/failed-reset candidates — it never re-checks a label's continued presence on an already-`dispatched` item.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure"><b>Gap — not previously identified in the workflows doc.</b> A human's most natural "stop this" gesture — removing the label — is not wired to anything once dispatch has happened. The only documented way to actually stop a running dispatch is out-of-band (killing the tmux session directly), which bypasses the entire state machine and would leave the <code>GithubWorkItem</code> permanently stuck mid-flight with no watcher able to reconcile it.</div>
+  </section>
+
+  <section class="usecase" id="uc12">
+    <div class="uc-head"><h2><span class="uc-id">UC12</span>Team spans two repos; issues land on both simultaneously</h2><span class="status-pill ok">Codified</span></div>
+    <p class="trigger">Trigger: a team with two <code>TeamGithubScope</code> entries gets a labeled issue on each repo at the same time.</p>
+    <div class="uc-grid">
+      <div class="uc-block">
+        <h3>Decisions the brain must make</h3>
+        <ul>
+          <li>Which repo does the owner slot's session actually work in?</li>
+          <li>Are the two repos' guardrails/merge policies independent?</li>
+        </ul>
+      </div>
+      <div class="uc-block">
+        <h3>UX that codifies each decision</h3>
+        <ul>
+          <li><code>repo_path_override</code> at launch time — directly codifies working-directory selection per dispatch.</li>
+          <li>Guardrails and <code>merge_policy</code> scoped per <code>TeamGithubScope</code> row, not per team — correctly independent per repo.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="failure none"><b>No gap.</b> This is the one multi-repo case the design explicitly built for and reasons through carefully (§3.3). Note it composes with UC6's per-slot cap: if both repos route to the <i>same</i> slot (e.g. one SME covers backend across both repos), the per-slot concurrency cap still applies correctly across repos, per §5b's explicit "regardless of which repo" wording.</div>
+  </section>
+
+  <section class="punchlist" id="punchlist">
+    <h2>Punch list — new UX needed, ranked by how many use cases it unblocks</h2>
+    <table class="punch">
+      <thead><tr><th>Priority</th><th>New UX/config needed</th><th>Unblocks</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>A defined recovery path out of <code>escalated</code> — minimally, a watcher rule resetting it to <code>pending</code> on a fresh <code>github_updated_at</code>, mirroring the existing <code>failed</code> rule; ideally also a UI action.</td><td>UC2, UC7, UC8, UC9 — every escalation dead-ends without this</td></tr>
+        <tr><td>2</td><td>A merge-failure decision tree for <code>merge_policy=auto</code> (retry mergeability check → fall back to human notification).</td><td>UC2, UC9</td></tr>
+        <tr><td>3</td><td>A distinct visible state (or sub-flag) for "routed but queued behind a busy slot," separate from "freshly discovered."</td><td>UC6</td></tr>
+        <tr><td>4</td><td>A liveness check on the leader's session distinct from idle-time, so "offline" and "slow review" aren't treated identically.</td><td>UC4, UC7</td></tr>
+        <tr><td>5</td><td>A round cap or timeout on the pre-dispatch owner↔leader approval exchange, independent of idle-detection.</td><td>UC3, UC4</td></tr>
+        <tr><td>6</td><td>A "pending handoff" sub-state for reassignment, confirmed only once the new owner acknowledges — plus a grace period before the vacated slot is considered free.</td><td>UC3</td></tr>
+        <tr><td>7</td><td>Watcher logic that re-checks <code>dispatch_label</code> presence on already-dispatched items, with a defined stop/cancel action when it's removed.</td><td>UC11</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</main>
+</body>
+</html>
