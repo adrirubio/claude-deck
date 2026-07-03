@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Autonomous GitHub Dispatch — Workflow Diagrams</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"
+        integrity="sha384-WmdflGW9aGfoBdHc4rRyWzYuAjEmDwMdGdiPNacbwfGKxBW/SO6guzuQ76qjnSlr"
+        crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --sev-high: #f85149;
+    --sev-medhigh: #ff9d5c;
+    --sev-med: #d29922;
+    --sev-lowmed: #7ee787;
+    --sev-low: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    line-height: 1.5;
+  }
+  header {
+    padding: 32px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  header a { color: var(--accent); }
+
+  nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 16px 40px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  nav a {
+    color: var(--text);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #0d1117;
+  }
+  nav a:hover { border-color: var(--accent); color: var(--accent); }
+
+  main { padding: 20px 40px 60px; max-width: 1200px; margin: 0 auto; }
+
+  section.diagram {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 28px;
+  }
+  section.diagram h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+  }
+  section.diagram .caption {
+    color: var(--muted);
+    font-size: 13px;
+    margin: 0 0 16px;
+  }
+  .mermaid-wrap {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+  }
+  .findings {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: #0d1117;
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .findings ul { margin: 6px 0 0; padding-left: 20px; }
+  .findings li { margin-bottom: 8px; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 10px;
+    margin-right: 6px;
+    color: #0d1117;
+  }
+  .badge.high { background: var(--sev-high); }
+  .badge.medhigh { background: var(--sev-medhigh); }
+  .badge.med { background: var(--sev-med); }
+  .badge.lowmed { background: var(--sev-lowmed); }
+  .badge.low { background: var(--sev-low); }
+  .badge.note { background: var(--muted); }
+
+  table.summary {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  table.summary th, table.summary td {
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+  }
+  table.summary th { background: #0d1117; color: var(--muted); font-weight: 600; }
+  table.summary td:first-child { white-space: nowrap; font-weight: 600; }
+
+  code {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Autonomous GitHub Dispatch — Workflow Diagrams</h1>
+  <p>Companion visualization for <code>2026-07-02-autonomous-github-dispatch-design.md</code> and <code>2026-07-03-autonomous-github-dispatch-workflows.md</code>. Findings V1–V8 below were surfaced by tracing every arrow in these diagrams to its destination.</p>
+</header>
+
+<nav>
+  <a href="#d1">1. Code happy path</a>
+  <a href="#d2">2. Design happy path</a>
+  <a href="#d3">3. State machine</a>
+  <a href="#d4">4. Reassignment</a>
+  <a href="#d5">5. Concurrency queueing</a>
+  <a href="#d6">6. Leader offline</a>
+  <a href="#summary">Findings summary</a>
+</nav>
+
+<main>
+
+  <section class="diagram" id="d1">
+    <h2>1. Code-issue happy path (defect / feature)</h2>
+    <p class="caption">Label → poll → route → dispatch → leader ack → implement → verify → merge.</p>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+sequenceDiagram
+    actor Human
+    participant GH as GitHub
+    participant Watcher as GitHub Watcher
+    participant Dispatch as Dispatch Service
+    participant Owner as Owner Slot (backend SME)
+    participant Leader as Leader Slot
+    participant Brain
+
+    Human->>GH: label issue #42 "claude-deck-ready" + "area:backend"
+    loop poll interval
+        Watcher->>GH: GET issues?labels=claude-deck-ready
+        GH-->>Watcher: issue #42 (open)
+    end
+    Watcher->>Watcher: upsert GithubWorkItem(issue_type=code, status=pending)
+    Dispatch->>Dispatch: 5b per-slot check: backend SME free
+    Dispatch->>Dispatch: 5a route: area:backend label match -> owner=backend SME
+    Dispatch->>Owner: plan-launch -> launch (repo_path_override)
+    Owner->>Leader: Agent Mail: triage plan, request ack
+    Leader-->>Owner: ack
+    Owner->>Owner: implement, run local tests
+    Owner->>GH: push branch, open draft PR #101
+    Owner->>Brain: deck_report_dispatch_status(pr_opened, pr=101)
+    Brain->>Brain: status = verifying
+    loop poll CI
+        Brain->>GH: GET PR #101 checks
+    end
+    GH-->>Brain: all green
+    Brain->>GH: PATCH PR #101 -> ready for review
+    alt merge_policy = auto
+        Brain->>GH: PUT PR #101 merge
+        GH-->>Brain: 200 OK
+        Brain->>Brain: status = merged
+    else merge_policy = human
+        Brain->>Human: notify "PR #101 ready for review"
+        Human->>GH: merge PR #101
+    end
+      </pre>
+    </div>
+    <div class="findings">
+      <span class="badge medhigh">V2</span><b>Auto-merge has no failure branch.</b>
+      <ul>
+        <li>The <code>PUT .../merge</code> arrow only draws a success path. A 409 (branch protection, stale branch, unmet review) leaves the item silently stranded at <code>ready_for_review</code> — no retry, no escalation, no notification.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="diagram" id="d2">
+    <h2>2. Design-issue happy path</h2>
+    <p class="caption">Same dispatch entry as Diagram 1, but the leader is now a real approval gate and CI is never polled.</p>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+sequenceDiagram
+    actor Human
+    participant GH as GitHub
+    participant Owner as Owner Slot
+    participant Leader as Leader Slot
+    participant Brain
+
+    Note over Owner,Leader: dispatched (same entry as Diagram 1)
+    Owner->>Leader: Agent Mail: triage + design approach, request approval
+    alt leader approves
+        Leader-->>Owner: approved
+        Owner->>Owner: write design doc
+        Owner->>GH: push branch, open PR #102 (not draft)
+        Owner->>Brain: deck_report_dispatch_status(pr_opened, pr=102)
+        Brain->>Brain: status = awaiting_human_review (no CI polling)
+        Brain->>Human: notify "Design PR #102 ready for human review"
+        Human->>GH: review, request changes
+        Owner->>GH: push revision
+        Human->>GH: merge PR #102
+        Brain->>Brain: watcher detects merge -> status = merged
+    else leader requests changes to the approach
+        Leader-->>Owner: "reconsider X, resubmit"
+        Owner->>Leader: revised triage + approach
+        Note over Owner,Leader: repeat until approved - no cap drawn
+    end
+      </pre>
+    </div>
+    <div class="findings">
+      <span class="badge med">V3</span><b>The approval loop has no round cap or timeout distinct from idle-detection.</b>
+      <ul>
+        <li>An owner/leader pair that iterates on approach occupies the per-slot cap indefinitely — active messaging never reads as idle, so nothing trips.</li>
+      </ul>
+      <span class="badge lowmed">V7</span><b>The generous design-issue idle threshold protects this failure mode too, not just healthy slow review.</b>
+    </div>
+  </section>
+
+  <section class="diagram" id="d3">
+    <h2>3. <code>GithubWorkItem.dispatch_status</code> state machine</h2>
+    <p class="caption">Every state and its transitions, drawn together rather than read section-by-section.</p>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+stateDiagram-v2
+    [*] --> pending
+    pending --> dispatched : 5c launch succeeds
+    pending --> escalated : plan blocked (can_launch=false)
+
+    dispatched --> verifying : issue_type=code, pr_opened reported
+    dispatched --> awaiting_human_review : issue_type=design, pr_opened reported
+    dispatched --> escalated : idle timeout exceeded (6)
+    dispatched --> escalated : status=blocked reported (5d)
+
+    verifying --> ready_for_review : all checks green
+    verifying --> dispatched : check failed, retry_count within budget
+    verifying --> escalated : retry_count exhausted
+    verifying --> escalated : zero check-runs found (7a)
+
+    ready_for_review --> merged : merge_policy=auto succeeds
+    ready_for_review --> merged : human merges manually
+
+    awaiting_human_review --> merged : watcher detects PR merged
+
+    failed --> pending : github_updated_at advances (4 step 3)
+
+    merged --> [*]
+    escalated --> [*]
+      </pre>
+    </div>
+    <div class="findings">
+      <span class="badge high">V1</span><b><code>escalated</code> has no outgoing transition anywhere in the spec.</b>
+      <ul>
+        <li>Every other non-terminal state has a path forward — even <code>failed</code>, via the watcher's reset rule. <code>escalated</code> has none: no watcher reset, no UI action (the activity feed is read-only).</li>
+      </ul>
+      <span class="badge note">note</span><b><code>failed</code> is a valid status with a defined recovery rule, but no transition in the spec ever sets it.</b>
+      <ul>
+        <li>Either it's meant for "the owner's session itself crashed" (never written down), or it's a schema vestige.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="diagram" id="d4">
+    <h2>4. Cross-area feature with mid-task reassignment</h2>
+    <p class="caption">Backend SME hands part of the work to Frontend SME mid-task — Scenario B from the earlier pressure test.</p>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+sequenceDiagram
+    actor Human
+    participant Dispatch as Dispatch Service
+    participant Backend as Backend SME (original owner)
+    participant Frontend as Frontend SME
+    participant Leader
+    participant Brain
+
+    Dispatch->>Backend: dispatch issue #77 (area:backend match)
+    Backend->>Leader: triage plan, request ack
+    Leader-->>Backend: ack
+    Backend->>Backend: starts implementation, discovers frontend work needed
+    Backend->>Leader: "this needs frontend/X too, handing off"
+    Backend->>Brain: deck_report_dispatch_status(reassign_to_slot_id=Frontend)
+    Brain->>Brain: owner_slot_id := Frontend, routing_method := "reassigned"
+    Note over Brain,Backend: Backend's slot is now "free" per 5b -<br/>nothing launches Frontend's session
+    Backend->>Frontend: (assumed) Agent Mail handoff, out of brain's view
+    par unrelated new work
+        Dispatch->>Backend: issue #90 (area:backend match, slot looks free)
+    and original handoff finishing
+        Frontend->>Frontend: picking up context from Backend
+    end
+      </pre>
+    </div>
+    <div class="findings">
+      <span class="badge med">V4</span><b>Reassignment is bookkeeping-only.</b>
+      <ul>
+        <li>The brain never confirms Frontend SME's slot is running or actually received the handoff — the state can say "reassigned" while nothing real has happened yet.</li>
+      </ul>
+      <span class="badge med">V5</span><b>The old owner's slot reads as free the instant reassignment happens.</b>
+      <ul>
+        <li>No grace period — a new issue can dispatch into Backend's slot while Backend is still mid-handoff to Frontend.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="diagram" id="d5">
+    <h2>5. Two same-area issues land in one poll cycle</h2>
+    <p class="caption">Per-repo concurrency allows this; per-slot concurrency queues the second issue — but the queue is invisible.</p>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+sequenceDiagram
+    participant Watcher
+    participant Dispatch as Dispatch Service
+    participant Backend as Backend SME
+
+    Watcher->>Watcher: poll finds issue #50 and #51, both area:backend
+    Dispatch->>Dispatch: route #50 -> Backend SME
+    Dispatch->>Backend: dispatch #50 (slot was free)
+    Dispatch->>Dispatch: route #51 -> Backend SME
+    Dispatch->>Dispatch: 5b check: Backend SME busy (dispatched on #50)
+    Dispatch->>Dispatch: #51 stays pending, retry next tick
+    Note over Dispatch: #51 will show dispatch_status="pending"<br/>identically to a brand-new, never-touched item
+      </pre>
+    </div>
+    <div class="findings">
+      <span class="badge lowmed">V6</span><b>One status value, two different meanings.</b>
+      <ul>
+        <li><code>dispatch_status="pending"</code> can't distinguish "just discovered, about to route" from "routed, but queued behind a busy SME" — exactly the distinction an operator most needs when staring at a stalled-looking item.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="diagram" id="d6">
+    <h2>6. Leader never comes online (design issue)</h2>
+    <p class="caption">The design pipeline's approval gate has a hard dependency on the leader being reachable at all.</p>
+    <div class="mermaid-wrap">
+      <pre class="mermaid">
+sequenceDiagram
+    participant Owner
+    participant Leader
+    participant Brain
+
+    Owner->>Leader: triage + design approach, request approval
+    Note over Leader: leader slot not running -<br/>wake_state = delivered_waiting or offline
+    loop idle-timeout window (2-3x code threshold, 6)
+        Brain->>Brain: check Owner's Agent Mail idle time
+    end
+    Brain->>Owner: nudge (1st check)
+    loop still idle
+        Brain->>Brain: 2nd idle check
+    end
+    Brain->>Brain: escalate -> dispatch_status = escalated
+    Note over Brain: per Diagram 3 / V1, escalated has no way back
+      </pre>
+    </div>
+    <div class="findings">
+      <span class="badge lowmed">V7</span><b>The design-specific generous timeout is indifferent to cause.</b>
+      <ul>
+        <li>It protects an offline leader exactly as long as it protects a healthy slow reviewer — and takes 2-3x longer than a code issue to reach an escalation that (per V1) has no way back.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="diagram" id="summary">
+    <h2>Consolidated Findings</h2>
+    <table class="summary">
+      <thead><tr><th>#</th><th>Severity</th><th>Finding</th><th>Diagram</th></tr></thead>
+      <tbody>
+        <tr><td>V1</td><td><span class="badge high">High</span></td><td><code>escalated</code> has no outgoing transition — no watcher reset, no UI action. No path back into the pipeline once reached.</td><td>3</td></tr>
+        <tr><td>V2</td><td><span class="badge medhigh">Med-High</span></td><td>Auto-merge has no defined failure path — a 409 strands the item at <code>ready_for_review</code> silently.</td><td>1</td></tr>
+        <tr><td>V3</td><td><span class="badge med">Medium</span></td><td>Pre-dispatch triage/approval loop has no round cap distinct from idle-detection — active messaging never reads as "stuck."</td><td>2</td></tr>
+        <tr><td>V4</td><td><span class="badge med">Medium</span></td><td>Reassignment is bookkeeping-only — the brain never confirms the new owner actually received the handoff.</td><td>4</td></tr>
+        <tr><td>V5</td><td><span class="badge med">Medium</span></td><td>Old owner's slot reads as free the instant reassignment happens — no grace period for the handoff to land.</td><td>4</td></tr>
+        <tr><td>V6</td><td><span class="badge lowmed">Low-Med</span></td><td>Activity feed can't distinguish "freshly discovered" from "routed but queued behind a busy slot" — both show <code>pending</code>.</td><td>5</td></tr>
+        <tr><td>V7</td><td><span class="badge lowmed">Low-Med</span></td><td>Generous design-issue idle threshold protects an offline leader exactly as much as a healthy slow reviewer.</td><td>2, 6</td></tr>
+        <tr><td>V8</td><td><span class="badge low">Low</span></td><td>Monitoring only checks Agent Mail idle-time, never whether the underlying tmux session/process is alive — a crash and idleness look identical.</td><td>1 (implicit)</td></tr>
+        <tr><td>—</td><td><span class="badge note">Note</span></td><td><code>failed</code> has a defined recovery rule but no transition in the spec ever produces it — dead state or unwritten requirement.</td><td>3</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+</main>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      background: '#0d1117',
+      primaryColor: '#1f2937',
+      primaryTextColor: '#e6edf3',
+      primaryBorderColor: '#58a6ff',
+      lineColor: '#8b949e',
+      secondaryColor: '#161b22',
+      tertiaryColor: '#0d1117',
+      noteBkgColor: '#30363d',
+      noteTextColor: '#e6edf3',
+      noteBorderColor: '#58a6ff'
+    },
+    sequence: { useMaxWidth: true, wrap: true, boxMargin: 8 },
+    state: { useMaxWidth: true }
+  });
+</script>
+
+</body>
+</html>
