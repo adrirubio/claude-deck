@@ -4,6 +4,8 @@
 **Date:** 2026-07-02
 **Scope:** Give Claude Deck an optional "brain" that watches labeled GitHub issues on one or more repos per Agent Team, routes each issue to the team's subject-matter-expert slot (mimicking how a real team triages — the specialist looks at it first, not the lead), has that slot check in with the team leader before starting work, and closes the loop through one of **two distinct pipelines depending on issue type**: a code pipeline (local checks → CI-gated PR → merge per policy) for defects/features, and a design pipeline (PR opens directly for human review, never CI-gated, never auto-merged) for brainstorming/spec issues whose output is documentation. Zero human interaction beyond labeling issues and (for code issues, optionally) merging.
 
+**Related docs:** UI mockups for the configuration surface this spec defines live in `2026-07-03-autonomous-github-dispatch-ui-mockups.html`; pressure-test findings and fixes in `2026-07-03-autonomous-github-dispatch-workflows.md` and `2026-07-03-autonomous-github-dispatch-use-cases.html`. **`2026-07-04-conversational-team-and-autonomy-setup-design.md`** adds a second, conversational way to fill in the same `TeamGithubScope`/`AgentTeamSlot` schema this spec defines (and, ahead of it, to propose the `AgentTeamPreset` roster itself when one doesn't exist yet) — it depends on this spec's schema and conventions but changes nothing here; the form UI in the mockups above remains the source of truth and fallback path either way.
+
 ---
 
 ## 1. Problem & Motivation
