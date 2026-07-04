@@ -496,7 +496,9 @@ class AgentTeamService:
         results: list[AgentTeamLaunchResultItem] = []
         for item in plan.items:
             slot = slot_by_id[item.slot_id]
-            result_item = await self._execute_plan_item(db, launch.id, preset, slot, item)
+            result_item = await self._execute_plan_item(
+                db, launch.id, preset, slot, item, request.repo_path_override
+            )
             results.append(result_item)
 
         failed = sum(1 for item in results if item.status == "failed")
@@ -523,6 +525,7 @@ class AgentTeamService:
         preset: AgentTeamPreset,
         slot: AgentTeamSlot,
         plan_item: AgentTeamLaunchPlanItem,
+        repo_path_override: str | None = None,
     ) -> AgentTeamLaunchResultItem:
         if plan_item.action == "reuse":
             agent_mail_member_id = await self._attach_team_context_to_existing_session(
@@ -577,7 +580,9 @@ class AgentTeamService:
             return result
 
         try:
-            options = self._spawn_options_for_slot(slot, self._bootstrap_prompt(preset, slot))
+            options = self._spawn_options_for_slot(
+                slot, self._bootstrap_prompt(preset, slot), repo_path_override
+            )
             spawned = spawn_session(
                 slot.provider,
                 options,
@@ -596,7 +601,7 @@ class AgentTeamService:
                 action="spawn",
                 status="pending_registration",
                 provider=slot.provider,
-                repo_path=slot.repo_path,
+                repo_path=repo_path_override or slot.repo_path,
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
                 message="Session spawned; waiting for Agent Mail registration",
@@ -609,7 +614,7 @@ class AgentTeamService:
                 action="spawn",
                 status="failed",
                 provider=slot.provider,
-                repo_path=slot.repo_path,
+                repo_path=repo_path_override or slot.repo_path,
                 error=str(exc),
                 warnings=plan_item.warnings,
             )
@@ -1034,7 +1039,9 @@ class AgentTeamService:
         except Exception as exc:
             return str(exc)
 
-    def _spawn_options_for_slot(self, slot: AgentTeamSlot, prompt: str | None) -> SpawnCommandOptions:
+    def _spawn_options_for_slot(
+        self, slot: AgentTeamSlot, prompt: str | None, repo_path_override: str | None = None
+    ) -> SpawnCommandOptions:
         raw_options = dict(slot.launch_options or {})
         raw_prompt = self._clean_optional(raw_options.pop("prompt", None))
         if prompt and raw_prompt:
@@ -1043,7 +1050,7 @@ class AgentTeamService:
             prompt = raw_prompt
 
         values: dict[str, Any] = {
-            "directory": slot.repo_path,
+            "directory": repo_path_override or slot.repo_path,
             "mode": slot.launch_mode or "plain",
             "prompt": prompt,
         }

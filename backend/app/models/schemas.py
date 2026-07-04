@@ -2178,6 +2178,7 @@ class AgentTeamLaunchRequest(BaseModel):
     include_disabled: bool = False
     confirm_plan_hash: Optional[str] = None
     skip_plan_confirmation: bool = False
+    repo_path_override: Optional[str] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):
