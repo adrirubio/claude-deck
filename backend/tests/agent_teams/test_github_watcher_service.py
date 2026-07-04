@@ -9,7 +9,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
 from app.database import Base
-from app.models.database import AgentTeamPreset, GithubWorkItem, TeamGithubScope
+from app.models.database import (
+    AgentTeamPreset,
+    AgentTeamSlot,
+    GithubWorkItem,
+    MailMessage,
+    MailTeamMember,
+    TeamGithubScope,
+)
 from app.services.github_client import GithubClient
 from app.services.github_watcher_service import github_watcher_service
 
@@ -223,6 +230,54 @@ async def test_active_item_escalates_when_label_removed(db):
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "dispatch_label_removed"
+
+
+@pytest.mark.asyncio
+async def test_label_removed_sends_broadcast_and_owner_direct_message(db):
+    scope = await _make_scope(db)
+    slot = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=0,
+        display_name="Owner",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(slot)
+    await db.flush()
+    member = MailTeamMember(
+        identity_key="slot:owner",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Owner",
+        participant_kind="team_slot",
+        team_preset_id=scope.preset_id,
+        team_slot_id=slot.id,
+    )
+    db.add(member)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=9,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 1),
+        dispatch_status="dispatched",
+        owner_slot_id=slot.id,
+    )
+    db.add(item)
+    await db.commit()
+    client = _FakeClient(labeled=[], by_number={9: _issue(9, ["some-other-label"])})
+
+    await github_watcher_service.poll_scope(db, scope, client)
+
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert any(message.kind == "broadcast" for message in messages)
+    assert any(
+        message.kind == "message" and message.recipient_member_id == member.id
+        for message in messages
+    )
 
 
 @pytest.mark.asyncio

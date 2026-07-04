@@ -37,6 +37,7 @@ class Settings(BaseSettings):
 
     # GitHub integration (autonomous dispatch)
     github_token: str = ""
+    github_dispatch_interval_seconds: int = 60
 
     # Server settings
     host: str = "0.0.0.0"
