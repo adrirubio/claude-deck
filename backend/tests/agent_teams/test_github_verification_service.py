@@ -184,7 +184,6 @@ async def test_verify_green_code_pr_marks_ready_for_review(db):
     assert item.dispatch_status == "ready_for_review"
     assert client.ready_calls == 1
     assert client.pull_calls == 2
-    assert client.ready_calls == 1
 
 
 @pytest.mark.asyncio
@@ -231,6 +230,8 @@ async def test_combined_status_success_verifies_without_check_runs(db):
 
     await db.refresh(item)
     assert item.dispatch_status == "ready_for_review"
+    assert client.ready_calls == 1
+    assert client.pull_calls == 2
 
 
 @pytest.mark.asyncio
