@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     bridge_attachment_retention_days: int = 7
     bridge_attachment_max_per_session_per_day: int = 100
 
+    # GitHub integration (autonomous dispatch)
+    github_token: str = ""
+
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
