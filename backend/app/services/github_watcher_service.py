@@ -86,11 +86,18 @@ class GithubWatcherService:
         ).scalars().all()
         if not active:
             return
-        current = await client.get_open_issues_by_number(
-            scope.repo_owner, scope.repo_name, [item.issue_number for item in active]
+        current = await client.get_issues_by_number(
+            scope.repo_owner,
+            scope.repo_name,
+            [item.issue_number for item in active],
         )
         for item in active:
             issue = current.get(item.issue_number)
+            if issue is not None and issue.get("state") == "closed":
+                item.dispatch_status = "completed"
+                item.escalation_reason = None
+                item.updated_at = datetime.utcnow()
+                continue
             still_labeled = issue is not None and any(
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
             )

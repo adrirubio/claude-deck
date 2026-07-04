@@ -72,6 +72,7 @@ async def test_github_work_item_defaults(db):
     assert item.approval_round_count == 0
     assert item.retry_count == 0
     assert item.handoff_state is None
+    assert item.status_note is None
 
 
 @pytest.mark.asyncio
@@ -114,12 +115,15 @@ async def test_compat_migration_adds_new_columns_to_legacy_db():
             "ui_color VARCHAR, launch_mode VARCHAR NOT NULL, launch_options JSON, "
             "enabled BOOLEAN NOT NULL, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL)"
         ))
+        await conn.execute(text("CREATE TABLE github_work_items (id INTEGER PRIMARY KEY AUTOINCREMENT)"))
     async with engine.connect() as conn:
         await _run_sqlite_compat_migrations(conn)
     async with engine.connect() as conn:
         preset_cols = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_presets)"))).fetchall()}
         slot_cols = {row[1] for row in (await conn.execute(text("PRAGMA table_info(agent_team_slots)"))).fetchall()}
+        work_item_cols = {row[1] for row in (await conn.execute(text("PRAGMA table_info(github_work_items)"))).fetchall()}
     assert "autonomy_enabled" in preset_cols
     assert "area_labels" in slot_cols
     assert "expertise" in slot_cols
+    assert "status_note" in work_item_cols
     await engine.dispose()

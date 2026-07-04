@@ -43,6 +43,16 @@ class GithubClient:
     async def get_open_issues_by_number(
         self, owner: str, repo: str, numbers: list[int]
     ) -> dict[int, dict]:
+        issues = await self.get_issues_by_number(owner, repo, numbers)
+        return {
+            number: issue
+            for number, issue in issues.items()
+            if issue.get("state") == "open" and "pull_request" not in issue
+        }
+
+    async def get_issues_by_number(
+        self, owner: str, repo: str, numbers: list[int]
+    ) -> dict[int, dict]:
         if not numbers:
             return {}
         client = self._client()
@@ -57,7 +67,7 @@ class GithubClient:
                     continue
                 resp.raise_for_status()
                 issue = resp.json()
-                if issue.get("state") == "open" and "pull_request" not in issue:
+                if "pull_request" not in issue:
                     result[number] = issue
             return result
         finally:

@@ -75,6 +75,13 @@ class _FakeClient:
         return list(self._labeled)
 
     async def get_open_issues_by_number(self, owner, repo, numbers):
+        return {
+            number: self._by_number[number]
+            for number in numbers
+            if number in self._by_number and self._by_number[number].get("state", "open") == "open"
+        }
+
+    async def get_issues_by_number(self, owner, repo, numbers):
         return {number: self._by_number[number] for number in numbers if number in self._by_number}
 
     async def list_repo_labels(self, owner, repo):
@@ -100,6 +107,7 @@ def _issue(number, labels, updated="2026-07-04T00:00:00Z"):
         "title": f"issue {number}",
         "html_url": f"https://github.com/o/r/issues/{number}",
         "updated_at": updated,
+        "state": "open",
         "labels": [{"name": name} for name in labels],
     }
 
@@ -183,3 +191,25 @@ async def test_active_item_escalates_when_label_removed(db):
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "dispatch_label_removed"
+
+
+@pytest.mark.asyncio
+async def test_active_item_closed_does_not_escalate_as_label_removed(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=8,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 1),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+    closed = _issue(8, ["some-other-label"])
+    closed["state"] = "closed"
+    client = _FakeClient(labeled=[], by_number={8: closed})
+    await github_watcher_service.poll_scope(db, scope, client)
+    await db.refresh(item)
+    assert item.dispatch_status == "completed"
+    assert item.escalation_reason is None
