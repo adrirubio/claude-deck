@@ -154,5 +154,50 @@ class GithubDispatchService:
         item.updated_at = datetime.utcnow()
         await db.commit()
 
+    async def monitor_dispatched(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+        wake_state_by_slot: dict[int, str] | None = None,
+    ) -> None:
+        enabled = sorted(
+            [slot for slot in preset_slots if slot.enabled],
+            key=lambda slot: slot.position,
+        )
+        if not enabled:
+            return
+        leader = enabled[0]
+
+        if wake_state_by_slot is None:
+            from app.services.agent_mail_service import agent_mail_service
+
+            members = await agent_mail_service.list_team(db)
+            wake_state_by_slot = {
+                member.team_slot_id: member.wake_state
+                for member in members
+                if member.team_slot_id is not None
+            }
+        leader_wake = wake_state_by_slot.get(leader.id, "offline")
+
+        dispatched = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "dispatched",
+                    GithubWorkItem.pr_number.is_(None),
+                )
+            )
+        ).scalars().all()
+
+        for item in dispatched:
+            if leader_wake == "offline":
+                item.dispatch_status = "escalated"
+                item.escalation_reason = "leader_offline"
+                item.updated_at = datetime.utcnow()
+            # Leader reachable but idle nudge/escalation is intentionally deferred;
+            # it needs agent-mail last-activity plumbing beyond Phase A's backend core.
+        await db.commit()
+
 
 github_dispatch_service = GithubDispatchService()
