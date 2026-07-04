@@ -381,10 +381,27 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             text("ALTER TABLE agent_team_presets ADD COLUMN autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL")
         )
 
+    result = await conn.execute(text("PRAGMA table_info(team_github_scopes)"))
+    scope_columns = {row[1] for row in result.fetchall()}
+    if scope_columns and "max_concurrent_dispatched" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_concurrent_dispatched INTEGER DEFAULT 3 NOT NULL")
+        )
+    if scope_columns and "max_verification_retries" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_verification_retries INTEGER DEFAULT 2 NOT NULL")
+        )
+    if scope_columns and "max_auto_merges_per_day" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_auto_merges_per_day INTEGER DEFAULT 5 NOT NULL")
+        )
+
     result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
     work_item_columns = {row[1] for row in result.fetchall()}
     if work_item_columns and "status_note" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
+    if work_item_columns and "auto_merged_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN auto_merged_at DATETIME"))
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}

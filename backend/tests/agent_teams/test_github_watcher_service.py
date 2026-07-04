@@ -55,6 +55,38 @@ async def test_list_issues_with_label_builds_request():
     assert issues[0]["number"] == 42
 
 
+@pytest.mark.asyncio
+async def test_github_client_pr_check_and_merge_requests():
+    def handler(request):
+        if request.url.path == "/repos/o/r/pulls/5" and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={"number": 5, "node_id": "PR_node", "head": {"sha": "abc"}, "merged": False},
+            )
+        if request.url.path == "/repos/o/r/commits/abc/check-runs":
+            return httpx.Response(200, json={"check_runs": [{"name": "ci", "conclusion": "success"}]})
+        if request.url.path == "/graphql":
+            return httpx.Response(200, json={"data": {"markPullRequestReadyForReview": {"pullRequest": {"id": "PR_node"}}}})
+        if request.url.path == "/repos/o/r/pulls/5/merge":
+            return httpx.Response(200, json={"merged": True})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    transport = _RecordingTransport(handler)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="https://api.github.com"
+    ) as http:
+        client = GithubClient(http=http, token="tok")
+        pull = await client.get_pull("o", "r", 5)
+        checks = await client.list_check_runs_for_ref("o", "r", "abc")
+        ready = await client.mark_pull_ready_for_review("PR_node")
+        merged = await client.merge_pull("o", "r", 5)
+
+    assert pull["head"]["sha"] == "abc"
+    assert checks[0]["name"] == "ci"
+    assert ready["data"]["markPullRequestReadyForReview"]["pullRequest"]["id"] == "PR_node"
+    assert merged["merged"] is True
+
+
 @pytest_asyncio.fixture
 async def db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
