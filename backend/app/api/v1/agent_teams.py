@@ -1,11 +1,14 @@
 """Agent Team Preset endpoints."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.database import GithubWorkItem, TeamGithubScope
 from app.models.schemas import (
     AgentTeamCreateFromBridgeRequest,
     AgentTeamCreateFromMailRequest,
@@ -19,7 +22,9 @@ from app.models.schemas import (
     AgentTeamSlotCreate,
     AgentTeamSlotReorderRequest,
     AgentTeamSlotUpdate,
+    DispatchStatusReport,
 )
+from app.services.github_dispatch_service import github_dispatch_service
 from app.services.agent_team_service import PlanConflictError, agent_team_service
 from app.services.providers.base import ProviderLaunchError
 
@@ -33,6 +38,51 @@ def _bad_request(exc: ValueError) -> HTTPException:
             detail={"message": str(exc), "block_code": exc.block_code},
         )
     return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/dispatch-status")
+async def report_dispatch_status(
+    report: DispatchStatusReport,
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, report.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work item not found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+
+    if report.status in ("triaging", "revision_requested"):
+        await github_dispatch_service.record_approval_round(db, item, scope)
+    elif report.status == "handoff_initiated":
+        if report.reassign_to_slot_id is None:
+            raise HTTPException(status_code=400, detail="reassign_to_slot_id required")
+        await github_dispatch_service.initiate_handoff(db, item, report.reassign_to_slot_id)
+    elif report.status == "handoff_accepted":
+        if report.reporting_slot_id is None:
+            raise HTTPException(status_code=400, detail="reporting_slot_id required")
+        try:
+            await github_dispatch_service.accept_handoff(db, item, report.reporting_slot_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    elif report.status == "blocked":
+        item.dispatch_status = "escalated"
+        item.escalation_reason = "agent_blocked"
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+    elif report.status in ("pr_opened", "in_progress"):
+        if report.pr_number is not None:
+            item.pr_number = report.pr_number
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
+
+    await db.refresh(item)
+    return {
+        "work_item_id": item.id,
+        "dispatch_status": item.dispatch_status,
+        "escalation_reason": item.escalation_reason,
+        "handoff_state": item.handoff_state,
+    }
 
 
 @router.get("/presets", response_model=AgentTeamPresetListResponse)
