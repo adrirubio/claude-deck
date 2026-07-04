@@ -365,3 +365,55 @@ async def test_two_phase_handoff(db):
     assert item.handoff_state == "accepted"
     assert item.handoff_target_slot_id is None
     assert item.routing_method == "reassigned"
+
+
+@pytest.mark.asyncio
+async def test_monitor_escalates_when_leader_offline(db):
+    preset, slots, scope = await _team(db)
+    architect = slots[0]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=50,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={architect.id: "offline", slots[1].id: "wakeable"},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "leader_offline"
+
+
+@pytest.mark.asyncio
+async def test_monitor_leaves_item_when_leader_reachable(db):
+    preset, slots, scope = await _team(db)
+    architect = slots[0]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=51,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={architect.id: "wakeable", slots[1].id: "wakeable"},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
