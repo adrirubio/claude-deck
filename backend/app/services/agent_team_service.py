@@ -110,6 +110,7 @@ class AgentTeamService:
         preset_id: int,
         name: str | None = None,
         description: str | None = None,
+        autonomy_enabled: bool | None = None,
     ) -> AgentTeamPresetResponse:
         preset = await self._require_preset(db, preset_id)
         if name is not None:
@@ -118,6 +119,8 @@ class AgentTeamService:
             preset.name = cleaned_name
         if description is not None:
             preset.description = self._clean_optional(description)
+        if autonomy_enabled is not None:
+            preset.autonomy_enabled = autonomy_enabled
         preset.updated_at = datetime.utcnow()
         await db.commit()
         await db.refresh(preset)
@@ -175,9 +178,12 @@ class AgentTeamService:
                     repo_name=slot.repo_name,
                     role=slot.role,
                     charter=slot.charter,
+                    ui_color=slot.ui_color,
                     bootstrap_prompt=slot.bootstrap_prompt,
                     launch_mode=slot.launch_mode,
                     launch_options=slot.launch_options or {},
+                    area_labels=slot.area_labels,
+                    expertise=slot.expertise,
                     enabled=slot.enabled,
                 )
             )
@@ -332,6 +338,10 @@ class AgentTeamService:
             updates["ui_color"] = self._clean_ui_color(request.ui_color)
         if request.bootstrap_prompt is not None:
             updates["bootstrap_prompt"] = self._clean_optional(request.bootstrap_prompt)
+        if "area_labels" in request.model_fields_set:
+            updates["area_labels"] = self._clean_area_labels(request.area_labels)
+        if request.expertise is not None:
+            updates["expertise"] = self._clean_optional(request.expertise)
         if request.launch_mode is not None:
             updates["launch_mode"] = request.launch_mode.strip() or "plain"
         if request.launch_options is not None:
@@ -1122,6 +1132,7 @@ class AgentTeamService:
             created_by=preset.created_by,
             created_at=preset.created_at,
             updated_at=preset.updated_at,
+            autonomy_enabled=preset.autonomy_enabled,
             slots=[self._slot_response(slot) for slot in slots],
         )
 
@@ -1141,6 +1152,8 @@ class AgentTeamService:
             bootstrap_prompt=slot.bootstrap_prompt,
             launch_mode=slot.launch_mode,
             launch_options=slot.launch_options or {},
+            area_labels=slot.area_labels,
+            expertise=slot.expertise,
             warnings=self._slot_launch_warnings(slot.provider, slot.launch_options or {}),
             enabled=slot.enabled,
             created_at=slot.created_at,
@@ -1226,6 +1239,8 @@ class AgentTeamService:
             "bootstrap_prompt": self._clean_optional(slot.bootstrap_prompt),
             "launch_mode": launch_mode,
             "launch_options": launch_options,
+            "area_labels": self._clean_area_labels(slot.area_labels),
+            "expertise": self._clean_optional(slot.expertise),
             "enabled": slot.enabled,
         }
 
@@ -1388,6 +1403,19 @@ class AgentTeamService:
             allowed = ", ".join(sorted(_TEAM_SLOT_UI_COLORS))
             raise ValueError(f"Unsupported ui_color: {color}. Expected one of: {allowed}")
         return color
+
+    def _clean_area_labels(self, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        labels: list[str] = []
+        seen: set[str] = set()
+        for raw_label in value:
+            label = self._clean_optional(raw_label)
+            if label is None or label in seen:
+                continue
+            labels.append(label)
+            seen.add(label)
+        return labels or None
 
 
 agent_team_service = AgentTeamService()

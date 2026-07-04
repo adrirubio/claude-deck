@@ -54,6 +54,8 @@ export interface AgentTeamSlot {
   bootstrap_prompt?: string | null
   launch_mode: string
   launch_options: SlotLaunchOptions
+  area_labels?: string[] | null
+  expertise?: string | null
   warnings?: string[]
   enabled: boolean
   created_at: string
@@ -67,6 +69,7 @@ export interface AgentTeamPreset {
   created_by?: string | null
   created_at: string
   updated_at: string
+  autonomy_enabled: boolean
   slots: AgentTeamSlot[]
 }
 
@@ -84,6 +87,8 @@ export interface AgentTeamSlotInput {
   bootstrap_prompt?: string | null
   launch_mode?: string
   launch_options?: SlotLaunchOptions
+  area_labels?: string[] | null
+  expertise?: string | null
   enabled?: boolean
   position?: number | null
 }
@@ -98,6 +103,8 @@ export interface AgentTeamSlotUpdate {
   bootstrap_prompt?: string | null
   launch_mode?: string
   launch_options?: SlotLaunchOptions
+  area_labels?: string[] | null
+  expertise?: string | null
   enabled?: boolean
   position?: number
 }
@@ -112,6 +119,7 @@ export interface AgentTeamPresetInput {
 export interface AgentTeamPresetUpdate {
   name?: string
   description?: string | null
+  autonomy_enabled?: boolean
 }
 
 export interface AgentTeamCreateFromMailRequest {
@@ -133,6 +141,91 @@ export interface AgentTeamLaunchRequest {
   include_disabled?: boolean
   confirm_plan_hash?: string | null
   skip_plan_confirmation?: boolean
+  repo_path_override?: string | null
+}
+
+export type TeamGithubMergePolicy = 'human' | 'auto'
+
+export interface TeamGithubScope {
+  id: number
+  preset_id: number
+  repo_owner: string
+  repo_name: string
+  repo_path: string
+  dispatch_label: string
+  design_label: string
+  merge_policy: TeamGithubMergePolicy | string
+  max_approval_rounds: number
+  max_concurrent_dispatched: number
+  max_verification_retries: number
+  max_auto_merges_per_day: number
+  enabled: boolean
+  last_polled_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TeamGithubScopeInput {
+  repo_owner: string
+  repo_name: string
+  repo_path: string
+  dispatch_label?: string
+  design_label?: string
+  merge_policy?: TeamGithubMergePolicy
+  max_approval_rounds?: number
+  max_concurrent_dispatched?: number
+  max_verification_retries?: number
+  max_auto_merges_per_day?: number
+  enabled?: boolean
+}
+
+export interface TeamGithubScopeUpdate {
+  repo_owner?: string
+  repo_name?: string
+  repo_path?: string
+  dispatch_label?: string
+  design_label?: string
+  merge_policy?: TeamGithubMergePolicy
+  max_approval_rounds?: number
+  max_concurrent_dispatched?: number
+  max_verification_retries?: number
+  max_auto_merges_per_day?: number
+  enabled?: boolean
+}
+
+export interface TeamGithubScopeListResponse {
+  scopes: TeamGithubScope[]
+}
+
+export interface GithubWorkItem {
+  id: number
+  scope_id: number
+  repo_owner: string
+  repo_name: string
+  issue_number: number
+  issue_title: string
+  issue_url: string
+  github_updated_at: string
+  issue_type: 'code' | 'design' | string
+  dispatch_status: string
+  pending_reason?: string | null
+  launch_id?: number | null
+  owner_slot_id?: number | null
+  routing_method?: string | null
+  handoff_state?: string | null
+  handoff_target_slot_id?: number | null
+  approval_round_count: number
+  pr_number?: number | null
+  retry_count: number
+  escalation_reason?: string | null
+  status_note?: string | null
+  auto_merged_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface GithubWorkItemListResponse {
+  items: GithubWorkItem[]
 }
 
 export interface AgentTeamLaunchPlanItem {
