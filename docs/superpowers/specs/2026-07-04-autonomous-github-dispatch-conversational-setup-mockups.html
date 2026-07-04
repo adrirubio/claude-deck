@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Conversational Autonomy Setup — Mockups</title>
+<style>
+  :root {
+    --background: #0f0f0f;
+    --foreground: #e5e5e5;
+    --card: #171717;
+    --primary: #22c55e;
+    --primary-foreground: #0f0f0f;
+    --secondary: #1f1f1f;
+    --secondary-foreground: #d9d9d9;
+    --muted: #242424;
+    --muted-foreground: #8c8c8c;
+    --destructive: #e5484d;
+    --warning: #f5c542;
+    --warning-foreground: #0f0f0f;
+    --info: #4db8e8;
+    --border: #2e2e2e;
+    --radius: 8px;
+    --docs-bg: #0a0a0a;
+    --docs-panel: #131313;
+    --docs-accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--docs-bg);
+    color: var(--foreground);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    line-height: 1.5;
+  }
+  header {
+    padding: 32px 40px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--docs-panel);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; color: #fff; }
+  header p { margin: 0 0 4px; color: var(--muted-foreground); font-size: 14px; max-width: 980px; }
+  header code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; color: #d9d9d9; }
+
+  nav {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 14px 40px; background: var(--docs-panel); border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 20;
+  }
+  nav a {
+    color: var(--foreground); text-decoration: none; font-size: 12.5px;
+    padding: 5px 11px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--docs-bg); white-space: nowrap;
+  }
+  nav a:hover { border-color: var(--docs-accent); color: var(--docs-accent); }
+
+  main { padding: 26px 40px 70px; max-width: 1100px; margin: 0 auto; }
+
+  section.screen { margin-bottom: 42px; }
+  section.screen .screen-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+  section.screen h2 { font-size: 16px; margin: 0; color: #fff; }
+  section.screen .screen-note { font-size: 13px; color: var(--muted-foreground); margin: 0 0 14px; max-width: 900px; }
+  .stage-tag {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+    background: rgba(88,166,255,0.14); color: var(--docs-accent); border: 1px solid rgba(88,166,255,0.35);
+  }
+
+  .app-frame { background: var(--background); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
+  .app-titlebar { background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 18px; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted-foreground); }
+  .app-titlebar .dots { display: flex; gap: 6px; }
+  .app-titlebar .dot { width: 10px; height: 10px; border-radius: 50%; background: #3a3a3a; }
+  .app-body { padding: 22px; color: var(--foreground); font-size: 14px; }
+
+  /* Progress rail across the top of the conversation */
+  .rail { display: flex; align-items: center; gap: 4px; margin-bottom: 20px; }
+  .rail-step {
+    flex: 1; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-foreground);
+  }
+  .rail-dot { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border); background: var(--secondary); display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+  .rail-step.done .rail-dot { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
+  .rail-step.current .rail-dot { border-color: var(--primary); color: var(--primary); }
+  .rail-step.current { color: var(--foreground); font-weight: 600; }
+  .rail-line { flex-shrink: 0; height: 1px; width: 20px; background: var(--border); }
+  .rail-step.done + .rail-line { background: var(--primary); }
+
+  /* Chat transcript */
+  .msg { display: flex; gap: 10px; margin-bottom: 16px; align-items: flex-start; }
+  .msg.human { flex-direction: row-reverse; }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+  }
+  .avatar.brain { background: rgba(34,197,94,0.18); color: var(--primary); border: 1px solid rgba(34,197,94,0.4); }
+  .avatar.human { background: var(--muted); color: var(--foreground); border: 1px solid var(--border); }
+  .bubble { max-width: 640px; border-radius: 10px; padding: 10px 14px; font-size: 13.5px; }
+  .bubble.brain { background: var(--card); border: 1px solid var(--border); border-top-left-radius: 3px; }
+  .bubble.human { background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.35); border-top-right-radius: 3px; color: var(--foreground); }
+  .bubble p { margin: 0 0 8px; }
+  .bubble p:last-child { margin-bottom: 0; }
+  .bubble code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+  .bubble .infer-tag {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600;
+    padding: 1px 7px; border-radius: 8px; background: rgba(77,184,232,0.14); color: var(--info); border: 1px solid rgba(77,184,232,0.35);
+    margin-bottom: 6px;
+  }
+
+  /* Inline widgets inside chat */
+  .widget { margin-top: 8px; }
+  .widget-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .choice-btn {
+    font-size: 13px; padding: 6px 13px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--secondary); color: var(--secondary-foreground); cursor: default;
+  }
+  .choice-btn.selected { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); font-weight: 600; }
+  .choice-btn .sub { display: block; font-size: 10.5px; opacity: 0.75; font-weight: 400; margin-top: 1px; }
+
+  .chip-input {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    background: var(--secondary); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; margin-top: 6px;
+  }
+  .chip { background: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+  .chip.suggested { border-color: rgba(77,184,232,0.5); }
+  .chip .x { color: var(--muted-foreground); }
+  .chip-input .add-chip { font-size: 12px; color: var(--muted-foreground); }
+
+  .text-field { margin-top: 6px; background: var(--secondary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+
+  .slot-card {
+    background: var(--secondary); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px;
+  }
+  .slot-card .slot-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .slot-card .slot-name { font-weight: 600; font-size: 13px; }
+  .slot-card .field-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+  .slot-card label { font-size: 11px; color: var(--muted-foreground); min-width: 68px; }
+
+  .app-badge {
+    display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 2px 9px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--secondary); color: var(--secondary-foreground);
+  }
+  .app-badge.new { background: rgba(34,197,94,0.15); color: var(--primary); border-color: rgba(34,197,94,0.5); }
+  .app-badge.warning { background: var(--warning); color: var(--warning-foreground); border-color: var(--warning); }
+  .app-badge.info { background: var(--info); color: #fff; border-color: var(--info); }
+
+  .app-btn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500;
+    padding: 7px 14px; border-radius: 6px; cursor: default; border: 1px solid var(--border);
+    background: var(--secondary); color: var(--secondary-foreground);
+  }
+  .app-btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+  .app-btn.ghost { background: transparent; border-color: transparent; color: var(--muted-foreground); }
+
+  .composer {
+    display: flex; align-items: center; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
+  }
+  .composer .text-field { flex: 1; margin-top: 0; color: var(--muted-foreground); }
+
+  .review-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-top: 6px;
+  }
+  .review-card .review-head { font-weight: 600; font-size: 13px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  table.review-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.review-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.review-table tr:last-child td { border-bottom: none; }
+  table.review-table td:first-child { color: var(--muted-foreground); white-space: nowrap; width: 160px; }
+  .diff-changed { color: var(--primary); font-weight: 600; }
+
+  .anno {
+    margin-top: 14px; padding: 14px 16px; background: var(--docs-panel);
+    border-left: 3px solid var(--docs-accent); border-radius: 6px; font-size: 13.5px; color: var(--foreground);
+  }
+  .anno ul { margin: 6px 0 0; padding-left: 20px; }
+  .anno li { margin-bottom: 6px; }
+  .anno code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Conversational Autonomy Setup — Guided Flow Mockups</h1>
+  <p>Follow-on from <code>2026-07-03-autonomous-github-dispatch-ui-mockups.html</code>. Explores an alternative, conversational entry point into the exact same <code>TeamGithubScope</code>/<code>AgentTeamSlot</code> configuration those form screens edit — the forms remain the source of truth and fallback path; this is a second way to arrive at the same data.</p>
+  <p>Decided going in: the interviewer <b>is</b> the same brain that later runs autonomous dispatch, in an interview mode rather than its dispatch loop. It inspects the team and target repo first and only asks what it can't infer. Answers are captured via inline widgets (buttons, chips, toggles), not free text, and nothing is written to the database until a final review/confirm step — mirroring the plan-hash confirmation pattern Deck already uses before launching a team.</p>
+</header>
+
+<nav>
+  <a href="#s1">1. Entry point</a>
+  <a href="#s2">2. Stage 1 — Repo</a>
+  <a href="#s3">3. Stage 2 — Labels &amp; policy</a>
+  <a href="#s4">4. Stage 3 — Slot routing</a>
+  <a href="#s5">5. Stage 4 — Review &amp; confirm</a>
+  <a href="#s6">6. Correction mid-flow</a>
+</nav>
+
+<main>
+
+  <section class="screen" id="s1">
+    <div class="screen-label"><h2>1. Entry point on the existing Autonomy tab</h2></div>
+    <p class="screen-note">One new button on the screen that already exists (Screen 2 of the prior mockup doc). Doesn't replace "+ Add repo" — sits next to it as a second way in.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Claude Deck — SnazzyEmail Core — Autonomy</div>
+      <div class="app-body">
+        <div style="font-weight:600; font-size:16px; margin-bottom:2px;">SnazzyEmail Core</div>
+        <div style="display:flex; gap:16px; font-size:13px; color:var(--muted-foreground); border-bottom:1px solid var(--border); margin-bottom:16px; padding-bottom:8px;">
+          <span>Slots</span><span style="color:var(--primary); font-weight:600;">Autonomy</span><span>Launches</span>
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px 18px;">
+          <div>
+            <div style="font-weight:600;">Autonomous GitHub dispatch</div>
+            <div style="font-size:12px; color:var(--muted-foreground); margin-top:2px;">This team isn't watching any repos yet.</div>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <span class="app-btn">+ Add repo</span>
+            <span class="app-btn primary">Set up with the brain</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="anno">"Set up with the brain" is deliberately named after the concept, not generically labeled "AI setup" or "wizard" — reinforcing that this is the same component the team will later hand real GitHub issues to, not a separate onboarding gimmick.</div>
+  </section>
+
+  <section class="screen" id="s2">
+    <div class="screen-label"><h2>2. Stage 1 — Repo &amp; scope basics</h2><span class="stage-tag">Adaptive: repo inspection</span></div>
+    <p class="screen-note">Opens as a full chat panel. The brain has already read the team's existing slots (roles, charters) before saying anything, so its first message isn't a blank "what do you want to do" — it opens with what it already knows.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step current"><span class="rail-dot">1</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">2</span> Labels &amp; policy</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>I looked at <b>SnazzyEmail Core</b> — it has 3 slots (Architect, Backend SME, Frontend SME) but isn't watching any GitHub repos yet. Which repo should this team pick up issues from?</p>
+            <div class="widget">
+              <div class="text-field" style="color:var(--foreground);">adrirubio/snazzyemail<span style="color:var(--muted-foreground);">-infra</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human">
+          <div class="avatar human">You</div>
+          <div class="bubble human"><p>adrirubio/snazzyemail-infra</p></div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <span class="infer-tag">checked the repo</span>
+            <p>Found it. It's a private repo with branch protection on <code>main</code> (1 required review) and no path-filtered Actions — so CI will actually run on any PR this team opens. I couldn't find a local checkout on this machine for it yet.</p>
+            <p>What's the local path where this team's sessions should work?</p>
+            <div class="widget">
+              <div class="text-field" style="color:var(--foreground);">/home/juan/work/repos/adrirubio/snazzyemail-infra</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human">
+          <div class="avatar human">You</div>
+          <div class="bubble human"><p>/home/juan/work/repos/adrirubio/snazzyemail-infra</p></div>
+        </div>
+
+        <div class="composer">
+          <div class="text-field">Type a message…</div>
+          <span class="app-btn ghost">Skip to forms</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>What's actually happening behind "checked the repo":</b> a read-only GitHub API call (issues/branch-protection/Actions config) using the already-configured global <code>GITHUB_TOKEN</code> — the same credential the watcher uses later, never a new one. The branch-protection finding here isn't idle chatter — it's a direct setup for Stage 2's merge-policy question, where "1 required review" becomes a reason to recommend <code>merge_policy=human</code> rather than a generic default.
+    </div>
+  </section>
+
+  <section class="screen" id="s3">
+    <div class="screen-label"><h2>3. Stage 2 — Labels &amp; merge policy</h2><span class="stage-tag">Explains tradeoffs inline</span></div>
+    <p class="screen-note">This is the stage that most directly answers "not knowing what a field means" — the design-pipeline caveat that lived in fine print under a dropdown in the form mockup is now the actual reason the brain gives for its recommendation.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">2</span> Labels &amp; policy</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>Now, two labels. First — what should a human apply to a GitHub issue to tell this team "go work on this"? I'll default to <code>claude-deck-ready</code> unless you want something else.</p>
+            <div class="widget widget-row">
+              <span class="choice-btn selected">claude-deck-ready<span class="sub">default</span></span>
+              <span class="choice-btn">Use a different label…</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>that's fine</p></div></div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>And a second label for design/spec issues, so this team knows to write a doc instead of code — I'll use <code>claude-deck-design</code> unless you'd rather not have a design pipeline for this repo at all.</p>
+            <div class="widget widget-row">
+              <span class="choice-btn selected">claude-deck-design<span class="sub">default</span></span>
+              <span class="choice-btn">This repo is code-only, skip it</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>keep the design one</p></div></div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>Last one for this stage — who merges a green, verified PR? Since <code>main</code> has a required review turned on, I'd lean toward a human merging rather than auto-merge, since branch protection would just reject an auto-merge attempt anyway and this team would fall back to notifying you regardless. Auto-merge is available if you want to switch it later — it's a per-repo setting, not locked in now.</p>
+            <div class="widget widget-row">
+              <span class="choice-btn selected">Human reviews and merges<span class="sub">recommended — matches branch protection</span></span>
+              <span class="choice-btn">Auto-merge when checks pass</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>yeah keep it on human</p></div></div>
+
+        <div class="composer">
+          <div class="text-field">Type a message…</div>
+          <span class="app-btn ghost">Skip to forms</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Note what didn't get asked here:</b> <code>max_approval_rounds</code> (the V3 guardrail). It's a real field but not one most humans have an intuition for on first setup — the brain silently uses the default (3) and surfaces it only at the Stage 4 review, where it's editable but not gated behind a question nobody can answer confidently on the spot. This is a deliberate application of the "ask only what you can't infer or default sanely" principle — a sane default is itself a form of inference.
+    </div>
+  </section>
+
+  <section class="screen" id="s4">
+    <div class="screen-label"><h2>4. Stage 3 — Per-slot routing</h2><span class="stage-tag">Collapses cross-screen navigation</span></div>
+    <p class="screen-note">In the form UI, area labels/expertise are set per-slot, one slot editor at a time, from a different tab. Here all three slots appear in one place, one message — the "too many screens" load collapsing into one stage.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Labels &amp; policy</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <span class="infer-tag">checked the repo's labels</span>
+            <p>This repo already has <code>area:backend</code>, <code>area:frontend</code>, and <code>area:infra</code> labels in use on past issues. I matched two of your three slots to existing labels — take a look and adjust anything that's wrong:</p>
+
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Backend SME</span><span class="app-badge new">suggested match</span></div>
+              <div class="field-row"><label>Area labels</label>
+                <div class="chip-input" style="flex:1;">
+                  <span class="chip suggested">area:backend</span>
+                  <span class="add-chip">+ add</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Frontend SME</span><span class="app-badge new">suggested match</span></div>
+              <div class="field-row"><label>Area labels</label>
+                <div class="chip-input" style="flex:1;">
+                  <span class="chip suggested">area:frontend</span>
+                  <span class="add-chip">+ add</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Architect</span><span class="app-badge warning">no label match</span></div>
+              <div class="field-row"><label>Area labels</label>
+                <div class="chip-input" style="flex:1;"><span class="add-chip">+ add</span></div>
+              </div>
+              <p style="font-size:12px; margin:6px 0 0; color:var(--muted-foreground);"><code>area:infra</code> exists but I wasn't sure it's Architect's — infra work sometimes belongs to whoever's on call rather than the architect specifically. Want me to add it, or describe what Architect actually owns instead and I'll use that for issues with no matching label?</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>architect owns infra and deployment stuff too, add that label. and for anything else unlabeled just say "cross-cutting architecture and deploy decisions, coordinates the other two when work spans areas"</p></div></div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>Got it — added <code>area:infra</code> to Architect and saved that as their expertise description for the fallback classifier. That covers routing for all three slots.</p>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="text-field">Type a message…</div>
+          <span class="app-btn ghost">Skip to forms</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Why Architect's card looks different on purpose:</b> this is the UC10 case from the use-case doc — a slot with no clean label match risks silently getting zero routing benefit if a human just clicks through. Making the "no match" state visually distinct (warning badge, an explicit question instead of a blank field) is the conversational equivalent of the highlighted "New" card in the form mockup — same goal (make the gap noticeable), different mechanism (a question you have to answer instead of a card you might skip).
+    </div>
+  </section>
+
+  <section class="screen" id="s5">
+    <div class="screen-label"><h2>5. Stage 4 — Review &amp; confirm</h2><span class="stage-tag">Preview before commit</span></div>
+    <p class="screen-note">Nothing has been written to <code>TeamGithubScope</code>/<code>AgentTeamSlot</code> yet. This stage is the plan-hash-style checkpoint — a full summary, editable inline, with one confirm action that commits everything at once.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Labels &amp; policy</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Slot routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">4</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain" style="max-width:none;">
+            <p>Here's everything before I save it. Nothing is written yet — edit anything below, or confirm to commit it all.</p>
+
+            <div class="review-card">
+              <div class="review-head">adrirubio/snazzyemail-infra <span class="app-badge">new scope</span></div>
+              <table class="review-table">
+                <tr><td>Local checkout</td><td>/home/juan/work/repos/adrirubio/snazzyemail-infra</td></tr>
+                <tr><td>Dispatch label</td><td><code>claude-deck-ready</code></td></tr>
+                <tr><td>Design label</td><td><code>claude-deck-design</code></td></tr>
+                <tr><td>Merge policy</td><td>Human reviews and merges</td></tr>
+                <tr><td>Max approval rounds</td><td>3 <span style="color:var(--muted-foreground);">(default — edit)</span></td></tr>
+              </table>
+            </div>
+
+            <div class="review-card">
+              <div class="review-head">Slot routing <span class="app-badge new">3 slots updated</span></div>
+              <table class="review-table">
+                <tr><td>Backend SME</td><td>area_labels: <code>area:backend</code></td></tr>
+                <tr><td>Frontend SME</td><td>area_labels: <code>area:frontend</code></td></tr>
+                <tr><td>Architect</td><td>area_labels: <code>area:infra</code> · expertise: "cross-cutting architecture and deploy decisions, coordinates the other two when work spans areas"</td></tr>
+              </table>
+            </div>
+
+            <div class="widget-row" style="margin-top:14px;">
+              <span class="app-btn">✎ Edit in forms instead</span>
+              <span class="app-btn primary">✓ Confirm &amp; save</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>"Edit in forms instead" is not a dead-end escape hatch — it's the seam between the two configuration paths.</b> Clicking it doesn't discard the conversation; it opens the existing Add-scope/slot-editor screens pre-filled with exactly what's shown above, so a human who wants to double-check or tweak one number doesn't have to redo the conversation or trust a value they can't see edited live. This is the same "two paths, one schema" principle as the form mockups' API-vs-UI table (Screen 0 there) — the conversation is a third path into the same data, not a fourth kind of state.
+    </div>
+  </section>
+
+  <section class="screen" id="s6">
+    <div class="screen-label"><h2>6. Mid-flow correction</h2><span class="stage-tag">Handling a wrong inference</span></div>
+    <p class="screen-note">Adaptive inference will sometimes be wrong. This shows the recovery path — going back doesn't require restarting the whole conversation.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Labels &amp; policy</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+        </div>
+
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>wait, actually go back — I don't want auto-merge disabled everywhere, just on infra. app repo should stay auto for backend fixes</p></div></div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>That's a different repo than the one we're setting up right now (this session is scoped to <b>snazzyemail-infra</b>) — <code>merge_policy</code> is per watched repo, not team-wide, so the app repo's setting won't be touched by anything we do here regardless.</p>
+            <p>Want me to jump back to Stage 2 and change infra's merge policy instead, or is infra's "human reviews" setting actually what you meant to keep?</p>
+            <div class="widget widget-row">
+              <span class="choice-btn">← Back to Labels &amp; policy</span>
+              <span class="choice-btn selected">No, infra staying human-gated is correct — continue</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Why this reply matters more than it looks:</b> the brain doesn't just accept a correction — it checks whether the human's correction is actually about <i>this</i> conversation's scope before acting on it, and explains the schema fact (<code>merge_policy</code> is per-scope-entry, not team-wide) that resolves the apparent conflict. This mirrors a real pressure-test concern from the design spec: a conversational interface that silently reinterprets ambiguous instructions is worse than a form that forces the human to be in the right screen already. Jumping back a stage (rail step becomes "current" again) is a real navigation action, not a scripted reply — prior answers in later stages aren't discarded, only the stage being revisited is reopened for edits.
+    </div>
+  </section>
+
+</main>
+</body>
+</html>
