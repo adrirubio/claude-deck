@@ -131,6 +131,7 @@ class AgentTeamPreset(Base):
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class AgentTeamSlot(Base):
@@ -154,6 +155,8 @@ class AgentTeamSlot(Base):
     bootstrap_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
     launch_mode: Mapped[str] = mapped_column(String, default="plain", nullable=False)
     launch_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    area_labels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    expertise: Mapped[str | None] = mapped_column(String, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -198,6 +201,71 @@ class AgentTeamLaunchItem(Base):
     block_code: Mapped[str | None] = mapped_column(String, nullable=True)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TeamGithubScope(Base):
+    """A GitHub repo an Agent Team watches for labeled issues."""
+
+    __tablename__ = "team_github_scopes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    preset_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    repo_owner: Mapped[str] = mapped_column(String, nullable=False)
+    repo_name: Mapped[str] = mapped_column(String, nullable=False)
+    repo_path: Mapped[str] = mapped_column(String, nullable=False)
+    dispatch_label: Mapped[str] = mapped_column(String, default="claude-deck-ready", nullable=False)
+    design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
+    merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
+    max_approval_rounds: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("preset_id", "repo_owner", "repo_name", name="uix_preset_repo_scope"),
+    )
+
+
+class GithubWorkItem(Base):
+    """A labeled GitHub issue the dispatch pipeline is tracking."""
+
+    __tablename__ = "github_work_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    issue_title: Mapped[str] = mapped_column(String, nullable=False)
+    issue_url: Mapped[str] = mapped_column(String, nullable=False)
+    github_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    issue_type: Mapped[str] = mapped_column(String, default="code", nullable=False)
+    dispatch_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    pending_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    launch_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_launches.id", ondelete="SET NULL"), nullable=True
+    )
+    owner_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    routing_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    handoff_state: Mapped[str | None] = mapped_column(String, nullable=True)
+    handoff_target_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    approval_round_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("scope_id", "issue_number", name="uix_scope_issue"),
+    )
 
 
 class BridgeSessionAttachment(Base):
