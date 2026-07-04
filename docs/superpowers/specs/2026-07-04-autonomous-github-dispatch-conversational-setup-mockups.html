@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Conversational Autonomy Setup — Mockups</title>
+<title>Conversational Team + Autonomy Setup — Mockups</title>
 <style>
   :root {
     --background: #0f0f0f;
@@ -40,6 +40,10 @@
   header h1 { margin: 0 0 6px; font-size: 22px; color: #fff; }
   header p { margin: 0 0 4px; color: var(--muted-foreground); font-size: 14px; max-width: 980px; }
   header code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; color: #d9d9d9; }
+  header .revision-note {
+    display: inline-block; margin-top: 10px; font-size: 12.5px; padding: 6px 12px; border-radius: 6px;
+    background: rgba(245,197,66,0.12); border: 1px solid rgba(245,197,66,0.4); color: var(--warning);
+  }
 
   nav {
     display: flex; flex-wrap: wrap; gap: 8px;
@@ -63,6 +67,7 @@
     font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
     background: rgba(88,166,255,0.14); color: var(--docs-accent); border: 1px solid rgba(88,166,255,0.35);
   }
+  .stage-tag.new { background: rgba(34,197,94,0.15); color: var(--primary); border-color: rgba(34,197,94,0.5); }
 
   .app-frame { background: var(--background); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
   .app-titlebar { background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 18px; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted-foreground); }
@@ -70,16 +75,18 @@
   .app-titlebar .dot { width: 10px; height: 10px; border-radius: 50%; background: #3a3a3a; }
   .app-body { padding: 22px; color: var(--foreground); font-size: 14px; }
 
-  /* Progress rail across the top of the conversation */
-  .rail { display: flex; align-items: center; gap: 4px; margin-bottom: 20px; }
+  /* Progress rail across the top of the conversation -- now 5 stages */
+  .rail { display: flex; align-items: center; gap: 3px; margin-bottom: 20px; }
   .rail-step {
-    flex: 1; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-foreground);
+    display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted-foreground); white-space: nowrap;
   }
-  .rail-dot { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border); background: var(--secondary); display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+  .rail-dot { width: 19px; height: 19px; border-radius: 50%; border: 1px solid var(--border); background: var(--secondary); display: flex; align-items: center; justify-content: center; font-size: 10.5px; flex-shrink: 0; }
   .rail-step.done .rail-dot { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
   .rail-step.current .rail-dot { border-color: var(--primary); color: var(--primary); }
   .rail-step.current { color: var(--foreground); font-weight: 600; }
-  .rail-line { flex-shrink: 0; height: 1px; width: 20px; background: var(--border); }
+  .rail-step.skipped .rail-dot { border-style: dashed; color: var(--muted-foreground); }
+  .rail-step.skipped { color: var(--muted-foreground); text-decoration: line-through; opacity: 0.6; }
+  .rail-line { flex-shrink: 0; height: 1px; width: 14px; background: var(--border); }
   .rail-step.done + .rail-line { background: var(--primary); }
 
   /* Chat transcript */
@@ -91,7 +98,7 @@
   }
   .avatar.brain { background: rgba(34,197,94,0.18); color: var(--primary); border: 1px solid rgba(34,197,94,0.4); }
   .avatar.human { background: var(--muted); color: var(--foreground); border: 1px solid var(--border); }
-  .bubble { max-width: 640px; border-radius: 10px; padding: 10px 14px; font-size: 13.5px; }
+  .bubble { max-width: 660px; border-radius: 10px; padding: 10px 14px; font-size: 13.5px; }
   .bubble.brain { background: var(--card); border: 1px solid var(--border); border-top-left-radius: 3px; }
   .bubble.human { background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.35); border-top-right-radius: 3px; color: var(--foreground); }
   .bubble p { margin: 0 0 8px; }
@@ -127,10 +134,12 @@
   .slot-card {
     background: var(--secondary); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px;
   }
-  .slot-card .slot-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .slot-card .slot-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
   .slot-card .slot-name { font-weight: 600; font-size: 13px; }
-  .slot-card .field-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
-  .slot-card label { font-size: 11px; color: var(--muted-foreground); min-width: 68px; }
+  .slot-card .field-row { display: flex; gap: 8px; align-items: flex-start; margin-top: 4px; flex-wrap: wrap; }
+  .slot-card label { font-size: 11px; color: var(--muted-foreground); min-width: 68px; padding-top: 2px; }
+  .slot-card .slot-detail { font-size: 12px; color: var(--secondary-foreground); flex: 1; }
+  .slot-card .slot-actions { display: flex; gap: 6px; }
 
   .app-badge {
     display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 2px 9px;
@@ -147,6 +156,7 @@
   }
   .app-btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
   .app-btn.ghost { background: transparent; border-color: transparent; color: var(--muted-foreground); }
+  .app-btn.sm { padding: 4px 10px; font-size: 12px; }
 
   .composer {
     display: flex; align-items: center; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border);
@@ -161,7 +171,13 @@
   table.review-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.review-table tr:last-child td { border-bottom: none; }
   table.review-table td:first-child { color: var(--muted-foreground); white-space: nowrap; width: 160px; }
-  .diff-changed { color: var(--primary); font-weight: 600; }
+
+  .app-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px;
+  }
+  .app-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .app-h1 { font-size: 18px; font-weight: 600; color: #fff; margin: 0 0 4px; }
+  .app-sub { font-size: 13px; color: var(--muted-foreground); margin: 0 0 18px; }
 
   .anno {
     margin-top: 14px; padding: 14px 16px; background: var(--docs-panel);
@@ -170,99 +186,108 @@
   .anno ul { margin: 6px 0 0; padding-left: 20px; }
   .anno li { margin-bottom: 6px; }
   .anno code { background: var(--muted); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+
+  .branch-divider {
+    display: flex; align-items: center; gap: 10px; margin: 20px 0; font-size: 11.5px; color: var(--muted-foreground);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .branch-divider::before, .branch-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>Conversational Autonomy Setup — Guided Flow Mockups</h1>
-  <p>Follow-on from <code>2026-07-03-autonomous-github-dispatch-ui-mockups.html</code>. Explores an alternative, conversational entry point into the exact same <code>TeamGithubScope</code>/<code>AgentTeamSlot</code> configuration those form screens edit — the forms remain the source of truth and fallback path; this is a second way to arrive at the same data.</p>
-  <p>Decided going in: the interviewer <b>is</b> the same brain that later runs autonomous dispatch, in an interview mode rather than its dispatch loop. It inspects the team and target repo first and only asks what it can't infer. Answers are captured via inline widgets (buttons, chips, toggles), not free text, and nothing is written to the database until a final review/confirm step — mirroring the plan-hash confirmation pattern Deck already uses before launching a team.</p>
+  <h1>Conversational Team + Autonomy Setup — Mockups (Revised)</h1>
+  <p>Supersedes the flow shape (not the individual autonomy-stage screens) from the earlier version of this document. That version assumed an <code>AgentTeamPreset</code> already existed and only walked through configuring autonomy on top of it. This revision fixes that assumption: the same conversation can start from <b>zero</b> — no team yet — and the brain proposes the team's composition itself, inspecting the target repo the same way it already inspects it for label routing, before flowing into the autonomy stages already designed.</p>
+  <p>If a team already exists for the repo the human names, the flow detects that and skips straight to the autonomy stages — the original mockups' starting point is now a fast path through this one, not a separate document.</p>
+  <div class="revision-note">Revision note: stage order is now Repo → Team composition → Labels &amp; policy → Slot routing → Review. The last three are functionally the prior document's Stages 2–4, renumbered.</div>
 </header>
 
 <nav>
   <a href="#s1">1. Entry point</a>
   <a href="#s2">2. Stage 1 — Repo</a>
-  <a href="#s3">3. Stage 2 — Labels &amp; policy</a>
-  <a href="#s4">4. Stage 3 — Slot routing</a>
-  <a href="#s5">5. Stage 4 — Review &amp; confirm</a>
-  <a href="#s6">6. Correction mid-flow</a>
+  <a href="#s3">3. Stage 2 — Team composition</a>
+  <a href="#s4">4. Thin-repo fallback</a>
+  <a href="#s5">5. Stage 3 — Labels &amp; policy</a>
+  <a href="#s6">6. Stage 4 — Slot routing</a>
+  <a href="#s7">7. Stage 5 — Review &amp; confirm</a>
+  <a href="#s8">8. Mid-flow correction</a>
 </nav>
 
 <main>
 
   <section class="screen" id="s1">
-    <div class="screen-label"><h2>1. Entry point on the existing Autonomy tab</h2></div>
-    <p class="screen-note">One new button on the screen that already exists (Screen 2 of the prior mockup doc). Doesn't replace "+ Add repo" — sits next to it as a second way in.</p>
+    <div class="screen-label"><h2>1. Entry point — Agent Teams list page</h2><span class="stage-tag new">Changed: no longer nested in a preset</span></div>
+    <p class="screen-note">The old entry point lived inside an existing preset's Autonomy tab, which silently assumed a team already existed. The primary entry point now lives one level up, on the Agent Teams list itself — where "I don't have a team yet" is the normal starting state, not an edge case.</p>
     <div class="app-frame">
-      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Claude Deck — SnazzyEmail Core — Autonomy</div>
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Claude Deck — Agent Teams</div>
       <div class="app-body">
-        <div style="font-weight:600; font-size:16px; margin-bottom:2px;">SnazzyEmail Core</div>
-        <div style="display:flex; gap:16px; font-size:13px; color:var(--muted-foreground); border-bottom:1px solid var(--border); margin-bottom:16px; padding-bottom:8px;">
-          <span>Slots</span><span style="color:var(--primary); font-weight:600;">Autonomy</span><span>Launches</span>
-        </div>
-        <div style="display:flex; align-items:center; justify-content:space-between; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px 18px;">
-          <div>
-            <div style="font-weight:600;">Autonomous GitHub dispatch</div>
-            <div style="font-size:12px; color:var(--muted-foreground); margin-top:2px;">This team isn't watching any repos yet.</div>
+        <div class="app-row" style="margin-bottom: 14px;">
+          <div class="app-h1" style="margin-bottom:0;">Agent Teams</div>
+          <div style="display:flex; gap:8px;">
+            <span class="app-btn">+ New team</span>
+            <span class="app-btn primary">Build a team with the brain</span>
           </div>
-          <div style="display:flex; gap:10px;">
-            <span class="app-btn">+ Add repo</span>
-            <span class="app-btn primary">Set up with the brain</span>
+        </div>
+        <p class="app-sub" style="margin-top:-6px;">Saved rosters for launching or reusing local Claude Code, Codex CLI, and GitHub Copilot CLI sessions.</p>
+
+        <div class="app-card">
+          <div class="app-row">
+            <div>
+              <span style="font-weight:600;">Claude Deck — Release Validation</span>
+              <span class="app-badge" style="margin-left:8px;">2 slots</span>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <span class="app-btn sm">Plan launch</span>
+              <span class="app-btn sm primary">Launch</span>
+            </div>
           </div>
         </div>
       </div>
     </div>
-    <div class="anno">"Set up with the brain" is deliberately named after the concept, not generically labeled "AI setup" or "wizard" — reinforcing that this is the same component the team will later hand real GitHub issues to, not a separate onboarding gimmick.</div>
+    <div class="anno">
+      <b>"+ New team" still exists unchanged</b> — the manual, form-first path (name a preset, add slots one at a time) isn't going away. "Build a team with the brain" is a second, equally prominent entry point into the same underlying create-preset API, for a human who'd rather describe the project and let the brain propose a starting roster than build one field-by-field from an empty state.
+    </div>
   </section>
 
   <section class="screen" id="s2">
-    <div class="screen-label"><h2>2. Stage 1 — Repo &amp; scope basics</h2><span class="stage-tag">Adaptive: repo inspection</span></div>
-    <p class="screen-note">Opens as a full chat panel. The brain has already read the team's existing slots (roles, charters) before saying anything, so its first message isn't a blank "what do you want to do" — it opens with what it already knows.</p>
+    <div class="screen-label"><h2>2. Stage 1 — Repo (unchanged mechanics, new opening)</h2><span class="stage-tag">Adaptive: repo inspection</span></div>
+    <p class="screen-note">Repo still has to come first — team composition inference in Stage 2 needs a repo to inspect. But the opening message can no longer reference an existing team's slots, since none may exist yet.</p>
     <div class="app-frame">
-      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — new</div>
       <div class="app-body">
         <div class="rail">
           <div class="rail-step current"><span class="rail-dot">1</span> Repo</div>
           <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">2</span> Labels &amp; policy</div>
+          <div class="rail-step"><span class="rail-dot">2</span> Team</div>
           <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-step"><span class="rail-dot">3</span> Labels</div>
           <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+          <div class="rail-step"><span class="rail-dot">4</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">5</span> Review</div>
         </div>
 
         <div class="msg brain">
           <div class="avatar brain">D</div>
           <div class="bubble brain">
-            <p>I looked at <b>SnazzyEmail Core</b> — it has 3 slots (Architect, Backend SME, Frontend SME) but isn't watching any GitHub repos yet. Which repo should this team pick up issues from?</p>
-            <div class="widget">
-              <div class="text-field" style="color:var(--foreground);">adrirubio/snazzyemail<span style="color:var(--muted-foreground);">-infra</span></div>
-            </div>
+            <p>Let's set up a team. Which GitHub repo is it for?</p>
+            <div class="widget"><div class="text-field" style="color:var(--foreground);">adrirubio/snazzyemail</div></div>
           </div>
         </div>
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>adrirubio/snazzyemail</p></div></div>
 
-        <div class="msg human">
-          <div class="avatar human">You</div>
-          <div class="bubble human"><p>adrirubio/snazzyemail-infra</p></div>
-        </div>
+        <div class="branch-divider">branch: no existing team for this repo</div>
 
         <div class="msg brain">
           <div class="avatar brain">D</div>
           <div class="bubble brain">
             <span class="infer-tag">checked the repo</span>
-            <p>Found it. It's a private repo with branch protection on <code>main</code> (1 required review) and no path-filtered Actions — so CI will actually run on any PR this team opens. I couldn't find a local checkout on this machine for it yet.</p>
-            <p>What's the local path where this team's sessions should work?</p>
-            <div class="widget">
-              <div class="text-field" style="color:var(--foreground);">/home/juan/work/repos/adrirubio/snazzyemail-infra</div>
-            </div>
+            <p>Found it, and confirmed no existing Agent Team already targets this repo. It's a private repo with branch protection on <code>main</code> and no local checkout on this machine yet — what path should this team work in?</p>
+            <div class="widget"><div class="text-field" style="color:var(--foreground);">/home/juan/work/repos/adrirubio/snazzyemail</div></div>
           </div>
         </div>
-
-        <div class="msg human">
-          <div class="avatar human">You</div>
-          <div class="bubble human"><p>/home/juan/work/repos/adrirubio/snazzyemail-infra</p></div>
-        </div>
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>/home/juan/work/repos/adrirubio/snazzyemail</p></div></div>
 
         <div class="composer">
           <div class="text-field">Type a message…</div>
@@ -271,136 +296,176 @@
       </div>
     </div>
     <div class="anno">
-      <b>What's actually happening behind "checked the repo":</b> a read-only GitHub API call (issues/branch-protection/Actions config) using the already-configured global <code>GITHUB_TOKEN</code> — the same credential the watcher uses later, never a new one. The branch-protection finding here isn't idle chatter — it's a direct setup for Stage 2's merge-policy question, where "1 required review" becomes a reason to recommend <code>merge_policy=human</code> rather than a generic default.
+      <b>The "checked the repo" step now does one more check than before:</b> alongside branch protection and Actions config (used later for the merge-policy recommendation), it also checks whether an <code>AgentTeamPreset</code> already has a <code>TeamGithubScope</code> pointing at this repo — see Screen 3 for what happens when it finds one.
     </div>
   </section>
 
   <section class="screen" id="s3">
-    <div class="screen-label"><h2>3. Stage 2 — Labels &amp; merge policy</h2><span class="stage-tag">Explains tradeoffs inline</span></div>
-    <p class="screen-note">This is the stage that most directly answers "not knowing what a field means" — the design-pipeline caveat that lived in fine print under a dropdown in the form mockup is now the actual reason the brain gives for its recommendation.</p>
+    <div class="screen-label"><h2>3. Stage 2 — Team composition (new stage)</h2><span class="stage-tag new">New</span></div>
+    <p class="screen-note">The core addition. Same inference philosophy as label routing (Stage 4 of the old doc) — but one level up: instead of guessing which existing slot owns an issue, the brain guesses what slots should exist at all.</p>
     <div class="app-frame">
-      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — adrirubio/snazzyemail</div>
       <div class="app-body">
         <div class="rail">
           <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
           <div class="rail-line"></div>
-          <div class="rail-step current"><span class="rail-dot">2</span> Labels &amp; policy</div>
+          <div class="rail-step current"><span class="rail-dot">2</span> Team</div>
           <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-step"><span class="rail-dot">3</span> Labels</div>
           <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+          <div class="rail-step"><span class="rail-dot">4</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">5</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain" style="max-width:none;">
+            <span class="infer-tag">checked the repo's structure &amp; issue history</span>
+            <p>This repo has a <code>backend/</code> (FastAPI, SQLAlchemy) and a <code>frontend/</code> (React) — and past issues already carry <code>area:backend</code> / <code>area:frontend</code> labels, so those are real working divisions, not just folders. Based on that, here's a starting roster. Add, remove, or rename anything before we continue.</p>
+
+            <div class="slot-card">
+              <div class="slot-head">
+                <span class="slot-name">Architect</span>
+                <div class="slot-actions"><span class="app-btn sm ghost">Rename</span><span class="app-btn sm ghost">Remove</span></div>
+              </div>
+              <div class="field-row"><label>Role</label><div class="slot-detail">Cross-cutting design decisions, coordinates the other two when work spans areas</div></div>
+              <div class="field-row"><label>Provider</label><div class="slot-detail">codex-cli <span style="color:var(--muted-foreground);">— default, matches your other teams</span></div></div>
+            </div>
+
+            <div class="slot-card">
+              <div class="slot-head">
+                <span class="slot-name">Backend SME</span>
+                <div class="slot-actions"><span class="app-btn sm ghost">Rename</span><span class="app-btn sm ghost">Remove</span></div>
+              </div>
+              <div class="field-row"><label>Role</label><div class="slot-detail">Owns the FastAPI backend, SQLAlchemy models, and background jobs</div></div>
+              <div class="field-row"><label>Provider</label><div class="slot-detail">codex-cli</div></div>
+            </div>
+
+            <div class="slot-card">
+              <div class="slot-head">
+                <span class="slot-name">Frontend SME</span>
+                <div class="slot-actions"><span class="app-btn sm ghost">Rename</span><span class="app-btn sm ghost">Remove</span></div>
+              </div>
+              <div class="field-row"><label>Role</label><div class="slot-detail">Owns the React frontend and UI components</div></div>
+              <div class="field-row"><label>Provider</label><div class="slot-detail">codex-cli</div></div>
+            </div>
+
+            <div class="widget-row" style="margin-top:12px;">
+              <span class="choice-btn">+ Add another slot</span>
+              <span class="choice-btn selected">Looks right — continue</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>looks right, continue</p></div></div>
+
+        <div class="composer">
+          <div class="text-field">Type a message…</div>
+          <span class="app-btn ghost">Skip to forms</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>What the human is actually approving here, per the earlier decision:</b> full slots, not just names — role, charter, and provider are all proposed, not asked one field at a time. The human's job is judging the <i>shape</i> of the roster (is 3 slots right, are the divisions correct) and fixing anything wrong via Rename/Remove/Add, not re-typing what the brain already got right. The provider default ("matches your other teams") is itself an inference — the brain looked at this human's other presets before proposing codex-cli here.
+      <ul>
+        <li>Nothing is written yet — this whole stage is still pre-commit, same as everything before the final Review stage.</li>
+        <li>These three slot cards become the exact <code>AgentTeamSlotCreate</code> payloads sent at Stage 5's confirm — the charters authored here are not placeholders, they're the real charters, which matters for Stage 4 (Screen 6), where routing inference reads them back.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="screen" id="s4">
+    <div class="screen-label"><h2>4. Thin-repo fallback</h2><span class="stage-tag new">New — fallback branch</span></div>
+    <p class="screen-note">Stack/label inspection only works if there's enough repo to inspect. A brand-new or nearly-empty repo falls back to asking the human directly, rather than proposing a roster from insufficient signal.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — adrirubio/new-side-project</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">2</span> Team</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">3</span> Labels</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">4</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">5</span> Review</div>
         </div>
 
         <div class="msg brain">
           <div class="avatar brain">D</div>
           <div class="bubble brain">
-            <p>Now, two labels. First — what should a human apply to a GitHub issue to tell this team "go work on this"? I'll default to <code>claude-deck-ready</code> unless you want something else.</p>
+            <span class="infer-tag">checked the repo's structure &amp; issue history</span>
+            <p>This repo only has a handful of commits and no issues yet, so I don't have enough to infer a roster from. Can you describe what it's for and who'll be working on it?</p>
+            <div class="widget"><div class="text-field" style="color:var(--foreground);">a small Discord bot, just me maintaining it</div></div>
+          </div>
+        </div>
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>a small Discord bot, just me maintaining it</p></div></div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain" style="max-width:none;">
+            <p>For something that size, one generalist slot is probably more useful than splitting into roles that don't exist yet. Proposing a single slot — you can always split it later once the codebase actually divides into parts:</p>
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Maintainer</span><div class="slot-actions"><span class="app-btn sm ghost">Rename</span></div></div>
+              <div class="field-row"><label>Role</label><div class="slot-detail">General implementer — bug fixes, features, and small refactors across the whole codebase</div></div>
+              <div class="field-row"><label>Provider</label><div class="slot-detail">codex-cli</div></div>
+            </div>
+            <div class="widget-row" style="margin-top:12px;">
+              <span class="choice-btn">+ Add another slot</span>
+              <span class="choice-btn selected">Looks right — continue</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>Why one slot, not a padded-out three-role roster:</b> the brain's proposal here directly reflects "just me maintaining it" — a small solo project doesn't benefit from Architect/Backend/Frontend roles that don't correspond to real divided ownership. This is a deliberate contrast with Screen 3: composition inference should scale down as readily as it scales up, otherwise a human with a tiny repo gets a roster sized for a team that doesn't exist, and ends up doing more cleanup than the conversation saved them.
+    </div>
+  </section>
+
+  <section class="screen" id="s5">
+    <div class="screen-label"><h2>5. Stage 3 — Labels &amp; merge policy</h2><span class="stage-tag">Renumbered — was Stage 2</span></div>
+    <p class="screen-note">Unchanged from the prior document's Stage 2, mechanically — shown here in its new position for continuity. The rail now shows Team as completed alongside Repo.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — adrirubio/snazzyemail</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Team</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">3</span> Labels</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">4</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">5</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain">
+            <p>Now, two labels. What should a human apply to a GitHub issue to tell this team "go work on this"? I'll default to <code>claude-deck-ready</code> unless you want something else.</p>
             <div class="widget widget-row">
               <span class="choice-btn selected">claude-deck-ready<span class="sub">default</span></span>
               <span class="choice-btn">Use a different label…</span>
             </div>
           </div>
         </div>
-
         <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>that's fine</p></div></div>
 
         <div class="msg brain">
           <div class="avatar brain">D</div>
           <div class="bubble brain">
-            <p>And a second label for design/spec issues, so this team knows to write a doc instead of code — I'll use <code>claude-deck-design</code> unless you'd rather not have a design pipeline for this repo at all.</p>
+            <p>Who merges a green, verified PR? Since <code>main</code> has a required review turned on, I'd lean toward a human merging — auto-merge would just get rejected by branch protection anyway.</p>
             <div class="widget widget-row">
-              <span class="choice-btn selected">claude-deck-design<span class="sub">default</span></span>
-              <span class="choice-btn">This repo is code-only, skip it</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>keep the design one</p></div></div>
-
-        <div class="msg brain">
-          <div class="avatar brain">D</div>
-          <div class="bubble brain">
-            <p>Last one for this stage — who merges a green, verified PR? Since <code>main</code> has a required review turned on, I'd lean toward a human merging rather than auto-merge, since branch protection would just reject an auto-merge attempt anyway and this team would fall back to notifying you regardless. Auto-merge is available if you want to switch it later — it's a per-repo setting, not locked in now.</p>
-            <div class="widget widget-row">
-              <span class="choice-btn selected">Human reviews and merges<span class="sub">recommended — matches branch protection</span></span>
+              <span class="choice-btn selected">Human reviews and merges<span class="sub">recommended</span></span>
               <span class="choice-btn">Auto-merge when checks pass</span>
             </div>
           </div>
         </div>
-
-        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>yeah keep it on human</p></div></div>
-
-        <div class="composer">
-          <div class="text-field">Type a message…</div>
-          <span class="app-btn ghost">Skip to forms</span>
-        </div>
-      </div>
-    </div>
-    <div class="anno">
-      <b>Note what didn't get asked here:</b> <code>max_approval_rounds</code> (the V3 guardrail). It's a real field but not one most humans have an intuition for on first setup — the brain silently uses the default (3) and surfaces it only at the Stage 4 review, where it's editable but not gated behind a question nobody can answer confidently on the spot. This is a deliberate application of the "ask only what you can't infer or default sanely" principle — a sane default is itself a form of inference.
-    </div>
-  </section>
-
-  <section class="screen" id="s4">
-    <div class="screen-label"><h2>4. Stage 3 — Per-slot routing</h2><span class="stage-tag">Collapses cross-screen navigation</span></div>
-    <p class="screen-note">In the form UI, area labels/expertise are set per-slot, one slot editor at a time, from a different tab. Here all three slots appear in one place, one message — the "too many screens" load collapsing into one stage.</p>
-    <div class="app-frame">
-      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
-      <div class="app-body">
-        <div class="rail">
-          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
-          <div class="rail-line"></div>
-          <div class="rail-step done"><span class="rail-dot">✓</span> Labels &amp; policy</div>
-          <div class="rail-line"></div>
-          <div class="rail-step current"><span class="rail-dot">3</span> Slot routing</div>
-          <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
-        </div>
-
-        <div class="msg brain">
-          <div class="avatar brain">D</div>
-          <div class="bubble brain">
-            <span class="infer-tag">checked the repo's labels</span>
-            <p>This repo already has <code>area:backend</code>, <code>area:frontend</code>, and <code>area:infra</code> labels in use on past issues. I matched two of your three slots to existing labels — take a look and adjust anything that's wrong:</p>
-
-            <div class="slot-card">
-              <div class="slot-head"><span class="slot-name">Backend SME</span><span class="app-badge new">suggested match</span></div>
-              <div class="field-row"><label>Area labels</label>
-                <div class="chip-input" style="flex:1;">
-                  <span class="chip suggested">area:backend</span>
-                  <span class="add-chip">+ add</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="slot-card">
-              <div class="slot-head"><span class="slot-name">Frontend SME</span><span class="app-badge new">suggested match</span></div>
-              <div class="field-row"><label>Area labels</label>
-                <div class="chip-input" style="flex:1;">
-                  <span class="chip suggested">area:frontend</span>
-                  <span class="add-chip">+ add</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="slot-card">
-              <div class="slot-head"><span class="slot-name">Architect</span><span class="app-badge warning">no label match</span></div>
-              <div class="field-row"><label>Area labels</label>
-                <div class="chip-input" style="flex:1;"><span class="add-chip">+ add</span></div>
-              </div>
-              <p style="font-size:12px; margin:6px 0 0; color:var(--muted-foreground);"><code>area:infra</code> exists but I wasn't sure it's Architect's — infra work sometimes belongs to whoever's on call rather than the architect specifically. Want me to add it, or describe what Architect actually owns instead and I'll use that for issues with no matching label?</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>architect owns infra and deployment stuff too, add that label. and for anything else unlabeled just say "cross-cutting architecture and deploy decisions, coordinates the other two when work spans areas"</p></div></div>
-
-        <div class="msg brain">
-          <div class="avatar brain">D</div>
-          <div class="bubble brain">
-            <p>Got it — added <code>area:infra</code> to Architect and saved that as their expertise description for the fallback classifier. That covers routing for all three slots.</p>
-          </div>
-        </div>
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>keep it on human</p></div></div>
 
         <div class="composer">
           <div class="text-field">Type a message…</div>
@@ -408,79 +473,140 @@
         </div>
       </div>
     </div>
-    <div class="anno">
-      <b>Why Architect's card looks different on purpose:</b> this is the UC10 case from the use-case doc — a slot with no clean label match risks silently getting zero routing benefit if a human just clicks through. Making the "no match" state visually distinct (warning badge, an explicit question instead of a blank field) is the conversational equivalent of the highlighted "New" card in the form mockup — same goal (make the gap noticeable), different mechanism (a question you have to answer instead of a card you might skip).
-    </div>
+    <div class="anno">This stage's content is identical to the earlier version of this document — the change is purely positional. It now runs after a team exists (freshly proposed or already existing), never before, since <code>TeamGithubScope</code> rows attach to a preset that must exist first.</div>
   </section>
 
-  <section class="screen" id="s5">
-    <div class="screen-label"><h2>5. Stage 4 — Review &amp; confirm</h2><span class="stage-tag">Preview before commit</span></div>
-    <p class="screen-note">Nothing has been written to <code>TeamGithubScope</code>/<code>AgentTeamSlot</code> yet. This stage is the plan-hash-style checkpoint — a full summary, editable inline, with one confirm action that commits everything at once.</p>
+  <section class="screen" id="s6">
+    <div class="screen-label"><h2>6. Stage 4 — Slot routing</h2><span class="stage-tag">Renumbered — was Stage 3</span></div>
+    <p class="screen-note">Mechanically unchanged, but meaningfully easier for the brain to get right now — the charters it's reading were written one stage ago, by itself, not inherited from a stranger's team.</p>
     <div class="app-frame">
-      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — adrirubio/snazzyemail</div>
       <div class="app-body">
         <div class="rail">
           <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
           <div class="rail-line"></div>
-          <div class="rail-step done"><span class="rail-dot">✓</span> Labels &amp; policy</div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Team</div>
           <div class="rail-line"></div>
-          <div class="rail-step done"><span class="rail-dot">✓</span> Slot routing</div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Labels</div>
           <div class="rail-line"></div>
-          <div class="rail-step current"><span class="rail-dot">4</span> Review</div>
+          <div class="rail-step current"><span class="rail-dot">4</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">5</span> Review</div>
         </div>
 
         <div class="msg brain">
           <div class="avatar brain">D</div>
           <div class="bubble brain" style="max-width:none;">
-            <p>Here's everything before I save it. Nothing is written yet — edit anything below, or confirm to commit it all.</p>
+            <span class="infer-tag">checked the repo's labels</span>
+            <p>This repo already uses <code>area:backend</code> and <code>area:frontend</code> on past issues — matching directly to the slots we just created:</p>
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Backend SME</span><span class="app-badge new">suggested match</span></div>
+              <div class="field-row"><label>Area labels</label><div class="chip-input" style="flex:1;"><span class="chip suggested">area:backend</span><span class="add-chip">+ add</span></div></div>
+            </div>
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Frontend SME</span><span class="app-badge new">suggested match</span></div>
+              <div class="field-row"><label>Area labels</label><div class="chip-input" style="flex:1;"><span class="chip suggested">area:frontend</span><span class="add-chip">+ add</span></div></div>
+            </div>
+            <div class="slot-card">
+              <div class="slot-head"><span class="slot-name">Architect</span><span class="app-badge">using its charter as fallback</span></div>
+              <div class="field-row"><label>Expertise</label><div class="slot-detail">"Cross-cutting design decisions, coordinates the other two when work spans areas" — reused from the role we set in Stage 2, no need to write it twice.</div></div>
+            </div>
+            <p style="margin-top:10px;">That covers routing for all three. Anything to change?</p>
+          </div>
+        </div>
+        <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>nope, good</p></div></div>
+
+        <div class="composer">
+          <div class="text-field">Type a message…</div>
+          <span class="app-btn ghost">Skip to forms</span>
+        </div>
+      </div>
+    </div>
+    <div class="anno">
+      <b>The one real behavioral difference from the old Stage 3:</b> Architect's <code>expertise</code> classifier field is auto-filled from the role description written in Stage 2 rather than asked again — a human who just told the brain what Architect does shouldn't have to say it a second time in different words two stages later. This only works because Stage 2 now exists and captures that text in the first place; on the fast path (an already-existing team, Screen 1's alternate case), this auto-fill doesn't apply and the question is asked directly, exactly as in the original document.
+    </div>
+  </section>
+
+  <section class="screen" id="s7">
+    <div class="screen-label"><h2>7. Stage 5 — Review &amp; confirm</h2><span class="stage-tag">Renumbered — was Stage 4, now includes the new team</span></div>
+    <p class="screen-note">Same checkpoint principle as before — nothing committed until now — but the summary has grown a section: the team being created, not just the autonomy config layered onto one that already existed.</p>
+    <div class="app-frame">
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — adrirubio/snazzyemail</div>
+      <div class="app-body">
+        <div class="rail">
+          <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Team</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Labels</div>
+          <div class="rail-line"></div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step current"><span class="rail-dot">5</span> Review</div>
+        </div>
+
+        <div class="msg brain">
+          <div class="avatar brain">D</div>
+          <div class="bubble brain" style="max-width:none;">
+            <p>Here's everything before I save it. Nothing is written yet — edit anything below, or confirm to create the team and turn on autonomy in one step.</p>
 
             <div class="review-card">
-              <div class="review-head">adrirubio/snazzyemail-infra <span class="app-badge">new scope</span></div>
+              <div class="review-head">New team: SnazzyEmail Core <span class="app-badge new">3 slots</span></div>
               <table class="review-table">
-                <tr><td>Local checkout</td><td>/home/juan/work/repos/adrirubio/snazzyemail-infra</td></tr>
+                <tr><td>Architect</td><td>codex-cli · cross-cutting design decisions</td></tr>
+                <tr><td>Backend SME</td><td>codex-cli · owns FastAPI backend, SQLAlchemy, jobs</td></tr>
+                <tr><td>Frontend SME</td><td>codex-cli · owns React frontend and UI</td></tr>
+              </table>
+            </div>
+
+            <div class="review-card">
+              <div class="review-head">adrirubio/snazzyemail <span class="app-badge">new scope</span></div>
+              <table class="review-table">
+                <tr><td>Local checkout</td><td>/home/juan/work/repos/adrirubio/snazzyemail</td></tr>
                 <tr><td>Dispatch label</td><td><code>claude-deck-ready</code></td></tr>
-                <tr><td>Design label</td><td><code>claude-deck-design</code></td></tr>
                 <tr><td>Merge policy</td><td>Human reviews and merges</td></tr>
                 <tr><td>Max approval rounds</td><td>3 <span style="color:var(--muted-foreground);">(default — edit)</span></td></tr>
               </table>
             </div>
 
             <div class="review-card">
-              <div class="review-head">Slot routing <span class="app-badge new">3 slots updated</span></div>
+              <div class="review-head">Slot routing <span class="app-badge new">3 slots</span></div>
               <table class="review-table">
                 <tr><td>Backend SME</td><td>area_labels: <code>area:backend</code></td></tr>
                 <tr><td>Frontend SME</td><td>area_labels: <code>area:frontend</code></td></tr>
-                <tr><td>Architect</td><td>area_labels: <code>area:infra</code> · expertise: "cross-cutting architecture and deploy decisions, coordinates the other two when work spans areas"</td></tr>
+                <tr><td>Architect</td><td>expertise: "cross-cutting design decisions, coordinates the other two when work spans areas"</td></tr>
               </table>
             </div>
 
             <div class="widget-row" style="margin-top:14px;">
-              <span class="app-btn">✎ Edit in forms instead</span>
-              <span class="app-btn primary">✓ Confirm &amp; save</span>
+              <span class="app-btn">Edit in forms instead</span>
+              <span class="app-btn primary">Confirm &amp; create team</span>
             </div>
           </div>
         </div>
       </div>
     </div>
     <div class="anno">
-      <b>"Edit in forms instead" is not a dead-end escape hatch — it's the seam between the two configuration paths.</b> Clicking it doesn't discard the conversation; it opens the existing Add-scope/slot-editor screens pre-filled with exactly what's shown above, so a human who wants to double-check or tweak one number doesn't have to redo the conversation or trust a value they can't see edited live. This is the same "two paths, one schema" principle as the form mockups' API-vs-UI table (Screen 0 there) — the conversation is a third path into the same data, not a fourth kind of state.
+      <b>One confirm, two API calls, still one checkpoint:</b> under the hood, "Confirm &amp; create team" means a preset-create call followed immediately by the scope/slot-update calls from the autonomy stages — but the human sees and approves it as one decision, not two. "Edit in forms instead" now opens the existing preset-creation form pre-filled with the proposed roster, <i>then</i> the Autonomy tab pre-filled with the rest — the same "conversation is a third path into the same schema, not a fourth kind of state" principle as before, just spanning two existing screens instead of one.
     </div>
   </section>
 
-  <section class="screen" id="s6">
-    <div class="screen-label"><h2>6. Mid-flow correction</h2><span class="stage-tag">Handling a wrong inference</span></div>
-    <p class="screen-note">Adaptive inference will sometimes be wrong. This shows the recovery path — going back doesn't require restarting the whole conversation.</p>
+  <section class="screen" id="s8">
+    <div class="screen-label"><h2>8. Mid-flow correction</h2><span class="stage-tag">Unchanged content, updated rail</span></div>
+    <p class="screen-note">Same scenario as the original document — the brain checks whether a correction is even in scope for the current repo before acting on it. Shown here purely to confirm the 5-stage rail still reads correctly mid-flow.</p>
     <div class="app-frame">
-      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Set up autonomy — SnazzyEmail Core</div>
+      <div class="app-titlebar"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span> Build a team — adrirubio/snazzyemail</div>
       <div class="app-body">
         <div class="rail">
           <div class="rail-step done"><span class="rail-dot">✓</span> Repo</div>
           <div class="rail-line"></div>
-          <div class="rail-step done"><span class="rail-dot">✓</span> Labels &amp; policy</div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Team</div>
           <div class="rail-line"></div>
-          <div class="rail-step current"><span class="rail-dot">3</span> Slot routing</div>
+          <div class="rail-step done"><span class="rail-dot">✓</span> Labels</div>
           <div class="rail-line"></div>
-          <div class="rail-step"><span class="rail-dot">4</span> Review</div>
+          <div class="rail-step current"><span class="rail-dot">4</span> Routing</div>
+          <div class="rail-line"></div>
+          <div class="rail-step"><span class="rail-dot">5</span> Review</div>
         </div>
 
         <div class="msg human"><div class="avatar human">You</div><div class="bubble human"><p>wait, actually go back — I don't want auto-merge disabled everywhere, just on infra. app repo should stay auto for backend fixes</p></div></div>
@@ -488,19 +614,17 @@
         <div class="msg brain">
           <div class="avatar brain">D</div>
           <div class="bubble brain">
-            <p>That's a different repo than the one we're setting up right now (this session is scoped to <b>snazzyemail-infra</b>) — <code>merge_policy</code> is per watched repo, not team-wide, so the app repo's setting won't be touched by anything we do here regardless.</p>
-            <p>Want me to jump back to Stage 2 and change infra's merge policy instead, or is infra's "human reviews" setting actually what you meant to keep?</p>
+            <p>That's a different repo than the one we're setting up right now (this session is scoped to <b>snazzyemail</b>, not <b>snazzyemail-infra</b>) — <code>merge_policy</code> is per watched repo, not team-wide, so a separate repo's setting won't be touched by anything we do here regardless.</p>
+            <p>Want me to jump back to Labels &amp; policy and change this repo's merge policy instead, or is "human reviews" actually what you meant to keep for snazzyemail specifically?</p>
             <div class="widget widget-row">
               <span class="choice-btn">← Back to Labels &amp; policy</span>
-              <span class="choice-btn selected">No, infra staying human-gated is correct — continue</span>
+              <span class="choice-btn selected">No, this repo staying human-gated is correct — continue</span>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <div class="anno">
-      <b>Why this reply matters more than it looks:</b> the brain doesn't just accept a correction — it checks whether the human's correction is actually about <i>this</i> conversation's scope before acting on it, and explains the schema fact (<code>merge_policy</code> is per-scope-entry, not team-wide) that resolves the apparent conflict. This mirrors a real pressure-test concern from the design spec: a conversational interface that silently reinterprets ambiguous instructions is worse than a form that forces the human to be in the right screen already. Jumping back a stage (rail step becomes "current" again) is a real navigation action, not a scripted reply — prior answers in later stages aren't discarded, only the stage being revisited is reopened for edits.
-    </div>
+    <div class="anno">Content identical to the original document's equivalent screen — included here only to verify the wider 5-step rail still fits and reads clearly once a human is deep into the flow, not just at Stage 1.</div>
   </section>
 
 </main>
