@@ -2181,6 +2181,15 @@ class AgentTeamLaunchRequest(BaseModel):
     repo_path_override: Optional[str] = None
 
 
+class DispatchStatusReport(BaseModel):
+    work_item_id: int
+    status: str
+    pr_number: Optional[int] = None
+    reassign_to_slot_id: Optional[int] = None
+    note: Optional[str] = None
+    reporting_slot_id: Optional[int] = None
+
+
 class AgentTeamLaunchResultItem(BaseModel):
     slot_id: int
     slot_name: str

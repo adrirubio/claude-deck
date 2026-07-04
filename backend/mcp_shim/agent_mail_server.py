@@ -110,6 +110,10 @@ def _bridge_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-bridge", path, **kwargs)
 
 
+def _dispatch_request(method: str, path: str, **kwargs) -> dict:
+    return _deck_request(method, "agent-teams", path, **kwargs)
+
+
 def _bridge_request_with_token(method: str, path: str, **kwargs) -> dict:
     token_result = _bridge_request("GET", "/token")
     if not token_result["ok"]:
@@ -592,6 +596,34 @@ def deck_launch_team(
     if not result["ok"]:
         return result
     return {"ok": True, "launch": result["data"]}
+
+
+@mcp.tool()
+def deck_report_dispatch_status(
+    work_item_id: int,
+    status: str,
+    pr_number: Optional[int] = None,
+    reassign_to_slot_id: Optional[int] = None,
+    note: Optional[str] = None,
+) -> dict:
+    """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
+
+    status is one of: triaging, revision_requested, in_progress, pr_opened,
+    handoff_initiated (with reassign_to_slot_id), handoff_accepted, blocked.
+    Called by the owner slot the brain dispatched the issue to. Include
+    work_item_id from your bootstrap prompt.
+    """
+    identity = _ensure_registered()
+    member = identity.get("data", {}).get("member", {}) if identity.get("ok") else {}
+    payload = {
+        "work_item_id": work_item_id,
+        "status": status,
+        "pr_number": pr_number,
+        "reassign_to_slot_id": reassign_to_slot_id,
+        "note": note,
+        "reporting_slot_id": member.get("team_slot_id"),
+    }
+    return _dispatch_request("POST", "/dispatch-status", json=payload)
 
 
 if __name__ == "__main__":
