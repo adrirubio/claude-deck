@@ -44,15 +44,16 @@ async def _seed_item(maker, **overrides):
         )
         db.add(scope)
         await db.flush()
-        item = GithubWorkItem(
-            scope_id=scope.id,
-            issue_number=1,
-            issue_title="x",
-            issue_url="u",
-            github_updated_at=datetime.utcnow(),
-            dispatch_status="dispatched",
-            **overrides,
-        )
+        values = {
+            "scope_id": scope.id,
+            "issue_number": 1,
+            "issue_title": "x",
+            "issue_url": "u",
+            "github_updated_at": datetime.utcnow(),
+            "dispatch_status": "dispatched",
+        }
+        values.update(overrides)
+        item = GithubWorkItem(**values)
         db.add(item)
         await db.commit()
         await db.refresh(item)
@@ -104,6 +105,21 @@ async def test_blocked_uses_spec_reason_and_persists_note(client_and_db):
         assert item.dispatch_status == "escalated"
         assert item.escalation_reason == "plan_blocked"
         assert item.status_note == "missing credentials"
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_rejected_after_item_escalated(client_and_db):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, dispatch_status="escalated")
+    resp = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "pr_opened", "pr_number": 12},
+    )
+    assert resp.status_code == 409
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "escalated"
+        assert item.pr_number is None
 
 
 def test_shim_exposes_dispatch_status_tool():

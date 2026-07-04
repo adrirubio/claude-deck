@@ -862,6 +862,52 @@ class AgentMailService:
             await self.auto_nudge_members(db, recipients)
         return await self._message_response(db, message, for_member_id=None)
 
+    async def send_broadcast(
+        self,
+        db: AsyncSession,
+        *,
+        subject: str | None,
+        body_markdown: str,
+        payload: dict | None = None,
+        auto_nudge: bool = True,
+        sender_actor_id: int | None = None,
+    ) -> MailMessageResponse:
+        return await self.send_message(
+            db,
+            MailMessageCreate(
+                kind="broadcast",
+                subject=subject,
+                body_markdown=body_markdown,
+                payload=payload,
+            ),
+            auto_nudge=auto_nudge,
+            sender_actor_id=sender_actor_id,
+        )
+
+    async def send_direct_message(
+        self,
+        db: AsyncSession,
+        *,
+        recipient_member_id: int,
+        subject: str | None,
+        body_markdown: str,
+        payload: dict | None = None,
+        auto_nudge: bool = True,
+        sender_actor_id: int | None = None,
+    ) -> MailMessageResponse:
+        return await self.send_message(
+            db,
+            MailMessageCreate(
+                kind="message",
+                recipient_member_id=recipient_member_id,
+                subject=subject,
+                body_markdown=body_markdown,
+                payload=payload,
+            ),
+            auto_nudge=auto_nudge,
+            sender_actor_id=sender_actor_id,
+        )
+
     async def _sender_identity(
         self,
         db: AsyncSession,

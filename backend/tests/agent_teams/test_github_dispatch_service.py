@@ -3,6 +3,7 @@ from datetime import datetime
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -11,6 +12,8 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
+    MailMessage,
+    MailTeamMember,
     TeamGithubScope,
 )
 from app.services.github_dispatch_service import github_dispatch_service
@@ -477,6 +480,115 @@ async def test_dispatch_pending_queues_when_slot_busy(db):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_pending_queues_when_scope_concurrency_cap_reached(db):
+    preset, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    db.add(
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=29,
+            issue_title="x",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="dispatched",
+            owner_slot_id=slots[0].id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=31,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(db_, preset_id, request):
+        raise AssertionError("repo cap should queue before launch")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={31: ["area:backend"]},
+    )
+    await db.refresh(item)
+    assert backend.id != slots[0].id
+    assert item.owner_slot_id is None
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "queued_repo_cap"
+
+
+@pytest.mark.asyncio
+async def test_scope_concurrency_ignores_human_review_and_escalated_items(db):
+    preset, slots, scope = await _team(db)
+    scope.max_concurrent_dispatched = 1
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    db.add_all(
+        [
+            GithubWorkItem(
+                scope_id=scope.id,
+                issue_number=32,
+                issue_title="x",
+                issue_url="u",
+                github_updated_at=datetime.utcnow(),
+                dispatch_status="awaiting_human_review",
+                owner_slot_id=backend.id,
+            ),
+            GithubWorkItem(
+                scope_id=scope.id,
+                issue_number=33,
+                issue_title="x",
+                issue_url="u",
+                github_updated_at=datetime.utcnow(),
+                dispatch_status="ready_for_review",
+                owner_slot_id=backend.id,
+            ),
+            GithubWorkItem(
+                scope_id=scope.id,
+                issue_number=34,
+                issue_title="x",
+                issue_url="u",
+                github_updated_at=datetime.utcnow(),
+                dispatch_status="escalated",
+                owner_slot_id=backend.id,
+            ),
+        ]
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=35,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _Result:
+        launch_id = 104
+
+    async def fake_launcher(db_, preset_id, request):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={35: ["area:backend"]},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.owner_slot_id == backend.id
+
+
+@pytest.mark.asyncio
 async def test_approval_round_cap_escalates(db):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 2
@@ -495,6 +607,71 @@ async def test_approval_round_cap_escalates(db):
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     await github_dispatch_service.record_approval_round(db, item, scope)
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "approval_rounds_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_escalation_creates_agent_mail_broadcast(db):
+    preset, slots, scope = await _team(db)
+    scope.max_approval_rounds = 1
+    db.add(
+        MailTeamMember(
+            identity_key="slot:1",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Architect",
+            participant_kind="team_slot",
+            team_preset_id=preset.id,
+            team_slot_id=slots[0].id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=36,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.record_approval_round(db, item, scope)
+
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert any(message.kind == "broadcast" for message in messages)
+    assert any("approval_rounds_exhausted" in (message.subject or "") for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_escalation_state_persists_when_notification_fails(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    scope.max_approval_rounds = 1
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=37,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fail_broadcast(db_, item_, reason, note):
+        raise RuntimeError("mail down")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "_send_escalation_broadcast",
+        fail_broadcast,
+    )
+
+    await github_dispatch_service.record_approval_round(db, item, scope)
+
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "approval_rounds_exhausted"

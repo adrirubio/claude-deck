@@ -219,6 +219,9 @@ class TeamGithubScope(Base):
     design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
     merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
     max_approval_rounds: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_concurrent_dispatched: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_verification_retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    max_auto_merges_per_day: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -261,6 +264,7 @@ class GithubWorkItem(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

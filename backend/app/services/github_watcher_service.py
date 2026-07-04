@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import GithubWorkItem, TeamGithubScope
 from app.services.github_client import GithubClient, github_client
+from app.services.github_dispatch_service import github_dispatch_service
 
 _ACTIVE_STATUSES = ("dispatched", "verifying", "awaiting_human_review")
 _RECOVERABLE_STATUSES = ("failed", "escalated")
@@ -102,9 +103,12 @@ class GithubWatcherService:
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
             )
             if not still_labeled:
-                item.dispatch_status = "escalated"
-                item.escalation_reason = "dispatch_label_removed"
-                item.updated_at = datetime.utcnow()
+                await github_dispatch_service.escalate(
+                    db,
+                    item,
+                    "dispatch_label_removed",
+                    "The dispatch label was removed from the issue.",
+                )
 
 
 github_watcher_service = GithubWatcherService()

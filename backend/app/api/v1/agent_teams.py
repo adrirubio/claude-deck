@@ -25,6 +25,7 @@ from app.models.schemas import (
     DispatchStatusReport,
 )
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_verification_service import github_verification_service
 from app.services.agent_team_service import PlanConflictError, agent_team_service
 from app.services.providers.base import ProviderLaunchError
 
@@ -69,12 +70,16 @@ async def report_dispatch_status(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
-        item.dispatch_status = "escalated"
-        item.escalation_reason = "plan_blocked"
-        item.status_note = report.note
-        item.updated_at = datetime.utcnow()
+        await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
         await db.commit()
-    elif report.status in ("pr_opened", "in_progress"):
+    elif report.status == "pr_opened":
+        if report.pr_number is None:
+            raise HTTPException(status_code=400, detail="pr_number required")
+        try:
+            await github_verification_service.report_pr_opened(db, item, scope, report.pr_number)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    elif report.status == "in_progress":
         if report.pr_number is not None:
             item.pr_number = report.pr_number
             item.updated_at = datetime.utcnow()
