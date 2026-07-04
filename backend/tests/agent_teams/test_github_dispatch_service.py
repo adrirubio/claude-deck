@@ -67,6 +67,14 @@ async def _team(db):
     return preset, [architect, backend], scope
 
 
+class _LabelsClient:
+    def __init__(self, labels):
+        self._labels = labels
+
+    async def list_repo_labels(self, owner, repo):
+        return list(self._labels)
+
+
 def _item(scope_id, number, labels):
     return (
         GithubWorkItem(
@@ -215,3 +223,145 @@ async def test_slot_busy_during_pending_handoff_on_both_sides(db):
     await db.commit()
     assert await github_dispatch_service.slot_is_busy(db, architect.id) is True
     assert await github_dispatch_service.slot_is_busy(db, backend.id) is True
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_launches_and_marks_dispatched(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=20,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    launched = {}
+
+    class _Result:
+        launch_id = 99
+
+    async def fake_launcher(db_, preset_id, request):
+        launched["preset_id"] = preset_id
+        launched["override"] = request.repo_path_override
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        client=_LabelsClient(["area:backend"]),
+        classify=None,
+        launcher=fake_launcher,
+        issue_labels_by_number={20: ["area:backend"]},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.owner_slot_id == backend.id
+    assert item.routing_method == "label"
+    assert item.launch_id == 99
+    assert item.pending_reason is None
+    assert launched["override"] == scope.repo_path
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_queues_when_slot_busy(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    db.add(
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=21,
+            issue_title="x",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="dispatched",
+            owner_slot_id=backend.id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=22,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(db_, preset_id, request):
+        raise AssertionError("should not launch a busy slot")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        client=_LabelsClient(["area:backend"]),
+        launcher=fake_launcher,
+        issue_labels_by_number={22: ["area:backend"]},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "queued_slot_busy"
+
+
+@pytest.mark.asyncio
+async def test_approval_round_cap_escalates(db):
+    preset, slots, scope = await _team(db)
+    scope.max_approval_rounds = 2
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=30,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        approval_round_count=0,
+    )
+    db.add(item)
+    await db.commit()
+    await github_dispatch_service.record_approval_round(db, item, scope)
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    await github_dispatch_service.record_approval_round(db, item, scope)
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "approval_rounds_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_two_phase_handoff(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=40,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=architect.id,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.initiate_handoff(db, item, backend.id)
+    await db.refresh(item)
+    assert item.handoff_state == "pending"
+    assert item.handoff_target_slot_id == backend.id
+    assert item.owner_slot_id == architect.id
+
+    with pytest.raises(ValueError):
+        await github_dispatch_service.accept_handoff(db, item, architect.id)
+
+    await github_dispatch_service.accept_handoff(db, item, backend.id)
+    await db.refresh(item)
+    assert item.owner_slot_id == backend.id
+    assert item.handoff_state == "accepted"
+    assert item.handoff_target_slot_id is None
+    assert item.routing_method == "reassigned"

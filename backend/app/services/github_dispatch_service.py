@@ -1,10 +1,14 @@
 """Routing and dispatch lifecycle for autonomous GitHub dispatch."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import AgentTeamSlot, GithubWorkItem
+from app.models.database import AgentTeamSlot, GithubWorkItem, TeamGithubScope
+from app.models.schemas import AgentTeamLaunchRequest
+from app.services.agent_team_service import agent_team_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 
@@ -59,6 +63,96 @@ class GithubDispatchService:
             )
         ).first()
         return pending_handoff is not None
+
+    async def dispatch_pending(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+        client=None,
+        classify=None,
+        launcher=None,
+        issue_labels_by_number: dict[int, list[str]] | None = None,
+    ) -> None:
+        from app.services.github_client import github_client as _default_client
+
+        client = client or _default_client
+        launcher = launcher or agent_team_service.launch
+        issue_labels_by_number = issue_labels_by_number or {}
+        repo_labels = await client.list_repo_labels(scope.repo_owner, scope.repo_name)
+
+        pending = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "pending",
+                )
+            )
+        ).scalars().all()
+
+        for item in pending:
+            issue_labels = issue_labels_by_number.get(item.issue_number, [])
+            owner_slot_id, method = await self.route_item(
+                db, item, preset_slots, repo_labels, issue_labels, classify=classify
+            )
+            if owner_slot_id is None:
+                item.dispatch_status = "escalated"
+                item.escalation_reason = "plan_blocked"
+                continue
+            if await self.slot_is_busy(db, owner_slot_id):
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_slot_busy"
+                continue
+            result = await launcher(
+                db,
+                scope.preset_id,
+                AgentTeamLaunchRequest(
+                    slot_ids=[owner_slot_id],
+                    skip_plan_confirmation=True,
+                    repo_path_override=scope.repo_path,
+                ),
+            )
+            item.owner_slot_id = owner_slot_id
+            item.routing_method = method
+            item.launch_id = getattr(result, "launch_id", None)
+            item.dispatch_status = "dispatched"
+            item.pending_reason = None
+            item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    async def record_approval_round(
+        self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope
+    ) -> None:
+        item.approval_round_count += 1
+        if item.approval_round_count >= scope.max_approval_rounds:
+            item.dispatch_status = "escalated"
+            item.escalation_reason = "approval_rounds_exhausted"
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    async def initiate_handoff(
+        self, db: AsyncSession, item: GithubWorkItem, target_slot_id: int
+    ) -> None:
+        item.handoff_state = "pending"
+        item.handoff_target_slot_id = target_slot_id
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    async def accept_handoff(
+        self, db: AsyncSession, item: GithubWorkItem, accepting_slot_id: int
+    ) -> None:
+        if item.handoff_target_slot_id != accepting_slot_id:
+            raise ValueError(
+                f"slot {accepting_slot_id} cannot accept a handoff targeted at "
+                f"{item.handoff_target_slot_id}"
+            )
+        item.owner_slot_id = accepting_slot_id
+        item.handoff_state = "accepted"
+        item.handoff_target_slot_id = None
+        item.routing_method = "reassigned"
+        item.updated_at = datetime.utcnow()
+        await db.commit()
 
 
 github_dispatch_service = GithubDispatchService()
