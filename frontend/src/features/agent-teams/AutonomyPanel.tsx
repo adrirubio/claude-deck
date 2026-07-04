@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { MODAL_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import type {
   AgentTeamPreset,
@@ -115,12 +116,14 @@ function ScopeDialog({
 }) {
   const [form, setForm] = useState<TeamGithubScopeInput>(emptyScope)
   const [saving, setSaving] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const open = state !== null
 
   useEffect(() => {
     if (!state) return
     queueMicrotask(() => {
       setForm(state.scope ? scopeToInput(state.scope) : emptyScope)
+      setErrorMessage(null)
     })
   }, [state])
 
@@ -128,13 +131,14 @@ function ScopeDialog({
     setForm((current) => ({ ...current, ...patch }))
   }
 
-  const numberValue = (value: string, fallback: number) => {
+  const numberValue = (value: string, fallback: number, min: number) => {
     const parsed = Number.parseInt(value, 10)
-    return Number.isFinite(parsed) ? parsed : fallback
+    return Number.isFinite(parsed) ? Math.max(parsed, min) : fallback
   }
 
   const submit = async () => {
     setSaving(true)
+    setErrorMessage(null)
     try {
       await onSave({
         ...form,
@@ -145,6 +149,8 @@ function ScopeDialog({
         design_label: form.design_label?.trim() || 'claude-deck-design',
       })
       onOpenChange(null)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save watched repo')
     } finally {
       setSaving(false)
     }
@@ -152,13 +158,18 @@ function ScopeDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => onOpenChange(next ? state : null)}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className={MODAL_SIZES.SM}>
         <DialogHeader>
           <DialogTitle>{state?.mode === 'edit' ? 'Edit watched repo' : 'Add watched repo'}</DialogTitle>
           <DialogDescription>
             This team will poll the repo for labeled issues and dispatch them automatically.
           </DialogDescription>
         </DialogHeader>
+        {errorMessage && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        )}
         <div className="grid gap-4 md:grid-cols-2">
           <div className="grid gap-2">
             <Label htmlFor="scope-owner">Repo owner</Label>
@@ -229,7 +240,7 @@ function ScopeDialog({
               min={1}
               value={form.max_approval_rounds}
               onChange={(event) => update({
-                max_approval_rounds: numberValue(event.target.value, 3),
+                max_approval_rounds: numberValue(event.target.value, 3, 1),
               })}
             />
           </div>
@@ -241,7 +252,7 @@ function ScopeDialog({
               min={1}
               value={form.max_concurrent_dispatched}
               onChange={(event) => update({
-                max_concurrent_dispatched: numberValue(event.target.value, 3),
+                max_concurrent_dispatched: numberValue(event.target.value, 3, 1),
               })}
             />
           </div>
@@ -253,7 +264,7 @@ function ScopeDialog({
               min={0}
               value={form.max_verification_retries}
               onChange={(event) => update({
-                max_verification_retries: numberValue(event.target.value, 2),
+                max_verification_retries: numberValue(event.target.value, 2, 0),
               })}
             />
           </div>
@@ -265,7 +276,7 @@ function ScopeDialog({
               min={0}
               value={form.max_auto_merges_per_day}
               onChange={(event) => update({
-                max_auto_merges_per_day: numberValue(event.target.value, 5),
+                max_auto_merges_per_day: numberValue(event.target.value, 5, 0),
               })}
             />
           </div>
@@ -302,14 +313,18 @@ function WorkItemDialog({
   onRetry: (item: GithubWorkItem) => Promise<void>
 }) {
   const [retrying, setRetrying] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const open = item !== null
 
   const retry = async () => {
     if (!item) return
     setRetrying(true)
+    setErrorMessage(null)
     try {
       await onRetry(item)
       onOpenChange(false)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to retry work item')
     } finally {
       setRetrying(false)
     }
@@ -317,7 +332,7 @@ function WorkItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className={MODAL_SIZES.SM}>
         {item && (
           <>
             <DialogHeader>
@@ -337,6 +352,11 @@ function WorkItemDialog({
                   {item.status_note && (
                     <p className="mt-2 text-sm text-muted-foreground">{item.status_note}</p>
                   )}
+                </div>
+              )}
+              {errorMessage && (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                  {errorMessage}
                 </div>
               )}
               {item.handoff_state && (
@@ -409,18 +429,25 @@ export function AutonomyPanel({
   onRetryWorkItem: (item: GithubWorkItem) => Promise<void>
 }) {
   const [scopeDialog, setScopeDialog] = useState<ScopeDialogState>(null)
-  const [detailItem, setDetailItem] = useState<GithubWorkItem | null>(null)
+  const [detailItemId, setDetailItemId] = useState<number | null>(null)
   const [toggleSaving, setToggleSaving] = useState(false)
+  const [retryingWorkItemId, setRetryingWorkItemId] = useState<number | null>(null)
   const slotById = useMemo(
     () => new Map(preset.slots.map((slot) => [slot.id, slot])),
     [preset.slots]
   )
   const scopeCount = scopes.length
+  const detailItem = useMemo(
+    () => workItems.find((item) => item.id === detailItemId) ?? null,
+    [detailItemId, workItems]
+  )
 
   const toggle = async (enabled: boolean) => {
     setToggleSaving(true)
     try {
       await onToggleAutonomy(enabled)
+    } catch {
+      // Parent handlers surface the error toast; keep the controlled switch stable.
     } finally {
       setToggleSaving(false)
     }
@@ -431,6 +458,26 @@ export function AutonomyPanel({
       await onUpdateScope(scopeDialog.scope.id, input)
     } else {
       await onCreateScope(input as TeamGithubScopeInput)
+    }
+  }
+
+  const deleteScope = async (scope: TeamGithubScope) => {
+    try {
+      await onDeleteScope(scope)
+    } catch {
+      // Parent handlers surface the error toast.
+    }
+  }
+
+  const retryWorkItem = async (item: GithubWorkItem) => {
+    if (retryingWorkItemId !== null) return
+    setRetryingWorkItemId(item.id)
+    try {
+      await onRetryWorkItem(item)
+    } catch {
+      // Parent handlers surface the error toast.
+    } finally {
+      setRetryingWorkItemId(null)
     }
   }
 
@@ -494,7 +541,7 @@ export function AutonomyPanel({
                       variant="outline"
                       className={scope.merge_policy === 'auto' ? 'border-primary text-primary' : 'border-amber-500/70 text-amber-400'}
                     >
-                      merge: {scope.merge_policy}
+                      code merge: {scope.merge_policy}
                     </Badge>
                     {!scope.enabled && <Badge variant="secondary">disabled</Badge>}
                   </div>
@@ -509,7 +556,7 @@ export function AutonomyPanel({
                   <Button variant="outline" size="sm" onClick={() => setScopeDialog({ mode: 'edit', scope })}>
                     Edit
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => onDeleteScope(scope)}>
+                  <Button variant="outline" size="sm" onClick={() => void deleteScope(scope)}>
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove
                   </Button>
@@ -614,12 +661,16 @@ export function AutonomyPanel({
                         <td className="px-3 py-3 text-right">
                           <div className="flex justify-end gap-2">
                             {item.dispatch_status === 'escalated' && (
-                              <Button size="sm" onClick={() => void onRetryWorkItem(item)}>
+                              <Button
+                                size="sm"
+                                disabled={retryingWorkItemId !== null}
+                                onClick={() => void retryWorkItem(item)}
+                              >
                                 <RotateCcw className="mr-2 h-4 w-4" />
-                                Retry
+                                {retryingWorkItemId === item.id ? 'Retrying' : 'Retry'}
                               </Button>
                             )}
-                            <Button variant="outline" size="sm" onClick={() => setDetailItem(item)}>
+                            <Button variant="outline" size="sm" onClick={() => setDetailItemId(item.id)}>
                               <ExternalLink className="mr-2 h-4 w-4" />
                               View
                             </Button>
@@ -637,6 +688,7 @@ export function AutonomyPanel({
 
       <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} />
       <WorkItemDialog
+        key={detailItem?.id ?? 'closed'}
         item={detailItem}
         ownerName={detailItem?.owner_slot_id ? slotById.get(detailItem.owner_slot_id)?.display_name : undefined}
         handoffTargetName={
@@ -644,7 +696,7 @@ export function AutonomyPanel({
             ? slotById.get(detailItem.handoff_target_slot_id)?.display_name
             : undefined
         }
-        onOpenChange={(open) => setDetailItem(open ? detailItem : null)}
+        onOpenChange={(open) => setDetailItemId(open ? detailItemId : null)}
         onRetry={onRetryWorkItem}
       />
     </div>

@@ -197,6 +197,9 @@ async def test_escalated_item_recovers_on_updated_timestamp(db):
         github_updated_at=datetime(2026, 7, 1),
         dispatch_status="escalated",
         escalation_reason="retry_count_exhausted",
+        pending_reason="queued_slot_busy",
+        handoff_state="pending",
+        handoff_target_slot_id=123,
         retry_count=2,
         approval_round_count=1,
     )
@@ -209,6 +212,9 @@ async def test_escalated_item_recovers_on_updated_timestamp(db):
     await db.refresh(item)
     assert item.dispatch_status == "pending"
     assert item.escalation_reason is None
+    assert item.pending_reason is None
+    assert item.handoff_state is None
+    assert item.handoff_target_slot_id is None
     assert item.retry_count == 0
     assert item.approval_round_count == 0
 

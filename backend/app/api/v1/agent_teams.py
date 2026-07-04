@@ -131,7 +131,7 @@ def _apply_scope_create(
     if request.repo_name is not None:
         scope.repo_name = _clean_repo_part(request.repo_name, "Repo name")
     if request.repo_path is not None:
-        repo_path, _ = agent_team_service._normalize_repo(request.repo_path)
+        repo_path, _ = agent_team_service.normalize_repo_path(request.repo_path)
         scope.repo_path = repo_path
     if request.dispatch_label is not None:
         scope.dispatch_label = _clean_label(request.dispatch_label, "Dispatch label")
@@ -290,7 +290,7 @@ async def delete_preset(preset_id: int, db: AsyncSession = Depends(get_db)):
 )
 async def list_github_scopes(preset_id: int, db: AsyncSession = Depends(get_db)):
     try:
-        await agent_team_service._require_preset(db, preset_id)
+        await agent_team_service.require_preset_row(db, preset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     scopes = (
@@ -313,7 +313,10 @@ async def create_github_scope(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await agent_team_service._require_preset(db, preset_id)
+        await agent_team_service.require_preset_row(db, preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
         scope = TeamGithubScope(
             preset_id=preset_id,
             repo_owner="",
@@ -376,7 +379,7 @@ async def list_github_work_items(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        await agent_team_service._require_preset(db, preset_id)
+        await agent_team_service.require_preset_row(db, preset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     rows = (
@@ -406,12 +409,7 @@ async def retry_github_work_item(work_item_id: int, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     if item.dispatch_status != "escalated":
         raise HTTPException(status_code=409, detail="Only escalated work items can be retried")
-    item.dispatch_status = "pending"
-    item.escalation_reason = None
-    item.pending_reason = None
-    item.retry_count = 0
-    item.approval_round_count = 0
-    item.updated_at = datetime.utcnow()
+    github_dispatch_service.reset_for_retry(item)
     await db.commit()
     await db.refresh(item)
     return _work_item_response(item, scope)

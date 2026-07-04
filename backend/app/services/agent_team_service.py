@@ -80,6 +80,12 @@ class AgentTeamService:
         preset = await self._require_preset(db, preset_id)
         return await self._preset_response(db, preset)
 
+    async def require_preset_row(self, db: AsyncSession, preset_id: int) -> AgentTeamPreset:
+        return await self._require_preset(db, preset_id)
+
+    def normalize_repo_path(self, repo_path: str) -> tuple[str, dict[str, str]]:
+        return self._normalize_repo(repo_path)
+
     async def create_preset(
         self, db: AsyncSession, request: AgentTeamPresetCreate
     ) -> AgentTeamPresetResponse:

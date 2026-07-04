@@ -63,11 +63,7 @@ class GithubWatcherService:
             existing.dispatch_status in _RECOVERABLE_STATUSES
             and github_updated_at > existing.github_updated_at
         ):
-            existing.dispatch_status = "pending"
-            existing.escalation_reason = None
-            existing.pending_reason = None
-            existing.retry_count = 0
-            existing.approval_round_count = 0
+            github_dispatch_service.reset_for_retry(existing)
         if existing.dispatch_status == "pending":
             existing.issue_type = issue_type
         existing.github_updated_at = github_updated_at

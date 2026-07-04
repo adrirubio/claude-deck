@@ -249,6 +249,23 @@ async def test_github_scope_rejects_invalid_repo_path(client, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_github_scope_create_missing_preset_returns_404(client, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    response = await client.post(
+        "/api/v1/agent-teams/presets/999999/github-scopes",
+        json={
+            "repo_owner": "adrirubio",
+            "repo_name": "snazzyemail",
+            "repo_path": str(repo),
+        },
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -282,6 +299,8 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
         dispatch_status="escalated",
         escalation_reason="retry_count_exhausted",
         pending_reason="queued_repo_cap",
+        handoff_state="pending",
+        handoff_target_slot_id=1,
         retry_count=2,
         approval_round_count=3,
     )
@@ -319,5 +338,7 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
     assert body["dispatch_status"] == "pending"
     assert body["escalation_reason"] is None
     assert body["pending_reason"] is None
+    assert body["handoff_state"] is None
+    assert body["handoff_target_slot_id"] is None
     assert body["retry_count"] == 0
     assert body["approval_round_count"] == 0

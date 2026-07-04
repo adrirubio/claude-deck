@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -736,6 +736,7 @@ export function AgentTeamsPage() {
   const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
   const [autonomyLoading, setAutonomyLoading] = useState(false)
   const [autonomyRefreshing, setAutonomyRefreshing] = useState(false)
+  const autonomyRequestIdRef = useRef(0)
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId),
@@ -775,6 +776,8 @@ export function AgentTeamsPage() {
   }, [])
 
   const loadAutonomy = useCallback(async (presetId: number, showLoading = false) => {
+    const requestId = autonomyRequestIdRef.current + 1
+    autonomyRequestIdRef.current = requestId
     if (showLoading) setAutonomyLoading(true)
     setAutonomyRefreshing(true)
     try {
@@ -782,13 +785,19 @@ export function AgentTeamsPage() {
         fetchTeamGithubScopes(presetId),
         fetchGithubWorkItems(presetId),
       ])
-      setGithubScopes(scopeResponse.scopes)
-      setGithubWorkItems(workItemResponse.items)
+      if (autonomyRequestIdRef.current === requestId) {
+        setGithubScopes(scopeResponse.scopes)
+        setGithubWorkItems(workItemResponse.items)
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load autonomy state')
+      if (autonomyRequestIdRef.current === requestId) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load autonomy state')
+      }
     } finally {
-      setAutonomyLoading(false)
-      setAutonomyRefreshing(false)
+      if (autonomyRequestIdRef.current === requestId) {
+        setAutonomyLoading(false)
+        setAutonomyRefreshing(false)
+      }
     }
   }, [])
 
@@ -807,9 +816,12 @@ export function AgentTeamsPage() {
 
   useEffect(() => {
     if (!selectedPresetId) {
+      autonomyRequestIdRef.current += 1
       queueMicrotask(() => {
         setGithubScopes([])
         setGithubWorkItems([])
+        setAutonomyLoading(false)
+        setAutonomyRefreshing(false)
       })
       return
     }
@@ -936,41 +948,66 @@ export function AgentTeamsPage() {
 
   const toggleAutonomy = async (enabled: boolean) => {
     if (!selectedPreset) return
-    const updated = await updateAgentTeamPreset(selectedPreset.id, {
-      autonomy_enabled: enabled,
-    })
-    replacePreset(updated)
-    toast.success(enabled ? 'Autonomy enabled' : 'Autonomy disabled')
+    try {
+      const updated = await updateAgentTeamPreset(selectedPreset.id, {
+        autonomy_enabled: enabled,
+      })
+      replacePreset(updated)
+      toast.success(enabled ? 'Autonomy enabled' : 'Autonomy disabled')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update autonomy')
+      throw error
+    }
   }
 
   const createGithubScope = async (input: TeamGithubScopeInput) => {
     if (!selectedPreset) return
-    await createTeamGithubScope(selectedPreset.id, input)
-    await loadAutonomy(selectedPreset.id)
-    toast.success('Watched repo added')
+    try {
+      await createTeamGithubScope(selectedPreset.id, input)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Watched repo added')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to add watched repo')
+      throw error
+    }
   }
 
   const updateGithubScope = async (scopeId: number, input: TeamGithubScopeUpdate) => {
     if (!selectedPreset) return
-    await updateTeamGithubScope(scopeId, input)
-    await loadAutonomy(selectedPreset.id)
-    toast.success('Watched repo saved')
+    try {
+      await updateTeamGithubScope(scopeId, input)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Watched repo saved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save watched repo')
+      throw error
+    }
   }
 
   const removeGithubScope = async (scope: TeamGithubScope) => {
     if (!selectedPreset) return
     const confirmed = window.confirm(`Remove watched repo ${scope.repo_owner}/${scope.repo_name}?`)
     if (!confirmed) return
-    await deleteTeamGithubScope(scope.id)
-    await loadAutonomy(selectedPreset.id)
-    toast.success('Watched repo removed')
+    try {
+      await deleteTeamGithubScope(scope.id)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Watched repo removed')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to remove watched repo')
+      throw error
+    }
   }
 
   const retryWorkItem = async (item: GithubWorkItem) => {
     if (!selectedPreset) return
-    await retryGithubWorkItem(item.id)
-    await loadAutonomy(selectedPreset.id)
-    toast.success(`Issue #${item.issue_number} reset to pending`)
+    try {
+      await retryGithubWorkItem(item.id)
+      await loadAutonomy(selectedPreset.id)
+      toast.success(`Issue #${item.issue_number} reset to pending`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to retry work item')
+      throw error
+    }
   }
 
   const removeSlot = async (slot: AgentTeamSlot) => {
