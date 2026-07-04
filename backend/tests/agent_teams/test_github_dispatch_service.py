@@ -105,7 +105,6 @@ async def test_route_by_label_match(db):
         db,
         item,
         slots,
-        repo_labels=["area:backend"],
         issue_labels=["area:backend"],
     )
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
@@ -134,7 +133,6 @@ async def test_route_classification_fallback(db):
         db,
         item,
         slots,
-        repo_labels=["area:backend"],
         issue_labels=["no-area-label"],
         classify=fake_classify,
     )
@@ -157,9 +155,7 @@ async def test_route_leader_fallback_when_no_expertise(db):
     )
     db.add(item)
     await db.commit()
-    owner_id, method = await github_dispatch_service.route_item(
-        db, item, slots, repo_labels=[], issue_labels=["nothing"]
-    )
+    owner_id, method = await github_dispatch_service.route_item(db, item, slots, ["nothing"])
     architect = next(slot for slot in slots if slot.display_name == "Architect")
     assert owner_id == architect.id
     assert method == "leader_fallback"
@@ -266,6 +262,176 @@ async def test_dispatch_pending_launches_and_marks_dispatched(db):
     assert item.launch_id == 99
     assert item.pending_reason is None
     assert launched["override"] == scope.repo_path
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_disables_reuse_for_repo_override(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=23,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    launched = {}
+
+    class _Result:
+        launch_id = 100
+
+    async def fake_launcher(db_, preset_id, request):
+        launched["reuse_existing"] = request.reuse_existing
+        launched["override"] = request.repo_path_override
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        client=_LabelsClient([]),
+        launcher=fake_launcher,
+        issue_labels_by_number={23: []},
+    )
+
+    assert launched["reuse_existing"] is False
+    assert launched["override"] == scope.repo_path
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_queues_same_batch_items_for_same_slot(db):
+    preset, slots, scope = await _team(db)
+    first = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=24,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    second = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=25,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add_all([first, second])
+    await db.commit()
+    launches = []
+
+    class _Result:
+        launch_id = 101
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request.slot_ids[0])
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        client=_LabelsClient(["area:backend"]),
+        launcher=fake_launcher,
+        issue_labels_by_number={24: ["area:backend"], 25: ["area:backend"]},
+    )
+    await db.refresh(first)
+    await db.refresh(second)
+    assert len(launches) == 1
+    assert first.dispatch_status == "dispatched"
+    assert second.dispatch_status == "pending"
+    assert second.pending_reason == "queued_slot_busy"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_commits_success_before_later_plan_block(db):
+    preset, slots, scope = await _team(db)
+    first = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=26,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    second = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=27,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add_all([first, second])
+    await db.commit()
+    calls = 0
+
+    class _Result:
+        launch_id = 102
+
+    async def fake_launcher(db_, preset_id, request):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("plan is blocked")
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        client=_LabelsClient(["area:backend"]),
+        launcher=fake_launcher,
+        issue_labels_by_number={26: [], 27: ["area:backend"]},
+    )
+    await db.refresh(first)
+    await db.refresh(second)
+    assert first.dispatch_status == "dispatched"
+    assert second.dispatch_status == "escalated"
+    assert second.escalation_reason == "plan_blocked"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_marks_failed_launch_result_failed(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=28,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _Item:
+        status = "failed"
+        error = "spawn failed"
+
+    class _Result:
+        launch_id = 103
+        status = "completed_with_errors"
+        items = [_Item()]
+
+    async def fake_launcher(db_, preset_id, request):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        client=_LabelsClient([]),
+        launcher=fake_launcher,
+        issue_labels_by_number={28: []},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "failed"
+    assert item.launch_id == 103
 
 
 @pytest.mark.asyncio
@@ -414,6 +580,30 @@ async def test_monitor_leaves_item_when_leader_reachable(db):
         scope,
         preset_slots=slots,
         wake_state_by_slot={architect.id: "wakeable", slots[1].id: "wakeable"},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_monitor_leaves_item_when_leader_not_registered_yet(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=52,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={slots[1].id: "wakeable"},
     )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"

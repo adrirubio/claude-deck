@@ -50,7 +50,12 @@ async def report_dispatch_status(
         raise HTTPException(status_code=404, detail="work item not found")
     scope = await db.get(TeamGithubScope, item.scope_id)
 
-    if report.status in ("triaging", "revision_requested"):
+    if report.status == "triaging":
+        if report.note is not None:
+            item.status_note = report.note
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+    elif report.status == "revision_requested":
         await github_dispatch_service.record_approval_round(db, item, scope)
     elif report.status == "handoff_initiated":
         if report.reassign_to_slot_id is None:
@@ -65,7 +70,8 @@ async def report_dispatch_status(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
         item.dispatch_status = "escalated"
-        item.escalation_reason = "agent_blocked"
+        item.escalation_reason = "plan_blocked"
+        item.status_note = report.note
         item.updated_at = datetime.utcnow()
         await db.commit()
     elif report.status in ("pr_opened", "in_progress"):

@@ -381,6 +381,11 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             text("ALTER TABLE agent_team_presets ADD COLUMN autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL")
         )
 
+    result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
+    work_item_columns = {row[1] for row in result.fetchall()}
+    if work_item_columns and "status_note" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
+
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}
     if launch_item_columns and "message" not in launch_item_columns:

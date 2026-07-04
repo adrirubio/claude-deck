@@ -19,7 +19,6 @@ class GithubDispatchService:
         db: AsyncSession,
         item: GithubWorkItem,
         preset_slots: list[AgentTeamSlot],
-        repo_labels: list[str],
         issue_labels: list[str],
         classify=None,
     ) -> tuple[int | None, str]:
@@ -74,12 +73,9 @@ class GithubDispatchService:
         launcher=None,
         issue_labels_by_number: dict[int, list[str]] | None = None,
     ) -> None:
-        from app.services.github_client import github_client as _default_client
-
-        client = client or _default_client
         launcher = launcher or agent_team_service.launch
         issue_labels_by_number = issue_labels_by_number or {}
-        repo_labels = await client.list_repo_labels(scope.repo_owner, scope.repo_name)
+        slots_dispatched_this_batch: set[int] = set()
 
         pending = (
             await db.execute(
@@ -93,33 +89,61 @@ class GithubDispatchService:
         for item in pending:
             issue_labels = issue_labels_by_number.get(item.issue_number, [])
             owner_slot_id, method = await self.route_item(
-                db, item, preset_slots, repo_labels, issue_labels, classify=classify
+                db, item, preset_slots, issue_labels, classify=classify
             )
             if owner_slot_id is None:
                 item.dispatch_status = "escalated"
                 item.escalation_reason = "plan_blocked"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
                 continue
-            if await self.slot_is_busy(db, owner_slot_id):
+            if owner_slot_id in slots_dispatched_this_batch or await self.slot_is_busy(
+                db, owner_slot_id
+            ):
                 item.owner_slot_id = owner_slot_id
                 item.routing_method = method
                 item.pending_reason = "queued_slot_busy"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
                 continue
-            result = await launcher(
-                db,
-                scope.preset_id,
-                AgentTeamLaunchRequest(
-                    slot_ids=[owner_slot_id],
-                    skip_plan_confirmation=True,
-                    repo_path_override=scope.repo_path,
-                ),
-            )
+            try:
+                result = await launcher(
+                    db,
+                    scope.preset_id,
+                    AgentTeamLaunchRequest(
+                        slot_ids=[owner_slot_id],
+                        reuse_existing=False,
+                        skip_plan_confirmation=True,
+                        repo_path_override=scope.repo_path,
+                    ),
+                )
+            except ValueError:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.dispatch_status = "escalated"
+                item.escalation_reason = "plan_blocked"
+                item.pending_reason = None
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
             item.owner_slot_id = owner_slot_id
             item.routing_method = method
             item.launch_id = getattr(result, "launch_id", None)
-            item.dispatch_status = "dispatched"
+            launch_item = next(iter(getattr(result, "items", []) or []), None)
+            launch_status = getattr(launch_item, "status", None)
+            if launch_status in {
+                "failed",
+                "blocked",
+                "blocked_provider_unavailable",
+                "blocked_agent_mail_not_configured",
+            }:
+                item.dispatch_status = "failed"
+            else:
+                item.dispatch_status = "dispatched"
+                slots_dispatched_this_batch.add(owner_slot_id)
             item.pending_reason = None
             item.updated_at = datetime.utcnow()
-        await db.commit()
+            await db.commit()
 
     async def record_approval_round(
         self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope
@@ -178,7 +202,7 @@ class GithubDispatchService:
                 for member in members
                 if member.team_slot_id is not None
             }
-        leader_wake = wake_state_by_slot.get(leader.id, "offline")
+        leader_wake = wake_state_by_slot.get(leader.id)
 
         dispatched = (
             await db.execute(

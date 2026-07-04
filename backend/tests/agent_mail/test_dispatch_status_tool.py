@@ -60,7 +60,7 @@ async def _seed_item(maker, **overrides):
 
 
 @pytest.mark.asyncio
-async def test_triaging_increments_and_caps(client_and_db):
+async def test_triaging_does_not_increment_approval_rounds(client_and_db):
     ac, maker = client_and_db
     item_id = await _seed_item(maker, approval_round_count=1)
     resp = await ac.post(
@@ -70,8 +70,40 @@ async def test_triaging_increments_and_caps(client_and_db):
     assert resp.status_code == 200
     async with maker() as db:
         item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "dispatched"
+        assert item.approval_round_count == 1
+        assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_revision_requested_increments_and_caps(client_and_db):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, approval_round_count=1)
+    resp = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "revision_requested"},
+    )
+    assert resp.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
         assert item.dispatch_status == "escalated"
         assert item.escalation_reason == "approval_rounds_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_blocked_uses_spec_reason_and_persists_note(client_and_db):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker)
+    resp = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "blocked", "note": "missing credentials"},
+    )
+    assert resp.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "escalated"
+        assert item.escalation_reason == "plan_blocked"
+        assert item.status_note == "missing credentials"
 
 
 def test_shim_exposes_dispatch_status_tool():
