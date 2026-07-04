@@ -75,7 +75,10 @@ async def report_dispatch_status(
     elif report.status == "pr_opened":
         if report.pr_number is None:
             raise HTTPException(status_code=400, detail="pr_number required")
-        await github_verification_service.report_pr_opened(db, item, scope, report.pr_number)
+        try:
+            await github_verification_service.report_pr_opened(db, item, scope, report.pr_number)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "in_progress":
         if report.pr_number is not None:
             item.pr_number = report.pr_number

@@ -647,6 +647,37 @@ async def test_escalation_creates_agent_mail_broadcast(db):
 
 
 @pytest.mark.asyncio
+async def test_escalation_state_persists_when_notification_fails(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    scope.max_approval_rounds = 1
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=37,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fail_broadcast(db_, item_, reason, note):
+        raise RuntimeError("mail down")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "_send_escalation_broadcast",
+        fail_broadcast,
+    )
+
+    await github_dispatch_service.record_approval_round(db, item, scope)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "approval_rounds_exhausted"
+
+
+@pytest.mark.asyncio
 async def test_two_phase_handoff(db):
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]

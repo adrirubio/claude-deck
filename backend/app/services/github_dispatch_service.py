@@ -1,6 +1,7 @@
 """Routing and dispatch lifecycle for autonomous GitHub dispatch."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy import func, select
@@ -12,6 +13,8 @@ from app.services.agent_team_service import agent_team_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
+
+logger = logging.getLogger(__name__)
 
 
 class GithubDispatchService:
@@ -246,15 +249,31 @@ class GithubDispatchService:
         reason: str,
         note: str | None = None,
     ) -> None:
+        self._apply_escalation(item, reason, note)
+        try:
+            await self._send_escalation_broadcast(db, item, reason, note)
+            if reason == "dispatch_label_removed":
+                await self._send_label_removed_owner_message(db, item)
+        except Exception:
+            logger.exception(
+                "Failed to send autonomous dispatch escalation notification for item %s",
+                item.id,
+            )
+            await db.rollback()
+            self._apply_escalation(item, reason, note)
+
+    def _apply_escalation(
+        self,
+        item: GithubWorkItem,
+        reason: str,
+        note: str | None = None,
+    ) -> None:
         item.dispatch_status = "escalated"
         item.escalation_reason = reason
         item.pending_reason = None
         if note is not None:
             item.status_note = note
         item.updated_at = datetime.utcnow()
-        await self._send_escalation_broadcast(db, item, reason, note)
-        if reason == "dispatch_label_removed":
-            await self._send_label_removed_owner_message(db, item)
 
     async def notify_owner(
         self,

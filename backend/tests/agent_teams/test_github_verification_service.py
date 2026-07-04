@@ -103,6 +103,7 @@ class _Client:
         *,
         pull=None,
         check_runs=None,
+        combined_status=None,
         merge_result=None,
         merge_error: httpx.HTTPStatusError | None = None,
     ):
@@ -115,16 +116,26 @@ class _Client:
             "head": {"sha": "sha"},
         }
         self.check_runs = check_runs if check_runs is not None else []
+        self.combined_status = (
+            combined_status
+            if combined_status is not None
+            else {"state": "pending", "statuses": []}
+        )
         self.merge_result = merge_result or {"merged": True}
         self.merge_error = merge_error
         self.ready_calls = 0
         self.merge_calls = 0
+        self.pull_calls = 0
 
     async def get_pull(self, owner, repo, pr_number):
+        self.pull_calls += 1
         return dict(self.pull)
 
     async def list_check_runs_for_ref(self, owner, repo, ref):
         return list(self.check_runs)
+
+    async def get_combined_status_for_ref(self, owner, repo, ref):
+        return dict(self.combined_status)
 
     async def mark_pull_ready_for_review(self, pull_node_id):
         self.ready_calls += 1
@@ -172,19 +183,69 @@ async def test_verify_green_code_pr_marks_ready_for_review(db):
     await db.refresh(item)
     assert item.dispatch_status == "ready_for_review"
     assert client.ready_calls == 1
+    assert client.pull_calls == 2
+    assert client.ready_calls == 1
 
 
 @pytest.mark.asyncio
 async def test_verify_zero_check_runs_escalates(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        updated_at=datetime.utcnow() - timedelta(minutes=5),
+    )
+
+    await github_verification_service.process_scope(db, scope, client=_Client(check_runs=[]))
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert "No GitHub check-runs or commit statuses" in item.status_note
+
+
+@pytest.mark.asyncio
+async def test_zero_check_runs_waits_during_grace_window(db):
     scope = await _scope(db)
     item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
 
     await github_verification_service.process_scope(db, scope, client=_Client(check_runs=[]))
 
     await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert "Waiting for GitHub check-runs" in item.status_note
+
+
+@pytest.mark.asyncio
+async def test_combined_status_success_verifies_without_check_runs(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        check_runs=[],
+        combined_status={"state": "success", "statuses": [{"context": "ci"}]},
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "ready_for_review"
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_check_conclusion_counts_as_failed(db):
+    scope = await _scope(db, max_verification_retries=0)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "startup_failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
     assert item.dispatch_status == "escalated"
-    assert item.escalation_reason == "no_check_runs"
-    assert "No GitHub check-runs" in item.status_note
+    assert item.escalation_reason == "retry_count_exhausted"
 
 
 @pytest.mark.asyncio
@@ -219,8 +280,33 @@ async def test_failed_check_returns_to_dispatched_until_budget_exhausted(db):
     await db.commit()
     await github_verification_service.process_scope(db, scope, client=client)
     await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 2
+
+    item.dispatch_status = "verifying"
+    await db.commit()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "retry_count_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_failed_check_dispatched_item_with_pr_is_reverified(db):
+    scope = await _scope(db, max_verification_retries=2)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+
+    client.check_runs = [{"name": "ci", "status": "completed", "conclusion": "success"}]
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "ready_for_review"
 
 
 @pytest.mark.asyncio
@@ -274,6 +360,77 @@ async def test_durable_merge_failure_falls_back_to_human_without_escalation(db):
     assert item.escalation_reason is None
     assert "requires human merge" in item.status_note
     assert client.merge_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_unexpected_merge_status_is_transient_and_does_not_abort_batch(db):
+    scope = await _scope(db, merge_policy="auto", max_verification_retries=2)
+    first = await _item(db, scope, issue_number=1, dispatch_status="ready_for_review", pr_number=5)
+    second = await _item(db, scope, issue_number=2, dispatch_status="ready_for_review", pr_number=6)
+
+    class _BatchClient(_Client):
+        async def get_pull(self, owner, repo, pr_number):
+            return {
+                "number": pr_number,
+                "merged": False,
+                "mergeable_state": "clean",
+                "head": {"sha": f"sha-{pr_number}"},
+            }
+
+        async def merge_pull(self, owner, repo, pr_number):
+            self.merge_calls += 1
+            if pr_number == 5:
+                raise _http_error(422)
+            return {"merged": True}
+
+    client = _BatchClient()
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(first)
+    await db.refresh(second)
+    assert first.dispatch_status == "ready_for_review"
+    assert first.retry_count == 1
+    assert "Transient merge failure" in first.status_note
+    assert second.dispatch_status == "merged"
+
+
+@pytest.mark.asyncio
+async def test_draft_pr_is_refetched_before_auto_merge_decision(db):
+    scope = await _scope(db, merge_policy="auto")
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+
+    class _DraftClient(_Client):
+        async def get_pull(self, owner, repo, pr_number):
+            self.pull_calls += 1
+            if self.pull_calls == 1:
+                return {
+                    "number": 5,
+                    "node_id": "node",
+                    "draft": True,
+                    "merged": False,
+                    "mergeable_state": "unknown",
+                    "head": {"sha": "sha"},
+                }
+            return {
+                "number": 5,
+                "node_id": "node",
+                "draft": False,
+                "merged": False,
+                "mergeable_state": "clean",
+                "head": {"sha": "sha"},
+            }
+
+    client = _DraftClient(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "merged"
+    assert client.ready_calls == 1
+    assert client.pull_calls == 2
 
 
 @pytest.mark.asyncio

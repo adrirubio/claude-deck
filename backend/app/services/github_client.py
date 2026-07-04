@@ -114,6 +114,19 @@ class GithubClient:
             if self._http is None:
                 await client.aclose()
 
+    async def get_combined_status_for_ref(self, owner: str, repo: str, ref: str) -> dict:
+        client = self._client()
+        try:
+            resp = await client.get(
+                f"/repos/{owner}/{repo}/commits/{ref}/status",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+        finally:
+            if self._http is None:
+                await client.aclose()
+
     async def mark_pull_ready_for_review(self, pull_node_id: str) -> dict:
         client = self._client()
         try:
