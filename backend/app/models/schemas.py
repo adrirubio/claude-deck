@@ -2062,6 +2062,8 @@ class AgentTeamSlotCreate(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str = "plain"
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    area_labels: Optional[List[str]] = None
+    expertise: Optional[str] = None
     enabled: bool = True
     position: Optional[int] = None
 
@@ -2076,6 +2078,8 @@ class AgentTeamSlotUpdate(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: Optional[str] = None
     launch_options: Optional[Dict[str, Any]] = None
+    area_labels: Optional[List[str]] = None
+    expertise: Optional[str] = None
     enabled: Optional[bool] = None
     position: Optional[int] = None
 
@@ -2095,6 +2099,8 @@ class AgentTeamSlotResponse(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    area_labels: Optional[List[str]] = None
+    expertise: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
     enabled: bool
     created_at: datetime
@@ -2111,6 +2117,7 @@ class AgentTeamPresetCreate(BaseModel):
 class AgentTeamPresetUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    autonomy_enabled: Optional[bool] = None
 
 
 class AgentTeamPresetResponse(BaseModel):
@@ -2120,6 +2127,7 @@ class AgentTeamPresetResponse(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    autonomy_enabled: bool = False
     slots: List[AgentTeamSlotResponse] = Field(default_factory=list)
 
 
@@ -2141,6 +2149,88 @@ class AgentTeamCreateFromBridgeRequest(BaseModel):
 
 class AgentTeamSlotReorderRequest(BaseModel):
     slot_ids: List[int]
+
+
+class TeamGithubScopeCreate(BaseModel):
+    repo_owner: str
+    repo_name: str
+    repo_path: str
+    dispatch_label: str = "claude-deck-ready"
+    design_label: str = "claude-deck-design"
+    merge_policy: Literal["human", "auto"] = "human"
+    max_approval_rounds: int = Field(default=3, ge=1)
+    max_concurrent_dispatched: int = Field(default=3, ge=1)
+    max_verification_retries: int = Field(default=2, ge=0)
+    max_auto_merges_per_day: int = Field(default=5, ge=0)
+    enabled: bool = True
+
+
+class TeamGithubScopeUpdate(BaseModel):
+    repo_owner: Optional[str] = None
+    repo_name: Optional[str] = None
+    repo_path: Optional[str] = None
+    dispatch_label: Optional[str] = None
+    design_label: Optional[str] = None
+    merge_policy: Optional[Literal["human", "auto"]] = None
+    max_approval_rounds: Optional[int] = Field(default=None, ge=1)
+    max_concurrent_dispatched: Optional[int] = Field(default=None, ge=1)
+    max_verification_retries: Optional[int] = Field(default=None, ge=0)
+    max_auto_merges_per_day: Optional[int] = Field(default=None, ge=0)
+    enabled: Optional[bool] = None
+
+
+class TeamGithubScopeResponse(BaseModel):
+    id: int
+    preset_id: int
+    repo_owner: str
+    repo_name: str
+    repo_path: str
+    dispatch_label: str
+    design_label: str
+    merge_policy: str
+    max_approval_rounds: int
+    max_concurrent_dispatched: int
+    max_verification_retries: int
+    max_auto_merges_per_day: int
+    enabled: bool
+    last_polled_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TeamGithubScopeListResponse(BaseModel):
+    scopes: List[TeamGithubScopeResponse] = Field(default_factory=list)
+
+
+class GithubWorkItemResponse(BaseModel):
+    id: int
+    scope_id: int
+    repo_owner: str
+    repo_name: str
+    issue_number: int
+    issue_title: str
+    issue_url: str
+    github_updated_at: datetime
+    issue_type: str
+    dispatch_status: str
+    pending_reason: Optional[str] = None
+    launch_id: Optional[int] = None
+    owner_slot_id: Optional[int] = None
+    routing_method: Optional[str] = None
+    handoff_state: Optional[str] = None
+    handoff_target_slot_id: Optional[int] = None
+    approval_round_count: int
+    pr_number: Optional[int] = None
+    retry_count: int
+    escalation_reason: Optional[str] = None
+    status_note: Optional[str] = None
+    auto_merged_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class GithubWorkItemListResponse(BaseModel):
+    items: List[GithubWorkItemResponse] = Field(default_factory=list)
 
 
 class AgentTeamLaunchPlanItem(BaseModel):

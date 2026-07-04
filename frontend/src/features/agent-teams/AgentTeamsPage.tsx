@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -39,6 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
@@ -50,29 +51,40 @@ import type {
   AgentTeamPreset,
   AgentTeamSlot,
   AgentTeamSlotInput,
+  GithubWorkItem,
   SlotLaunchOptions,
+  TeamGithubScope,
+  TeamGithubScopeInput,
+  TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
+  createTeamGithubScope,
   createAgentTeamFromBridge,
   createAgentTeamFromMail,
   createAgentTeamPreset,
   deleteAgentTeamPreset,
   deleteAgentTeamSlot,
+  deleteTeamGithubScope,
   duplicateAgentTeamPreset,
   fetchAgentTeamPresets,
+  fetchGithubWorkItems,
+  fetchTeamGithubScopes,
   launchAgentTeam,
   planAgentTeamLaunch,
+  retryGithubWorkItem,
   reorderAgentTeamSlots,
   updateAgentTeamPreset,
   updateAgentTeamSlot,
+  updateTeamGithubScope,
 } from './api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
 import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
 import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
+import { AutonomyPanel } from './AutonomyPanel'
 
 type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
@@ -91,6 +103,8 @@ const emptySlot: AgentTeamSlotInput = {
   bootstrap_prompt: '',
   launch_mode: 'plain',
   launch_options: {},
+  area_labels: [],
+  expertise: '',
   enabled: true,
 }
 
@@ -118,6 +132,18 @@ function parseLaunchOptions(raw: string): SlotLaunchOptions {
     throw new Error('Launch options must be a JSON object')
   }
   return parsed as SlotLaunchOptions
+}
+
+function parseLabelList(raw: string): string[] {
+  const seen = new Set<string>()
+  const labels: string[] = []
+  for (const part of raw.split(/[,\n]/)) {
+    const label = part.trim()
+    if (!label || seen.has(label)) continue
+    labels.push(label)
+    seen.add(label)
+  }
+  return labels
 }
 
 function modeOptionsFor(
@@ -149,6 +175,8 @@ function slotToInput(slot: AgentTeamSlot): AgentTeamSlotInput {
     bootstrap_prompt: slot.bootstrap_prompt ?? '',
     launch_mode: slot.launch_mode,
     launch_options: slot.launch_options ?? {},
+    area_labels: slot.area_labels ?? [],
+    expertise: slot.expertise ?? '',
     enabled: slot.enabled,
     position: slot.position,
   }
@@ -361,6 +389,7 @@ function SlotDialog({
 }) {
   const [form, setForm] = useState<AgentTeamSlotInput>(emptySlot)
   const [launchOptionsText, setLaunchOptionsText] = useState('{}')
+  const [areaLabelsText, setAreaLabelsText] = useState('')
   const [saving, setSaving] = useState(false)
   const open = state !== null
   const selectedProvider = form.provider as AgentProviderId
@@ -377,6 +406,7 @@ function SlotDialog({
     queueMicrotask(() => {
       setForm(next)
       setLaunchOptionsText(JSON.stringify(next.launch_options ?? {}, null, 2))
+      setAreaLabelsText((next.area_labels ?? []).join(', '))
     })
   }, [state])
 
@@ -399,6 +429,7 @@ function SlotDialog({
     try {
       await onSave({
         ...form,
+        area_labels: parseLabelList(areaLabelsText),
         launch_options: parseLaunchOptions(launchOptionsText),
       })
       onOpenChange(null)
@@ -503,6 +534,45 @@ function SlotDialog({
               value={form.charter ?? ''}
               onChange={(event) => update({ charter: event.target.value })}
             />
+          </div>
+          <div className="grid gap-4 rounded-lg border border-primary/30 bg-primary/5 p-4 md:col-span-2">
+            <div>
+              <Badge variant="outline" className="border-primary text-primary">
+                GitHub dispatch routing
+              </Badge>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Optional SME routing metadata used by autonomous GitHub dispatch.
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="slot-area-labels">Area labels</Label>
+              <Input
+                id="slot-area-labels"
+                value={areaLabelsText}
+                placeholder="area:backend, area:api"
+                onChange={(event) => setAreaLabelsText(event.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                {parseLabelList(areaLabelsText).map((label) => (
+                  <Badge key={label} variant="secondary">{label}</Badge>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Mechanical match checked first against incoming GitHub issue labels.
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="slot-expertise">Expertise</Label>
+              <Textarea
+                id="slot-expertise"
+                value={form.expertise ?? ''}
+                placeholder="Owns the backend API, database models, and background jobs."
+                onChange={(event) => update({ expertise: event.target.value })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Used only as fallback classifier input when no area label matches.
+              </p>
+            </div>
           </div>
           <div className="grid gap-2 md:col-span-2">
             <Label htmlFor="slot-bootstrap">Bootstrap prompt</Label>
@@ -662,6 +732,11 @@ export function AgentTeamsPage() {
   const [plannedSlotIds, setPlannedSlotIds] = useState<number[] | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [launchOptionsByProvider, setLaunchOptionsByProvider] = useState<LaunchOptionsByProvider>({})
+  const [githubScopes, setGithubScopes] = useState<TeamGithubScope[]>([])
+  const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
+  const [autonomyLoading, setAutonomyLoading] = useState(false)
+  const [autonomyRefreshing, setAutonomyRefreshing] = useState(false)
+  const autonomyRequestIdRef = useRef(0)
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId),
@@ -700,6 +775,32 @@ export function AgentTeamsPage() {
     }
   }, [])
 
+  const loadAutonomy = useCallback(async (presetId: number, showLoading = false) => {
+    const requestId = autonomyRequestIdRef.current + 1
+    autonomyRequestIdRef.current = requestId
+    if (showLoading) setAutonomyLoading(true)
+    setAutonomyRefreshing(true)
+    try {
+      const [scopeResponse, workItemResponse] = await Promise.all([
+        fetchTeamGithubScopes(presetId),
+        fetchGithubWorkItems(presetId),
+      ])
+      if (autonomyRequestIdRef.current === requestId) {
+        setGithubScopes(scopeResponse.scopes)
+        setGithubWorkItems(workItemResponse.items)
+      }
+    } catch (error) {
+      if (autonomyRequestIdRef.current === requestId) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load autonomy state')
+      }
+    } finally {
+      if (autonomyRequestIdRef.current === requestId) {
+        setAutonomyLoading(false)
+        setAutonomyRefreshing(false)
+      }
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     queueMicrotask(() => {
@@ -712,6 +813,26 @@ export function AgentTeamsPage() {
       cancelled = true
     }
   }, [loadPresets, loadProviderLaunchOptions])
+
+  useEffect(() => {
+    if (!selectedPresetId) {
+      autonomyRequestIdRef.current += 1
+      queueMicrotask(() => {
+        setGithubScopes([])
+        setGithubWorkItems([])
+        setAutonomyLoading(false)
+        setAutonomyRefreshing(false)
+      })
+      return
+    }
+    queueMicrotask(() => {
+      void loadAutonomy(selectedPresetId, true)
+    })
+    const interval = window.setInterval(() => {
+      void loadAutonomy(selectedPresetId)
+    }, 5000)
+    return () => window.clearInterval(interval)
+  }, [loadAutonomy, selectedPresetId])
 
   const stats = useMemo(() => {
     const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
@@ -818,6 +939,75 @@ export function AgentTeamsPage() {
       : await addAgentTeamSlot(selectedPreset.id, normalizedInput)
     replacePreset(saved)
     toast.success('Slot saved')
+  }
+
+  const refreshAutonomy = async () => {
+    if (!selectedPreset) return
+    await loadAutonomy(selectedPreset.id)
+  }
+
+  const toggleAutonomy = async (enabled: boolean) => {
+    if (!selectedPreset) return
+    try {
+      const updated = await updateAgentTeamPreset(selectedPreset.id, {
+        autonomy_enabled: enabled,
+      })
+      replacePreset(updated)
+      toast.success(enabled ? 'Autonomy enabled' : 'Autonomy disabled')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to update autonomy')
+      throw error
+    }
+  }
+
+  const createGithubScope = async (input: TeamGithubScopeInput) => {
+    if (!selectedPreset) return
+    try {
+      await createTeamGithubScope(selectedPreset.id, input)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Watched repo added')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to add watched repo')
+      throw error
+    }
+  }
+
+  const updateGithubScope = async (scopeId: number, input: TeamGithubScopeUpdate) => {
+    if (!selectedPreset) return
+    try {
+      await updateTeamGithubScope(scopeId, input)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Watched repo saved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save watched repo')
+      throw error
+    }
+  }
+
+  const removeGithubScope = async (scope: TeamGithubScope) => {
+    if (!selectedPreset) return
+    const confirmed = window.confirm(`Remove watched repo ${scope.repo_owner}/${scope.repo_name}?`)
+    if (!confirmed) return
+    try {
+      await deleteTeamGithubScope(scope.id)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Watched repo removed')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to remove watched repo')
+      throw error
+    }
+  }
+
+  const retryWorkItem = async (item: GithubWorkItem) => {
+    if (!selectedPreset) return
+    try {
+      await retryGithubWorkItem(item.id)
+      await loadAutonomy(selectedPreset.id)
+      toast.success(`Issue #${item.issue_number} reset to pending`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to retry work item')
+      throw error
+    }
   }
 
   const removeSlot = async (slot: AgentTeamSlot) => {
@@ -968,7 +1158,12 @@ export function AgentTeamsPage() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <p className="font-medium">{preset.name}</p>
-                  <Badge variant="secondary">{preset.slots.length}</Badge>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {preset.autonomy_enabled && (
+                      <Badge variant="outline" className="border-primary text-primary">⚡ Autonomy</Badge>
+                    )}
+                    <Badge variant="secondary">{preset.slots.length}</Badge>
+                  </div>
                 </div>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                   Updated {formatDate(preset.updated_at)}
@@ -1016,7 +1211,13 @@ export function AgentTeamsPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
+              <Tabs defaultValue="roster" className="border-t pt-5">
+                <TabsList>
+                  <TabsTrigger value="roster">Roster</TabsTrigger>
+                  <TabsTrigger value="autonomy">Autonomy</TabsTrigger>
+                </TabsList>
+                <TabsContent value="roster" className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold">Roster</h2>
                   <p className="text-sm text-muted-foreground">{selectedPreset.slots.length} slots</p>
@@ -1080,6 +1281,21 @@ export function AgentTeamsPage() {
                               <p>{slot.role || 'Unassigned'}</p>
                             </div>
                           </div>
+                          {(slot.area_labels?.length || slot.expertise) && (
+                            <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
+                              <p className="text-xs uppercase text-muted-foreground">GitHub dispatch routing</p>
+                              {slot.area_labels && slot.area_labels.length > 0 && (
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {slot.area_labels.map((label) => (
+                                    <Badge key={label} variant="secondary">{label}</Badge>
+                                  ))}
+                                </div>
+                              )}
+                              {slot.expertise && (
+                                <p className="mt-2 text-muted-foreground">{slot.expertise}</p>
+                              )}
+                            </div>
+                          )}
                           {slot.warnings && slot.warnings.length > 0 && (
                             <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
                               {slot.warnings.join('; ')}
@@ -1126,6 +1342,23 @@ export function AgentTeamsPage() {
                   )
                 })}
               </div>
+                </TabsContent>
+                <TabsContent value="autonomy" className="mt-5">
+                  <AutonomyPanel
+                    preset={selectedPreset}
+                    scopes={githubScopes}
+                    workItems={githubWorkItems}
+                    loading={autonomyLoading}
+                    refreshing={autonomyRefreshing}
+                    onRefresh={refreshAutonomy}
+                    onToggleAutonomy={toggleAutonomy}
+                    onCreateScope={createGithubScope}
+                    onUpdateScope={updateGithubScope}
+                    onDeleteScope={removeGithubScope}
+                    onRetryWorkItem={retryWorkItem}
+                  />
+                </TabsContent>
+              </Tabs>
             </div>
           )}
         </div>

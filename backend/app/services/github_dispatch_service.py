@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 class GithubDispatchService:
+    def reset_for_retry(self, item: GithubWorkItem) -> None:
+        item.dispatch_status = "pending"
+        item.escalation_reason = None
+        item.pending_reason = None
+        item.handoff_state = None
+        item.handoff_target_slot_id = None
+        item.retry_count = 0
+        item.approval_round_count = 0
+        item.updated_at = datetime.utcnow()
+
     async def route_item(
         self,
         db: AsyncSession,
