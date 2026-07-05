@@ -301,7 +301,9 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
         pending_reason="queued_repo_cap",
         handoff_state="pending",
         handoff_target_slot_id=1,
+        pr_number=12,
         retry_count=2,
+        last_verified_sha="abc123",
         approval_round_count=3,
     )
     active = GithubWorkItem(
@@ -340,5 +342,7 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
     assert body["pending_reason"] is None
     assert body["handoff_state"] is None
     assert body["handoff_target_slot_id"] is None
+    assert body["pr_number"] is None
     assert body["retry_count"] == 0
+    assert body["last_verified_sha"] is None
     assert body["approval_round_count"] == 0

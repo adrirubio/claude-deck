@@ -24,6 +24,8 @@ class GithubDispatchService:
         item.pending_reason = None
         item.handoff_state = None
         item.handoff_target_slot_id = None
+        item.pr_number = None
+        item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
         item.updated_at = datetime.utcnow()
@@ -422,8 +424,14 @@ class GithubDispatchService:
         for item in dispatched:
             if leader_wake == "offline":
                 await self.escalate(db, item, "leader_offline")
-            # Leader reachable but idle nudge/escalation is intentionally deferred;
-            # it needs agent-mail last-activity plumbing beyond Phase A's backend core.
+                continue
+            owner_wake = (
+                wake_state_by_slot.get(item.owner_slot_id)
+                if item.owner_slot_id is not None
+                else None
+            )
+            if owner_wake == "offline":
+                await self.escalate(db, item, "owner_offline")
         await db.commit()
 
     async def escalate(

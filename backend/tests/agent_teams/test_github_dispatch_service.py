@@ -930,6 +930,65 @@ async def test_monitor_escalates_when_leader_offline(db):
 
 
 @pytest.mark.asyncio
+async def test_monitor_escalates_when_owner_offline(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=51,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={architect.id: "wakeable", backend.id: "offline"},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "owner_offline"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert any("owner_offline" in (message.subject or "") for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_monitor_does_not_escalate_slow_live_owner(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    for wake_state in ("wakeable", "delivered_waiting"):
+        item = GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=60 if wake_state == "wakeable" else 61,
+            issue_title="x",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="dispatched",
+            owner_slot_id=backend.id,
+        )
+        db.add(item)
+        await db.commit()
+
+        await github_dispatch_service.monitor_dispatched(
+            db,
+            scope,
+            preset_slots=slots,
+            wake_state_by_slot={architect.id: "wakeable", backend.id: wake_state},
+        )
+
+        await db.refresh(item)
+        assert item.dispatch_status == "dispatched"
+        assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
 async def test_monitor_leaves_item_when_leader_reachable(db):
     preset, slots, scope = await _team(db)
     architect = slots[0]
