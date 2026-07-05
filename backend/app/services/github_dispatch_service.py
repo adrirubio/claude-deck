@@ -449,7 +449,9 @@ class GithubDispatchService:
         reason: str,
         note: str | None = None,
     ) -> None:
-        self._apply_escalation(item, reason, note)
+        applied = self._apply_escalation(item, reason, note)
+        if not applied:
+            return
         try:
             await self._send_escalation_broadcast(db, item, reason, note)
             if reason == "dispatch_label_removed":
@@ -460,20 +462,29 @@ class GithubDispatchService:
                 item.id,
             )
             await db.rollback()
-            self._apply_escalation(item, reason, note)
+            self._apply_escalation(item, reason, note, preserve_existing_reason=False)
 
     def _apply_escalation(
         self,
         item: GithubWorkItem,
         reason: str,
         note: str | None = None,
-    ) -> None:
+        *,
+        preserve_existing_reason: bool = True,
+    ) -> bool:
+        if (
+            preserve_existing_reason
+            and item.dispatch_status == "escalated"
+            and item.escalation_reason
+        ):
+            return False
         item.dispatch_status = "escalated"
         item.escalation_reason = reason
         item.pending_reason = None
         if note is not None:
             item.status_note = note
         item.updated_at = datetime.utcnow()
+        return True
 
     async def notify_owner(
         self,

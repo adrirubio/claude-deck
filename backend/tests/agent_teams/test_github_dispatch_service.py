@@ -592,6 +592,85 @@ async def test_dispatch_pending_commits_success_before_later_plan_block(db):
 
 
 @pytest.mark.asyncio
+async def test_escalate_sets_reason_for_active_item(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=62,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.escalate(db, item, "plan_blocked", "needs a human plan")
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "plan_blocked"
+    assert item.status_note == "needs a human plan"
+
+
+@pytest.mark.asyncio
+async def test_escalate_preserves_first_reason_for_already_escalated_item(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=63,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="dispatch_label_removed",
+        status_note="The dispatch label was removed.",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+    message_count = len((await db.execute(select(MailMessage))).scalars().all())
+
+    await github_dispatch_service.escalate(db, item, "plan_blocked", "owner also blocked")
+
+    await db.refresh(item)
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "dispatch_label_removed"
+    assert item.status_note == "The dispatch label was removed."
+    assert len(messages) == message_count
+
+
+@pytest.mark.asyncio
+async def test_escalate_same_reason_is_idempotent_for_already_escalated_item(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=64,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="owner_offline",
+        status_note="Owner heartbeat expired.",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+    message_count = len((await db.execute(select(MailMessage))).scalars().all())
+
+    await github_dispatch_service.escalate(db, item, "owner_offline", "duplicate poll")
+
+    await db.refresh(item)
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "owner_offline"
+    assert item.status_note == "Owner heartbeat expired."
+    assert len(messages) == message_count
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_marks_failed_launch_result_failed(db):
     preset, slots, scope = await _team(db)
     item = GithubWorkItem(
