@@ -20,6 +20,7 @@ _TRANSIENT_MERGE_STATES = {"unstable", "blocked"}
 _HUMAN_MERGE_NOTE_PREFIXES = (
     "Auto-merge blocked",
     "Auto-merge budget exhausted",
+    "Auto-merge failed",
     "Auto-merge retry budget exhausted",
 )
 _MERGE_TRANSIENT_STATUS_CODES = {405, 409, 422}
@@ -182,9 +183,11 @@ class GithubVerificationService:
         if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
             return
         if await self._auto_merge_budget_exhausted(db, scope):
-            item.status_note = "Auto-merge budget exhausted; PR is ready for human merge."
-            item.updated_at = datetime.utcnow()
-            await db.commit()
+            await self._fallback_to_human_merge(
+                db,
+                item,
+                "Auto-merge budget exhausted; PR is ready for human merge.",
+            )
             return
         merge_state = pull.get("mergeable_state")
         if merge_state in _TRANSIENT_MERGE_STATES:
@@ -202,17 +205,17 @@ class GithubVerificationService:
             if status_code in _MERGE_TRANSIENT_STATUS_CODES or status_code >= 500:
                 await self._record_transient_merge_failure(db, scope, item, str(exc))
             elif status_code == 403:
-                self._fallback_to_human_merge(
+                await self._fallback_to_human_merge(
+                    db,
                     item,
                     "Auto-merge blocked by repository policy; requires human merge.",
                 )
-                await db.commit()
             else:
-                self._fallback_to_human_merge(
+                await self._fallback_to_human_merge(
+                    db,
                     item,
                     f"Auto-merge failed with GitHub status {status_code}; requires human merge.",
                 )
-                await db.commit()
             return
 
         self._mark_merged(item)
@@ -228,7 +231,8 @@ class GithubVerificationService:
     ) -> None:
         item.retry_count += 1
         if item.retry_count > scope.max_verification_retries:
-            self._fallback_to_human_merge(
+            await self._fallback_to_human_merge(
+                db,
                 item,
                 f"Auto-merge retry budget exhausted after transient merge failure: {note}",
             )
@@ -324,19 +328,7 @@ class GithubVerificationService:
         item.status_note = f"PR #{item.pr_number} is ready for review."
         item.updated_at = datetime.utcnow()
         if scope.merge_policy == "human":
-            await github_dispatch_service.notify_team(
-                db,
-                subject="Code PR ready for review",
-                body_markdown=(
-                    f"Code PR #{item.pr_number} is ready for human review for "
-                    f"issue #{item.issue_number}: {item.issue_title}"
-                ),
-                payload={
-                    "kind": "github_dispatch_code_pr_ready",
-                    "work_item_id": item.id,
-                    "pr_number": item.pr_number,
-                },
-            )
+            await self._notify_code_pr_ready_for_review(db, item)
         await db.commit()
         await self._process_review_item(db, scope, item, client, pull=pull)
 
@@ -361,11 +353,45 @@ class GithubVerificationService:
         item.status_note = None
         item.updated_at = datetime.utcnow()
 
-    def _fallback_to_human_merge(self, item: GithubWorkItem, note: str) -> None:
+    async def _fallback_to_human_merge(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        note: str,
+    ) -> None:
         item.dispatch_status = "ready_for_review"
         item.escalation_reason = None
         item.status_note = note
         item.updated_at = datetime.utcnow()
+        await self._notify_code_pr_ready_for_review(db, item, fallback_note=note)
+        await db.commit()
+
+    async def _notify_code_pr_ready_for_review(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        *,
+        fallback_note: str | None = None,
+    ) -> None:
+        body = (
+            f"Code PR #{item.pr_number} is ready for human review for "
+            f"issue #{item.issue_number}: {item.issue_title}"
+        )
+        payload = {
+            "kind": "github_dispatch_code_pr_ready",
+            "work_item_id": item.id,
+            "pr_number": item.pr_number,
+        }
+        if fallback_note:
+            body = f"{body}\n\nAuto-merge fell back to human merge: {fallback_note}"
+            payload["auto_merge_fallback"] = True
+            payload["fallback_note"] = fallback_note
+        await github_dispatch_service.notify_team(
+            db,
+            subject="Code PR ready for review",
+            body_markdown=body,
+            payload=payload,
+        )
 
     def _failed_check_note(self, checks: list[dict]) -> str:
         names = ", ".join(str(check.get("name") or check.get("id")) for check in checks)

@@ -158,6 +158,11 @@ def _http_error(status_code: int) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("blocked", request=request, response=response)
 
 
+async def _ready_review_messages(db):
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    return [message for message in messages if message.subject == "Code PR ready for review"]
+
+
 @pytest.mark.asyncio
 async def test_report_pr_opened_routes_code_and_design(db):
     code_scope = await _scope(db)
@@ -188,6 +193,10 @@ async def test_verify_green_code_pr_marks_ready_for_review(db):
     assert item.dispatch_status == "ready_for_review"
     assert client.ready_calls == 1
     assert client.pull_calls == 2
+    messages = await _ready_review_messages(db)
+    assert len(messages) == 1
+    assert "Code PR #5 is ready for human review" in messages[0].body_markdown
+    assert "Auto-merge fell back" not in messages[0].body_markdown
 
 
 @pytest.mark.asyncio
@@ -427,6 +436,10 @@ async def test_auto_merge_cap_falls_back_to_human_review(db):
     assert item.escalation_reason is None
     assert "Auto-merge budget exhausted" in item.status_note
     assert client.merge_calls == 0
+    messages = await _ready_review_messages(db)
+    assert len(messages) == 1
+    assert "Auto-merge fell back to human merge" in messages[0].body_markdown
+    assert "Auto-merge budget exhausted" in messages[0].body_markdown
 
 
 @pytest.mark.asyncio
@@ -443,6 +456,10 @@ async def test_durable_merge_failure_falls_back_to_human_without_escalation(db):
     assert item.escalation_reason is None
     assert "requires human merge" in item.status_note
     assert client.merge_calls == 1
+    messages = await _ready_review_messages(db)
+    assert len(messages) == 1
+    assert "Auto-merge fell back to human merge" in messages[0].body_markdown
+    assert "requires human merge" in messages[0].body_markdown
 
 
 @pytest.mark.asyncio
@@ -530,3 +547,7 @@ async def test_transient_merge_failure_falls_back_to_human_after_budget(db):
     assert item.escalation_reason is None
     assert "Auto-merge retry budget exhausted" in item.status_note
     assert client.merge_calls == 0
+    messages = await _ready_review_messages(db)
+    assert len(messages) == 1
+    assert "Auto-merge fell back to human merge" in messages[0].body_markdown
+    assert "Auto-merge retry budget exhausted" in messages[0].body_markdown
