@@ -512,8 +512,15 @@ class AgentTeamService:
         results: list[AgentTeamLaunchResultItem] = []
         for item in plan.items:
             slot = slot_by_id[item.slot_id]
+            prompt_override = (request.slot_prompt_overrides or {}).get(slot.id)
             result_item = await self._execute_plan_item(
-                db, launch.id, preset, slot, item, request.repo_path_override
+                db,
+                launch.id,
+                preset,
+                slot,
+                item,
+                request.repo_path_override,
+                prompt_override,
             )
             results.append(result_item)
 
@@ -542,6 +549,7 @@ class AgentTeamService:
         slot: AgentTeamSlot,
         plan_item: AgentTeamLaunchPlanItem,
         repo_path_override: str | None = None,
+        prompt_override: str | None = None,
     ) -> AgentTeamLaunchResultItem:
         if plan_item.action == "reuse":
             agent_mail_member_id = await self._attach_team_context_to_existing_session(
@@ -597,7 +605,9 @@ class AgentTeamService:
 
         try:
             options = self._spawn_options_for_slot(
-                slot, self._bootstrap_prompt(preset, slot), repo_path_override
+                slot,
+                prompt_override or self._bootstrap_prompt(preset, slot),
+                repo_path_override,
             )
             spawned = spawn_session(
                 slot.provider,

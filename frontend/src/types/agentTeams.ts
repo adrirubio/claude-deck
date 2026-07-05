@@ -142,6 +142,7 @@ export interface AgentTeamLaunchRequest {
   confirm_plan_hash?: string | null
   skip_plan_confirmation?: boolean
   repo_path_override?: string | null
+  slot_prompt_overrides?: Record<number, string> | null
 }
 
 export type TeamGithubMergePolicy = 'human' | 'auto'

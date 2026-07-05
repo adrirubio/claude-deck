@@ -1162,6 +1162,45 @@ async def test_launch_uses_custom_bootstrap_prompt(db, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_launch_uses_slot_prompt_override(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Override prompt team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Dev agent",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                    bootstrap_prompt="Static team startup prompt.",
+                )
+            ],
+        ),
+    )
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    slot_id = preset.slots[0].id
+    calls = []
+
+    def fake_spawn(provider_id, options, *, extra_env=None):
+        calls.append((provider_id, options, extra_env))
+        return {"session_name": "repo-abcd", "tmux_target": "repo-abcd:0.0"}
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", fake_spawn)
+    await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(
+            confirm_plan_hash=plan.plan_hash,
+            slot_prompt_overrides={slot_id: "Dispatch-specific issue brief."},
+        ),
+    )
+
+    assert calls[0][1].prompt == "Dispatch-specific issue brief."
+
+
+@pytest.mark.asyncio
 async def test_launch_rejects_blocked_plan_without_partial_spawn(db, tmp_path, monkeypatch):
     runnable_repo = tmp_path / "runnable"
     blocked_repo = tmp_path / "blocked"

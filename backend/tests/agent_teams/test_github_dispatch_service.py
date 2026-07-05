@@ -268,6 +268,97 @@ async def test_dispatch_pending_launches_and_marks_dispatched(db):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=833,
+        issue_title="Add agent docs",
+        issue_url="https://github.com/o/r/issues/833",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    launched = {}
+
+    class _Result:
+        launch_id = 833
+
+    async def fake_launcher(db_, preset_id, request):
+        launched["request"] = request
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={833: ["area:backend"]},
+        issue_details_by_number={
+            833: {
+                "body": "Acceptance criteria and verification steps.",
+                "labels": [{"name": "area:backend"}, {"name": "agent-ready"}],
+            }
+        },
+    )
+
+    prompt = launched["request"].slot_prompt_overrides[backend.id]
+    assert "autonomous GitHub dispatch" in prompt
+    assert "Work item ID:" in prompt
+    assert "Issue: #833 — Add agent docs" in prompt
+    assert "https://github.com/o/r/issues/833" in prompt
+    assert "Acceptance criteria and verification steps." in prompt
+    assert "deck_report_dispatch_status" in prompt
+    assert "deck_request_context" in prompt
+    assert "wait for acknowledgment before starting implementation" in prompt
+    assert "open a draft PR" in prompt
+
+
+@pytest.mark.asyncio
+async def test_design_dispatch_brief_uses_design_pipeline_language(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=835,
+        issue_title="Write design note",
+        issue_url="https://github.com/o/r/issues/835",
+        github_updated_at=datetime.utcnow(),
+        issue_type="design",
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    launched = {}
+
+    class _Result:
+        launch_id = 835
+
+    async def fake_launcher(db_, preset_id, request):
+        launched["request"] = request
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={835: ["area:backend"]},
+        issue_details_by_number={835: {"body": "Capture design rationale."}},
+    )
+
+    prompt = launched["request"].slot_prompt_overrides[backend.id]
+    assert "Pipeline: design" in prompt
+    assert "Design pipeline instructions" in prompt
+    assert "do not rely on CI or auto-merge" in prompt
+    assert "human-reviewed PR" in prompt
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_disables_reuse_for_repo_override(db):
     preset, slots, scope = await _team(db)
     item = GithubWorkItem(

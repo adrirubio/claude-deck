@@ -129,7 +129,11 @@ class GithubDispatchScheduler:
                     .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
                 )
             ).scalars().all()
-            issue_labels_by_number = await self._issue_labels_by_number(db, scope, client)
+            issues_by_number = await self._pending_issues_by_number(db, scope, client)
+            issue_labels_by_number = {
+                number: [label["name"] for label in issue.get("labels", []) if "name" in label]
+                for number, issue in issues_by_number.items()
+            }
             await self.dispatch.dispatch_pending(
                 db,
                 scope,
@@ -138,16 +142,17 @@ class GithubDispatchScheduler:
                 classify=classify,
                 launcher=launcher,
                 issue_labels_by_number=issue_labels_by_number,
+                issue_details_by_number=issues_by_number,
             )
             await self.dispatch.monitor_dispatched(db, scope, slots)
             await self.verification.process_scope(db, scope, client=client)
 
-    async def _issue_labels_by_number(
+    async def _pending_issues_by_number(
         self,
         db: AsyncSession,
         scope: TeamGithubScope,
         client: GithubClient,
-    ) -> dict[int, list[str]]:
+    ) -> dict[int, dict]:
         pending_numbers = (
             await db.execute(
                 select(GithubWorkItem.issue_number).where(
@@ -163,10 +168,7 @@ class GithubDispatchScheduler:
             scope.repo_name,
             list(pending_numbers),
         )
-        return {
-            number: [label["name"] for label in issue.get("labels", []) if "name" in label]
-            for number, issue in issues.items()
-        }
+        return issues
 
     def _job_id(self, owner: str, repo: str) -> str:
         return f"{_JOB_PREFIX}{owner}/{repo}"

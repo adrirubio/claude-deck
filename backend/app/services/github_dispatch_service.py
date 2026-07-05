@@ -100,9 +100,11 @@ class GithubDispatchService:
         classify=None,
         launcher=None,
         issue_labels_by_number: dict[int, list[str]] | None = None,
+        issue_details_by_number: dict[int, dict] | None = None,
     ) -> None:
         launcher = launcher or agent_team_service.launch
         issue_labels_by_number = issue_labels_by_number or {}
+        issue_details_by_number = issue_details_by_number or {}
         slots_dispatched_this_batch: set[int] = set()
         scope_dispatched_this_batch = 0
         scope_active = await self.scope_active_count(db, scope.id)
@@ -140,6 +142,13 @@ class GithubDispatchService:
                 await db.commit()
                 continue
             try:
+                brief = self._dispatch_brief(
+                    item,
+                    scope,
+                    owner_slot_id=owner_slot_id,
+                    preset_slots=preset_slots,
+                    issue_details=issue_details_by_number.get(item.issue_number),
+                )
                 result = await launcher(
                     db,
                     scope.preset_id,
@@ -148,6 +157,7 @@ class GithubDispatchService:
                         reuse_existing=False,
                         skip_plan_confirmation=True,
                         repo_path_override=scope.repo_path,
+                        slot_prompt_overrides={owner_slot_id: brief},
                     ),
                 )
             except ValueError:
@@ -173,9 +183,109 @@ class GithubDispatchService:
                 item.dispatch_status = "dispatched"
                 slots_dispatched_this_batch.add(owner_slot_id)
                 scope_dispatched_this_batch += 1
+                if getattr(launch_item, "action", None) == "reuse":
+                    await self._send_dispatch_brief_to_owner(db, item, brief)
             item.pending_reason = None
             item.updated_at = datetime.utcnow()
             await db.commit()
+
+    def _dispatch_brief(
+        self,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        owner_slot_id: int,
+        preset_slots: list[AgentTeamSlot],
+        issue_details: dict | None = None,
+    ) -> str:
+        enabled = sorted(
+            [slot for slot in preset_slots if slot.enabled],
+            key=lambda slot: slot.position,
+        )
+        leader = enabled[0] if enabled else None
+        owner = next((slot for slot in preset_slots if slot.id == owner_slot_id), None)
+        issue_body = (issue_details or {}).get("body") or ""
+        labels = [
+            label["name"]
+            for label in (issue_details or {}).get("labels", [])
+            if isinstance(label, dict) and "name" in label
+        ]
+        body = issue_body.strip() or "(No issue body provided.)"
+        if len(body) > 12000:
+            body = f"{body[:12000]}\n\n[Issue body truncated by Claude Deck.]"
+
+        lines = [
+            "You are handling an autonomous GitHub dispatch from Claude Deck.",
+            "",
+            f"- Work item ID: {item.id}",
+            f"- Repo: {scope.repo_owner}/{scope.repo_name}",
+            f"- Local checkout: {scope.repo_path}",
+            f"- Issue: #{item.issue_number} — {item.issue_title}",
+            f"- Issue URL: {item.issue_url}",
+            f"- Pipeline: {item.issue_type}",
+            f"- Owner slot: {owner.display_name if owner else owner_slot_id}",
+        ]
+        if leader is not None:
+            lines.append(f"- Team leader / approver slot: {leader.display_name} (slot_id={leader.id})")
+        if labels:
+            lines.append(f"- Labels: {', '.join(labels)}")
+        lines.extend(
+            [
+                "",
+                "Issue body:",
+                body,
+                "",
+                "Required status reporting:",
+                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"triaging\", note=\"...\")`.",
+                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"pr_opened\", pr_number=<PR number>)`.",
+                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"blocked\", note=\"...\")`.",
+            ]
+        )
+        if item.issue_type == "design":
+            lines.extend(
+                [
+                    "",
+                    "Design pipeline instructions:",
+                    "- Treat this as a design/documentation task.",
+                    "- Prepare a human-reviewed PR; do not rely on CI or auto-merge.",
+                    "- Send the team leader a short plan and wait for acknowledgment before opening the PR.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "Code pipeline instructions:",
+                    "- Triage this issue and prepare a short implementation plan.",
+                    "- Send the team leader a short plan via Agent Mail and wait for acknowledgment before starting implementation.",
+                    "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
+                    "- Keep the change inside the issue scope, run the issue's requested local verification commands, then open a draft PR.",
+                    "- After opening the draft PR, report `pr_opened` with the PR number and wait for CI verification.",
+                ]
+            )
+        return "\n".join(lines)
+
+    async def _send_dispatch_brief_to_owner(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        brief: str,
+    ) -> None:
+        try:
+            await self.notify_owner(
+                db,
+                item,
+                subject=f"Autonomous dispatch: issue #{item.issue_number}",
+                body_markdown=brief,
+                payload={
+                    "kind": "github_dispatch_assignment",
+                    "work_item_id": item.id,
+                    "issue_number": item.issue_number,
+                    "scope_id": item.scope_id,
+                },
+            )
+        except Exception:
+            logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)
 
     async def record_approval_round(
         self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope

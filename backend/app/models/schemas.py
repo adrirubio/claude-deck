@@ -2269,6 +2269,7 @@ class AgentTeamLaunchRequest(BaseModel):
     confirm_plan_hash: Optional[str] = None
     skip_plan_confirmation: bool = False
     repo_path_override: Optional[str] = None
+    slot_prompt_overrides: Optional[Dict[int, str]] = None
 
 
 class DispatchStatusReport(BaseModel):
