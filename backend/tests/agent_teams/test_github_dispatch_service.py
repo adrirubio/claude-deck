@@ -316,6 +316,19 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     assert "wait for acknowledgment before starting implementation" in prompt
     assert "open a draft PR" in prompt
 
+    member = (
+        await db.execute(select(MailTeamMember).where(MailTeamMember.team_slot_id == backend.id))
+    ).scalar_one()
+    message = (
+        await db.execute(
+            select(MailMessage).where(MailMessage.recipient_member_id == member.id)
+        )
+    ).scalar_one()
+    assert message.subject == "Autonomous dispatch: issue #833"
+    assert "Issue: #833 — Add agent docs" in message.body_markdown
+    assert "Acceptance criteria and verification steps." in message.body_markdown
+    assert "wait for acknowledgment before starting implementation" in message.body_markdown
+
 
 @pytest.mark.asyncio
 async def test_design_dispatch_brief_uses_design_pipeline_language(db):

@@ -149,6 +149,13 @@ class GithubDispatchService:
                     preset_slots=preset_slots,
                     issue_details=issue_details_by_number.get(item.issue_number),
                 )
+                await self._send_dispatch_brief_to_slot(
+                    db,
+                    item,
+                    preset_slots=preset_slots,
+                    owner_slot_id=owner_slot_id,
+                    brief=brief,
+                )
                 result = await launcher(
                     db,
                     scope.preset_id,
@@ -183,8 +190,6 @@ class GithubDispatchService:
                 item.dispatch_status = "dispatched"
                 slots_dispatched_this_batch.add(owner_slot_id)
                 scope_dispatched_this_batch += 1
-                if getattr(launch_item, "action", None) == "reuse":
-                    await self._send_dispatch_brief_to_owner(db, item, brief)
             item.pending_reason = None
             item.updated_at = datetime.utcnow()
             await db.commit()
@@ -265,16 +270,25 @@ class GithubDispatchService:
             )
         return "\n".join(lines)
 
-    async def _send_dispatch_brief_to_owner(
+    async def _send_dispatch_brief_to_slot(
         self,
         db: AsyncSession,
         item: GithubWorkItem,
+        *,
+        preset_slots: list[AgentTeamSlot],
+        owner_slot_id: int,
         brief: str,
     ) -> None:
+        owner_slot = next((slot for slot in preset_slots if slot.id == owner_slot_id), None)
+        if owner_slot is None:
+            return
         try:
-            await self.notify_owner(
+            from app.services.agent_mail_service import agent_mail_service
+
+            member = await agent_mail_service.get_or_create_slot_member(db, owner_slot)
+            await agent_mail_service.send_direct_message(
                 db,
-                item,
+                recipient_member_id=member.id,
                 subject=f"Autonomous dispatch: issue #{item.issue_number}",
                 body_markdown=brief,
                 payload={
