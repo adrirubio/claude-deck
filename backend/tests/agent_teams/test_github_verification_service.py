@@ -106,6 +106,7 @@ class _Client:
         combined_status=None,
         merge_result=None,
         merge_error: httpx.HTTPStatusError | None = None,
+        ready_error: httpx.HTTPStatusError | None = None,
     ):
         self.pull = pull or {
             "number": 5,
@@ -123,6 +124,7 @@ class _Client:
         )
         self.merge_result = merge_result or {"merged": True}
         self.merge_error = merge_error
+        self.ready_error = ready_error
         self.ready_calls = 0
         self.merge_calls = 0
         self.pull_calls = 0
@@ -139,6 +141,8 @@ class _Client:
 
     async def mark_pull_ready_for_review(self, pull_node_id):
         self.ready_calls += 1
+        if self.ready_error is not None:
+            raise self.ready_error
         return {"ok": True}
 
     async def merge_pull(self, owner, repo, pr_number):
@@ -184,6 +188,26 @@ async def test_verify_green_code_pr_marks_ready_for_review(db):
     assert item.dispatch_status == "ready_for_review"
     assert client.ready_calls == 1
     assert client.pull_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_draft_ready_failure_keeps_item_verifying_for_retry(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+        ready_error=_http_error(403),
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert item.last_verified_sha is None
+    assert "GitHub verification failed; will retry" in item.status_note
+    assert client.ready_calls == 1
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not any(message.subject == "Code PR ready for review" for message in messages)
 
 
 @pytest.mark.asyncio
@@ -269,6 +293,7 @@ async def test_failed_check_returns_to_dispatched_until_budget_exhausted(db):
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.retry_count == 1
+    assert item.last_verified_sha == "sha"
     messages = (await db.execute(select(MailMessage))).scalars().all()
     assert any(
         message.kind == "message"
@@ -277,19 +302,76 @@ async def test_failed_check_returns_to_dispatched_until_budget_exhausted(db):
         for message in messages
     )
 
+    client.pull["head"]["sha"] = "sha-2"
     item.dispatch_status = "verifying"
     await db.commit()
     await github_verification_service.process_scope(db, scope, client=client)
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.retry_count == 2
+    assert item.last_verified_sha == "sha-2"
 
+    client.pull["head"]["sha"] = "sha-3"
     item.dispatch_status = "verifying"
     await db.commit()
     await github_verification_service.process_scope(db, scope, client=client)
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "retry_count_exhausted"
+    assert item.retry_count == 3
+    assert item.last_verified_sha == "sha-3"
+
+
+@pytest.mark.asyncio
+async def test_failed_check_counts_same_head_once_until_new_sha(db):
+    scope = await _scope(db, max_verification_retries=2)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 1
+    assert item.escalation_reason is None
+    assert item.last_verified_sha == "sha"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    failure_messages = [
+        message
+        for message in messages
+        if message.kind == "message"
+        and message.recipient_member_id == member.id
+        and "GitHub checks failed" in (message.subject or "")
+    ]
+    assert len(failure_messages) == 1
+
+    client.pull["head"]["sha"] = "sha-2"
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 2
+    assert item.escalation_reason is None
+    assert item.last_verified_sha == "sha-2"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    failure_messages = [
+        message
+        for message in messages
+        if message.kind == "message"
+        and message.recipient_member_id == member.id
+        and "GitHub checks failed" in (message.subject or "")
+    ]
+    assert len(failure_messages) == 2
 
 
 @pytest.mark.asyncio

@@ -110,6 +110,7 @@ def _work_item_response(item: GithubWorkItem, scope: TeamGithubScope) -> GithubW
         approval_round_count=item.approval_round_count,
         pr_number=item.pr_number,
         retry_count=item.retry_count,
+        last_verified_sha=item.last_verified_sha,
         escalation_reason=item.escalation_reason,
         status_note=item.status_note,
         auto_merged_at=item.auto_merged_at,

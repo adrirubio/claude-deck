@@ -39,8 +39,9 @@ class GithubVerificationService:
             raise ValueError(
                 f"pr_opened is only valid for dispatched work items; current status is "
                 f"{item.dispatch_status}"
-            )
+        )
         item.pr_number = pr_number
+        item.last_verified_sha = None
         if item.issue_type == "design":
             item.dispatch_status = "awaiting_human_review"
             item.status_note = f"Design PR #{pr_number} is ready for human review."
@@ -114,10 +115,11 @@ class GithubVerificationService:
             await db.commit()
             return
 
+        head_sha = self._head_sha(pull)
         checks = await client.list_check_runs_for_ref(
             scope.repo_owner,
             scope.repo_name,
-            pull.get("head", {}).get("sha", ""),
+            head_sha or "",
         )
         if not checks:
             if await self._process_combined_status(db, scope, item, client, pull):
@@ -136,34 +138,23 @@ class GithubVerificationService:
             if check not in pending and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
         ]
         if failed:
-            item.retry_count += 1
-            item.status_note = self._failed_check_note(failed)
-            await github_dispatch_service.notify_owner(
+            await self._record_failed_verification_attempt(
                 db,
+                scope,
                 item,
+                head_sha,
+                self._failed_check_note(failed),
                 subject="GitHub checks failed",
                 body_markdown=(
                     f"GitHub checks failed for issue #{item.issue_number} / "
-                    f"PR #{item.pr_number}.\n\n{item.status_note}"
+                    f"PR #{item.pr_number}.\n\n{self._failed_check_note(failed)}"
                 ),
                 payload={
                     "kind": "github_dispatch_check_failed",
                     "work_item_id": item.id,
                     "pr_number": item.pr_number,
-                    "retry_count": item.retry_count,
                 },
             )
-            if item.retry_count > scope.max_verification_retries:
-                await github_dispatch_service.escalate(
-                    db,
-                    item,
-                    "retry_count_exhausted",
-                    item.status_note,
-                )
-            else:
-                item.dispatch_status = "dispatched"
-                item.updated_at = datetime.utcnow()
-            await db.commit()
             return
         if pending:
             item.status_note = "GitHub checks are still running."
@@ -171,32 +162,7 @@ class GithubVerificationService:
             await db.commit()
             return
         if all(check.get("conclusion") in _SUCCESS_CONCLUSIONS for check in checks):
-            item.dispatch_status = "ready_for_review"
-            item.status_note = f"PR #{item.pr_number} is ready for review."
-            item.updated_at = datetime.utcnow()
-            if pull.get("draft") and pull.get("node_id"):
-                await client.mark_pull_ready_for_review(str(pull["node_id"]))
-                pull = await client.get_pull(
-                    scope.repo_owner,
-                    scope.repo_name,
-                    int(item.pr_number),
-                )
-            if scope.merge_policy == "human":
-                await github_dispatch_service.notify_team(
-                    db,
-                    subject="Code PR ready for review",
-                    body_markdown=(
-                        f"Code PR #{item.pr_number} is ready for human review for "
-                        f"issue #{item.issue_number}: {item.issue_title}"
-                    ),
-                    payload={
-                        "kind": "github_dispatch_code_pr_ready",
-                        "work_item_id": item.id,
-                        "pr_number": item.pr_number,
-                    },
-                )
-            await db.commit()
-            await self._process_review_item(db, scope, item, client, pull=pull)
+            await self._promote_verified_item(db, scope, item, client, pull, head_sha)
 
     async def _process_review_item(
         self,
@@ -279,72 +245,38 @@ class GithubVerificationService:
         client: GithubClient,
         pull: dict,
     ) -> bool:
+        head_sha = self._head_sha(pull)
         status = await client.get_combined_status_for_ref(
             scope.repo_owner,
             scope.repo_name,
-            pull.get("head", {}).get("sha", ""),
+            head_sha or "",
         )
         contexts = status.get("statuses") or []
         if not contexts:
             return False
         state = status.get("state")
         if state in _STATUS_SUCCESS_STATES:
-            item.dispatch_status = "ready_for_review"
-            item.status_note = f"PR #{item.pr_number} is ready for review."
-            item.updated_at = datetime.utcnow()
-            if pull.get("draft") and pull.get("node_id"):
-                await client.mark_pull_ready_for_review(str(pull["node_id"]))
-                pull = await client.get_pull(
-                    scope.repo_owner,
-                    scope.repo_name,
-                    int(item.pr_number),
-                )
-            if scope.merge_policy == "human":
-                await github_dispatch_service.notify_team(
-                    db,
-                    subject="Code PR ready for review",
-                    body_markdown=(
-                        f"Code PR #{item.pr_number} is ready for human review for "
-                        f"issue #{item.issue_number}: {item.issue_title}"
-                    ),
-                    payload={
-                        "kind": "github_dispatch_code_pr_ready",
-                        "work_item_id": item.id,
-                        "pr_number": item.pr_number,
-                    },
-                )
-            await db.commit()
-            await self._process_review_item(db, scope, item, client, pull=pull)
+            await self._promote_verified_item(db, scope, item, client, pull, head_sha)
             return True
         if state in _STATUS_FAILURE_STATES:
-            item.retry_count += 1
-            item.status_note = f"GitHub commit status failed: {state}"
-            await github_dispatch_service.notify_owner(
+            note = f"GitHub commit status failed: {state}"
+            await self._record_failed_verification_attempt(
                 db,
+                scope,
                 item,
+                head_sha,
+                note,
                 subject="GitHub commit status failed",
                 body_markdown=(
                     f"GitHub commit status failed for issue #{item.issue_number} / "
-                    f"PR #{item.pr_number}.\n\n{item.status_note}"
+                    f"PR #{item.pr_number}.\n\n{note}"
                 ),
                 payload={
                     "kind": "github_dispatch_status_failed",
                     "work_item_id": item.id,
                     "pr_number": item.pr_number,
-                    "retry_count": item.retry_count,
                 },
             )
-            if item.retry_count > scope.max_verification_retries:
-                await github_dispatch_service.escalate(
-                    db,
-                    item,
-                    "retry_count_exhausted",
-                    item.status_note,
-                )
-            else:
-                item.dispatch_status = "dispatched"
-                item.updated_at = datetime.utcnow()
-            await db.commit()
             return True
         item.status_note = "GitHub commit statuses are still pending."
         item.updated_at = datetime.utcnow()
@@ -370,6 +302,43 @@ class GithubVerificationService:
             "No GitHub check-runs or commit statuses found for PR.",
         )
         await db.commit()
+
+    async def _promote_verified_item(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        pull: dict,
+        head_sha: str | None,
+    ) -> None:
+        if pull.get("draft") and pull.get("node_id"):
+            await client.mark_pull_ready_for_review(str(pull["node_id"]))
+            pull = await client.get_pull(
+                scope.repo_owner,
+                scope.repo_name,
+                int(item.pr_number),
+            )
+        item.last_verified_sha = head_sha
+        item.dispatch_status = "ready_for_review"
+        item.status_note = f"PR #{item.pr_number} is ready for review."
+        item.updated_at = datetime.utcnow()
+        if scope.merge_policy == "human":
+            await github_dispatch_service.notify_team(
+                db,
+                subject="Code PR ready for review",
+                body_markdown=(
+                    f"Code PR #{item.pr_number} is ready for human review for "
+                    f"issue #{item.issue_number}: {item.issue_title}"
+                ),
+                payload={
+                    "kind": "github_dispatch_code_pr_ready",
+                    "work_item_id": item.id,
+                    "pr_number": item.pr_number,
+                },
+            )
+        await db.commit()
+        await self._process_review_item(db, scope, item, client, pull=pull)
 
     async def _auto_merge_budget_exhausted(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -401,6 +370,56 @@ class GithubVerificationService:
     def _failed_check_note(self, checks: list[dict]) -> str:
         names = ", ".join(str(check.get("name") or check.get("id")) for check in checks)
         return f"GitHub check failed: {names}"
+
+    async def _record_failed_verification_attempt(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        head_sha: str | None,
+        note: str,
+        *,
+        subject: str,
+        body_markdown: str,
+        payload: dict,
+    ) -> None:
+        if head_sha and item.last_verified_sha == head_sha:
+            if item.dispatch_status == "verifying":
+                item.dispatch_status = "dispatched"
+                item.status_note = note
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+            return
+
+        item.last_verified_sha = head_sha
+        item.retry_count += 1
+        item.status_note = note
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject=subject,
+            body_markdown=body_markdown,
+            payload={
+                **payload,
+                "retry_count": item.retry_count,
+                "head_sha": head_sha,
+            },
+        )
+        if item.retry_count > scope.max_verification_retries:
+            await github_dispatch_service.escalate(
+                db,
+                item,
+                "retry_count_exhausted",
+                item.status_note,
+            )
+        else:
+            item.dispatch_status = "dispatched"
+            item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    def _head_sha(self, pull: dict) -> str | None:
+        sha = (pull.get("head") or {}).get("sha")
+        return str(sha) if sha else None
 
 
 github_verification_service = GithubVerificationService()

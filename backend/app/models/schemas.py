@@ -2222,6 +2222,7 @@ class GithubWorkItemResponse(BaseModel):
     approval_round_count: int
     pr_number: Optional[int] = None
     retry_count: int
+    last_verified_sha: Optional[str] = None
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None

@@ -402,6 +402,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
     if work_item_columns and "auto_merged_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN auto_merged_at DATETIME"))
+    if work_item_columns and "last_verified_sha" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN last_verified_sha VARCHAR"))
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}
