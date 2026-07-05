@@ -92,6 +92,37 @@ def _item(scope_id, number, labels):
     )
 
 
+async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMember:
+    for index in range(2):
+        db.add(
+            MailTeamMember(
+                identity_key=f"repo:offset:{slot.id}:{index}",
+                repo_id="offset",
+                repo_path="/tmp/offset",
+                repo_name="offset",
+                display_name=f"Offset {index}",
+                participant_kind="repo",
+            )
+        )
+    await db.flush()
+    member = MailTeamMember(
+        identity_key=f"slot:test:{slot.id}",
+        repo_id=slot.repo_id,
+        repo_path=slot.repo_path,
+        repo_name=slot.repo_name,
+        display_name=slot.display_name,
+        participant_kind="team_slot",
+        team_preset_id=slot.preset_id,
+        team_slot_id=slot.id,
+        role=slot.role,
+        charter=slot.charter,
+    )
+    db.add(member)
+    await db.commit()
+    assert member.id != slot.id
+    return member
+
+
 @pytest.mark.asyncio
 async def test_route_by_label_match(db):
     preset, slots, scope = await _team(db)
@@ -270,7 +301,9 @@ async def test_dispatch_pending_launches_and_marks_dispatched(db):
 @pytest.mark.asyncio
 async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     preset, slots, scope = await _team(db)
+    architect = next(slot for slot in slots if slot.display_name == "Architect")
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    leader_member = await _create_registered_slot_member(db, architect)
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=833,
@@ -313,6 +346,10 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     assert "Acceptance criteria and verification steps." in prompt
     assert "deck_report_dispatch_status" in prompt
     assert "deck_request_context" in prompt
+    assert f"Agent Mail member_id={leader_member.id}" in prompt
+    assert f"to_member_id={leader_member.id}" in prompt
+    assert f"slot_id={architect.id}" not in prompt
+    assert f"to_member_id={architect.id}" not in prompt
     assert "wait for acknowledgment before starting implementation" in prompt
     assert "open a draft PR" in prompt
 
@@ -327,13 +364,18 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     assert message.subject == "Autonomous dispatch: issue #833"
     assert "Issue: #833 — Add agent docs" in message.body_markdown
     assert "Acceptance criteria and verification steps." in message.body_markdown
+    assert f"Agent Mail member_id={leader_member.id}" in message.body_markdown
+    assert f"to_member_id={leader_member.id}" in message.body_markdown
+    assert f"slot_id={architect.id}" not in message.body_markdown
     assert "wait for acknowledgment before starting implementation" in message.body_markdown
 
 
 @pytest.mark.asyncio
 async def test_design_dispatch_brief_uses_design_pipeline_language(db):
     preset, slots, scope = await _team(db)
+    architect = next(slot for slot in slots if slot.display_name == "Architect")
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    leader_member = await _create_registered_slot_member(db, architect)
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=835,
@@ -369,6 +411,52 @@ async def test_design_dispatch_brief_uses_design_pipeline_language(db):
     assert "Design pipeline instructions" in prompt
     assert "do not rely on CI or auto-merge" in prompt
     assert "human-reviewed PR" in prompt
+    assert f"Agent Mail member_id={leader_member.id}" in prompt
+    assert f"to_member_id={leader_member.id}" in prompt
+    assert f"slot_id={architect.id}" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_dispatch_brief_uses_discovery_when_leader_member_missing(db):
+    preset, slots, scope = await _team(db)
+    architect = next(slot for slot in slots if slot.display_name == "Architect")
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=837,
+        issue_title="Small docs follow-up",
+        issue_url="https://github.com/o/r/issues/837",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    launched = {}
+
+    class _Result:
+        launch_id = 837
+
+    async def fake_launcher(db_, preset_id, request):
+        launched["request"] = request
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={837: ["area:backend"]},
+        issue_details_by_number={837: {"body": "Tiny docs follow-up."}},
+    )
+
+    prompt = launched["request"].slot_prompt_overrides[backend.id]
+    assert "Team leader / approver: Architect" in prompt
+    assert "Leader Agent Mail member id is not registered yet" in prompt
+    assert "deck_list_team" in prompt
+    assert "resolve the Agent Mail member id for `Architect`" in prompt
+    assert f"slot_id={architect.id}" not in prompt
+    assert f"to_member_id={architect.id}" not in prompt
 
 
 @pytest.mark.asyncio

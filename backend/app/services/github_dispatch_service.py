@@ -142,11 +142,16 @@ class GithubDispatchService:
                 await db.commit()
                 continue
             try:
+                leader = self._leader_slot(preset_slots)
+                leader_member = (
+                    await self._slot_member(db, leader.id) if leader is not None else None
+                )
                 brief = self._dispatch_brief(
                     item,
                     scope,
                     owner_slot_id=owner_slot_id,
                     preset_slots=preset_slots,
+                    leader_member=leader_member,
                     issue_details=issue_details_by_number.get(item.issue_number),
                 )
                 await self._send_dispatch_brief_to_slot(
@@ -201,13 +206,10 @@ class GithubDispatchService:
         *,
         owner_slot_id: int,
         preset_slots: list[AgentTeamSlot],
+        leader_member: MailTeamMember | None = None,
         issue_details: dict | None = None,
     ) -> str:
-        enabled = sorted(
-            [slot for slot in preset_slots if slot.enabled],
-            key=lambda slot: slot.position,
-        )
-        leader = enabled[0] if enabled else None
+        leader = self._leader_slot(preset_slots)
         owner = next((slot for slot in preset_slots if slot.id == owner_slot_id), None)
         issue_body = (issue_details or {}).get("body") or ""
         labels = [
@@ -231,7 +233,18 @@ class GithubDispatchService:
             f"- Owner slot: {owner.display_name if owner else owner_slot_id}",
         ]
         if leader is not None:
-            lines.append(f"- Team leader / approver slot: {leader.display_name} (slot_id={leader.id})")
+            if leader_member is not None:
+                lines.append(
+                    "- Team leader / approver: "
+                    f"{leader.display_name} (Agent Mail member_id={leader_member.id})"
+                )
+            else:
+                lines.append(f"- Team leader / approver: {leader.display_name}")
+                lines.append(
+                    "- Leader Agent Mail member id is not registered yet; call "
+                    "`deck_list_team` and select the connected team member whose "
+                    f"team slot/name is `{leader.display_name}` before requesting acknowledgment."
+                )
         if labels:
             lines.append(f"- Labels: {', '.join(labels)}")
         lines.extend(
@@ -253,7 +266,7 @@ class GithubDispatchService:
                     "Design pipeline instructions:",
                     "- Treat this as a design/documentation task.",
                     "- Prepare a human-reviewed PR; do not rely on CI or auto-merge.",
-                    "- Send the team leader a short plan and wait for acknowledgment before opening the PR.",
+                    self._leader_ack_instruction(leader, leader_member, before="opening the PR"),
                 ]
             )
         else:
@@ -262,13 +275,50 @@ class GithubDispatchService:
                     "",
                     "Code pipeline instructions:",
                     "- Triage this issue and prepare a short implementation plan.",
-                    "- Send the team leader a short plan via Agent Mail and wait for acknowledgment before starting implementation.",
+                    self._leader_ack_instruction(
+                        leader,
+                        leader_member,
+                        before="starting implementation",
+                    ),
                     "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
                     "- Keep the change inside the issue scope, run the issue's requested local verification commands, then open a draft PR.",
                     "- After opening the draft PR, report `pr_opened` with the PR number and wait for CI verification.",
                 ]
             )
         return "\n".join(lines)
+
+    def _leader_slot(self, preset_slots: list[AgentTeamSlot]) -> AgentTeamSlot | None:
+        enabled = sorted(
+            [slot for slot in preset_slots if slot.enabled],
+            key=lambda slot: slot.position,
+        )
+        return enabled[0] if enabled else None
+
+    def _leader_ack_instruction(
+        self,
+        leader: AgentTeamSlot | None,
+        leader_member: MailTeamMember | None,
+        *,
+        before: str,
+    ) -> str:
+        if leader_member is not None:
+            return (
+                "- Send the team leader a short plan via Agent Mail using "
+                f"`deck_request_context(to_member_id={leader_member.id}, ...)` "
+                "or "
+                f"`deck_send_message(to_member_id={leader_member.id}, ...)`, "
+                f"then wait for acknowledgment before {before}."
+            )
+        if leader is not None:
+            return (
+                "- Send the team leader a short plan via Agent Mail and wait for "
+                f"acknowledgment before {before}; first call `deck_list_team` to "
+                f"resolve the Agent Mail member id for `{leader.display_name}`."
+            )
+        return (
+            "- Send the team leader a short plan via Agent Mail and wait for "
+            f"acknowledgment before {before}; if no leader is registered, report blocked."
+        )
 
     async def _send_dispatch_brief_to_slot(
         self,
@@ -506,10 +556,13 @@ class GithubDispatchService:
     async def _owner_member(self, db: AsyncSession, item: GithubWorkItem) -> MailTeamMember | None:
         if item.owner_slot_id is None:
             return None
+        return await self._slot_member(db, item.owner_slot_id)
+
+    async def _slot_member(self, db: AsyncSession, slot_id: int) -> MailTeamMember | None:
         return (
             await db.execute(
                 select(MailTeamMember)
-                .where(MailTeamMember.team_slot_id == item.owner_slot_id)
+                .where(MailTeamMember.team_slot_id == slot_id)
                 .order_by(MailTeamMember.updated_at.desc())
                 .limit(1)
             )
