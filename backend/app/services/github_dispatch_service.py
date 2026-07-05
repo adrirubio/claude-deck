@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import AgentTeamSlot, GithubWorkItem, MailTeamMember, TeamGithubScope
 from app.models.schemas import AgentTeamLaunchRequest
 from app.services.agent_team_service import agent_team_service
@@ -422,6 +423,8 @@ class GithubDispatchService:
         ).scalars().all()
 
         for item in dispatched:
+            if self._within_registration_grace(item):
+                continue
             if leader_wake == "offline":
                 await self.escalate(db, item, "leader_offline")
                 continue
@@ -433,6 +436,11 @@ class GithubDispatchService:
             if owner_wake == "offline":
                 await self.escalate(db, item, "owner_offline")
         await db.commit()
+
+    def _within_registration_grace(self, item: GithubWorkItem) -> bool:
+        grace_started_at = item.updated_at or item.created_at
+        grace_age = datetime.utcnow() - grace_started_at
+        return grace_age < timedelta(seconds=settings.github_owner_registration_grace_seconds)
 
     async def escalate(
         self,

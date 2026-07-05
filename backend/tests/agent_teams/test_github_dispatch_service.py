@@ -1,5 +1,5 @@
 """Dispatch routing + concurrency tests."""
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
+from app.config import settings
 from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
@@ -906,6 +907,9 @@ async def test_two_phase_handoff(db):
 async def test_monitor_escalates_when_leader_offline(db):
     preset, slots, scope = await _team(db)
     architect = slots[0]
+    past_registration_grace = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_registration_grace_seconds + 1
+    )
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=50,
@@ -914,6 +918,7 @@ async def test_monitor_escalates_when_leader_offline(db):
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
         owner_slot_id=slots[1].id,
+        updated_at=past_registration_grace,
     )
     db.add(item)
     await db.commit()
@@ -930,12 +935,74 @@ async def test_monitor_escalates_when_leader_offline(db):
 
 
 @pytest.mark.asyncio
+async def test_monitor_leaves_newly_dispatched_item_when_leader_offline(db):
+    preset, slots, scope = await _team(db)
+    architect = slots[0]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=53,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={architect.id: "offline", slots[1].id: "wakeable"},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
 async def test_monitor_escalates_when_owner_offline(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    past_registration_grace = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_registration_grace_seconds + 1
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=51,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        updated_at=past_registration_grace,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={architect.id: "wakeable", backend.id: "offline"},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "owner_offline"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert any("owner_offline" in (message.subject or "") for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_monitor_leaves_newly_dispatched_item_when_owner_offline(db):
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]
     item = GithubWorkItem(
         scope_id=scope.id,
-        issue_number=51,
+        issue_number=54,
         issue_title="x",
         issue_url="u",
         github_updated_at=datetime.utcnow(),
@@ -953,10 +1020,8 @@ async def test_monitor_escalates_when_owner_offline(db):
     )
 
     await db.refresh(item)
-    assert item.dispatch_status == "escalated"
-    assert item.escalation_reason == "owner_offline"
-    messages = (await db.execute(select(MailMessage))).scalars().all()
-    assert any("owner_offline" in (message.subject or "") for message in messages)
+    assert item.dispatch_status == "dispatched"
+    assert item.escalation_reason is None
 
 
 @pytest.mark.asyncio
