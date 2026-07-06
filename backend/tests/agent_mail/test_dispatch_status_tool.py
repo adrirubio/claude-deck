@@ -108,7 +108,7 @@ async def test_blocked_uses_spec_reason_and_persists_note(client_and_db):
 
 
 @pytest.mark.asyncio
-async def test_in_progress_records_activity_and_satisfies_ack(client_and_db):
+async def test_in_progress_records_activity_without_satisfying_ack(client_and_db):
     ac, maker = client_and_db
     item_id = await _seed_item(maker, last_nudge_at=datetime.utcnow())
     resp = await ac.post(
@@ -119,7 +119,7 @@ async def test_in_progress_records_activity_and_satisfies_ack(client_and_db):
     async with maker() as db:
         item = await db.get(GithubWorkItem, item_id)
         assert item.dispatch_status == "dispatched"
-        assert item.ack_received_at is not None
+        assert item.ack_received_at is None
         assert item.last_nudge_at is None
         assert item.pr_number is None
 

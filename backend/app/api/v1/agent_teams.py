@@ -195,8 +195,6 @@ async def report_dispatch_status(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "in_progress":
         now = datetime.utcnow()
-        if item.ack_received_at is None:
-            item.ack_received_at = now
         item.last_nudge_at = None
         if report.pr_number is not None:
             item.pr_number = report.pr_number
