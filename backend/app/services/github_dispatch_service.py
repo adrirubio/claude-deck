@@ -452,12 +452,61 @@ class GithubDispatchService:
             )
             if owner_wake == "offline":
                 await self.escalate(db, item, "owner_offline")
+                continue
+            if not self._ack_satisfied(item):
+                anchor = item.dispatched_at or item.updated_at or item.created_at
+                overdue = datetime.utcnow() - anchor > timedelta(
+                    seconds=self._ack_deadline_seconds(item)
+                )
+                if not overdue:
+                    continue
+                if item.last_nudge_at is None:
+                    await self._nudge_leader_for_ack(db, item, leader)
+                elif datetime.utcnow() - item.last_nudge_at > timedelta(
+                    seconds=settings.github_nudge_grace_seconds
+                ):
+                    await self.escalate(db, item, "leader_ack_timeout")
+                continue
         await db.commit()
 
     def _within_registration_grace(self, item: GithubWorkItem) -> bool:
         grace_started_at = item.updated_at or item.created_at
         grace_age = datetime.utcnow() - grace_started_at
         return grace_age < timedelta(seconds=settings.github_owner_registration_grace_seconds)
+
+    def _ack_satisfied(self, item: GithubWorkItem) -> bool:
+        return item.ack_received_at is not None or item.pr_number is not None
+
+    def _ack_deadline_seconds(self, item: GithubWorkItem) -> int:
+        base = settings.github_leader_ack_timeout_seconds
+        if item.issue_type == "design":
+            return base * settings.github_design_ack_multiplier
+        return base
+
+    async def _nudge_leader_for_ack(
+        self, db: AsyncSession, item: GithubWorkItem, leader: AgentTeamSlot
+    ) -> None:
+        member = await self._slot_member(db, leader.id)
+        item.last_nudge_at = datetime.utcnow()
+        if member is not None:
+            from app.services.agent_mail_service import agent_mail_service
+
+            await agent_mail_service.send_direct_message(
+                db,
+                recipient_member_id=member.id,
+                subject=f"Ack needed: issue #{item.issue_number}",
+                body_markdown=(
+                    f"The owner is waiting on your acknowledgment for issue "
+                    f"#{item.issue_number} ({item.issue_title}). Please review their "
+                    "plan and acknowledge so work can proceed."
+                ),
+                payload={
+                    "kind": "github_dispatch_ack_nudge",
+                    "work_item_id": item.id,
+                    "issue_number": item.issue_number,
+                },
+            )
+        await db.commit()
 
     async def escalate(
         self,
