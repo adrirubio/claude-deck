@@ -198,6 +198,18 @@ class GithubVerificationService:
                 f"mergeable_state={merge_state}",
             )
             return
+        current_head = self._head_sha(pull)
+        if current_head != item.last_verified_sha or not await self._head_is_green(
+            scope, client, current_head
+        ):
+            item.dispatch_status = "verifying"
+            item.status_note = (
+                "Head changed or is no longer green since promotion; re-verifying "
+                "before auto-merge."
+            )
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
         try:
             await client.merge_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
         except httpx.HTTPStatusError as exc:
@@ -446,6 +458,23 @@ class GithubVerificationService:
     def _head_sha(self, pull: dict) -> str | None:
         sha = (pull.get("head") or {}).get("sha")
         return str(sha) if sha else None
+
+    async def _head_is_green(
+        self, scope: TeamGithubScope, client: GithubClient, head_sha: str | None
+    ) -> bool:
+        if not head_sha:
+            return False
+        checks = await client.list_check_runs_for_ref(
+            scope.repo_owner, scope.repo_name, head_sha
+        )
+        if not checks:
+            return False
+        if any(
+            check.get("status") != "completed" or check.get("conclusion") is None
+            for check in checks
+        ):
+            return False
+        return all(check.get("conclusion") in _SUCCESS_CONCLUSIONS for check in checks)
 
 
 github_verification_service = GithubVerificationService()

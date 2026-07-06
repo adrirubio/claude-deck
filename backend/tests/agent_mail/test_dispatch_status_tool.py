@@ -108,6 +108,23 @@ async def test_blocked_uses_spec_reason_and_persists_note(client_and_db):
 
 
 @pytest.mark.asyncio
+async def test_in_progress_records_activity_without_satisfying_ack(client_and_db):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, last_nudge_at=datetime.utcnow())
+    resp = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "in_progress"},
+    )
+    assert resp.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "dispatched"
+        assert item.ack_received_at is None
+        assert item.last_nudge_at is None
+        assert item.pr_number is None
+
+
+@pytest.mark.asyncio
 async def test_pr_opened_rejected_after_item_escalated(client_and_db):
     ac, maker = client_and_db
     item_id = await _seed_item(maker, dispatch_status="escalated")

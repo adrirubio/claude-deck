@@ -184,6 +184,8 @@ async def report_dispatch_status(
     elif report.status == "blocked":
         await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
         await db.commit()
+    elif report.status == "ack_received":
+        await github_dispatch_service.record_ack_received(db, item)
     elif report.status == "pr_opened":
         if report.pr_number is None:
             raise HTTPException(status_code=400, detail="pr_number required")
@@ -192,10 +194,12 @@ async def report_dispatch_status(
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "in_progress":
+        now = datetime.utcnow()
+        item.last_nudge_at = None
         if report.pr_number is not None:
             item.pr_number = report.pr_number
-            item.updated_at = datetime.utcnow()
-            await db.commit()
+        item.updated_at = now
+        await db.commit()
     else:
         raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
 

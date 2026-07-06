@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     github_dispatch_interval_seconds: int = 60
     github_check_signal_grace_seconds: int = 120
     github_owner_registration_grace_seconds: int = 120
+    github_leader_ack_timeout_seconds: int = 300
+    github_design_ack_multiplier: int = 3
+    github_owner_idle_timeout_seconds: int = 900
+    github_nudge_grace_seconds: int = 180
 
     # Server settings
     host: str = "0.0.0.0"
