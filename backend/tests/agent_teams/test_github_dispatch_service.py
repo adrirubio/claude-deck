@@ -125,6 +125,36 @@ async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMem
 
 
 @pytest.mark.asyncio
+async def test_work_item_has_lifecycle_columns(db):
+    preset, slots, scope = await _team(db)
+    now = datetime.utcnow()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=900,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=now,
+        dispatch_status="dispatched",
+        dispatched_at=now,
+        ack_received_at=now,
+        last_nudge_at=now,
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    assert item.dispatched_at is not None
+    assert item.ack_received_at is not None
+    assert item.last_nudge_at is not None
+
+
+def test_ack_lifecycle_settings_present():
+    assert settings.github_leader_ack_timeout_seconds > 0
+    assert settings.github_design_ack_multiplier >= 1
+    assert settings.github_owner_idle_timeout_seconds > 0
+    assert settings.github_nudge_grace_seconds > 0
+
+
+@pytest.mark.asyncio
 async def test_route_by_label_match(db):
     preset, slots, scope = await _team(db)
     item = GithubWorkItem(
