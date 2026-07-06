@@ -467,6 +467,18 @@ class GithubDispatchService:
                 ):
                     await self.escalate(db, item, "leader_ack_timeout")
                 continue
+            idle_anchor = item.updated_at or item.created_at
+            idle_overdue = datetime.utcnow() - idle_anchor > timedelta(
+                seconds=settings.github_owner_idle_timeout_seconds
+            )
+            if not idle_overdue:
+                continue
+            if item.last_nudge_at is None or item.last_nudge_at < idle_anchor:
+                await self._nudge_owner_for_progress(db, item)
+            elif datetime.utcnow() - item.last_nudge_at > timedelta(
+                seconds=settings.github_nudge_grace_seconds
+            ):
+                await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
 
     def _within_registration_grace(self, item: GithubWorkItem) -> bool:
@@ -506,6 +518,27 @@ class GithubDispatchService:
                     "issue_number": item.issue_number,
                 },
             )
+        await db.commit()
+
+    async def _nudge_owner_for_progress(
+        self, db: AsyncSession, item: GithubWorkItem
+    ) -> None:
+        item.last_nudge_at = datetime.utcnow()
+        await self.notify_owner(
+            db,
+            item,
+            subject=f"Progress check: issue #{item.issue_number}",
+            body_markdown=(
+                f"No PR yet for issue #{item.issue_number} ({item.issue_title}). "
+                "Are you still making progress? Reply or report your status. If you "
+                "are blocked, report `blocked` so a human can help."
+            ),
+            payload={
+                "kind": "github_dispatch_idle_nudge",
+                "work_item_id": item.id,
+                "issue_number": item.issue_number,
+            },
+        )
         await db.commit()
 
     async def escalate(

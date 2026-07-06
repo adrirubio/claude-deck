@@ -1367,6 +1367,101 @@ async def test_monitor_no_ack_action_when_ack_received(db):
 
 
 @pytest.mark.asyncio
+async def test_monitor_nudges_idle_owner_after_ack(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds + 30
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=930,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        dispatched_at=old,
+        updated_at=old,
+        ack_received_at=old,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.last_nudge_at is not None
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_monitor_idle_owner_activity_resets_clock(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds + 30
+    )
+    nudged = old + timedelta(seconds=1)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=931,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        dispatched_at=old,
+        ack_received_at=old,
+        last_nudge_at=nudged,
+        updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_monitor_escalates_idle_owner_after_nudge_grace(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds + 60
+    )
+    nudged = datetime.utcnow() - timedelta(seconds=settings.github_nudge_grace_seconds + 5)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=932,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        dispatched_at=old,
+        ack_received_at=old,
+        updated_at=old,
+        last_nudge_at=nudged,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "owner_idle_timeout"
+
+
+@pytest.mark.asyncio
 async def test_monitor_leaves_item_when_leader_reachable(db):
     preset, slots, scope = await _team(db)
     architect = slots[0]
