@@ -482,7 +482,7 @@ class GithubDispatchService:
         await db.commit()
 
     def _within_registration_grace(self, item: GithubWorkItem) -> bool:
-        grace_started_at = item.updated_at or item.created_at
+        grace_started_at = item.dispatched_at or item.updated_at or item.created_at
         grace_age = datetime.utcnow() - grace_started_at
         return grace_age < timedelta(seconds=settings.github_owner_registration_grace_seconds)
 

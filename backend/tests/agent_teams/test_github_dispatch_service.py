@@ -1367,6 +1367,38 @@ async def test_monitor_no_ack_action_when_ack_received(db):
 
 
 @pytest.mark.asyncio
+async def test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_leader_ack_timeout_seconds
+        + settings.github_owner_registration_grace_seconds
+        + 10
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=924,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        dispatched_at=old,
+        updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.last_nudge_at is not None
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
 async def test_monitor_nudges_idle_owner_after_ack(db):
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]
