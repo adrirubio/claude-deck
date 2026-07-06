@@ -163,6 +163,78 @@ async def _ready_review_messages(db):
     return [message for message in messages if message.subject == "Code PR ready for review"]
 
 
+async def _auto_ready_item(
+    db,
+    *,
+    last_verified_sha: str,
+    current_head: str,
+    head_checks: list[dict],
+):
+    scope = await _scope(db, merge_policy="auto")
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        issue_type="code",
+        pr_number=1,
+        last_verified_sha=last_verified_sha,
+    )
+    client = _Client(
+        pull={
+            "number": 1,
+            "node_id": "node",
+            "draft": False,
+            "merged": False,
+            "mergeable_state": "clean",
+            "head": {"sha": current_head},
+        },
+        check_runs=head_checks,
+    )
+    return scope, item, client
+
+
+@pytest.mark.asyncio
+async def test_auto_merge_demotes_when_head_moved(db):
+    scope, item, client = await _auto_ready_item(
+        db,
+        last_verified_sha="aaa111",
+        current_head="bbb222",
+        head_checks=[{"status": "completed", "conclusion": "success"}],
+    )
+    await github_verification_service._process_review_item(db, scope, item, client)
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert client.merge_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_merge_demotes_when_head_red(db):
+    scope, item, client = await _auto_ready_item(
+        db,
+        last_verified_sha="aaa111",
+        current_head="aaa111",
+        head_checks=[{"status": "completed", "conclusion": "failure"}],
+    )
+    await github_verification_service._process_review_item(db, scope, item, client)
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert client.merge_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_merge_proceeds_when_head_unchanged_and_green(db):
+    scope, item, client = await _auto_ready_item(
+        db,
+        last_verified_sha="aaa111",
+        current_head="aaa111",
+        head_checks=[{"status": "completed", "conclusion": "success"}],
+    )
+    await github_verification_service._process_review_item(db, scope, item, client)
+    await db.refresh(item)
+    assert item.dispatch_status == "merged"
+    assert client.merge_calls == 1
+
+
 @pytest.mark.asyncio
 async def test_report_pr_opened_routes_code_and_design(db):
     code_scope = await _scope(db)
@@ -404,8 +476,16 @@ async def test_failed_check_dispatched_item_with_pr_is_reverified(db):
 @pytest.mark.asyncio
 async def test_auto_merge_success_sets_merged_and_budget_timestamp(db):
     scope = await _scope(db, merge_policy="auto")
-    item = await _item(db, scope, dispatch_status="ready_for_review", pr_number=5)
-    client = _Client()
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        last_verified_sha="sha",
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}]
+    )
 
     await github_verification_service.process_scope(db, scope, client=client)
 
@@ -445,8 +525,17 @@ async def test_auto_merge_cap_falls_back_to_human_review(db):
 @pytest.mark.asyncio
 async def test_durable_merge_failure_falls_back_to_human_without_escalation(db):
     scope = await _scope(db, merge_policy="auto")
-    item = await _item(db, scope, dispatch_status="ready_for_review", pr_number=5)
-    client = _Client(merge_error=_http_error(403))
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        last_verified_sha="sha",
+    )
+    client = _Client(
+        merge_error=_http_error(403),
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+    )
 
     await github_verification_service.process_scope(db, scope, client=client)
     await github_verification_service.process_scope(db, scope, client=client)
@@ -465,8 +554,22 @@ async def test_durable_merge_failure_falls_back_to_human_without_escalation(db):
 @pytest.mark.asyncio
 async def test_unexpected_merge_status_is_transient_and_does_not_abort_batch(db):
     scope = await _scope(db, merge_policy="auto", max_verification_retries=2)
-    first = await _item(db, scope, issue_number=1, dispatch_status="ready_for_review", pr_number=5)
-    second = await _item(db, scope, issue_number=2, dispatch_status="ready_for_review", pr_number=6)
+    first = await _item(
+        db,
+        scope,
+        issue_number=1,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        last_verified_sha="sha-5",
+    )
+    second = await _item(
+        db,
+        scope,
+        issue_number=2,
+        dispatch_status="ready_for_review",
+        pr_number=6,
+        last_verified_sha="sha-6",
+    )
 
     class _BatchClient(_Client):
         async def get_pull(self, owner, repo, pr_number):
@@ -483,7 +586,9 @@ async def test_unexpected_merge_status_is_transient_and_does_not_abort_batch(db)
                 raise _http_error(422)
             return {"merged": True}
 
-    client = _BatchClient()
+    client = _BatchClient(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}]
+    )
 
     await github_verification_service.process_scope(db, scope, client=client)
 
