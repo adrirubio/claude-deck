@@ -196,6 +196,7 @@ class GithubDispatchService:
                 item.dispatch_status = "failed"
             else:
                 item.dispatch_status = "dispatched"
+                item.dispatched_at = datetime.utcnow()
                 slots_dispatched_this_batch.add(owner_slot_id)
                 scope_dispatched_this_batch += 1
             item.pending_reason = None
@@ -304,23 +305,31 @@ class GithubDispatchService:
         *,
         before: str,
     ) -> str:
+        report = (
+            " Once the leader acknowledges, call "
+            '`deck_report_dispatch_status(status="ack_received")` before '
+            f"{before}. Do not set your own deadline for the acknowledgment; "
+            "the brain manages timeouts and will nudge or escalate if needed."
+        )
         if leader_member is not None:
             return (
                 "- Send the team leader a short plan via Agent Mail using "
                 f"`deck_request_context(to_member_id={leader_member.id}, ...)` "
                 "or "
                 f"`deck_send_message(to_member_id={leader_member.id}, ...)`, "
-                f"then wait for acknowledgment before {before}."
+                f"then wait for acknowledgment before {before}." + report
             )
         if leader is not None:
             return (
                 "- Send the team leader a short plan via Agent Mail and wait for "
                 f"acknowledgment before {before}; first call `deck_list_team` to "
                 f"resolve the Agent Mail member id for `{leader.display_name}`."
+                + report
             )
         return (
             "- Send the team leader a short plan via Agent Mail and wait for "
             f"acknowledgment before {before}; if no leader is registered, report blocked."
+            + report
         )
 
     async def _send_dispatch_brief_to_slot(
@@ -360,6 +369,14 @@ class GithubDispatchService:
         item.approval_round_count += 1
         if item.approval_round_count >= scope.max_approval_rounds:
             await self.escalate(db, item, "approval_rounds_exhausted")
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+
+    async def record_ack_received(
+        self, db: AsyncSession, item: GithubWorkItem
+    ) -> None:
+        item.ack_received_at = datetime.utcnow()
+        item.last_nudge_at = None
         item.updated_at = datetime.utcnow()
         await db.commit()
 

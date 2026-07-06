@@ -608,9 +608,10 @@ def deck_report_dispatch_status(
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
-    status is one of: triaging, revision_requested, in_progress, pr_opened,
-    handoff_initiated (with reassign_to_slot_id), handoff_accepted, blocked.
-    Called by the owner slot the brain dispatched the issue to. Include
+    status is one of: triaging, ack_received, revision_requested, in_progress,
+    pr_opened, handoff_initiated (with reassign_to_slot_id), handoff_accepted,
+    blocked. Report ack_received right after the team leader acknowledges your
+    plan. Called by the owner slot the brain dispatched the issue to. Include
     work_item_id from your bootstrap prompt.
     """
     identity = _ensure_registered()

@@ -155,6 +155,78 @@ def test_ack_lifecycle_settings_present():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_pending_stamps_dispatched_at(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=910,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _Result:
+        launch_id = 910
+        items = []
+
+    async def fake_launcher(db_, preset_id, request):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={910: ["area:backend"]},
+        issue_details_by_number={910: {"body": "do the thing"}},
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.dispatched_at is not None
+
+
+@pytest.mark.asyncio
+async def test_ack_prompt_has_no_owner_side_timeout(db):
+    preset, slots, scope = await _team(db)
+    architect = next(slot for slot in slots if slot.display_name == "Architect")
+    leader_member = await _create_registered_slot_member(db, architect)
+    instruction = github_dispatch_service._leader_ack_instruction(
+        architect, leader_member, before="editing files"
+    )
+    assert "ack_received" in instruction
+    assert "minute" not in instruction.lower()
+    assert "give up" not in instruction.lower()
+
+
+@pytest.mark.asyncio
+async def test_report_ack_received_records_timestamp_and_clears_nudge(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=911,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatched_at=datetime.utcnow(),
+        last_nudge_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.record_ack_received(db, item)
+
+    await db.refresh(item)
+    assert item.ack_received_at is not None
+    assert item.last_nudge_at is None
+    assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
 async def test_route_by_label_match(db):
     preset, slots, scope = await _team(db)
     item = GithubWorkItem(
