@@ -310,3 +310,59 @@ async def test_active_item_closed_does_not_escalate_as_label_removed(db):
     await db.refresh(item)
     assert item.dispatch_status == "completed"
     assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_watcher_completed_fires_blocker_merged_notification(db):
+    scope = await _make_scope(db)
+    leader = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=0,
+        display_name="Leader",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(leader)
+    await db.flush()
+    member = MailTeamMember(
+        identity_key="slot:leader",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Leader",
+        participant_kind="team_slot",
+        team_preset_id=scope.preset_id,
+        team_slot_id=leader.id,
+    )
+    db.add(member)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=858,
+        issue_title="design",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="awaiting_human_review",
+    )
+    db.add(item)
+    await db.commit()
+    closed = _issue(858, ["claude-deck-ready"])
+    closed["state"] = "closed"
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[], by_number={858: closed}),
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "completed"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    notifications = [
+        message
+        for message in messages
+        if (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+    ]
+    assert len(notifications) == 1
+    assert notifications[0].recipient_member_id == member.id

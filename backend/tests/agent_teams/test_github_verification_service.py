@@ -163,6 +163,15 @@ async def _ready_review_messages(db):
     return [message for message in messages if message.subject == "Code PR ready for review"]
 
 
+async def _blocker_merged_messages(db):
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    return [
+        message
+        for message in messages
+        if (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+    ]
+
+
 async def _auto_ready_item(
     db,
     *,
@@ -229,10 +238,58 @@ async def test_auto_merge_proceeds_when_head_unchanged_and_green(db):
         current_head="aaa111",
         head_checks=[{"status": "completed", "conclusion": "success"}],
     )
+    await _owner(db, scope)
     await github_verification_service._process_review_item(db, scope, item, client)
     await db.refresh(item)
     assert item.dispatch_status == "merged"
     assert client.merge_calls == 1
+    assert len(await _blocker_merged_messages(db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_verifying_merged_pull_fires_blocker_merged_notification(db):
+    scope = await _scope(db, merge_policy="human")
+    await _owner(db, scope)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        pull={
+            "number": 5,
+            "node_id": "node",
+            "draft": False,
+            "merged": True,
+            "mergeable_state": "clean",
+            "head": {"sha": "sha"},
+        }
+    )
+
+    await github_verification_service._verify_item(db, scope, item, client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "merged"
+    assert len(await _blocker_merged_messages(db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_human_merge_fires_blocker_merged_notification(db):
+    scope = await _scope(db, merge_policy="human")
+    await _owner(db, scope)
+    item = await _item(db, scope, dispatch_status="ready_for_review", pr_number=5)
+    client = _Client(
+        pull={
+            "number": 5,
+            "node_id": "node",
+            "draft": False,
+            "merged": True,
+            "mergeable_state": "clean",
+            "head": {"sha": "sha"},
+        }
+    )
+
+    await github_verification_service._process_review_item(db, scope, item, client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "merged"
+    assert len(await _blocker_merged_messages(db)) == 1
 
 
 @pytest.mark.asyncio

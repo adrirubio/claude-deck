@@ -1,17 +1,20 @@
 """Polling watcher for autonomous GitHub dispatch."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import GithubWorkItem, TeamGithubScope
+from app.models.database import AgentTeamSlot, GithubWorkItem, TeamGithubScope
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
 
 _ACTIVE_STATUSES = ("dispatched", "verifying", "awaiting_human_review")
 _RECOVERABLE_STATUSES = ("failed", "escalated")
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_gh_ts(value: str) -> datetime:
@@ -94,6 +97,25 @@ class GithubWatcherService:
                 item.dispatch_status = "completed"
                 item.escalation_reason = None
                 item.updated_at = datetime.utcnow()
+                await db.commit()
+                try:
+                    slots = (
+                        await db.execute(
+                            select(AgentTeamSlot)
+                            .where(AgentTeamSlot.preset_id == scope.preset_id)
+                            .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                        )
+                    ).scalars().all()
+                    await github_dispatch_service.notify_blocker_merged(
+                        db, scope, item, slots
+                    )
+                    await db.commit()
+                except Exception:
+                    logger.exception(
+                        "Failed to send blocker-merged notification for work item %s",
+                        item.id,
+                    )
+                    await db.rollback()
                 continue
             still_labeled = issue is not None and any(
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
