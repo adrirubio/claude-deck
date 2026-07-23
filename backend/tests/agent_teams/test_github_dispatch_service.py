@@ -130,6 +130,8 @@ def test_leader_unblock_instructions_text():
     assert "deck_retry_work_item" in text
     assert "github_dispatch_blocker_merged" in text
     assert "all" in text.lower()
+    assert "deck_list_work_items" in text
+    assert "start" in text.lower()
 
 
 @pytest.mark.asyncio
