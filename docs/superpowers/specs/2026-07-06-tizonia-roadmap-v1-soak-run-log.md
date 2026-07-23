@@ -89,6 +89,22 @@ Window 2 (auto-merge) relies on branch protection to prove the T-S7 human-fallba
 4. Continue merging CI-green PRs as they land; watch for any actual loop defect (vs. expected dependency escalation).
 5. Before Window 2: restore branch protection; resolve the distinct-approver problem (findings #1 + #6).
 
+## RESUMED 2026-07-23 (session 2) — Phase E merged; cold-start acceptance test
+
+- Phase E (leader-owned dependency unblocking) merged to integration (`a5fa0e7`), verified (261 tests). Backend restarted on Phase E code; **verified live** the Leader's bootstrap includes the unblock instructions and the Generalist/Specialist's do NOT (leader-gating works). Team respawned (launch 48), all 3 live.
+
+### Finding 8 (process) — duplicate agent set from restart ordering
+
+Restarting the backend BEFORE killing the old agent tmux sessions left 3 orphaned sessions (19:25) that codex auto-reconnected to the same durable member IDs → two Leaders/Generalists/Specialists briefly live (4 sessions/member). Caught and cleaned (killed the 3 orphans; back to one set, 2 sessions/member). No double-action occurred (only mail 222 during the window). **Runbook fix: kill agent tmux sessions FIRST, then restart backend, then respawn.**
+
+### Finding 9 (IMPORTANT — Phase E cold-start seam) — leader knows #817 is unblocked but won't act without a live notification
+
+On start-up the Leader correctly built its dep map and reported (mail 222): "#817 -> #816[CLOSED] ... so #817 is logically clear ... Inbox contains no github_dispatch_blocker_merged notification ... so per the leader retry protocol I did not call deck_retry_work_item." The Leader's reasoning was impeccable — the **protocol has a gap**: action is tied strictly to receiving a blocker-merged *notification*, but a blocker that merged before the leader existed (resume-after-pause, leader crash/respawn — the cold-start case) produces no notification, so the already-unblocked dependent stays stranded.
+
+**Root cause is deeper than prompt wording:** the leader has NO MCP read tool to fetch escalated work items with their `work_item_id`s at start-up. The `issue_number ↔ work_item_id` mapping needed to call `deck_retry_work_item` only arrives via the notification payload's `escalated_items`. The activity-feed endpoint `GET /presets/{id}/github-work-items` exists but is not exposed as a `deck_` tool. So the build-on-start map is informational-only; the leader literally cannot act on it.
+
+**Fix (chosen 2026-07-23): close the seam properly (Phase E follow-up).** Add a `deck_list_work_items` MCP read tool (exposing escalated items + ids, reusing the activity-feed endpoint), and amend the leader bootstrap: after the start-up dep-map scan, fetch escalated items via the new tool and retry any whose blockers are ALL already closed — same all-blockers-resolved guardrail as the notification path. Then re-run the #817 acceptance test. Autonomy left OFF until the fix lands.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
