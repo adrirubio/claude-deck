@@ -628,6 +628,53 @@ def deck_report_dispatch_status(
 
 
 @mcp.tool()
+def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
+    """Leader-only: list this team's GitHub dispatch work items with their
+    work_item_id and issue_number. Defaults to escalated items (pass status=""
+    for all). Use at team start to resolve which escalated dependents are now
+    unblocked (per your dependency map) so you can call deck_retry_work_item
+    with the correct work_item_id.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    preset_id = registered["data"]["member"].get("team_preset_id")
+    if preset_id is None:
+        return {
+            "ok": False,
+            "error": {
+                "code": "no_team_preset",
+                "message": "Caller is not a member of a team preset.",
+            },
+        }
+    result = _dispatch_request(
+        "GET",
+        f"/presets/{preset_id}/github-work-items",
+        params={"limit": limit},
+    )
+    if not result["ok"]:
+        return result
+    items = result["data"].get("items", [])
+    if status:
+        items = [
+            item for item in items if item.get("dispatch_status") == status
+        ]
+    return {
+        "ok": True,
+        "items": [
+            {
+                "work_item_id": item.get("id"),
+                "issue_number": item.get("issue_number"),
+                "dispatch_status": item.get("dispatch_status"),
+                "escalation_reason": item.get("escalation_reason"),
+                "status_note": item.get("status_note"),
+            }
+            for item in items
+        ],
+    }
+
+
+@mcp.tool()
 def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
     """Leader-only: request re-dispatch of an ESCALATED GitHub work item whose
     blockers are now resolved. Pass the work_item_id (from the blocker-merged
