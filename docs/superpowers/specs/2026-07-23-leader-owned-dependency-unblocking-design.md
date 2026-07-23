@@ -48,8 +48,21 @@ Today `_mark_merged` silently sets `dispatch_status="merged"`. Add a leader-dire
 **Notification shape:**
 - Recipient: the **leader** (scope preset's first-position enabled slot → its Agent Mail member via `_slot_member`, mirroring the Phase D leader-ack resolution). Leader-directed, not a broadcast.
 - Subject: e.g. `"Blocker merged: issue #<n>"`.
-- Body: names the closed issue number + title.
-- Payload: `{"kind": "github_dispatch_blocker_merged", "issue_number": <n>, "work_item_id": <id>, "scope_id": <id>}` so the leader can filter for it.
+- Body: names the closed issue number + title, plus a readable list of the currently-escalated items (issue number + short reason) so the leader has full context in one message.
+- Payload — self-contained so the leader needs **no follow-up read**:
+  ```
+  {
+    "kind": "github_dispatch_blocker_merged",
+    "issue_number": <merged issue #>,
+    "work_item_id": <merged item id>,
+    "scope_id": <id>,
+    "escalated_items": [
+      {"work_item_id": <id>, "issue_number": <n>, "escalation_reason": "plan_blocked", "status_note": "<triage note naming its blockers>"},
+      ...
+    ]
+  }
+  ```
+  The `escalated_items` array is the scope's current `escalated` work items (the candidate dependents). Each carries the `issue_number` ↔ `work_item_id` mapping and the `status_note` (which already records the owner's triaged blockers), so the leader can, in one message: match its dep map against the merged issue, identify newly-fully-unblocked dependents, and call `deck_retry_work_item` with their `work_item_id` directly — no separate activity-feed query.
 
 If the leader member is not registered, the notify is a no-op (do not fail the merge path) — same defensive posture as the existing owner/leader notify helpers.
 
@@ -76,12 +89,13 @@ Lives in the **leader's dispatch/charter instructions** (the same brief-construc
   - Don't retry the same dependent twice for the same event.
   - If a dependency is ambiguous or the map is uncertain, leave it escalated for a human — conservative, no-fabrication ethos (T-S4 lesson).
 
-**Issue → work_item_id resolution:** the leader must map a dependent's issue number to its work_item_id to call the retry tool. The merge notification payload carries the *merged* item's work_item_id; for *dependents*, the leader resolves via a read of the scope's escalated work items (issue_number ↔ work_item_id). The exact read path (existing `GET /presets/{id}/github-work-items` activity feed, which returns issue_number + id + dispatch_status) is pinned in the implementation plan.
+**Issue → work_item_id resolution:** no separate read needed. The merge notification payload's `escalated_items` array (§1) already carries every currently-escalated dependent's `issue_number` ↔ `work_item_id` (plus `status_note`). The leader matches its dep map against the merged issue, and for each newly-fully-unblocked dependent reads the `work_item_id` straight from the payload to call `deck_retry_work_item`. The notification is fully self-contained.
 
 ## §4 — Testing
 
 - **Deck unit tests:**
   - `_mark_merged` fires the leader notification with the correct `github_dispatch_blocker_merged` payload; the watcher `completed` path fires it too; human-merge (not just auto-merge) triggers it.
+  - The payload's `escalated_items` array lists exactly the scope's current `escalated` items with `issue_number` + `work_item_id` + `status_note` (assert against a fixture with a mix of escalated and non-escalated items — only escalated appear).
   - Notification is a no-op when no leader member is registered (merge path still succeeds).
   - `deck_retry_work_item` resets an escalated item to `pending`; returns 409 for a non-escalated item (reuses the existing retry-guard test).
 - **Leader behavior:** validated in the **soak** (agent judgment has no unit test). Acceptance criterion = the live Finding-7 case: #816 merged → leader notified → leader retries #817 → #817 dispatches. 
