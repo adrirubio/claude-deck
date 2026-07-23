@@ -77,6 +77,16 @@ New MCP tool `deck_retry_work_item(work_item_id: int, reason: str = "")`:
 
 Docstring names it as: "Leader-only: request re-dispatch of an escalated work item whose blockers are now resolved. Pass the work_item_id and a short reason (e.g. 'prerequisite #816 merged')."
 
+## §2b — Deck primitive: leader work-item read tool (new MCP tool, added 2026-07-23 for Finding 9)
+
+**Files:** `backend/mcp_shim/agent_mail_server.py` (new tool) + reuse endpoint `GET /api/v1/agent-teams/presets/{preset_id}/github-work-items` (`backend/app/api/v1/agent_teams.py`, ~line 379, already returns issue_number/work_item_id/dispatch_status/escalation_reason/status_note per row).
+
+New MCP tool `deck_list_work_items(status: str = "escalated") -> dict`:
+- GETs the existing activity-feed endpoint for the caller's preset (resolve preset from the registered leader member, mirroring how `deck_report_dispatch_status` resolves identity), optionally filtering to a `dispatch_status` (default `escalated`).
+- Returns the work items with their `work_item_id`, `issue_number`, `dispatch_status`, `escalation_reason`, `status_note` — giving the leader the `issue_number ↔ work_item_id` mapping it needs to act on its start-up dep-map scan.
+- **Why this is needed:** without it, the leader can build a dep map from GitHub issue bodies but has no way to obtain the `work_item_id`s required by `deck_retry_work_item` except via a `blocker_merged` notification payload. That is the cold-start seam (Finding 9): a blocker merged before the leader existed leaves the dependent unactionable. This read tool makes the start-up scan actionable.
+- Read-only; no new endpoint (reuses the existing one).
+
 ## §3 — Leader-side behavior (operating instructions, not Deck code)
 
 Lives in the leader's **standing bootstrap prompt** (`agent_team_service._bootstrap_prompt`, leader-gated), so the leader has these instructions at session start regardless of whether it is ever dispatched as an owner. Deck supplies primitives; the leader supplies judgment.
@@ -86,8 +96,9 @@ Lives in the leader's **standing bootstrap prompt** (`agent_team_service._bootst
 - **Build (team start):** scan the scope's roadmap issues once; parse `Blocked by #N` / "Dependencies" prose from each body; form a dep map `issue → [blocker issues]`; note which blockers are already closed.
 - **Maintain (incremental):** on each `github_dispatch_blocker_merged` notification, mark that blocker satisfied; recompute, for each escalated dependent, whether **all** its blockers are now closed.
 - **Act:** for each newly-*fully*-unblocked dependent, call `deck_retry_work_item(work_item_id, reason="prerequisite #N merged")`.
+- **Cold-start action (added 2026-07-23, Finding 9):** the build-on-start scan must also *act*, not just inform. After building the map, the leader fetches the current escalated work items via `deck_list_work_items` (new read tool — see §2b) and retries any escalated dependent whose blockers are **all already closed** at start-up. This closes the resume-after-pause / leader-respawn case, where a blocker merged before the leader existed so no `blocker_merged` notification is in the inbox. Without this, the leader knows the dependent is unblocked (its map says so) but has no `work_item_id` to act on and no event to trigger it — the exact seam observed in the soak (Leader mail 222: "#817 logically clear … no notification … did not call deck_retry_work_item").
 - **Guardrails (in the prompt):**
-  - Only retry when **all** of a dependent's blockers are satisfied (never premature-retry a multi-blocker issue on one blocker landing).
+  - Only retry when **all** of a dependent's blockers are satisfied (never premature-retry a multi-blocker issue on one blocker landing). Applies to both the notification path and the start-up scan.
   - Don't retry the same dependent twice for the same event.
   - If a dependency is ambiguous or the map is uncertain, leave it escalated for a human — conservative, no-fabrication ethos (T-S4 lesson).
 
