@@ -452,25 +452,28 @@ git commit -m "feat(dispatch): add deck_retry_work_item MCP tool + retry reason"
 
 ---
 
-## Task 4: Leader dispatch-brief instructions (dep map + unblock behavior)
+## Task 4: Leader standing-bootstrap instructions (dep map + unblock behavior)
 
-Teach the leader to build/maintain the dep map and act on blocker-merged notifications. Reviewer gate: the leader's brief text contains the dep-map + unblock instructions and references the real tool/payload names.
+> **PLAN CORRECTION (2026-07-23, after impl-agent Task-4 stop on issue #294):** The original Task 4 targeted `github_dispatch_service._dispatch_brief`. That path builds **only the owner/worker** launch prompt (`slot_prompt_overrides={owner_slot_id: brief}`); the leader receives it only when *dispatched as an owner*, not as a standing approver — so it does NOT satisfy the spec's "build the dep map on team start." The authoritative home for standing per-slot instructions is `agent_team_service._bootstrap_prompt(preset, slot)` (backend/app/services/agent_team_service.py:1088), which every slot receives at session start. This corrected task targets that path, gated to the leader slot. (Confirmed by the impl agent, the running Leader agent via Agent Mail, and orchestrator code review.)
+
+Teach the leader to build/maintain the dep map and act on blocker-merged notifications, delivered in its **standing bootstrap prompt** so it has them at session start regardless of dispatch. Reviewer gate: the leader slot's bootstrap prompt contains the dep-map + unblock instructions (referencing the real tool/payload names); a non-leader slot's bootstrap prompt does NOT; the instructions are appended even when the slot has a custom `bootstrap_prompt`.
 
 **Files:**
-- Modify: `backend/app/services/github_dispatch_service.py` (`_leader_ack_instruction` / the brief-construction path that builds the leader's operating text — the same path Phase D used; find where the leader slot's brief/charter is assembled)
-- Test: `backend/tests/agent_teams/test_github_dispatch_service.py`
+- Modify: `backend/app/services/github_dispatch_service.py` (add the pure text helper `_leader_unblock_instructions`)
+- Modify: `backend/app/services/agent_team_service.py` (`_bootstrap_prompt`, line 1088-1100 — append the instructions when the slot is the leader)
+- Test: `backend/tests/agent_teams/test_github_dispatch_service.py` (text helper) + `backend/tests/agent_teams/` bootstrap test (delivery)
 
 **Interfaces:**
-- Consumes: the existing brief-construction for a leader-owned or leader slot. If the leader only receives instructions when it is dispatched as an owner, the dep-map instructions must live in the leader's standing charter/bootstrap text instead — locate where the leader slot's persistent instructions are set (slot `charter`/`bootstrap_prompt`, or the team-launch prompt). Add the instructions there so the leader has them regardless of being dispatched.
-- Produces: brief/charter text including the dep-map lifecycle + `deck_retry_work_item` usage.
+- Consumes: `github_dispatch_service._leader_unblock_instructions() -> str` (defined here); `_bootstrap_prompt(preset, slot)` which already receives `preset` + `slot`.
+- Produces: `_bootstrap_prompt` appends the leader instructions when `slot` is the leader. **Leader identification:** there is NO `preset.slots` relationship, so `_bootstrap_prompt` cannot enumerate siblings. The leader is the first-position ENABLED slot. Resolve it by loading the preset's slots once inside `_bootstrap_prompt` (query `AgentTeamSlot` by `preset_id`, order by `position, id`, first enabled) and comparing `slot.id`. This keeps the signature unchanged and is called only at spawn time (not hot-path).
+- **Always append:** append even when `slot.bootstrap_prompt` is set (the early-return branch) — a leader with a custom prompt must not silently lose the duty (approved decision 2026-07-23).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 Add to `backend/tests/agent_teams/test_github_dispatch_service.py`:
 
 ```python
-def test_leader_brief_includes_dep_map_and_unblock_instructions():
-    # the function that builds the leader's operating instructions
+def test_leader_unblock_instructions_text():
     text = github_dispatch_service._leader_unblock_instructions()
     assert "dependency map" in text.lower()
     assert "deck_retry_work_item" in text
@@ -478,12 +481,44 @@ def test_leader_brief_includes_dep_map_and_unblock_instructions():
     assert "all" in text.lower()  # only retry when ALL blockers resolved
 ```
 
+Add a bootstrap-delivery test (uses the `_team` fixture — `slots[0]` is the leader at position 0, `slots[1]` a non-leader):
+
+```python
+@pytest.mark.asyncio
+async def test_bootstrap_prompt_appends_unblock_only_for_leader(db):
+    from app.services.agent_team_service import agent_team_service
+    preset, slots, scope = await _team(db)
+    leader, non_leader = slots[0], slots[1]
+
+    leader_text = await agent_team_service._bootstrap_prompt(preset, leader)
+    non_leader_text = await agent_team_service._bootstrap_prompt(preset, non_leader)
+
+    assert "deck_retry_work_item" in leader_text
+    assert "dependency map" in leader_text.lower()
+    assert "deck_retry_work_item" not in non_leader_text
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_prompt_appends_unblock_even_with_custom_prompt(db):
+    from app.services.agent_team_service import agent_team_service
+    preset, slots, scope = await _team(db)
+    leader = slots[0]
+    leader.bootstrap_prompt = "CUSTOM standing prompt."
+    await db.commit()
+
+    text = await agent_team_service._bootstrap_prompt(preset, leader)
+    assert text.startswith("CUSTOM standing prompt.")   # custom prompt preserved
+    assert "deck_retry_work_item" in text               # duty still appended
+```
+
+Note: `_bootstrap_prompt` is currently **sync**; this task makes it `async` (it must query slots to identify the leader). Update its one caller (`agent_team_service` line ~609, `self._bootstrap_prompt(preset, slot)`) to `await` it. Confirm no other callers: `grep -rn "_bootstrap_prompt" backend/`.
+
 - [ ] **Step 2: Run to verify failure**
 
-Run: `cd backend && source venv/bin/activate && pytest tests/agent_teams/test_github_dispatch_service.py -k "leader_brief_includes_dep_map" -v`
-Expected: FAIL — `_leader_unblock_instructions` not defined.
+Run: `cd backend && source venv/bin/activate && pytest tests/agent_teams/test_github_dispatch_service.py -k "unblock_instructions or bootstrap_prompt_appends" -v`
+Expected: FAIL — `_leader_unblock_instructions` not defined; `_bootstrap_prompt` not async / no appended text.
 
-- [ ] **Step 3: Add the instruction text + include it in the leader's brief**
+- [ ] **Step 3: Add the instruction text helper**
 
 In `backend/app/services/github_dispatch_service.py`, add:
 
@@ -507,18 +542,64 @@ In `backend/app/services/github_dispatch_service.py`, add:
         )
 ```
 
-Then include `self._leader_unblock_instructions()` in the leader slot's operating text at the brief/charter assembly point (the same construction path Phase D's `_leader_ack_instruction` is used in). If the leader receives a brief only when dispatched, ALSO ensure these instructions reach the leader as standing guidance (append to the leader slot's launch/bootstrap prompt in the launch path). Locate via: `grep -n "_leader_ack_instruction\|charter\|bootstrap_prompt\|slot_prompt_overrides" backend/app/services/github_dispatch_service.py backend/app/services/agent_team_service.py`.
+- [ ] **Step 4: Make `_bootstrap_prompt` leader-aware (append the instructions)**
 
-- [ ] **Step 4: Run to verify pass**
+In `backend/app/services/agent_team_service.py`, change `_bootstrap_prompt` to `async` and append the leader instructions in BOTH branches (custom-prompt early return AND default). Replace lines 1088-1100:
 
-Run: `cd backend && source venv/bin/activate && pytest tests/agent_teams/test_github_dispatch_service.py -k "leader_brief_includes_dep_map" -v`
-Expected: PASS.
+```python
+    async def _bootstrap_prompt(self, preset: AgentTeamPreset, slot: AgentTeamSlot) -> str:
+        is_leader = await self._slot_is_leader(preset, slot)
+        if slot.bootstrap_prompt:
+            base = slot.bootstrap_prompt
+        else:
+            parts = [
+                f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
+                f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
+                "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
+            ]
+            if slot.role:
+                parts.append(f"Role: {slot.role}")
+            if slot.charter:
+                parts.append(f"Charter: {slot.charter}")
+            base = "\n".join(parts)
+        if is_leader:
+            from app.services.github_dispatch_service import github_dispatch_service
+            base = f"{base}\n\n{github_dispatch_service._leader_unblock_instructions()}"
+        return base
 
-- [ ] **Step 5: Commit**
+    async def _slot_is_leader(self, preset: AgentTeamPreset, slot: AgentTeamSlot) -> bool:
+        rows = (
+            await db_session_from(self)  # see note
+        )
+```
+
+**Implementation note for `_slot_is_leader`:** this method needs a DB session. `_bootstrap_prompt` currently takes no `db`. Two clean options — pick the one matching the caller:
+- **Preferred:** thread `db` through: change `_bootstrap_prompt(self, db, preset, slot)` and its caller (line ~609) which already has `db` in scope. Then:
+  ```python
+  async def _slot_is_leader(self, db, preset, slot) -> bool:
+      first = (
+          await db.execute(
+              select(AgentTeamSlot)
+              .where(AgentTeamSlot.preset_id == preset.id, AgentTeamSlot.enabled.is_(True))
+              .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+          )
+      ).scalars().first()
+      return first is not None and first.id == slot.id
+  ```
+  Update the signature calls: `_bootstrap_prompt(db, preset, slot)`, `_slot_is_leader(db, preset, slot)`, and the test calls accordingly (`await agent_team_service._bootstrap_prompt(db, preset, leader)`).
+
+Use the `db`-threaded form (do NOT invent a `db_session_from` helper — that was pseudocode). `select` and `AgentTeamSlot` are already imported in this module (confirm; add if missing).
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `cd backend && source venv/bin/activate && pytest tests/agent_teams/test_github_dispatch_service.py -k "unblock_instructions or bootstrap_prompt_appends" -v`
+Expected: PASS (3 passed). Then confirm the launch path still works: `pytest tests/agent_teams -q`.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add backend/app/services/github_dispatch_service.py backend/tests/agent_teams/test_github_dispatch_service.py
-git commit -m "feat(dispatch): add leader dependency-map + unblock instructions"
+git add backend/app/services/github_dispatch_service.py backend/app/services/agent_team_service.py backend/tests/agent_teams/test_github_dispatch_service.py
+git commit -m "feat(dispatch): deliver leader unblock instructions via bootstrap prompt (leader-gated)"
 ```
 
 ---
@@ -551,7 +632,7 @@ git commit -m "test(dispatch): full-suite green for leader-owned unblocking" --a
 **1. Spec coverage:**
 - §1 merge notification (human + auto + watcher-completed), leader-directed, self-contained `escalated_items` payload, no-op without leader → Task 1 (helper) + Task 2 (wiring, all 3 verify sites + watcher) ✓
 - §2 retry MCP tool reusing escalated-only endpoint, leader identity/reason → Task 3 ✓
-- §3 leader dep-map + incremental-update + retry + guardrails instructions → Task 4 ✓
+- §3 leader dep-map + incremental-update + retry + guardrails instructions → Task 4 (corrected 2026-07-23 to deliver via `_bootstrap_prompt`, leader-gated, so the leader has them at session start regardless of dispatch) ✓
 - §4 tests: notify payload correctness (escalated-only), human-merge fires, retry resets/409, watcher-completed fires → Tasks 1-3 tests + Task 5 ✓
 - Scope/YAGNI: no dependency schema, no auto-retry, only the two primitives + prompt → honored (Task 5 Step 2 explicitly guards against a schema change) ✓
 

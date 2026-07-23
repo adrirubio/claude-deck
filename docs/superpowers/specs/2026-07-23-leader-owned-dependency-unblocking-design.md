@@ -79,7 +79,9 @@ Docstring names it as: "Leader-only: request re-dispatch of an escalated work it
 
 ## §3 — Leader-side behavior (operating instructions, not Deck code)
 
-Lives in the **leader's dispatch/charter instructions** (the same brief-construction path Phase D uses for leader-ack). Deck supplies primitives; the leader supplies judgment.
+Lives in the leader's **standing bootstrap prompt** (`agent_team_service._bootstrap_prompt`, leader-gated), so the leader has these instructions at session start regardless of whether it is ever dispatched as an owner. Deck supplies primitives; the leader supplies judgment.
+
+> Corrected 2026-07-23: an earlier draft placed these in the dispatch-brief path (`github_dispatch_service._dispatch_brief`), but that path builds only the owner/worker prompt — the leader would receive it only when dispatched as an owner, not as a standing approver. The bootstrap path is authoritative for standing per-slot instructions. Confirmed during Phase E implementation (issue #294).
 
 - **Build (team start):** scan the scope's roadmap issues once; parse `Blocked by #N` / "Dependencies" prose from each body; form a dep map `issue → [blocker issues]`; note which blockers are already closed.
 - **Maintain (incremental):** on each `github_dispatch_blocker_merged` notification, mark that blocker satisfied; recompute, for each escalated dependent, whether **all** its blockers are now closed.
