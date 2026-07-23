@@ -604,9 +604,12 @@ class AgentTeamService:
             return result
 
         try:
+            bootstrap_prompt = prompt_override or await self._bootstrap_prompt(
+                db, preset, slot
+            )
             options = self._spawn_options_for_slot(
                 slot,
-                prompt_override or self._bootstrap_prompt(preset, slot),
+                bootstrap_prompt,
                 repo_path_override,
             )
             spawned = spawn_session(
@@ -1085,19 +1088,49 @@ class AgentTeamService:
                 values[key] = value
         return SpawnCommandOptions(**values)
 
-    def _bootstrap_prompt(self, preset: AgentTeamPreset, slot: AgentTeamSlot) -> str:
+    async def _bootstrap_prompt(
+        self,
+        db: AsyncSession,
+        preset: AgentTeamPreset,
+        slot: AgentTeamSlot,
+    ) -> str:
+        is_leader = await self._slot_is_leader(db, preset, slot)
         if slot.bootstrap_prompt:
-            return slot.bootstrap_prompt
-        parts = [
-            f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
-            f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
-            "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
-        ]
-        if slot.role:
-            parts.append(f"Role: {slot.role}")
-        if slot.charter:
-            parts.append(f"Charter: {slot.charter}")
-        return "\n".join(parts)
+            base = slot.bootstrap_prompt
+        else:
+            parts = [
+                f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
+                f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
+                "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
+            ]
+            if slot.role:
+                parts.append(f"Role: {slot.role}")
+            if slot.charter:
+                parts.append(f"Charter: {slot.charter}")
+            base = "\n".join(parts)
+        if is_leader:
+            from app.services.github_dispatch_service import github_dispatch_service
+
+            base = f"{base}\n\n{github_dispatch_service._leader_unblock_instructions()}"
+        return base
+
+    async def _slot_is_leader(
+        self,
+        db: AsyncSession,
+        preset: AgentTeamPreset,
+        slot: AgentTeamSlot,
+    ) -> bool:
+        first = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(
+                    AgentTeamSlot.preset_id == preset.id,
+                    AgentTeamSlot.enabled.is_(True),
+                )
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().first()
+        return first is not None and first.id == slot.id
 
     def _discover_sessions(self) -> list[dict[str, Any]]:
         try:

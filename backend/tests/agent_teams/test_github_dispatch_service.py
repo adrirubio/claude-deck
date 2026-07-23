@@ -124,6 +124,44 @@ async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMem
     return member
 
 
+def test_leader_unblock_instructions_text():
+    text = github_dispatch_service._leader_unblock_instructions()
+    assert "dependency map" in text.lower()
+    assert "deck_retry_work_item" in text
+    assert "github_dispatch_blocker_merged" in text
+    assert "all" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_prompt_appends_unblock_only_for_leader(db):
+    from app.services.agent_team_service import agent_team_service
+
+    preset, slots, scope = await _team(db)
+    leader, non_leader = slots[0], slots[1]
+
+    leader_text = await agent_team_service._bootstrap_prompt(db, preset, leader)
+    non_leader_text = await agent_team_service._bootstrap_prompt(db, preset, non_leader)
+
+    assert "deck_retry_work_item" in leader_text
+    assert "dependency map" in leader_text.lower()
+    assert "deck_retry_work_item" not in non_leader_text
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_prompt_appends_unblock_even_with_custom_prompt(db):
+    from app.services.agent_team_service import agent_team_service
+
+    preset, slots, scope = await _team(db)
+    leader = slots[0]
+    leader.bootstrap_prompt = "CUSTOM standing prompt."
+    await db.commit()
+
+    text = await agent_team_service._bootstrap_prompt(db, preset, leader)
+
+    assert text.startswith("CUSTOM standing prompt.")
+    assert "deck_retry_work_item" in text
+
+
 @pytest.mark.asyncio
 async def test_notify_blocker_merged_sends_leader_message_with_escalated_items(db):
     preset, slots, scope = await _team(db)

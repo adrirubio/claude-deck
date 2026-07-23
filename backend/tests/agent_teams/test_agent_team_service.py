@@ -1158,7 +1158,8 @@ async def test_launch_uses_custom_bootstrap_prompt(db, tmp_path, monkeypatch):
         AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
     )
 
-    assert calls[0][1].prompt == "Custom team startup prompt."
+    assert calls[0][1].prompt.startswith("Custom team startup prompt.")
+    assert "deck_retry_work_item" in calls[0][1].prompt
 
 
 @pytest.mark.asyncio

@@ -332,6 +332,24 @@ class GithubDispatchService:
             + report
         )
 
+    def _leader_unblock_instructions(self) -> str:
+        return (
+            "DEPENDENCY UNBLOCKING (leader duty):\n"
+            "- On team start, scan the roadmap issues and build a dependency map "
+            "(parse 'Blocked by #N' / 'Dependencies' from each issue body): "
+            "issue -> [blocker issues]. Note which blockers are already closed.\n"
+            "- When you receive a `github_dispatch_blocker_merged` notification, mark "
+            "that blocker satisfied in your map. For each ESCALATED dependent in the "
+            "notification's `escalated_items`, check whether ALL of its blockers are now "
+            "resolved.\n"
+            "- For each dependent whose blockers are ALL resolved, call "
+            "`deck_retry_work_item(work_item_id=<id from escalated_items>, "
+            "reason=\"prerequisite #<n> merged\")` to re-dispatch it.\n"
+            "- Only retry when ALL blockers are resolved (never on a single blocker for a "
+            "multi-blocker issue). Do not retry the same dependent twice for one event. If "
+            "a dependency is ambiguous, leave it escalated for a human."
+        )
+
     async def _send_dispatch_brief_to_slot(
         self,
         db: AsyncSession,
