@@ -128,6 +128,18 @@ This closes Finding 7 (dependents don't auto-recover) AND Finding 9 (cold-start 
 
 **Both Phase E paths now proven live against real tizonia issues:** cold-start scan (E.1, via #817 start-up) AND merge notification (E, via #817→#818/#819/#820 cascade). The DAG is now self-propelling under human-merge: merge an upstream PR → dependents auto-unblock and dispatch.
 
+## Autonomous Window 1 operation (2026-07-23/24, orchestrator running as human)
+
+User delegated Window 1 merges to the orchestrator. Merged (each reviewed): PR #863 (#817 code, libspotify default off — triggered the notification cascade), PR #860 (#858 yt-dlp design), PR #861 (#859 libspotify design). Design-PR merges also fired `blocker_merged` notifications (mail 239). #818/#819/#820 unblocked and being worked by Specialist (slot 6, serial per concurrency cap).
+
+### Finding 10 (IMPORTANT product gap) — standing slot session vs dispatched-owner session collide on shared checkout
+
+While #820 (SoundCloud removal, real code) was dispatched, the **standing Specialist session (member 17)** detected a **separate dispatched-owner process for the same work item editing the same local checkout** (Specialist mail 238: "a separate Claude Deck autonomous process for work item 24 is actively editing the same shared checkout ... this interactive Specialist session will not make parallel file edits ... I will monitor/review after the dispatched worker stops"). Confirmed: 5 tizonia tmux sessions = 3 standing team + 2 dispatched-owner (Deck spawns a fresh owner session per work item with `reuse_existing=false`).
+
+**Root cause (structural, NOT the Finding-8 restart-ordering orphan):** Deck dispatches by spawning a NEW owner session per work item rather than reusing the slot's standing session, and all sessions share ONE local checkout. So a slot's standing session and its own dispatched-owner session are both live on the same working tree and can race on file writes. The Specialist's voluntary back-off is an agent-level mitigation; the product gap is Deck doesn't isolate dispatched-owner working trees (e.g. per-worktree/branch checkout) or quiesce the standing session while its dispatched-owner is active.
+
+**Disposition:** benign now (Specialist deferred; #820 proceeding, no corruption, no escalation). NOT intervening mid-edit (T-S4 lesson: don't kill a working session). Recorded as a product hardening item for the #280 family (isolation of dispatched-owner working trees). Revisit before scaling parallelism or enabling broad auto-merge.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
