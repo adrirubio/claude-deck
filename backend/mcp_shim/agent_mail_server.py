@@ -627,6 +627,21 @@ def deck_report_dispatch_status(
     return _dispatch_request("POST", "/dispatch-status", json=payload)
 
 
+@mcp.tool()
+def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
+    """Leader-only: request re-dispatch of an ESCALATED GitHub work item whose
+    blockers are now resolved. Pass the work_item_id (from the blocker-merged
+    notification's escalated_items) and a short reason, e.g.
+    'prerequisite #816 merged'. Rejected (409) if the item is not escalated.
+    """
+    _ensure_registered()
+    return _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/retry",
+        json={"reason": reason},
+    )
+
+
 if __name__ == "__main__":
     _start_heartbeat_thread()
     mcp.run()

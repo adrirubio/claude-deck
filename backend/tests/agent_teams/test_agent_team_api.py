@@ -328,18 +328,20 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
     assert row["escalation_reason"] == "retry_count_exhausted"
 
     guard_response = await client.post(
-        f"/api/v1/agent-teams/github-work-items/{active.id}/retry"
+        f"/api/v1/agent-teams/github-work-items/{active.id}/retry",
+        json={"reason": "should remain guarded"},
     )
     assert guard_response.status_code == 409
 
     retry_response = await client.post(
-        f"/api/v1/agent-teams/github-work-items/{escalated.id}/retry"
+        f"/api/v1/agent-teams/github-work-items/{escalated.id}/retry",
+        json={"reason": "prerequisite #816 merged"},
     )
     assert retry_response.status_code == 200
     body = retry_response.json()
     assert body["dispatch_status"] == "pending"
     assert body["escalation_reason"] is None
-    assert body["pending_reason"] is None
+    assert body["pending_reason"] == "retry requested: prerequisite #816 merged"
     assert body["handoff_state"] is None
     assert body["handoff_target_slot_id"] is None
     assert body["pr_number"] is None
