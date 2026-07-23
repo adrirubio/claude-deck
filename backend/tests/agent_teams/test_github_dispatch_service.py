@@ -125,6 +125,98 @@ async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMem
 
 
 @pytest.mark.asyncio
+async def test_notify_blocker_merged_sends_leader_message_with_escalated_items(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    from app.services.agent_mail_service import agent_mail_service
+
+    leader_member = await agent_mail_service.get_or_create_slot_member(db, architect)
+    await db.commit()
+    merged = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=816,
+        issue_title="baseline",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+    )
+    dep1 = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=817,
+        issue_title="build",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        status_note="Blocked by #816",
+    )
+    dep2 = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=818,
+        issue_title="gmusic",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        status_note="Blocked by #817",
+    )
+    other = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=828,
+        issue_title="docs",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add_all([merged, dep1, dep2, other])
+    await db.commit()
+
+    await github_dispatch_service.notify_blocker_merged(db, scope, merged, slots)
+
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    hit = [
+        message
+        for message in messages
+        if (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+    ]
+    assert len(hit) == 1
+    message = hit[0]
+    assert message.recipient_member_id == leader_member.id
+    assert "816" in (message.subject or "")
+    escalated = {entry["issue_number"] for entry in message.payload["escalated_items"]}
+    assert escalated == {817, 818}
+    work_item_ids = {
+        entry["work_item_id"] for entry in message.payload["escalated_items"]
+    }
+    assert dep1.id in work_item_ids and dep2.id in work_item_ids
+    assert message.payload["issue_number"] == 816
+
+
+@pytest.mark.asyncio
+async def test_notify_blocker_merged_noop_when_no_leader_registered(db):
+    preset, slots, scope = await _team(db)
+    merged = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=816,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+    )
+    db.add(merged)
+    await db.commit()
+
+    await github_dispatch_service.notify_blocker_merged(db, scope, merged, slots)
+
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not [
+        message
+        for message in messages
+        if (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_work_item_has_lifecycle_columns(db):
     preset, slots, scope = await _team(db)
     now = datetime.utcnow()

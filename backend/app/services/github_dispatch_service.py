@@ -679,6 +679,77 @@ class GithubDispatchService:
             },
         )
 
+    async def _escalated_items_payload(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> list[dict]:
+        rows = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "escalated",
+                )
+            )
+        ).scalars().all()
+        return [
+            {
+                "work_item_id": row.id,
+                "issue_number": row.issue_number,
+                "escalation_reason": row.escalation_reason,
+                "status_note": row.status_note,
+            }
+            for row in rows
+        ]
+
+    async def notify_blocker_merged(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        preset_slots: list[AgentTeamSlot],
+    ) -> None:
+        leader = self._leader_slot(preset_slots)
+        if leader is None:
+            return
+        member = await self._slot_member(db, leader.id)
+        if member is None:
+            return
+        escalated = await self._escalated_items_payload(db, scope)
+        lines = [
+            f"Blocker merged: issue #{item.issue_number} ({item.issue_title}).",
+            "",
+            "Currently escalated items (candidate dependents):",
+        ]
+        if escalated:
+            for entry in escalated:
+                lines.append(
+                    f"- #{entry['issue_number']} (work_item {entry['work_item_id']}): "
+                    f"{entry['status_note'] or entry['escalation_reason']}"
+                )
+        else:
+            lines.append("- (none)")
+        lines += [
+            "",
+            "If any of these were blocked ONLY by the merged issue (and all their "
+            "other blockers are resolved), call "
+            "`deck_retry_work_item(work_item_id=<id>, reason=\"prerequisite #"
+            f"{item.issue_number} merged\")` to re-dispatch them.",
+        ]
+        from app.services.agent_mail_service import agent_mail_service
+
+        await agent_mail_service.send_direct_message(
+            db,
+            recipient_member_id=member.id,
+            subject=f"Blocker merged: issue #{item.issue_number}",
+            body_markdown="\n".join(lines),
+            payload={
+                "kind": "github_dispatch_blocker_merged",
+                "issue_number": item.issue_number,
+                "work_item_id": item.id,
+                "scope_id": item.scope_id,
+                "escalated_items": escalated,
+            },
+        )
+
     async def _owner_member(self, db: AsyncSession, item: GithubWorkItem) -> MailTeamMember | None:
         if item.owner_slot_id is None:
             return None
