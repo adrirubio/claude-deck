@@ -210,3 +210,67 @@ def test_shim_retry_work_item_posts_reason(monkeypatch):
             {"json": {"reason": "prerequisite #816 merged"}},
         )
     ]
+
+
+def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
+    import importlib
+
+    shim = importlib.import_module("mcp_shim.agent_mail_server")
+    requests = []
+
+    monkeypatch.setattr(
+        shim,
+        "_ensure_registered",
+        lambda: {
+            "ok": True,
+            "data": {"member": {"id": 1, "team_preset_id": 42}},
+        },
+    )
+
+    def fake_dispatch_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        return {
+            "ok": True,
+            "data": {
+                "items": [
+                    {
+                        "id": 17,
+                        "issue_number": 817,
+                        "dispatch_status": "escalated",
+                        "escalation_reason": "plan_blocked",
+                        "status_note": "Blocked by #816",
+                    },
+                    {
+                        "id": 16,
+                        "issue_number": 816,
+                        "dispatch_status": "dispatched",
+                        "escalation_reason": None,
+                        "status_note": None,
+                    },
+                ]
+            },
+        }
+
+    monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch_request)
+
+    result = shim.deck_list_work_items(status="escalated", limit=25)
+
+    assert result == {
+        "ok": True,
+        "items": [
+            {
+                "work_item_id": 17,
+                "issue_number": 817,
+                "dispatch_status": "escalated",
+                "escalation_reason": "plan_blocked",
+                "status_note": "Blocked by #816",
+            }
+        ],
+    }
+    assert requests == [
+        (
+            "GET",
+            "/presets/42/github-work-items",
+            {"params": {"limit": 25}},
+        )
+    ]
