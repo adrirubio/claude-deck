@@ -117,6 +117,17 @@ After Phase E.1 merged (`deck_list_work_items` tool + start-up unblock action), 
 
 This closes Finding 7 (dependents don't auto-recover) AND Finding 9 (cold-start seam): the leader now acts on already-closed blockers at start-up with no notification needed. Phase E + E.1 mechanism verified end-to-end against real tizonia issues.
 
+## Phase E notification-path acceptance test — PASS (2026-07-23)
+
+#817 completed the FULL code pipeline autonomously (cold-start retry → dispatched → implemented → PR #863 → CI green → ready_for_review). Orchestrator reviewed PR #863 (clean: `meson_options.txt` libspotify default true→false + drop `spotify` from default plugins; `meson.build` comment sync — exactly implements #817) and merged it; issue #817 closed.
+
+**On merge, the Phase E NOTIFICATION path fired end-to-end:**
+1. Mail 231 "Blocker merged: issue #817" → Leader (member 16). Deck detected the merge and fired the `blocker_merged` notification (§1 primitive).
+2. Leader consulted its dep map, retried #817's now-fully-unblocked direct dependents: #818/#819/#820 left escalated → #820 dispatched (mail 232, Specialist slot 6), #818/#819 pending (concurrency cap). Escalated count 14→11.
+3. **Guardrail held:** #821/#822/#824/#829 stayed escalated — they have OTHER still-open blockers (e.g. #821 needs #818/#819/#820), correctly NOT retried.
+
+**Both Phase E paths now proven live against real tizonia issues:** cold-start scan (E.1, via #817 start-up) AND merge notification (E, via #817→#818/#819/#820 cascade). The DAG is now self-propelling under human-merge: merge an upstream PR → dependents auto-unblock and dispatch.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
