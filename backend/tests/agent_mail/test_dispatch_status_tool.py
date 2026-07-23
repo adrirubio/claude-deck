@@ -144,6 +144,7 @@ def test_shim_exposes_dispatch_status_tool():
 
     shim = importlib.import_module("mcp_shim.agent_mail_server")
     assert hasattr(shim, "deck_report_dispatch_status")
+    assert hasattr(shim, "deck_retry_work_item")
     assert hasattr(shim, "_dispatch_request")
 
 
@@ -176,3 +177,36 @@ def test_shim_dispatch_status_reports_team_slot(monkeypatch):
     assert requests[0][0:2] == ("POST", "/dispatch-status")
     assert requests[0][2]["json"]["reporting_slot_id"] == 7
     assert requests[0][2]["json"]["pr_number"] == 456
+
+
+def test_shim_retry_work_item_posts_reason(monkeypatch):
+    import importlib
+
+    shim = importlib.import_module("mcp_shim.agent_mail_server")
+    requests = []
+
+    monkeypatch.setattr(
+        shim,
+        "_ensure_registered",
+        lambda: {"ok": True, "data": {"member": {"id": 1, "team_slot_id": 7}}},
+    )
+
+    def fake_dispatch_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        return {"ok": True, "data": {"dispatch_status": "pending"}}
+
+    monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch_request)
+
+    result = shim.deck_retry_work_item(
+        123,
+        reason="prerequisite #816 merged",
+    )
+
+    assert result["ok"] is True
+    assert requests == [
+        (
+            "POST",
+            "/github-work-items/123/retry",
+            {"json": {"reason": "prerequisite #816 merged"}},
+        )
+    ]

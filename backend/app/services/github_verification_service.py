@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import GithubWorkItem, TeamGithubScope
+from app.models.database import AgentTeamSlot, GithubWorkItem, TeamGithubScope
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
 
@@ -103,6 +103,36 @@ class GithubVerificationService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
 
+    async def _preset_slots(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> list[AgentTeamSlot]:
+        return (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().all()
+
+    async def _notify_blocker_merged(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+    ) -> None:
+        try:
+            slots = await self._preset_slots(db, scope)
+            await github_dispatch_service.notify_blocker_merged(
+                db, scope, item, slots
+            )
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to send blocker-merged notification for work item %s",
+                item.id,
+            )
+            await db.rollback()
+
     async def _verify_item(
         self,
         db: AsyncSession,
@@ -114,6 +144,7 @@ class GithubVerificationService:
         if pull.get("merged"):
             self._mark_merged(item)
             await db.commit()
+            await self._notify_blocker_merged(db, scope, item)
             return
 
         head_sha = self._head_sha(pull)
@@ -177,6 +208,7 @@ class GithubVerificationService:
         if pull.get("merged"):
             self._mark_merged(item)
             await db.commit()
+            await self._notify_blocker_merged(db, scope, item)
             return
         if item.issue_type == "design" or scope.merge_policy != "auto":
             return
@@ -233,6 +265,7 @@ class GithubVerificationService:
         self._mark_merged(item)
         item.auto_merged_at = datetime.utcnow()
         await db.commit()
+        await self._notify_blocker_merged(db, scope, item)
 
     async def _record_transient_merge_failure(
         self,

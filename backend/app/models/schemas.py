@@ -2202,6 +2202,10 @@ class TeamGithubScopeListResponse(BaseModel):
     scopes: List[TeamGithubScopeResponse] = Field(default_factory=list)
 
 
+class GithubWorkItemRetryRequest(BaseModel):
+    reason: Optional[str] = None
+
+
 class GithubWorkItemResponse(BaseModel):
     id: int
     scope_id: int

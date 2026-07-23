@@ -26,6 +26,7 @@ from app.models.schemas import (
     AgentTeamSlotUpdate,
     DispatchStatusReport,
     GithubWorkItemListResponse,
+    GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
     TeamGithubScopeCreate,
     TeamGithubScopeListResponse,
@@ -405,7 +406,11 @@ async def list_github_work_items(
     "/github-work-items/{work_item_id}/retry",
     response_model=GithubWorkItemResponse,
 )
-async def retry_github_work_item(work_item_id: int, db: AsyncSession = Depends(get_db)):
+async def retry_github_work_item(
+    work_item_id: int,
+    request: GithubWorkItemRetryRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     item = await db.get(GithubWorkItem, work_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="GitHub work item not found")
@@ -415,6 +420,8 @@ async def retry_github_work_item(work_item_id: int, db: AsyncSession = Depends(g
     if item.dispatch_status != "escalated":
         raise HTTPException(status_code=409, detail="Only escalated work items can be retried")
     github_dispatch_service.reset_for_retry(item)
+    if request is not None and request.reason:
+        item.pending_reason = f"retry requested: {request.reason}"
     await db.commit()
     await db.refresh(item)
     return _work_item_response(item, scope)

@@ -332,6 +332,24 @@ class GithubDispatchService:
             + report
         )
 
+    def _leader_unblock_instructions(self) -> str:
+        return (
+            "DEPENDENCY UNBLOCKING (leader duty):\n"
+            "- On team start, scan the roadmap issues and build a dependency map "
+            "(parse 'Blocked by #N' / 'Dependencies' from each issue body): "
+            "issue -> [blocker issues]. Note which blockers are already closed.\n"
+            "- When you receive a `github_dispatch_blocker_merged` notification, mark "
+            "that blocker satisfied in your map. For each ESCALATED dependent in the "
+            "notification's `escalated_items`, check whether ALL of its blockers are now "
+            "resolved.\n"
+            "- For each dependent whose blockers are ALL resolved, call "
+            "`deck_retry_work_item(work_item_id=<id from escalated_items>, "
+            "reason=\"prerequisite #<n> merged\")` to re-dispatch it.\n"
+            "- Only retry when ALL blockers are resolved (never on a single blocker for a "
+            "multi-blocker issue). Do not retry the same dependent twice for one event. If "
+            "a dependency is ambiguous, leave it escalated for a human."
+        )
+
     async def _send_dispatch_brief_to_slot(
         self,
         db: AsyncSession,
@@ -676,6 +694,77 @@ class GithubDispatchService:
                 "kind": "github_dispatch_label_removed",
                 "work_item_id": item.id,
                 "issue_number": item.issue_number,
+            },
+        )
+
+    async def _escalated_items_payload(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> list[dict]:
+        rows = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "escalated",
+                )
+            )
+        ).scalars().all()
+        return [
+            {
+                "work_item_id": row.id,
+                "issue_number": row.issue_number,
+                "escalation_reason": row.escalation_reason,
+                "status_note": row.status_note,
+            }
+            for row in rows
+        ]
+
+    async def notify_blocker_merged(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        preset_slots: list[AgentTeamSlot],
+    ) -> None:
+        leader = self._leader_slot(preset_slots)
+        if leader is None:
+            return
+        member = await self._slot_member(db, leader.id)
+        if member is None:
+            return
+        escalated = await self._escalated_items_payload(db, scope)
+        lines = [
+            f"Blocker merged: issue #{item.issue_number} ({item.issue_title}).",
+            "",
+            "Currently escalated items (candidate dependents):",
+        ]
+        if escalated:
+            for entry in escalated:
+                lines.append(
+                    f"- #{entry['issue_number']} (work_item {entry['work_item_id']}): "
+                    f"{entry['status_note'] or entry['escalation_reason']}"
+                )
+        else:
+            lines.append("- (none)")
+        lines += [
+            "",
+            "If any of these were blocked ONLY by the merged issue (and all their "
+            "other blockers are resolved), call "
+            "`deck_retry_work_item(work_item_id=<id>, reason=\"prerequisite #"
+            f"{item.issue_number} merged\")` to re-dispatch them.",
+        ]
+        from app.services.agent_mail_service import agent_mail_service
+
+        await agent_mail_service.send_direct_message(
+            db,
+            recipient_member_id=member.id,
+            subject=f"Blocker merged: issue #{item.issue_number}",
+            body_markdown="\n".join(lines),
+            payload={
+                "kind": "github_dispatch_blocker_merged",
+                "issue_number": item.issue_number,
+                "work_item_id": item.id,
+                "scope_id": item.scope_id,
+                "escalated_items": escalated,
             },
         )
 
