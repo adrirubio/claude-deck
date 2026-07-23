@@ -105,6 +105,18 @@ On start-up the Leader correctly built its dep map and reported (mail 222): "#81
 
 **Fix (chosen 2026-07-23): close the seam properly (Phase E follow-up).** Add a `deck_list_work_items` MCP read tool (exposing escalated items + ids, reusing the activity-feed endpoint), and amend the leader bootstrap: after the start-up dep-map scan, fetch escalated items via the new tool and retry any whose blockers are ALL already closed — same all-blockers-resolved guardrail as the notification path. Then re-run the #817 acceptance test. Autonomy left OFF until the fix lands.
 
+## Phase E.1 acceptance test — PASS (2026-07-23) — cold-start seam closed
+
+After Phase E.1 merged (`deck_list_work_items` tool + start-up unblock action), restarted backend on E.1 code (tmux-killed FIRST per Finding 8 hygiene — one clean team, no orphans), respawned team, enabled autonomy. **No `blocker_merged` notification existed** (#816 merged in a prior session), so this isolates the cold-start path.
+
+**Result: PASS, fully traced in backend logs:**
+1. `GET /presets/2/github-work-items?limit=100` — Leader called `deck_list_work_items` at start-up.
+2. `POST /github-work-items/27/retry` → 200 — Leader called `deck_retry_work_item` on work_item 27 (=#817); escalated-only guard passed.
+3. #817: `escalated → dispatched` (Generalist slot 5, fresh launch 50); escalated count 15→14; owner brief delivered (mail 223).
+4. **Guardrail held:** #818/#819/#820 (blocked by still-open #817) stayed escalated — no premature retry.
+
+This closes Finding 7 (dependents don't auto-recover) AND Finding 9 (cold-start seam): the leader now acts on already-closed blockers at start-up with no notification needed. Phase E + E.1 mechanism verified end-to-end against real tizonia issues.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
