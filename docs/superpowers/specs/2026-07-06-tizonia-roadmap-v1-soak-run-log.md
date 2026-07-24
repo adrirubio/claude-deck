@@ -140,6 +140,18 @@ While #820 (SoundCloud removal, real code) was dispatched, the **standing Specia
 
 **Disposition:** benign now (Specialist deferred; #820 proceeding, no corruption, no escalation). NOT intervening mid-edit (T-S4 lesson: don't kill a working session). Recorded as a product hardening item for the #280 family (isolation of dispatched-owner working trees). Revisit before scaling parallelism or enabling broad auto-merge.
 
+## Finding 11 (CRITICAL — resource exhaustion, the headline soak finding) — concurrent C++ builds OOM'd the box, killing the team overnight
+
+Overnight (2026-07-24), #818/#819/#820 all escalated `leader_offline` (~03:11–03:19). Root cause is NOT session idle-timeout — it is **system memory exhaustion**. dmesg shows a sustained OOM event: kills at 01:38, 02:05, 02:25, 02:26, **02:56 `(sd-pam)`, 02:59 `systemd`**, **03:12** (coincident with the agents' `mcp` heartbeats stopping at 03:11:17), and **05:09 `cc1plus` (~1GB RSS)**. Killing the user session manager (systemd/dbus) at ~02:56–02:59 broke session IPC → the agents' standing `mcp` heartbeats died at 03:11 → monitor correctly escalated the in-flight items `leader_offline`.
+
+**Why:** box has 15Gi RAM + 4Gi swap. `max_concurrent_dispatched=3`, and tizonia is a large C++/OpenMAX tree. Issues like #819 (libspotify removal) and #820 (SoundCloud removal) run local Meson **compile** verification; a single `cc1plus` hit ~1GB. Three concurrent compiles + desktop + backend + Vite + tooling exhausted memory.
+
+**The design gap:** `max_concurrent_dispatched` is a *dispatch* guardrail (issues in flight), not a *resource* guardrail. When the work is compilation, concurrency implicitly sets peak memory, but nothing links them. On a memory-bound host, "3 concurrent C++ builds" can OOM the machine, which kills the agents doing the work → mass offline escalations. The monitor behaved correctly (safe, recoverable escalation, no lost work — #820's branch preserved); the underlying issue is Deck has no notion of per-work resource cost.
+
+**What was NOT lost:** all 3 items are `escalated` (recoverable); #820's SoundCloud work preserved on `codex/issue-820-exclude-soundcloud`; the 5 merged PRs are safe.
+
+**Disposition (chosen 2026-07-24): pause soak; address resource/durability before resuming.** Candidate mitigations (for discussion): lower `max_concurrent_dispatched` to 1–2 for a C++ repo on this box; cap build parallelism (`ninja -j1/-j2`, cgroup/systemd memory limits per agent); add swap; or make Deck resource-aware (model per-work build cost vs available RAM). This is the most operationally significant soak finding — a hard physical constraint the autonomy design never modeled. Feeds #280 / pre-Window-2 hardening.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
