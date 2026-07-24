@@ -160,6 +160,14 @@ Overnight (2026-07-24), #818/#819/#820 all escalated `leader_offline` (~03:11–
 
 **Deferred decision B — Deck auto-respawn of vanished team members.** When agent sessions die (OOM, crash, idle), Deck currently escalates (`leader_offline`/`owner_offline`) but does not respawn the team; a human respawns. Whether Deck should auto-respawn vanished members is a fringe case for now — deferred. (Related: findings #8/#10/#11 are all "unattended operation needs durable agents.")
 
+## 2026-07-24 — #820 merged; #819 duplicate-owner conflict; clean-slate recovery
+
+- **#820 (SoundCloud removal) completed → PR #864 merged** (62 files, CI green; comprehensive removal across build/packaging/docs/player). Issue closed. This was the big code change that survived the concurrency=1 resume.
+- **Finding 10 RECURRED and escalated in severity (upgrade to serious).** On #819, a duplicate owner process kept mutating the isolated worktree `…-issue-819` (diff hash `cffd85ac→b93e145e` in 10s) even AFTER dispatch used a per-issue worktree. The **Leader handled it textbook-perfectly**: imposed an all-session read-only freeze, escalated #819 `plan_blocked`, and sent the coordinator (member 2) an URGENT pending context-request (#267/#272) to stop the duplicate process and authorize resume — explicitly blocking reset/clean/commit/push/PR while ownership was unresolved. Verified the freeze held (worktree frozen, contained, no active corruption).
+  - **Key learning:** per-issue worktree isolation (which newer dispatch DOES use — confirmed `…-issue-818`/`…-issue-819` worktrees) is NOT sufficient alone; two processes still targeted the same worktree. Teardown found 6 tmux + 5 codex procs (should be ~3+6) — duplicate accumulation again. Finding 10 is now a confirmed serious defect: Deck can spawn a duplicate owner for a work item.
+  - **Resolution (chosen: clean-slate, safest — don't guess which process is the duplicate):** merged #864 first; paused autonomy; killed ALL team sessions + procs; removed the contested #819 worktree AND the orphaned #818 worktree; reset main checkout to clean master (`e8c10016`, includes merged #820); reset #818/#819 work items to `pending` via the retry endpoint (not hand-edit); respawned one clean team; re-enabled autonomy. #818/#819 re-dispatch fresh, serially.
+  - **This is now a hard pre-Window-2 / pre-unattended blocker** alongside the resource finding (#11): Deck must not spawn duplicate owners (dedupe dispatch per work item; ensure one owner session per dispatched item). Feeds #280.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
