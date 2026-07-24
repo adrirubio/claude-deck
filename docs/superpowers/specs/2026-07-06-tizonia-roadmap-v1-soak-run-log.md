@@ -152,6 +152,14 @@ Overnight (2026-07-24), #818/#819/#820 all escalated `leader_offline` (~03:11–
 
 **Disposition (chosen 2026-07-24): pause soak; address resource/durability before resuming.** Candidate mitigations (for discussion): lower `max_concurrent_dispatched` to 1–2 for a C++ repo on this box; cap build parallelism (`ninja -j1/-j2`, cgroup/systemd memory limits per agent); add swap; or make Deck resource-aware (model per-work build cost vs available RAM). This is the most operationally significant soak finding — a hard physical constraint the autonomy design never modeled. Feeds #280 / pre-Window-2 hardening.
 
+## Finding 11 fix + deferred decisions (2026-07-24)
+
+**Immediate fix applied:** `max_concurrent_dispatched` 3 → 1 on scope 1 (via API). At most one dispatched/verifying item at a time ⇒ at most one local C++ build at a time ⇒ no OOM on the 15Gi box. Trade-off: serial throughput. This is the right fix now; the deeper resource-awareness is deferred below. (What the param is: a per-scope cap on issues in `dispatched`/`verifying` at once — a dispatch-flow guardrail that, for a C++ repo, doubles as a memory guardrail Deck doesn't model. See Finding 11.)
+
+**Deferred decision A — outsource compute for builds (real project need, NOT a Deck bug).** Tizonia's builds are too heavy to run many concurrently on the local box. Even though agents work locally, they may need to *offload the build* to a bigger machine (e.g. SSH access to a higher-memory host, or a remote build runner). This is a project-infrastructure decision, not a Deck feature. Revisit when scaling beyond serial builds.
+
+**Deferred decision B — Deck auto-respawn of vanished team members.** When agent sessions die (OOM, crash, idle), Deck currently escalates (`leader_offline`/`owner_offline`) but does not respawn the team; a human respawns. Whether Deck should auto-respawn vanished members is a fringe case for now — deferred. (Related: findings #8/#10/#11 are all "unattended operation needs durable agents.")
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
