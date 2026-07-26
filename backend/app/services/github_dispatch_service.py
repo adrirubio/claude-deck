@@ -129,6 +129,21 @@ class GithubDispatchService:
             for session in sessions
         )
 
+    def _available_memory_mb(self) -> int | None:
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as meminfo:
+                for line in meminfo:
+                    name, separator, value = line.partition(":")
+                    if name != "MemAvailable" or not separator:
+                        continue
+                    amount, unit = value.split()
+                    if unit.lower() != "kb":
+                        return None
+                    return int(amount) // 1024
+        except (OSError, ValueError):
+            return None
+        return None
+
     async def dispatch_pending(
         self,
         db: AsyncSession,
@@ -159,6 +174,15 @@ class GithubDispatchService:
         for item in pending:
             if scope_active + scope_dispatched_this_batch >= scope.max_concurrent_dispatched:
                 item.pending_reason = "queued_repo_cap"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
+            available_memory_mb = self._available_memory_mb()
+            if (
+                available_memory_mb is not None
+                and available_memory_mb < settings.github_min_available_memory_mb
+            ):
+                item.pending_reason = "queued_low_memory"
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue

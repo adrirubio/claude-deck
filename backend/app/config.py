@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     github_design_ack_multiplier: int = 3
     github_owner_idle_timeout_seconds: int = 900
     github_nudge_grace_seconds: int = 180
+    github_min_available_memory_mb: int = 3000
 
     # Server settings
     host: str = "0.0.0.0"

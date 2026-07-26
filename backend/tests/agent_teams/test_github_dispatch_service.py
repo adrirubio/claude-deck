@@ -1,5 +1,6 @@
 """Dispatch routing + concurrency tests."""
 from datetime import datetime, timedelta
+from io import StringIO
 
 import pytest
 import pytest_asyncio
@@ -20,7 +21,7 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
-from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_dispatch_service import GithubDispatchService, github_dispatch_service
 
 
 @pytest_asyncio.fixture
@@ -32,6 +33,16 @@ async def db():
     async with maker() as session:
         yield session
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def host_has_enough_memory(monkeypatch):
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "_available_memory_mb",
+        lambda: 999_999,
+        raising=False,
+    )
 
 
 async def _team(db):
@@ -1292,6 +1303,118 @@ async def test_dispatch_pending_queues_when_scope_concurrency_cap_reached(db):
     assert item.owner_slot_id is None
     assert item.dispatch_status == "pending"
     assert item.pending_reason == "queued_repo_cap"
+
+
+def test_available_memory_mb_reads_memavailable(monkeypatch):
+    meminfo = "MemTotal:       16384000 kB\nMemAvailable:    6144000 kB\n"
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: StringIO(meminfo))
+
+    assert GithubDispatchService()._available_memory_mb() == 6000
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queues_when_available_memory_below_floor(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=45,
+        issue_title="memory-heavy work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: 2999)
+
+    async def fake_launcher(db_, preset_id, request):
+        raise AssertionError("should not launch below the memory floor")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={45: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "queued_low_memory"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proceeds_when_available_memory_above_floor(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=46,
+        issue_title="memory-safe work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: 3001)
+    launches = []
+
+    class _Result:
+        launch_id = 106
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={46: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fails_open_when_available_memory_unknown(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=47,
+        issue_title="portable dispatch",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: None)
+    launches = []
+
+    class _Result:
+        launch_id = 107
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={47: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
 
 
 @pytest.mark.asyncio
