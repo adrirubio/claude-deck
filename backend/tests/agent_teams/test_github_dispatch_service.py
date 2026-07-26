@@ -10,9 +10,12 @@ import app.models.database  # noqa: F401
 from app.config import settings
 from app.database import Base
 from app.models.database import (
+    AgentTeamLaunch,
+    AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
+    MailAgentSession,
     MailMessage,
     MailTeamMember,
     TeamGithubScope,
@@ -122,6 +125,49 @@ async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMem
     await db.commit()
     assert member.id != slot.id
     return member
+
+
+async def _create_live_slot_launch_session(
+    db,
+    preset: AgentTeamPreset,
+    slot: AgentTeamSlot,
+    *,
+    target: str,
+) -> tuple[AgentTeamLaunch, MailAgentSession]:
+    launch = AgentTeamLaunch(
+        preset_id=preset.id,
+        plan_hash=f"plan:{target}",
+        status="running",
+    )
+    db.add(launch)
+    await db.flush()
+    db.add(
+        AgentTeamLaunchItem(
+            launch_id=launch.id,
+            slot_id=slot.id,
+            action="spawn",
+            status="started",
+            provider=slot.provider,
+            repo_path=slot.repo_path,
+            tmux_target=target,
+        )
+    )
+    member = await _create_registered_slot_member(db, slot)
+    session = MailAgentSession(
+        member_id=member.id,
+        provider=slot.provider,
+        source="observed",
+        session_key=f"tmux:{target}",
+        cwd=slot.repo_path,
+        tmux_target=target,
+        team_preset_id=preset.id,
+        team_slot_id=slot.id,
+        mailbox_status="observed",
+        last_seen_at=datetime.utcnow(),
+    )
+    db.add(session)
+    await db.commit()
+    return launch, session
 
 
 def test_leader_unblock_instructions_text():
@@ -1039,6 +1085,169 @@ async def test_dispatch_pending_queues_when_slot_busy(db):
     await db.refresh(item)
     assert item.dispatch_status == "pending"
     assert item.pending_reason == "queued_slot_busy"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queues_when_slot_has_live_owner_session(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    owner_launch, _ = await _create_live_slot_launch_session(
+        db,
+        preset,
+        backend,
+        target="owner:0.0",
+    )
+    db.add(
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=40,
+            issue_title="completed owner work",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="merged",
+            owner_slot_id=backend.id,
+            launch_id=owner_launch.id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=41,
+        issue_title="next work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(db_, preset_id, request):
+        raise AssertionError("should not launch while an owner session is live")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={41: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.owner_slot_id == backend.id
+    assert item.routing_method == "label"
+    assert item.pending_reason == "queued_owner_session_live"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proceeds_with_only_standing_session(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _create_live_slot_launch_session(
+        db,
+        preset,
+        backend,
+        target="standing:0.0",
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=42,
+        issue_title="new work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    launches = []
+
+    class _Result:
+        launch_id = 104
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={42: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.owner_slot_id == backend.id
+    assert item.pending_reason is None
+
+
+@pytest.mark.asyncio
+async def test_queued_owner_session_dispatches_after_session_goes_offline(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    owner_launch, owner_session = await _create_live_slot_launch_session(
+        db,
+        preset,
+        backend,
+        target="finished-owner:0.0",
+    )
+    db.add(
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=43,
+            issue_title="finished work",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="merged",
+            owner_slot_id=backend.id,
+            launch_id=owner_launch.id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=44,
+        issue_title="queued work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    launches = []
+
+    class _Result:
+        launch_id = 105
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={44: ["area:backend"]},
+    )
+    await db.refresh(item)
+    assert item.pending_reason == "queued_owner_session_live"
+    assert launches == []
+
+    owner_session.mailbox_status = "offline"
+    await db.commit()
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={44: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
 
 
 @pytest.mark.asyncio

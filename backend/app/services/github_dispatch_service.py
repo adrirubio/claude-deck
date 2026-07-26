@@ -8,8 +8,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import AgentTeamSlot, GithubWorkItem, MailTeamMember, TeamGithubScope
+from app.models.database import (
+    AgentTeamLaunchItem,
+    AgentTeamSlot,
+    GithubWorkItem,
+    MailAgentSession,
+    MailTeamMember,
+    TeamGithubScope,
+)
 from app.models.schemas import AgentTeamLaunchRequest
+from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
@@ -95,6 +103,32 @@ class GithubDispatchService:
             ).scalar_one()
         )
 
+    async def slot_has_live_owner_session(self, db: AsyncSession, slot_id: int) -> bool:
+        sessions = (
+            await db.execute(
+                select(MailAgentSession)
+                .join(
+                    AgentTeamLaunchItem,
+                    (AgentTeamLaunchItem.tmux_target == MailAgentSession.tmux_target)
+                    & (AgentTeamLaunchItem.slot_id == MailAgentSession.team_slot_id),
+                )
+                .join(
+                    GithubWorkItem,
+                    GithubWorkItem.launch_id == AgentTeamLaunchItem.launch_id,
+                )
+                .where(
+                    MailAgentSession.team_slot_id == slot_id,
+                    MailAgentSession.tmux_target.is_not(None),
+                )
+                .distinct()
+            )
+        ).scalars().all()
+        now = datetime.utcnow()
+        return any(
+            agent_mail_service._effective_status(session, now) != "offline"
+            for session in sessions
+        )
+
     async def dispatch_pending(
         self,
         db: AsyncSession,
@@ -142,6 +176,13 @@ class GithubDispatchService:
                 item.owner_slot_id = owner_slot_id
                 item.routing_method = method
                 item.pending_reason = "queued_slot_busy"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
+            if await self.slot_has_live_owner_session(db, owner_slot_id):
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_owner_session_live"
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
