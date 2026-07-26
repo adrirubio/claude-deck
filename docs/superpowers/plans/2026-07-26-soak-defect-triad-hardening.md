@@ -151,10 +151,22 @@ grep -n "source=" app/services/agent_mail_service.py | head -20
 grep -n "session_name\|tmux_target" app/services/agent_team_service.py | head -20
 ```
 
-Candidates, in order of preference:
-1. `MailAgentSession.source` (or another column) reliably distinguishes the two.
-2. Correlate `MailAgentSession.session_key`/`tmux_target` with `agent_team_launch_items.session_name` for the launch recorded on the work item (`GithubWorkItem.launch_id`).
-3. **Fallback** (only if 1 and 2 don't work): record the spawned owner session identity on the work item at dispatch time and key the check off that. This needs a column — if you reach here, STOP and report before adding it.
+**The orchestrator already ran this investigation against the live soak DB. Findings — treat as verified, but re-confirm before relying on them:**
+
+1. ❌ **`MailAgentSession.source` is NOT a viable discriminator.** Its only values are `mcp`, `hook`, `observed`, and *both* standing and dispatched-owner sessions produce those. Do not use it.
+2. ✅ **`tmux_target` correlation WORKS and is the recommended discriminator.** `agent_team_launch_items.tmux_target` joins exactly to `mail_agent_sessions.tmux_target`, and a launch is a *dispatch* launch iff its id appears in `github_work_items.launch_id`. Verified live:
+
+```
+launch_item(launch 58, slot 6) tmux_target = tizonia-openmax-il-a1c9:0.0   <- standing (launch 58 NOT on any work item)
+launch_item(launch 59, slot 6) tmux_target = tizonia-openmax-il-8403:0.0   <- dispatched owner (launch 59 IS on work item 25)
+
+mail_session(member 17, slot 6) tmux_target = tizonia-openmax-il-a1c9:0.0
+mail_session(member 17, slot 6) tmux_target = tizonia-openmax-il-8403:0.0
+```
+
+   Note that this pair **is Finding 10 captured in data**: slot 6 with two live tmux-bound sessions, one standing and one dispatched owner. Your queueing test can be seeded from exactly this shape.
+
+3. **Fallback** (only if 2 doesn't hold up): record the spawned owner session identity on the work item at dispatch time and key the check off that. This needs a column — if you reach here, STOP and report before adding it.
 
 **Report which discriminator you chose and the evidence** in the PR description. If none is reliable, STOP and report rather than shipping a guard that might block all dispatch.
 
