@@ -286,6 +286,62 @@ def test_ack_lifecycle_settings_present():
     assert settings.github_nudge_grace_seconds > 0
 
 
+def test_reset_for_retry_clears_ack_received_at():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        dispatched_at=datetime(2026, 7, 24, 17, 12, 0),
+    )
+
+    github_dispatch_service.reset_for_retry(item)
+
+    assert item.ack_received_at is None
+
+
+def test_ack_not_satisfied_by_ack_older_than_current_dispatch():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="dispatched",
+        ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        dispatched_at=datetime(2026, 7, 24, 18, 35, 56),
+    )
+
+    assert github_dispatch_service._ack_satisfied(item) is False
+
+
+def test_ack_satisfied_when_ack_follows_dispatch():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="dispatched",
+        dispatched_at=datetime(2026, 7, 24, 18, 35, 56),
+        ack_received_at=datetime(2026, 7, 24, 18, 40, 0),
+    )
+
+    assert github_dispatch_service._ack_satisfied(item) is True
+
+
+def test_pr_number_satisfies_ack_regardless_of_stale_ack():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="dispatched",
+        pr_number=865,
+        ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        dispatched_at=datetime(2026, 7, 24, 18, 35, 56),
+    )
+
+    assert github_dispatch_service._ack_satisfied(item) is True
+
+
 @pytest.mark.asyncio
 async def test_dispatch_pending_stamps_dispatched_at(db):
     preset, slots, scope = await _team(db)
@@ -1392,6 +1448,46 @@ async def test_monitor_nudges_leader_on_ack_timeout(db):
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
     )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.last_nudge_at is not None
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_retried_item_still_nudged_when_leader_never_acks_again(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    dispatched_at = datetime.utcnow() - timedelta(
+        seconds=settings.github_leader_ack_timeout_seconds
+        + settings.github_owner_registration_grace_seconds
+        + 10
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=819,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        dispatched_at=dispatched_at,
+        ack_received_at=dispatched_at - timedelta(hours=1),
+        updated_at=dispatched_at,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={
+            architect.id: "wakeable",
+            backend.id: "wakeable",
+        },
+    )
+
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.last_nudge_at is not None

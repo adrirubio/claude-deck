@@ -26,6 +26,7 @@ class GithubDispatchService:
         item.handoff_state = None
         item.handoff_target_slot_id = None
         item.pr_number = None
+        item.ack_received_at = None
         item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
@@ -511,7 +512,16 @@ class GithubDispatchService:
         return grace_age < timedelta(seconds=settings.github_owner_registration_grace_seconds)
 
     def _ack_satisfied(self, item: GithubWorkItem) -> bool:
-        return item.ack_received_at is not None or item.pr_number is not None
+        if item.pr_number is not None:
+            return True
+        if item.ack_received_at is None:
+            return False
+        if (
+            item.dispatched_at is not None
+            and item.ack_received_at < item.dispatched_at
+        ):
+            return False
+        return True
 
     def _ack_deadline_seconds(self, item: GithubWorkItem) -> int:
         base = settings.github_leader_ack_timeout_seconds
