@@ -168,6 +168,44 @@ Overnight (2026-07-24), #818/#819/#820 all escalated `leader_offline` (~03:11–
   - **Resolution (chosen: clean-slate, safest — don't guess which process is the duplicate):** merged #864 first; paused autonomy; killed ALL team sessions + procs; removed the contested #819 worktree AND the orphaned #818 worktree; reset main checkout to clean master (`e8c10016`, includes merged #820); reset #818/#819 work items to `pending` via the retry endpoint (not hand-edit); respawned one clean team; re-enabled autonomy. #818/#819 re-dispatch fresh, serially.
   - **This is now a hard pre-Window-2 / pre-unattended blocker** alongside the resource finding (#11): Deck must not spawn duplicate owners (dedupe dispatch per work item; ensure one owner session per dispatched item). Feeds #280.
 
+## ⏸️ 2026-07-26 — soak PAUSED to fix a defect triad; host rebooted twice
+
+**Session state on resume:** the box had rebooted **twice** since the 24th (`shutdown Jul 25 00:10`; boot `Jul 25 11:52`–`18:51`; current boot from `Jul 25 19:36`). No tmux server, no backend, no frontend, no codex processes — the clean team respawned on the 24th died with the reboot. The DB still read `#819 dispatched` / `#818 pending`: **stale rows describing agents that no longer existed.**
+
+**Finding 11 independently corroborated from a new source.** `dmesg` does not survive reboots, but `journalctl -b -2` does: 28 OOM lines in the soak boot, culminating `Jul 24 05:11` with `npm run dev` and `snapd` invoking the oom-killer. This confirms the Finding 11 diagnosis from evidence not used when it was first written.
+
+**Pause executed safely (order matters).** `scope.enabled=1` AND `preset.autonomy_enabled=1` meant simply starting the backend would arm the 60s scheduler and dispatch `#818` to a **team that did not exist**. Started the backend and immediately `PATCH /agent-teams/presets/2 {"autonomy_enabled": false}`, landing inside the first interval. Verified: **zero** dispatch/poll lines in the backend log; `#818`/`#819` untouched. Soak is genuinely paused.
+
+### Finding 12 (NEW — correctness defect, found by inspection not by failure) — retry silently bypasses the leader-ack gate
+
+`reset_for_retry` clears `pr_number`, `last_verified_sha`, `retry_count`, `approval_round_count`, `pending_reason`, `handoff_*` — but **not `ack_received_at`**. The gate is presence-only (`_ack_satisfied`: `ack_received_at is not None or pr_number is not None`). So a retried item carries a stale ack from its *previous* dispatch and skips the leader-ack check forever.
+
+**Proven against the real model, then corroborated in live data:**
+
+```
+after reset_for_retry:  ack_received_at = 2026-07-24 17:30:05   <-- survives
+re-dispatched, leader has NOT acked:  _ack_satisfied() = True   <-- gate SKIPPED
+
+#819 id=25 dispatched  ack=17:30:05  dispatched=18:35:56  STALE_ACK=True  (ack 65 min OLDER than its dispatch)
+#818 id=26 pending     ack=17:48:06  (survived the 2026-07-24 clean-slate retry)
+```
+
+**Why it matters:** the leader-ack gate is what catches a dispatched owner that never woke up. Every retried item — **including both items reset during the clean-slate recovery** — permanently skips it. Phase D deliberately anchors ack on `dispatched_at` (stable) so a new dispatch demands a new ack; the missing field defeated that intent. The asymmetry that hid it: `record_ack_received` clears `last_nudge_at` and the retry endpoint clears `last_nudge_at`, so nudge bookkeeping is handled twice while the ack itself is handled nowhere.
+
+### Finding 10 root cause confirmed in code (no longer an inference)
+
+`dispatch_pending` launches with `reuse_existing=False` (`github_dispatch_service.py:172`), so **every dispatch spawns a NEW session** for a slot that already has a standing one. `slot_is_busy` guards one *work item* per slot; nothing guards one *session* per slot. That is the structural gap behind both Finding 10 sightings.
+
+### The unifying theme (drives the fix design)
+
+Deck models **logical work, not physical resources**. Each guard is correct about its abstraction and blind to the physical thing that breaks: `max_concurrent_dispatched` counts issues (not RAM), `slot_is_busy` counts work items (not sessions), `_ack_satisfied` counts timestamp presence (not dispatch generation). Unattended operation is precisely where that gap stops being academic.
+
+### PR #865 (#819 libspotify removal) — survived, but conflicted and orphaned
+
+The #819 work was NOT lost: the duplicate-owner process opened **PR #865** before the reboot — 148 files, **-12,342 lines**, CI "Core Meson build" **SUCCESS**. But: `mergeable: CONFLICTING` across **21 files** (meson.build, both PKGBUILDs, debian/control, player sources, docs); its base predates the #820 merge; authored under the human's git identity (**Finding 6 again**); and Deck has no record of it (`pr_number=None` on item 25) because the clean-slate retry cleared it. **Side effect worth noting: the recovery orphaned a real PR from its work item.**
+
+**Decisions (user, 2026-07-26):** (a) **rebase and salvage #865** via the team rather than close it; (b) **pause the soak while all three defects are fixed**; (c) fix shapes chosen — Deck-enforced one owner session, memory preflight gate, and both halves of the ack fix. Design: `2026-07-26-soak-defect-triad-hardening-design.md`; plan: `2026-07-26-soak-defect-triad-hardening.md`. Findings **#1 and #6 remain deferred** and remain Window 2 gates.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
