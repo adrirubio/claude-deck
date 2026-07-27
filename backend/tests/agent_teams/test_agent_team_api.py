@@ -8,7 +8,7 @@ import pytest_asyncio
 
 from app.database import get_db
 from app.main import app
-from app.models.database import GithubWorkItem, TeamGithubScope
+from app.models.database import AgentTeamPreset, GithubWorkItem, TeamGithubScope
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 
@@ -301,7 +301,7 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
         pending_reason="queued_repo_cap",
         handoff_state="pending",
         handoff_target_slot_id=1,
-        pr_number=12,
+        pr_number=None,
         retry_count=2,
         last_verified_sha="abc123",
         approval_round_count=3,
@@ -348,3 +348,60 @@ async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
     assert body["retry_count"] == 0
     assert body["last_verified_sha"] is None
     assert body["approval_round_count"] == 0
+
+
+async def _create_retry_work_item(db, *, pr_number: int | None) -> GithubWorkItem:
+    preset = AgentTeamPreset(name="Retry team")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="adrirubio",
+        repo_name="snazzyemail",
+        repo_path="/tmp/snazzyemail",
+    )
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=865,
+        issue_title="Preserve open PR",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/865",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        pr_number=pr_number,
+    )
+    db.add(item)
+    await db.commit()
+    return item
+
+
+@pytest.mark.asyncio
+async def test_retry_rejected_when_pr_open(client, db):
+    item = await _create_retry_work_item(db, pr_number=865)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        json={"reason": "try again"},
+    )
+
+    assert response.status_code == 409
+    assert "865" in response.json()["detail"]
+    await db.refresh(item)
+    assert item.pr_number == 865
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_retry_allowed_when_no_pr(client, db):
+    item = await _create_retry_work_item(db, pr_number=None)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        json={"reason": "try again"},
+    )
+
+    assert response.status_code == 200
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
