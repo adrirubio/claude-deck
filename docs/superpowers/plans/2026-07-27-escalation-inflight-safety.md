@@ -30,29 +30,60 @@ if item.dispatch_status != "dispatched":
     )
 ```
 
+> **⚠ REVISED 2026-07-27 — read this before implementing.** The first version of this task said "accept from `escalated`" unconditionally. **That was wrong** and the impl agent correctly refused it: unconditional acceptance repeals the **T-S6 human stop-signal** guarantee (`../specs/2026-07-05-tizonia-e2e-testbed-plan.md`, T-S6), enforced by `tests/agent_mail/test_dispatch_status_tool.py::test_pr_opened_rejected_after_item_escalated`. **That existing test is correct and must keep passing UNMODIFIED.** Not all escalations are equal — see the revised design's decision table. Implement the allow-list below.
+
 **Step 1 (test first).** In `backend/tests/agent_teams/test_github_verification_service.py`, add:
 
-- `test_pr_opened_accepted_from_escalated` — item `dispatch_status="escalated"`, `escalation_reason="plan_blocked"`, `issue_type="code"`. After `report_pr_opened(..., pr_number=865)`: `dispatch_status == "verifying"`, `pr_number == 865`, `escalation_reason is None`.
-- `test_pr_opened_accepted_from_escalated_design_item` — same but `issue_type="design"` → `dispatch_status == "awaiting_human_review"`.
-- `test_pr_opened_still_rejected_from_merged` — `dispatch_status="merged"` → still raises `ValueError`. This is the regression guard; do not skip it.
+- `test_pr_opened_accepted_from_recoverable_escalation` — `dispatch_status="escalated"`, `escalation_reason="plan_blocked"`, `issue_type="code"`. After `report_pr_opened(..., pr_number=865)`: `dispatch_status == "verifying"`, `pr_number == 865`, `escalation_reason is None`.
+- `test_pr_opened_accepted_from_recoverable_escalation_design_item` — same but `issue_type="design"` → `awaiting_human_review`.
+- `test_pr_opened_rejected_after_label_removed` — `escalation_reason="dispatch_label_removed"` → **raises `ValueError`**. This is the T-S6 guarantee; it is the most important test in this task.
+- `test_pr_opened_rejected_after_retry_budget_exhausted` — `escalation_reason="retry_count_exhausted"` → raises.
+- `test_pr_opened_rejected_from_unattributed_escalation` — `escalation_reason=None` → raises (default-deny).
+- `test_pr_opened_still_rejected_from_merged` — `dispatch_status="merged"` → raises.
 
-Run them. The first two must fail with the current `ValueError`. If they fail for any *other* reason, STOP and report — your fixture is wrong, not the code.
+Run them. Only the first two may fail at this point; the four rejection tests should pass immediately against the *current* code (it rejects everything non-`dispatched`). If a rejection test fails now, STOP and report — your fixture is wrong.
 
-**Step 2 (implement).** Allow the two valid entry states and clear the escalation when accepting from it:
+**Step 2 (implement).** At module level in `github_verification_service.py`:
 
 ```python
-if item.dispatch_status not in ("dispatched", "escalated"):
-    raise ValueError(
-        f"pr_opened is only valid for dispatched or escalated work items; current "
-        f"status is {item.dispatch_status}"
-    )
-if item.dispatch_status == "escalated":
-    item.escalation_reason = None
+# Escalations a late PR legitimately resolves: the agent said it was stuck, or Deck
+# *inferred* it from a timer. A real PR is evidence that inference was wrong.
+# Anything NOT listed here — including an unattributed escalation (reason=None) —
+# stays rejected: default-deny. `dispatch_label_removed` is a human stop signal
+# (T-S6) and `*_exhausted` are deliberate budget stops; both outrank a late PR.
+_PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset({
+    "plan_blocked",
+    "owner_idle_timeout",
+    "owner_offline",
+    "leader_offline",
+    "leader_ack_timeout",
+})
 ```
 
-Place this before the existing `item.pr_number = pr_number` line. Everything after it is unchanged.
+Then replace the guard in `report_pr_opened`:
 
-**Do NOT** touch the `issue_type == "design"` branch or the notification bodies.
+```python
+        recoverable = (
+            item.dispatch_status == "escalated"
+            and item.escalation_reason in _PR_OPENED_RECOVERABLE_ESCALATIONS
+        )
+        if item.dispatch_status != "dispatched" and not recoverable:
+            raise ValueError(
+                f"pr_opened is only valid for dispatched work items, or escalated "
+                f"items with a recoverable reason; current status is "
+                f"{item.dispatch_status} ({item.escalation_reason})"
+            )
+        if recoverable:
+            item.escalation_reason = None
+```
+
+Everything after the existing `item.pr_number = pr_number` line is unchanged. **Do NOT** touch the `issue_type == "design"` branch or the notification bodies.
+
+**Step 3 (verify you didn't break T-S6).** Run the pre-existing guard explicitly and confirm it still passes without edits:
+
+```bash
+pytest tests/agent_mail/test_dispatch_status_tool.py::test_pr_opened_rejected_after_item_escalated -q
+```
 
 ---
 

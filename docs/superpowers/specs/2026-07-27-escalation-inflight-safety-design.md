@@ -33,13 +33,42 @@ Both are data-loss paths that only bite unattended, which is precisely the Windo
 - **Retry must be refused when it would destroy something.** Not silently adjusted — refused loudly, so the caller learns why.
 - **No new status values.** The state machine is already the thing that is over-loaded; adding `escalated_but_working` would deepen the same mistake. (The impl agent has previously invented statuses — explicitly out of scope.)
 
-## Change 1 — `pr_opened` is accepted from `escalated`
+## Change 1 — `pr_opened` is accepted from `escalated`, **except when a human said stop**
 
-`report_pr_opened` must accept `dispatched` **and** `escalated`. When it accepts from `escalated`, it clears `escalation_reason` (the escalation is resolved by definition — the work landed) and proceeds exactly as before into `verifying` / `awaiting_human_review`.
+> **Revised 2026-07-27 after an impl-agent objection.** The first draft of this design said "accept from `escalated`" unconditionally. That was wrong: it would have silently repealed the T-S6 human stop-signal guarantee (`2026-07-05-tizonia-e2e-testbed-plan.md`, T-S6), which is enforced by `tests/agent_mail/test_dispatch_status_tool.py::test_pr_opened_rejected_after_item_escalated` and was validated on a real repo. The impl agent stopped and asked instead of rewriting the test — correct call. The distinction below is the fix.
 
-Any other status remains rejected, so `merged`/`completed` items still cannot be rewritten by a late report.
+Not all escalations are equal. Sorting the reasons by **who** decided:
 
-Rationale: an owner that produces a PR has demonstrably un-stuck itself. Escalation was Deck's assessment; the PR is evidence that overrides it.
+| Reason | Decided by | A late PR means |
+|---|---|---|
+| `dispatch_label_removed` | **a human**, on GitHub | The human's stop-signal must win. **Reject.** |
+| `plan_blocked` | the agent itself | It un-blocked itself. Accept. |
+| `owner_idle_timeout`, `owner_offline`, `leader_offline`, `leader_ack_timeout` | Deck's inference from timers | The inference was wrong — the owner was alive. Accept. |
+| `retry_count_exhausted`, `approval_rounds_exhausted` | Deck's budget policy | Budget is spent; a new PR should not silently reopen the loop. **Reject.** |
+
+So `report_pr_opened` accepts from `dispatched`, and from `escalated` **only** when `escalation_reason` appears in an explicit **allow-list**:
+
+```python
+# Escalations that a late PR legitimately resolves: the item was stuck because
+# the agent said so, or because Deck *inferred* it from a timer. A real PR is
+# evidence that inference was wrong. Anything NOT listed here — including an
+# unattributed escalation (reason=None) — stays rejected: default-deny.
+_PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset({
+    "plan_blocked",
+    "owner_idle_timeout",
+    "owner_offline",
+    "leader_offline",
+    "leader_ack_timeout",
+})
+```
+
+Allow-list, not block-list, for two reasons: an unattributed escalation (`escalation_reason=None`) must reject — which is exactly what the existing 409 test seeds — and any *future* escalation reason should default to rejecting rather than silently inheriting permission from a set nobody remembered to update.
+
+When it accepts, it clears `escalation_reason` and proceeds as before into `verifying` / `awaiting_human_review`. Any other `dispatch_status` (e.g. `merged`, `completed`) stays rejected.
+
+Rationale: the original insight still holds — a PR is ground truth from GitHub, and Deck's *inference* about being stuck should yield to it. But a human removing the label is not an inference; it is an instruction. An exhausted retry budget is a deliberate policy stop. Both outrank the PR.
+
+**Consequence for the soak's actual case:** item 26 (#818) is escalated `plan_blocked`, which is on the allow-list — so the fix still solves the incident that motivated it.
 
 ## Change 2 — retry refuses to discard in-flight work
 
@@ -64,9 +93,12 @@ The Leader's standing instruction ("retry escalated dependents whose blockers re
 
 ## Test obligations
 
-1. `pr_opened` from `escalated` → `verifying`, `pr_number` set, `escalation_reason` cleared.
-2. `pr_opened` from `escalated` for a `design` item → `awaiting_human_review`.
+1. `pr_opened` from `escalated` + `plan_blocked` → `verifying`, `pr_number` set, `escalation_reason` cleared.
+2. `pr_opened` from `escalated` + `plan_blocked` for a `design` item → `awaiting_human_review`.
 3. `pr_opened` from `merged` (or `completed`) → still raises. Regression guard against over-permissiveness.
+3a. `pr_opened` from `escalated` + `dispatch_label_removed` → **still raises** (T-S6 human stop signal preserved).
+3b. `pr_opened` from `escalated` + `retry_count_exhausted` → **still raises**.
+3c. `pr_opened` from `escalated` + `escalation_reason=None` → **still raises** (default-deny; this is the existing `test_pr_opened_rejected_after_item_escalated` case, which must keep passing **unmodified**).
 4. Retry with `pr_number` set → 409, item unchanged (`pr_number` still set, still `escalated`).
 5. Retry with `pr_number is None` → still works exactly as before.
 6. Escalating a `dispatched` item with an owner → broadcast payload carries `owner_may_be_active: True`; escalating a `pending` item → `False`.
