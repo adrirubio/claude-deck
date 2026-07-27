@@ -270,6 +270,12 @@ _RECOVERABLE_STATUSES = ("failed", "escalated")
 
 The two sets are disjoint in exactly the wrong way: the set that notices "the issue is done" excludes escalated items, and the set that handles escalated items only sees open issues. **An escalation is therefore a terminal state whenever the work actually succeeded** — the good outcome is the one Deck cannot record. Same root theme as Findings 10/13 and G1: escalation is treated as a state transition that discards the item's future rather than as a signal.
 
+**Blast radius: the soak is silently dead, and Finding 14 is why.** Status counts are now `escalated 12 / completed 10 / merged 6` — **zero `pending`, zero `dispatched`**. Nothing is running and nothing will start. Slot 6 alone holds 8 items (#821–#827, #829) escalated `plan_blocked` whose `status_note` names #817/#818/#819/#820 as the open prerequisites. All four have since merged, and GitHub confirms **#816–#820 are all CLOSED** while #821 onward are OPEN and genuinely unblocked.
+
+The dependents were never told. `notify_blocker_merged` has exactly two live call sites — `_recheck_active_items` (which skips `escalated`) and the verification paths reached via `report_pr_opened`/merge — and item 26 entered *neither*, because its `pr_opened` was rejected with the G1 409 and its status excluded it from the active sweep. So the blocker merged, the cascade never fired, and every dependent is parked on a premise that is no longer true.
+
+Mitigating detail: `_BUSY_STATUSES = ("dispatched", "verifying")` omits `escalated`, so these items do **not** hold slot 6 hostage — the slot is free. The queue is idle for lack of a wake-up signal, not for lack of capacity. That is the good news, because it means fixing the notification/reconciliation path is sufficient; no slot surgery is needed.
+
 Note this is *distinct from* Phase G1 and not fixed by it. G1 lets a live owner report `pr_opened` from a recoverable escalation (which would have prevented this instance by moving item 26 to `verifying` before the merge). Finding 14 is the case where nobody reports anything and the issue simply closes — G1's allow-list never comes into play. Candidate fix: have `_recheck_active_items` also sweep `escalated`/`failed` items whose issue has closed, since a closed issue is ground truth from GitHub that outranks Deck's stale inference. Wants its own test; do not fold into G1's PR.
 
 ## Per-issue outcome log
