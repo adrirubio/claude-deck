@@ -1,5 +1,6 @@
 """Dispatch routing + concurrency tests."""
 from datetime import datetime, timedelta
+from io import StringIO
 
 import pytest
 import pytest_asyncio
@@ -10,14 +11,17 @@ import app.models.database  # noqa: F401
 from app.config import settings
 from app.database import Base
 from app.models.database import (
+    AgentTeamLaunch,
+    AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
+    MailAgentSession,
     MailMessage,
     MailTeamMember,
     TeamGithubScope,
 )
-from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_dispatch_service import GithubDispatchService, github_dispatch_service
 
 
 @pytest_asyncio.fixture
@@ -29,6 +33,16 @@ async def db():
     async with maker() as session:
         yield session
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def host_has_enough_memory(monkeypatch):
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "_available_memory_mb",
+        lambda: 999_999,
+        raising=False,
+    )
 
 
 async def _team(db):
@@ -122,6 +136,49 @@ async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMem
     await db.commit()
     assert member.id != slot.id
     return member
+
+
+async def _create_live_slot_launch_session(
+    db,
+    preset: AgentTeamPreset,
+    slot: AgentTeamSlot,
+    *,
+    target: str,
+) -> tuple[AgentTeamLaunch, MailAgentSession]:
+    launch = AgentTeamLaunch(
+        preset_id=preset.id,
+        plan_hash=f"plan:{target}",
+        status="running",
+    )
+    db.add(launch)
+    await db.flush()
+    db.add(
+        AgentTeamLaunchItem(
+            launch_id=launch.id,
+            slot_id=slot.id,
+            action="spawn",
+            status="started",
+            provider=slot.provider,
+            repo_path=slot.repo_path,
+            tmux_target=target,
+        )
+    )
+    member = await _create_registered_slot_member(db, slot)
+    session = MailAgentSession(
+        member_id=member.id,
+        provider=slot.provider,
+        source="observed",
+        session_key=f"tmux:{target}",
+        cwd=slot.repo_path,
+        tmux_target=target,
+        team_preset_id=preset.id,
+        team_slot_id=slot.id,
+        mailbox_status="observed",
+        last_seen_at=datetime.utcnow(),
+    )
+    db.add(session)
+    await db.commit()
+    return launch, session
 
 
 def test_leader_unblock_instructions_text():
@@ -284,6 +341,62 @@ def test_ack_lifecycle_settings_present():
     assert settings.github_design_ack_multiplier >= 1
     assert settings.github_owner_idle_timeout_seconds > 0
     assert settings.github_nudge_grace_seconds > 0
+
+
+def test_reset_for_retry_clears_ack_received_at():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        dispatched_at=datetime(2026, 7, 24, 17, 12, 0),
+    )
+
+    github_dispatch_service.reset_for_retry(item)
+
+    assert item.ack_received_at is None
+
+
+def test_ack_not_satisfied_by_ack_older_than_current_dispatch():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="dispatched",
+        ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        dispatched_at=datetime(2026, 7, 24, 18, 35, 56),
+    )
+
+    assert github_dispatch_service._ack_satisfied(item) is False
+
+
+def test_ack_satisfied_when_ack_follows_dispatch():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="dispatched",
+        dispatched_at=datetime(2026, 7, 24, 18, 35, 56),
+        ack_received_at=datetime(2026, 7, 24, 18, 40, 0),
+    )
+
+    assert github_dispatch_service._ack_satisfied(item) is True
+
+
+def test_pr_number_satisfies_ack_regardless_of_stale_ack():
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=819,
+        issue_type="code",
+        dispatch_status="dispatched",
+        pr_number=865,
+        ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        dispatched_at=datetime(2026, 7, 24, 18, 35, 56),
+    )
+
+    assert github_dispatch_service._ack_satisfied(item) is True
 
 
 @pytest.mark.asyncio
@@ -986,6 +1099,169 @@ async def test_dispatch_pending_queues_when_slot_busy(db):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_queues_when_slot_has_live_owner_session(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    owner_launch, _ = await _create_live_slot_launch_session(
+        db,
+        preset,
+        backend,
+        target="owner:0.0",
+    )
+    db.add(
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=40,
+            issue_title="completed owner work",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="merged",
+            owner_slot_id=backend.id,
+            launch_id=owner_launch.id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=41,
+        issue_title="next work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(db_, preset_id, request):
+        raise AssertionError("should not launch while an owner session is live")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={41: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.owner_slot_id == backend.id
+    assert item.routing_method == "label"
+    assert item.pending_reason == "queued_owner_session_live"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proceeds_with_only_standing_session(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _create_live_slot_launch_session(
+        db,
+        preset,
+        backend,
+        target="standing:0.0",
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=42,
+        issue_title="new work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    launches = []
+
+    class _Result:
+        launch_id = 104
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={42: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.owner_slot_id == backend.id
+    assert item.pending_reason is None
+
+
+@pytest.mark.asyncio
+async def test_queued_owner_session_dispatches_after_session_goes_offline(db):
+    preset, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    owner_launch, owner_session = await _create_live_slot_launch_session(
+        db,
+        preset,
+        backend,
+        target="finished-owner:0.0",
+    )
+    db.add(
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=43,
+            issue_title="finished work",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="merged",
+            owner_slot_id=backend.id,
+            launch_id=owner_launch.id,
+        )
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=44,
+        issue_title="queued work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    launches = []
+
+    class _Result:
+        launch_id = 105
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={44: ["area:backend"]},
+    )
+    await db.refresh(item)
+    assert item.pending_reason == "queued_owner_session_live"
+    assert launches == []
+
+    owner_session.mailbox_status = "offline"
+    await db.commit()
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={44: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_queues_when_scope_concurrency_cap_reached(db):
     preset, slots, scope = await _team(db)
     scope.max_concurrent_dispatched = 1
@@ -1027,6 +1303,118 @@ async def test_dispatch_pending_queues_when_scope_concurrency_cap_reached(db):
     assert item.owner_slot_id is None
     assert item.dispatch_status == "pending"
     assert item.pending_reason == "queued_repo_cap"
+
+
+def test_available_memory_mb_reads_memavailable(monkeypatch):
+    meminfo = "MemTotal:       16384000 kB\nMemAvailable:    6144000 kB\n"
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: StringIO(meminfo))
+
+    assert GithubDispatchService()._available_memory_mb() == 6000
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queues_when_available_memory_below_floor(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=45,
+        issue_title="memory-heavy work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: 2999)
+
+    async def fake_launcher(db_, preset_id, request):
+        raise AssertionError("should not launch below the memory floor")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={45: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "queued_low_memory"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_proceeds_when_available_memory_above_floor(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=46,
+        issue_title="memory-safe work",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: 3001)
+    launches = []
+
+    class _Result:
+        launch_id = 106
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={46: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fails_open_when_available_memory_unknown(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=47,
+        issue_title="portable dispatch",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: None)
+    launches = []
+
+    class _Result:
+        launch_id = 107
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={47: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert len(launches) == 1
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
 
 
 @pytest.mark.asyncio
@@ -1392,6 +1780,46 @@ async def test_monitor_nudges_leader_on_ack_timeout(db):
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
     )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.last_nudge_at is not None
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_retried_item_still_nudged_when_leader_never_acks_again(db):
+    preset, slots, scope = await _team(db)
+    architect, backend = slots[0], slots[1]
+    dispatched_at = datetime.utcnow() - timedelta(
+        seconds=settings.github_leader_ack_timeout_seconds
+        + settings.github_owner_registration_grace_seconds
+        + 10
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=819,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=backend.id,
+        dispatched_at=dispatched_at,
+        ack_received_at=dispatched_at - timedelta(hours=1),
+        updated_at=dispatched_at,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={
+            architect.id: "wakeable",
+            backend.id: "wakeable",
+        },
+    )
+
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.last_nudge_at is not None

@@ -8,8 +8,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import AgentTeamSlot, GithubWorkItem, MailTeamMember, TeamGithubScope
+from app.models.database import (
+    AgentTeamLaunchItem,
+    AgentTeamSlot,
+    GithubWorkItem,
+    MailAgentSession,
+    MailTeamMember,
+    TeamGithubScope,
+)
 from app.models.schemas import AgentTeamLaunchRequest
+from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
@@ -26,6 +34,7 @@ class GithubDispatchService:
         item.handoff_state = None
         item.handoff_target_slot_id = None
         item.pr_number = None
+        item.ack_received_at = None
         item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
@@ -94,6 +103,47 @@ class GithubDispatchService:
             ).scalar_one()
         )
 
+    async def slot_has_live_owner_session(self, db: AsyncSession, slot_id: int) -> bool:
+        sessions = (
+            await db.execute(
+                select(MailAgentSession)
+                .join(
+                    AgentTeamLaunchItem,
+                    (AgentTeamLaunchItem.tmux_target == MailAgentSession.tmux_target)
+                    & (AgentTeamLaunchItem.slot_id == MailAgentSession.team_slot_id),
+                )
+                .join(
+                    GithubWorkItem,
+                    GithubWorkItem.launch_id == AgentTeamLaunchItem.launch_id,
+                )
+                .where(
+                    MailAgentSession.team_slot_id == slot_id,
+                    MailAgentSession.tmux_target.is_not(None),
+                )
+                .distinct()
+            )
+        ).scalars().all()
+        now = datetime.utcnow()
+        return any(
+            agent_mail_service._effective_status(session, now) != "offline"
+            for session in sessions
+        )
+
+    def _available_memory_mb(self) -> int | None:
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as meminfo:
+                for line in meminfo:
+                    name, separator, value = line.partition(":")
+                    if name != "MemAvailable" or not separator:
+                        continue
+                    amount, unit = value.split()
+                    if unit.lower() != "kb":
+                        return None
+                    return int(amount) // 1024
+        except (OSError, ValueError):
+            return None
+        return None
+
     async def dispatch_pending(
         self,
         db: AsyncSession,
@@ -127,6 +177,15 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            available_memory_mb = self._available_memory_mb()
+            if (
+                available_memory_mb is not None
+                and available_memory_mb < settings.github_min_available_memory_mb
+            ):
+                item.pending_reason = "queued_low_memory"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
             issue_labels = issue_labels_by_number.get(item.issue_number, [])
             owner_slot_id, method = await self.route_item(
                 db, item, preset_slots, issue_labels, classify=classify
@@ -141,6 +200,13 @@ class GithubDispatchService:
                 item.owner_slot_id = owner_slot_id
                 item.routing_method = method
                 item.pending_reason = "queued_slot_busy"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
+            if await self.slot_has_live_owner_session(db, owner_slot_id):
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_owner_session_live"
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
@@ -511,7 +577,16 @@ class GithubDispatchService:
         return grace_age < timedelta(seconds=settings.github_owner_registration_grace_seconds)
 
     def _ack_satisfied(self, item: GithubWorkItem) -> bool:
-        return item.ack_received_at is not None or item.pr_number is not None
+        if item.pr_number is not None:
+            return True
+        if item.ack_received_at is None:
+            return False
+        if (
+            item.dispatched_at is not None
+            and item.ack_received_at < item.dispatched_at
+        ):
+            return False
+        return True
 
     def _ack_deadline_seconds(self, item: GithubWorkItem) -> int:
         base = settings.github_leader_ack_timeout_seconds
