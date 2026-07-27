@@ -206,6 +206,35 @@ The #819 work was NOT lost: the duplicate-owner process opened **PR #865** befor
 
 **Decisions (user, 2026-07-26):** (a) **rebase and salvage #865** via the team rather than close it; (b) **pause the soak while all three defects are fixed**; (c) fix shapes chosen — Deck-enforced one owner session, memory preflight gate, and both halves of the ack fix. Design: `2026-07-26-soak-defect-triad-hardening-design.md`; plan: `2026-07-26-soak-defect-triad-hardening.md`. Findings **#1 and #6 remain deferred** and remain Window 2 gates.
 
+## 2026-07-27 — Phase F merged, soak re-armed; Findings 12 & 11 PASS, **Finding 10 NOT fixed** (new root cause: Finding 13)
+
+**Re-arm sequence executed** (order matters, per team-respawn hygiene): merged Phase F PR #299 (`dc11b9bd`) and tizonia PR #865 (`5939da92`, closing #819) → restored tizonia branch protection → killed agent tmux → pulled the integration branch → **restarted the backend** (the old process, PID 50505, had no `--reload` and was silently serving pre-Phase-F code) → respawned the team (launch 61: slots 4/5/6, one tmux-bound session each, no duplicates) → **then** enabled autonomy.
+
+**Finding 12 (stale ack) — PASS, proven on live data.** Item 26 carries ack `2026-07-24 17:48:06` against `dispatched_at 2026-07-27 18:33:41` (stale by 3 days); `_ack_satisfied()` now returns **False**, so the re-dispatch correctly demands a fresh leader ack. Item 25 self-reconciled to `completed` on the first poll after re-arming — the watcher closed the orphaned-PR gap from the 24th without any hand-edited DB row.
+
+**Finding 11 (memory preflight) — PASS.** `_available_memory_mb()` reads 13047 MB against the 3000 MB floor; no OOM, host stable throughout. `max_concurrent_dispatched=1` held.
+
+### Finding 13 (NEW — serious) — the Finding 10 guard cannot see the session it is meant to block
+
+`slot_has_live_owner_session` fired correctly and returned `False` for every slot, so dispatch proceeded — **and then spawned a second session on the Specialist slot anyway**. Observed within 5 minutes of re-arming:
+
+```
+slot 6  tizonia-openmax-il-fe2f:0.0  pid 149190  launch 61  standing        member 17
+slot 6  tizonia-openmax-il-7845:0.0  pid 159009  launch 62  dispatch owner  member 17
+```
+
+**Root cause — the guard's join is self-referential.** It joins `MailAgentSession → AgentTeamLaunchItem → GithubWorkItem.launch_id`, i.e. it only counts sessions that *already belong to a dispatch launch*. A **standing** session's launch id never appears in `github_work_items.launch_id`, so it is filtered out of the very query meant to detect it. The guard therefore answers "is there a live session from a previous *dispatch*?" — not "is there a live session on this slot?", which is the question Finding 10 asks. It can only ever fire on the second dispatch to a slot, never against the standing session that Finding 10 is about.
+
+The over-blocking canary `test_dispatch_proceeds_with_only_standing_session` **passes for the wrong reason**: it asserts dispatch proceeds when only a standing session exists, which is exactly the hole. The test encodes the bug as the requirement. This is why Phase F's live behaviour diverged from its green test suite.
+
+**Consequence observed (the same shape as both prior Finding 10 sightings):** two OS processes, **one Agent Mail identity** (`member_id=17`). The Leader's read-only check saw 93 staged gmusic deletions in `…-issue-818` while the Specialist truthfully reported never having entered it. Both agents behaved correctly; the contradiction was an artefact of the shared identity. The Leader again handled it textbook-perfectly (all-session freeze, escalation, urgent context-request #330).
+
+**Secondary defect — escalation wedges an in-flight item.** Item 26 sat `escalated` while its real owner was mid-edit. `report_pr_opened` accepts only `dispatched`, so the owner's eventual `pr_opened` report would have been rejected **HTTP 409**, and `deck_retry_work_item` would have cleared `pr_number`/`ack_received_at` and discarded the work. Recovery had to route around Deck: the owner pushes and opens the PR, then reports by mail. `escalated` is being used for two incompatible things — "this item is stuck, a human should look" and "this item's owner is alive and working".
+
+**Resolution:** freeze lifted for the owner session only (agents self-identify by working directory, since one mail identity covers both); worktree preserved untouched — its base `5939da92` is correct and the diff is in-scope for #818. No clean-slate this time: the work is salvageable and the diagnosis is certain.
+
+**Finding 10 remains an open hard pre-Window-2 blocker.** The correct discriminator is "any live tmux-bound session on this slot", with the *current* dispatch's own launch excluded — not "any session belonging to some dispatch launch".
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
