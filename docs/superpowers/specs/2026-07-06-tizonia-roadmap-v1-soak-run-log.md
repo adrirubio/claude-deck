@@ -233,7 +233,13 @@ The over-blocking canary `test_dispatch_proceeds_with_only_standing_session` **p
 
 **Resolution:** freeze lifted for the owner session only (agents self-identify by working directory, since one mail identity covers both); worktree preserved untouched — its base `5939da92` is correct and the diff is in-scope for #818. No clean-slate this time: the work is salvageable and the diagnosis is certain.
 
-**Finding 10 remains an open hard pre-Window-2 blocker.** The correct discriminator is "any live tmux-bound session on this slot", with the *current* dispatch's own launch excluded — not "any session belonging to some dispatch launch".
+**Finding 10 remains an open hard pre-Window-2 blocker — and the guard is the wrong lever entirely.**
+
+The tempting fix ("count any live tmux-bound session on this slot") **cannot work**: a standing session is *always* live on its slot, so that predicate would block every dispatch forever. That is precisely what the over-blocking canary was written to prevent, and why the original author reached for the self-referential join. Both branches of the guard are dead ends — the question "is a session live here?" has no answer that both blocks duplicates and permits work.
+
+**The defect is one layer down: dispatch spawns because reuse cannot carry a brief.** `dispatch_pending` passes `reuse_existing=False` (`github_dispatch_service.py:238`) and delivers the dispatch brief via `slot_prompt_overrides`. In `agent_team_service._launch_slot`, the `action == "reuse"` branch calls `_attach_team_context_to_existing_session` and **silently drops `prompt_override`** — it is only read on the spawn path (`agent_team_service.py:515`). So reuse *cannot* tell an existing session what to work on. Spawning a second session was the only way to deliver the brief; `reuse_existing=False` is a symptom, not the cause.
+
+**Correct fix shape (Phase G):** make the reuse path deliver `prompt_override` into the existing session, then flip dispatch to `reuse_existing=True`. One session per slot for its whole life; the brief arrives as a message to the standing session. `slot_has_live_owner_session` then becomes redundant and should be deleted rather than repaired — `slot_is_busy` already enforces one work item per slot, which is the *logical* guard that was always correct. The canary test must be rewritten to assert **the brief reached the standing session**, not that a second session was spawned.
 
 ## Per-issue outcome log
 
