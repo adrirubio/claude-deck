@@ -278,6 +278,30 @@ Mitigating detail: `_BUSY_STATUSES = ("dispatched", "verifying")` omits `escalat
 
 Note this is *distinct from* Phase G1 and not fixed by it. G1 lets a live owner report `pr_opened` from a recoverable escalation (which would have prevented this instance by moving item 26 to `verifying` before the merge). Finding 14 is the case where nobody reports anything and the issue simply closes — G1's allow-list never comes into play. Candidate fix: have `_recheck_active_items` also sweep `escalated`/`failed` items whose issue has closed, since a closed issue is ground truth from GitHub that outranks Deck's stale inference. Wants its own test; do not fold into G1's PR.
 
+### 2026-07-28 — G1 + G1b merged (PR #301), Finding 14 fix verified in production
+
+PR #301 reviewed and merged as `f70b946` into `feature/autonomous-github-dispatch`; 290 passing (274 → 284 after G1 → 290 after G1b). Both fixes verified independently, not taken on the impl agent's report.
+
+**Mutation-tested the two new regression guards**, because a guard only earns its keep if it fails when the bug returns:
+
+1. Patched `_ACTIVE_STATUSES` to include `escalated`/`failed` — i.e. deliberately took the shortcut the design forbids. `test_failed_item_with_label_removed_is_not_laundered_into_escalated` **failed**, as designed. The `failed` → retryable-`escalated` laundering trap is genuinely fenced off, not merely documented.
+2. Deleted the `_reconcile_closed_issues` call from `poll_scope` — all four sweep tests **failed**.
+
+Also confirmed the TDD precondition held honestly: against pre-G1b code the two regression guards pass while the four sweep tests fail — the correct signature for "guard, not new behaviour". And `test_pr_opened_rejected_after_item_escalated` still passes unmodified, so T-S6 survives both phases.
+
+**Deployed and observed working end to end.** The scheduler runs as APScheduler jobs inside uvicorn without `--reload`, so the merged code was invisible to the running process — the restart *is* the deployment step. Stopped PID 148556, restarted (PID 375319), and on the first poll after restart:
+
+| | before | after |
+|---|---|---|
+| item 26 (#818) | `escalated`/`plan_blocked` | **`completed`**, reason cleared, at `06:31:11` |
+| escalated / completed / merged | 12 / 10 / 6 | **11 / 11 / 6** |
+
+`notify_blocker_merged` fired (message 341 → member 16, the Leader, `kind=github_dispatch_blocker_merged`), and its body lists all 11 remaining escalated items as candidate dependents with the `deck_retry_work_item` instruction. Exactly one item changed, matching the pre-merge read-only dry run precisely — #821–#829 and #834 skipped as still OPEN, #858 doubly skipped (OPEN *and* `pr_number=860`).
+
+**Restart hygiene held.** Pre-restart snapshot (`/tmp/pre-restart-members.txt`) recorded members 14/16/17 and tmux-bound sessions 301/302/303/308; post-restart both sets are identical. No duplicate members were created despite four live tmux sessions and codex's auto-reconnect — the failure mode from `team-respawn-hygiene` did **not** recur this time, even though tmux was left running (the standing instruction not to terminate dispatched sessions took precedence over the kill-tmux-first rule).
+
+The cascade is now restarted through Deck's own notification path — no DB hand-editing, no forced retry. The Leader decides which dependents to re-dispatch. Note the notification's candidate list is *all* escalated items rather than only true dependents of #818, so the Leader must still check each one's other blockers; that is by design (Deck notifies, the Leader decides) but is worth watching for noise as the list grows.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
