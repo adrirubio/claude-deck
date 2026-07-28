@@ -302,6 +302,59 @@ Also confirmed the TDD precondition held honestly: against pre-G1b code the two 
 
 The cascade is now restarted through Deck's own notification path — no DB hand-editing, no forced retry. The Leader decides which dependents to re-dispatch. Note the notification's candidate list is *all* escalated items rather than only true dependents of #818, so the Leader must still check each one's other blockers; that is by design (Deck notifies, the Leader decides) but is worth watching for noise as the list grows.
 
+**Leader acted unprompted — finding #1 did NOT recur.** Within minutes of message 341 the Leader read its inbox, called `POST /agent-teams/github-work-items/23/retry` (200) on its own initiative, approved a scoped #821 plan, and handed off to the Specialist, which came up as a *new* session `fd9c` (sessions 310/311, member 17, slot 6) and reported `triaging`. Deck notified, the Leader decided, the owner started work — the full intended loop, with no orchestrator intervention. Note slot 6 now carries **three** sessions (`fe2f` standing, `7845` from #818, `fd9c` for #821): Finding 13 reproducing exactly as predicted, and further justification for Phase G2.
+
+## Finding 15 (SERIOUS — regression introduced by the G1b fix) — the closed-issue sweep exhausted GitHub's unauthenticated rate limit, stopping autonomy entirely
+
+Within ~11 minutes of deploying G1b, every poll began failing:
+
+```
+httpx.HTTPStatusError: Client error '403 rate limit exceeded' for url
+'https://api.github.com/repos/tizonia/tizonia-openmax-il/issues?labels=agent-ready&state=open&per_page=100'
+```
+
+`scope.last_polled_at` froze at `06:42:09` and six consecutive `run_repo_job` invocations failed. **Autonomy stopped completely** — no watching, no dispatch, no verification. Reproduced directly: the same unauthenticated request returns `403` with `x-ratelimit-limit: 60`, `x-ratelimit-remaining: 0`, `x-ratelimit-used: 60`.
+
+**Root cause: `settings.github_token` was `""`.** Deck had been calling GitHub anonymously for the entire soak — a 60 requests/hour budget. The arithmetic:
+
+| | requests per poll | per hour (60s interval) | vs 60/hr budget |
+|---|---|---|---|
+| pre-G1b | 1 label-list + 0 active + 0 pending = **1** | 60 | exactly at the ceiling |
+| post-G1b | 1 label-list + 0 active + **11 sweep** + 0 pending = **12** | 720 | **12× over** |
+
+Quota is gone after ~5 polls; thereafter *everything* 403s — including `list_issues_with_label` at `poll_scope` line 32, so the poll dies before the sweep it was meant to feed.
+
+**Finding 14's wedge had been masking Finding 15.** With every item stranded in `escalated`, the active set and the pending set were both empty, so `poll_scope` made exactly one request per cycle — landing precisely on the 60/hr ceiling. *The wedge was acting as an accidental rate limiter.* Fixing the wedge restored the request volume the design always implied, and immediately blew the budget. Same unifying theme as Findings 10/11/13: **Deck models logical work and ignores physical resources.** Finding 11's unmodelled resource was RAM; this one's is API quota.
+
+**Second defect, independent of the token: the sweep is an N+1 that re-fetches data already in hand.** `poll_scope` already holds `labeled` — all 10 open `agent-ready` issues — from line 32. `_reconcile_closed_issues` then issues 11 individual `GET /issues/{n}` calls for 821–829, 834, 858, of which **10 are already in that response**. An escalated item still present in the open-labeled list is by definition not closed, so it needs no request at all. Only #858 (label removed, so absent from the list) genuinely requires a lookup. Correct cost is **2 requests per poll, not 12**. Fix: prefilter the sweep against the labeled set — Phase G1c.
+
+### Fix deployed (2026-07-28 18:41)
+
+Authenticated with a **fine-grained read-only PAT** (`Public Repositories (read-only)`, personal account, 30-day expiry) written to `backend/.env` at mode `0600`. Verified: gitignored (`.gitignore:27`), absent from `git status`, `settings.github_token` loads as `github_pat_…` (93 chars).
+
+Token choice was deliberately read-only, because **`github_client.py`'s docstring claims "Read-only GitHub REST client" and that is false.** It has two write methods:
+
+- `merge_pull` — `PUT /pulls/{n}/merge`, gated behind `scope.merge_policy != "auto"`; the tizonia scope is `human`, so inert.
+- `mark_pull_ready_for_review` — GraphQL mutation, called from `_promote_verified_item` with **no merge-policy gate at all**.
+
+So a write-scoped token would have let Deck flip draft PRs to ready-for-review on a public repo *today*, and would have armed auto-merge the instant `merge_policy` changed. A read-only PAT makes both methods fail at the API layer regardless of what the code does — defense in depth matching the standing "public repo, human-merge-only until tested" constraint. **Follow-ups: correct the docstring, and consider gating `mark_pull_ready_for_review` on `merge_policy` too.**
+
+Post-restart (PID 375321 → 554916): polls advancing every 60s, **zero** GitHub errors, quota 5000/hr. All five tmux sessions survived — `fd9c` was mid-work on #821 and had to be preserved.
+
+## Finding 16 (SERIOUS — design gap, not a regression) — the team blocks on an isolated-worktree contract that Deck does not implement
+
+Immediately after the Leader re-dispatched #821, the owner escalated `plan_blocked` again and the Leader froze all #821 activity, opening context request #347 asking the coordinator to "provision/authorize exactly one isolated #821 worktree from current master 280f5803."
+
+**Deck has no worktree provisioning whatsoever.** `grep -rn worktree` across `github_dispatch_service.py` and `agent_team_service.py` returns nothing. The dispatch brief offers exactly one line — `- Local checkout: {scope.repo_path}` — a single shared path. Confirmed all five live sessions have that same directory as their `pane_current_path`.
+
+The agents were **inferring a contract Deck never offered**. The `-issue-818` worktree they reported as "appearing unexpectedly" was created *by the orchestrator by hand* during the #818 recovery, not by Deck; the team reasonably generalised from it that worktrees are coordinator-provisioned, and now blocks on their absence. The team's reasoning was sound — Deck's brief is what's wrong.
+
+Aggravating state in the shared checkout: it sits on `codex/issue-819-remove-libspotify` (PR #865 merged 2026-07-27T18:22Z, so the upstream branch is gone), and local `origin/master` is stale at `5939da92` vs the real `280f5803` (last fetch 21:33 the previous day). Nothing was dirty except a stray `claude_registry.db` left by orchestrator tooling.
+
+**Why this is the same defect as Finding 11.** Two items dispatched concurrently would collide in one working tree. `max_concurrent_dispatched=1` — set to stop OOM — is therefore *also* load-bearing for correctness, silently and by accident. Raising it for throughput would corrupt work.
+
+Coordinator answer sent (message 350, resolving request #347): sole owner confirmed as `fd9c`/member 17; Deck provisions nothing; the Leader's freeze upheld; no retry. Item 23 remains `escalated`/`plan_blocked`, which is now an accurate description of reality rather than a wedge. **Provisioning deferred to the human operator** — it means operating on a checkout that five live sessions hold as cwd, which is beyond what the orchestrator should do unilaterally.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
@@ -315,4 +368,5 @@ The cascade is now restarted through Deck's own notification path — no DB hand
 | 828 | code | Generalist | escalated(plan_blocked) | yes — blocked by #822/#823/#825/#827 | docs can't precede build |
 | 829 | code | Specialist | escalated(plan_blocked) | yes — blocked by #821–#828 | release validation = last step |
 | 818–826 | code | Specialist | pending (queued_slot_busy) | — | queued behind Specialist |
-| 818 | code | Specialist (slot 6) | **PR #866 merged**, issue closed; Deck item 26 stuck `escalated(plan_blocked)`, `pr_number=None` | no — work succeeded | review PASS; exposed Finding 14 (stranded escalation) + the unsatisfiable self-approval block |
+| 818 | code | Specialist (slot 6) | **PR #866 merged**, issue closed; Deck item 26 stuck `escalated(plan_blocked)`, `pr_number=None` → **`completed`** after G1b | no — work succeeded | review PASS; exposed Finding 14 (stranded escalation) + the unsatisfiable self-approval block |
+| 821 | code | Specialist (slot 6, session `fd9c`) | Leader-approved plan, then `escalated(plan_blocked)` — frozen awaiting an isolated worktree | yes — Deck provisions no worktree | exposed Finding 16; sole owner confirmed, freeze upheld, no retry |
