@@ -1,4 +1,11 @@
-"""Read-only GitHub REST client for autonomous dispatch."""
+"""GitHub REST client for autonomous dispatch.
+
+Mostly read-only, but NOT entirely: `merge_pull` and `mark_pull_ready_for_review`
+both write. `merge_pull` is gated on `scope.merge_policy == "auto"` by its only
+caller; `mark_pull_ready_for_review` is currently ungated. Deployments that must
+not write to GitHub should enforce that with a read-only token rather than
+relying on this module.
+"""
 from __future__ import annotations
 
 import httpx
@@ -9,7 +16,7 @@ _GITHUB_API = "https://api.github.com"
 
 
 class GithubClient:
-    """Thin async wrapper over the read-only GitHub calls dispatch needs."""
+    """Thin async wrapper over the GitHub calls dispatch needs."""
 
     def __init__(self, http: httpx.AsyncClient | None = None, token: str | None = None):
         self._http = http
