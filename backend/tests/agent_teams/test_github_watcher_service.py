@@ -366,3 +366,210 @@ async def test_watcher_completed_fires_blocker_merged_notification(db):
     ]
     assert len(notifications) == 1
     assert notifications[0].recipient_member_id == member.id
+
+
+@pytest.mark.asyncio
+async def test_closed_issue_reconciles_escalated_item(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=818,
+        issue_title="blocked work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    db.add(item)
+    await db.commit()
+    closed = _issue(818, ["claude-deck-ready"])
+    closed["state"] = "closed"
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[], by_number={818: closed}),
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "completed"
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_closed_issue_reconciliation_fires_blocker_merged_notification(db):
+    scope = await _make_scope(db)
+    leader = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=0,
+        display_name="Leader",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(leader)
+    await db.flush()
+    member = MailTeamMember(
+        identity_key="slot:closed-reconciliation-leader",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Leader",
+        participant_kind="team_slot",
+        team_preset_id=scope.preset_id,
+        team_slot_id=leader.id,
+    )
+    db.add(member)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=819,
+        issue_title="blocked work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    db.add(item)
+    await db.commit()
+    closed = _issue(819, ["claude-deck-ready"])
+    closed["state"] = "closed"
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[], by_number={819: closed}),
+    )
+
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    notifications = [
+        message
+        for message in messages
+        if (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+    ]
+    assert len(notifications) == 1
+    assert notifications[0].recipient_member_id == member.id
+
+
+@pytest.mark.asyncio
+async def test_closed_issue_reconciles_failed_item(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=820,
+        issue_title="failed work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="failed",
+        escalation_reason="launch_failed",
+    )
+    db.add(item)
+    await db.commit()
+    closed = _issue(820, ["claude-deck-ready"])
+    closed["state"] = "closed"
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[], by_number={820: closed}),
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "completed"
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_closed_issue_skips_item_with_open_pr(db, caplog):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=821,
+        issue_title="work with open PR",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="dispatch_label_removed",
+        pr_number=865,
+    )
+    db.add(item)
+    await db.commit()
+    closed = _issue(821, ["claude-deck-ready"])
+    closed["state"] = "closed"
+    caplog.set_level("INFO", logger="app.services.github_watcher_service")
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[], by_number={821: closed}),
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "dispatch_label_removed"
+    assert item.pr_number == 865
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not any(
+        (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+        for message in messages
+    )
+    assert "unresolved PR #865" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failed_item_with_label_removed_is_not_laundered_into_escalated(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=822,
+        issue_title="failed work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="failed",
+        escalation_reason="launch_failed",
+    )
+    db.add(item)
+    await db.commit()
+    open_issue = _issue(822, [])
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[], by_number={822: open_issue}),
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "failed"
+    assert item.escalation_reason == "launch_failed"
+
+
+@pytest.mark.asyncio
+async def test_escalated_item_with_open_labeled_issue_is_untouched(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=823,
+        issue_title="blocked work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    db.add(item)
+    await db.commit()
+    open_issue = _issue(823, ["claude-deck-ready"])
+
+    await github_watcher_service.poll_scope(
+        db,
+        scope,
+        _FakeClient(labeled=[open_issue], by_number={823: open_issue}),
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "plan_blocked"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not any(
+        (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+        for message in messages
+    )

@@ -13,6 +13,9 @@ from app.services.github_dispatch_service import github_dispatch_service
 
 _ACTIVE_STATUSES = ("dispatched", "verifying", "awaiting_human_review")
 _RECOVERABLE_STATUSES = ("failed", "escalated")
+# Kept separate from _ACTIVE_STATUSES: that tuple also drives label removal,
+# which would turn failed items into retryable escalations behind the operator's back.
+_CLOSED_ISSUE_RECONCILABLE_STATUSES = ("escalated", "failed")
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ class GithubWatcherService:
         for issue in labeled:
             await self._upsert_item(db, scope, issue)
         await self._recheck_active_items(db, scope, client)
+        await self._reconcile_closed_issues(db, scope, client)
         scope.last_polled_at = datetime.utcnow()
         await db.commit()
 
@@ -106,6 +110,41 @@ class GithubWatcherService:
                     "dispatch_label_removed",
                     "The dispatch label was removed from the issue.",
                 )
+
+    async def _reconcile_closed_issues(
+        self, db: AsyncSession, scope: TeamGithubScope, client: GithubClient
+    ) -> None:
+        stalled = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status.in_(
+                        _CLOSED_ISSUE_RECONCILABLE_STATUSES
+                    ),
+                )
+            )
+        ).scalars().all()
+        if not stalled:
+            return
+        current = await client.get_issues_by_number(
+            scope.repo_owner,
+            scope.repo_name,
+            [item.issue_number for item in stalled],
+        )
+        for item in stalled:
+            issue = current.get(item.issue_number)
+            if issue is None or issue.get("state") != "closed":
+                continue
+            if item.pr_number is not None:
+                logger.info(
+                    "Work item %s (issue #%s) has a closed issue but an unresolved "
+                    "PR #%s; leaving it for the verification path",
+                    item.id,
+                    item.issue_number,
+                    item.pr_number,
+                )
+                continue
+            await self._complete_and_notify(db, scope, item)
 
     async def _complete_and_notify(
         self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
