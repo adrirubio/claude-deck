@@ -311,6 +311,95 @@ async def test_report_pr_opened_routes_code_and_design(db):
 
 
 @pytest.mark.asyncio
+async def test_pr_opened_accepted_from_recoverable_escalation(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        issue_type="code",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 865)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert item.pr_number == 865
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_accepted_from_recoverable_escalation_design_item(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        issue_type="design",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 865)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "awaiting_human_review"
+    assert item.pr_number == 865
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_rejected_after_label_removed(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="escalated",
+        escalation_reason="dispatch_label_removed",
+    )
+
+    with pytest.raises(ValueError):
+        await github_verification_service.report_pr_opened(db, item, scope, 865)
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_rejected_after_retry_budget_exhausted(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted",
+    )
+
+    with pytest.raises(ValueError):
+        await github_verification_service.report_pr_opened(db, item, scope, 865)
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_rejected_from_unattributed_escalation(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="escalated",
+        escalation_reason=None,
+    )
+
+    with pytest.raises(ValueError):
+        await github_verification_service.report_pr_opened(db, item, scope, 865)
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_still_rejected_from_merged(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="merged")
+
+    with pytest.raises(ValueError):
+        await github_verification_service.report_pr_opened(db, item, scope, 865)
+
+
+@pytest.mark.asyncio
 async def test_verify_green_code_pr_marks_ready_for_review(db):
     scope = await _scope(db)
     item = await _item(db, scope, dispatch_status="verifying", pr_number=5)

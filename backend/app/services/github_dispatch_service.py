@@ -647,11 +647,20 @@ class GithubDispatchService:
         reason: str,
         note: str | None = None,
     ) -> None:
+        owner_may_be_active = (
+            item.dispatch_status == "dispatched" and item.owner_slot_id is not None
+        )
         applied = self._apply_escalation(item, reason, note)
         if not applied:
             return
         try:
-            await self._send_escalation_broadcast(db, item, reason, note)
+            await self._send_escalation_broadcast(
+                db,
+                item,
+                reason,
+                note,
+                owner_may_be_active=owner_may_be_active,
+            )
             if reason == "dispatch_label_removed":
                 await self._send_label_removed_owner_message(db, item)
         except Exception:
@@ -729,6 +738,8 @@ class GithubDispatchService:
         item: GithubWorkItem,
         reason: str,
         note: str | None,
+        *,
+        owner_may_be_active: bool = False,
     ) -> None:
         scope = await db.get(TeamGithubScope, item.scope_id)
         repo = f"{scope.repo_owner}/{scope.repo_name}" if scope is not None else "unknown repo"
@@ -741,6 +752,15 @@ class GithubDispatchService:
         ]
         if item.issue_url:
             lines.append(f"- URL: {item.issue_url}")
+        if owner_may_be_active:
+            lines.extend(
+                [
+                    "",
+                    "- NOTE: this item's owner session may still be working. Do NOT "
+                    "retry it — retrying clears any PR it has opened. Confirm with the "
+                    "coordinator first.",
+                ]
+            )
         if note:
             lines.extend(["", note])
         await self.notify_team(
@@ -753,6 +773,7 @@ class GithubDispatchService:
                 "issue_number": item.issue_number,
                 "scope_id": item.scope_id,
                 "reason": reason,
+                "owner_may_be_active": owner_may_be_active,
             },
         )
 

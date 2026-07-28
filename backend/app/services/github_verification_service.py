@@ -24,6 +24,17 @@ _HUMAN_MERGE_NOTE_PREFIXES = (
     "Auto-merge retry budget exhausted",
 )
 _MERGE_TRANSIENT_STATUS_CODES = {405, 409, 422}
+# Escalations a late PR legitimately resolves: the agent said it was stuck, or Deck
+# inferred it from a timer. Anything not listed stays rejected by default.
+_PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset(
+    {
+        "plan_blocked",
+        "owner_idle_timeout",
+        "owner_offline",
+        "leader_offline",
+        "leader_ack_timeout",
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +47,18 @@ class GithubVerificationService:
         scope: TeamGithubScope,
         pr_number: int,
     ) -> None:
-        if item.dispatch_status != "dispatched":
-            raise ValueError(
-                f"pr_opened is only valid for dispatched work items; current status is "
-                f"{item.dispatch_status}"
+        recoverable = (
+            item.dispatch_status == "escalated"
+            and item.escalation_reason in _PR_OPENED_RECOVERABLE_ESCALATIONS
         )
+        if item.dispatch_status != "dispatched" and not recoverable:
+            raise ValueError(
+                f"pr_opened is only valid for dispatched work items, or escalated "
+                f"items with a recoverable reason; current status is "
+                f"{item.dispatch_status} ({item.escalation_reason})"
+            )
+        if recoverable:
+            item.escalation_reason = None
         item.pr_number = pr_number
         item.last_verified_sha = None
         if item.issue_type == "design":

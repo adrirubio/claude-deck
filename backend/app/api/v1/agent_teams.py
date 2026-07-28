@@ -419,6 +419,14 @@ async def retry_github_work_item(
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     if item.dispatch_status != "escalated":
         raise HTTPException(status_code=409, detail="Only escalated work items can be retried")
+    if item.pr_number is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Work item has PR #{item.pr_number} already open; retry would orphan "
+                "it. Resolve or close the PR first."
+            ),
+        )
     github_dispatch_service.reset_for_retry(item)
     if request is not None and request.reason:
         item.pending_reason = f"retry requested: {request.reason}"

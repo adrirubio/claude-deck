@@ -962,6 +962,62 @@ async def test_escalate_sets_reason_for_active_item(db):
 
 
 @pytest.mark.asyncio
+async def test_escalation_broadcast_flags_active_owner(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=65,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.escalate(db, item, "owner_idle_timeout")
+
+    message = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.kind == "broadcast",
+                MailMessage.payload["kind"].as_string() == "github_dispatch_escalation",
+            )
+        )
+    ).scalar_one()
+    assert message.payload["owner_may_be_active"] is True
+    assert "Do NOT retry" in message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_escalation_broadcast_no_active_owner_for_pending_item(db):
+    preset, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=66,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.escalate(db, item, "plan_blocked")
+
+    message = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.kind == "broadcast",
+                MailMessage.payload["kind"].as_string() == "github_dispatch_escalation",
+            )
+        )
+    ).scalar_one()
+    assert message.payload["owner_may_be_active"] is False
+
+
+@pytest.mark.asyncio
 async def test_escalate_preserves_first_reason_for_already_escalated_item(db):
     preset, slots, scope = await _team(db)
     item = GithubWorkItem(
