@@ -94,28 +94,7 @@ class GithubWatcherService:
         for item in active:
             issue = current.get(item.issue_number)
             if issue is not None and issue.get("state") == "closed":
-                item.dispatch_status = "completed"
-                item.escalation_reason = None
-                item.updated_at = datetime.utcnow()
-                await db.commit()
-                try:
-                    slots = (
-                        await db.execute(
-                            select(AgentTeamSlot)
-                            .where(AgentTeamSlot.preset_id == scope.preset_id)
-                            .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-                        )
-                    ).scalars().all()
-                    await github_dispatch_service.notify_blocker_merged(
-                        db, scope, item, slots
-                    )
-                    await db.commit()
-                except Exception:
-                    logger.exception(
-                        "Failed to send blocker-merged notification for work item %s",
-                        item.id,
-                    )
-                    await db.rollback()
+                await self._complete_and_notify(db, scope, item)
                 continue
             still_labeled = issue is not None and any(
                 label["name"] == scope.dispatch_label for label in issue.get("labels", [])
@@ -127,6 +106,29 @@ class GithubWatcherService:
                     "dispatch_label_removed",
                     "The dispatch label was removed from the issue.",
                 )
+
+    async def _complete_and_notify(
+        self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
+    ) -> None:
+        item.dispatch_status = "completed"
+        item.escalation_reason = None
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+        try:
+            slots = (
+                await db.execute(
+                    select(AgentTeamSlot)
+                    .where(AgentTeamSlot.preset_id == scope.preset_id)
+                    .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                )
+            ).scalars().all()
+            await github_dispatch_service.notify_blocker_merged(db, scope, item, slots)
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to send blocker-merged notification for work item %s", item.id
+            )
+            await db.rollback()
 
 
 github_watcher_service = GithubWatcherService()
