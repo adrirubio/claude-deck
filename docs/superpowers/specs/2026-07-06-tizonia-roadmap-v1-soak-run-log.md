@@ -355,6 +355,26 @@ Aggravating state in the shared checkout: it sits on `codex/issue-819-remove-lib
 
 Coordinator answer sent (message 350, resolving request #347): sole owner confirmed as `fd9c`/member 17; Deck provisions nothing; the Leader's freeze upheld; no retry. Item 23 remains `escalated`/`plan_blocked`, which is now an accurate description of reality rather than a wedge. **Provisioning deferred to the human operator** — it means operating on a checkout that five live sessions hold as cwd, which is beyond what the orchestrator should do unilaterally.
 
+### Finding 16 — design resolved 2026-07-29
+
+Design: `2026-07-29-dispatch-workspace-provisioning-design.md`. Plan: `../plans/2026-07-29-dispatch-workspace-provisioning.md`. Steps 1+2+3a approved for implementation; 3b documented as a prerequisite for multi-scope, not built.
+
+Six things the design conversation surfaced that the finding above did not have:
+
+1. **A workspace must be pooled and long-lived, not per-issue.** A built tizonia worktree is 2.4 GB, 1.1 GB of it the Meson build dir. Per-issue creation means a from-scratch C++ build every time — the exact thing that OOM'd the host. Pooling keeps the build dir and `ccache` warm and bounds disk at N × repo size instead of unbounded (the soak had already accumulated 6 stale build dirs).
+
+2. **Meson is fully out-of-tree *and self-ignoring*.** Each build dir contains a `.gitignore` holding `*` (`git check-ignore -v build/` → `build/.gitignore:2:*`). Two consequences: `meson compile -C build-A` and `-C build-B` in the *same* checkout are already independent, so worktrees are needed for **branch and file** isolation, not build isolation; and `git clean -fd` preserves the build dir while `-fdx` would destroy it. That single flag is a 90-second build vs a 40-minute one.
+
+3. **`max_concurrent_dispatched=1` never actually fixed Finding 11.** `ninja` defaults to `-j$(nproc)+2` = **`-j18`** on this 16-core host, and `cc1plus` on tizonia's C++ peaks near 1 GB — so **one build can exhaust 15.6 GB by itself.** The real multiplier was 18 × 3, not item concurrency alone; the cap reduced exposure ~3× and no more. The `-j` cap in 3a addresses the actual multiplier.
+
+4. **Escalation must not release a lease.** Escalation does not mean the agent stopped — `_send_escalation_broadcast` already warns the team that "this item's owner session may still be working." Releasing on escalation recreates Finding 10 via the very mechanism meant to prevent it. But never releasing wedges the pool: 11 escalated items against a pool of 2 is permanent. Resolution: release on the *physical* condition (`slot_has_live_owner_session` is false), not the logical one. Note the coupling — **Phase G2 plans to delete `slot_has_live_owner_session`**, which is the only thing preventing a workspace wedge.
+
+5. **The migration claim in CLAUDE.md is stale for this table family.** `_run_sqlite_compat_migrations` (`app/database.py:290-429`) is an idempotent `PRAGMA table_info` + `ALTER TABLE ADD COLUMN` ladder that already migrated `max_concurrent_dispatched` itself. So no hand-surgery on the live DB is needed — a backend restart migrates it, which is strictly safer than hand-editing because it cannot drift from what the code creates. The earlier plan to alter the live DB by hand was dropped for this reason.
+
+6. **Per-scope limits cannot bound a host-wide resource.** Every concurrency control in Deck is per-scope (`scope_active_count` filters `scope_id`) or per-slot; build memory is host-wide. Add a second watched repo and each scope independently believes it may run `max_concurrent_dispatched` items, with nothing summing them: 2 scopes × 2 workspaces × `-j4` ≈ 16 GB on a 15.6 GB box, every individual limit respected, host dead. This is the generic form of the unifying defect — Finding 11 one level up — and it promotes 3b from "probably never needed" to **a gate on adding a second scope**.
+
+Also verified: `derive_repo_identity` hashes `--git-common-dir`, so a worktree and its primary yield the **same `repo_id`** (both `4532704bf856d362`). Slot matching and Agent Mail identity therefore cannot distinguish a worktree from its parent — which is precisely why session reuse collided on a shared checkout in Finding 13.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
