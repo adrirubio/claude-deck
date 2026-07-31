@@ -375,6 +375,31 @@ Six things the design conversation surfaced that the finding above did not have:
 
 Also verified: `derive_repo_identity` hashes `--git-common-dir`, so a worktree and its primary yield the **same `repo_id`** (both `4532704bf856d362`). Slot matching and Agent Mail identity therefore cannot distinguish a worktree from its parent — which is precisely why session reuse collided on a shared checkout in Finding 13.
 
+### Finding 16 — plan rejected on review, revised 2026-07-31 (`cc5d6fa`)
+
+The impl agent reviewed the plan before implementing and judged it **unsafe to implement unchanged** — 11 findings, 8 blocking (review at `/tmp/dispatch-workspace-provisioning-plan-review.md`). It was right to stop, and this is the second time in the soak that a pre-implementation review by the implementer caught defects the designer had missed (the G1 spec conflict and the G1b laundering trap being the first). Verified each finding independently rather than accepting the report: 1, 2, 4, 5, 8, 9, 11 confirmed (4, 5 and 11 by direct experiment), 3 partly overstated, 6 already fixed, 10 a genuine self-contradiction in the design's own test obligations.
+
+Four of the findings are worth recording as facts rather than as process:
+
+1. **`git switch --detach <ref>` aborts on a dirty tracked file** (exit 1, "Your local changes … would be overwritten"). The reset sequence therefore failed on precisely the `escalated`/`failed` case reclaim exists to recover, because step 2 aborting means the `reset --hard` at step 3 never runs. Needs `--force`. Verified empirically both ways, including that `--force` still preserves a self-ignoring `build/`.
+
+2. **A fixed workspace pool does not bound disk.** Point 1 of the design notes above claimed it did; that was wrong for the reason point 2 gives — `clean -fd` preserves ignored dirs *on purpose*, which is what keeps builds warm. So a per-issue `build_dir_template` grows disk without bound *inside* a fixed pool. Measured: **eight** build trees across the two checkouts (not six), 3.5 GB, three of them 1.1 GB each. Fix: one stable `build` per workspace, which is also faster.
+
+3. **`max_concurrent_dispatched=1` is not the only thing that would have put an agent in the human's checkout.** `acquire` picking the oldest workspace by `id`, plus deployment registering the primary first, means the primary wins the *first* dispatch. The design's own rollout instructions would have produced the outcome the design exists to prevent. Fix: a `dispatchable` flag, defaulted `False` for `kind="primary"`.
+
+4. **`tmux new-session -d` outlives the merge.** The design released the lease on `merged`/`completed`, reasoning from logical state. But Deck's sessions are detached and persistent — merging a PR does not terminate the agent, and a human closing an issue marks the item `completed` mid-edit. Releasing there lets the next `acquire` run `reset --hard` under a live process: **Finding 10 recreated through the release path.** This is the unifying defect biting the fix for the unifying defect.
+
+Point 4 forced a scope decision. Doing terminal release *safely* needs per-item liveness (`MailAgentSession` via `item.launch_id`), because `slot_has_live_owner_session` is slot-keyed and can be held true by an unrelated session — and Phase G2 is already scheduled to rewrite that predicate. Building an interim one would leave two similarly-named liveness checks to reconcile, in the exact area where Finding 13 showed identity confusion causes collisions.
+
+**Decision (user): split into PR A / PR B.** PR A ships schema, provisioning, reset, gate 6, brief, API and UI with **no terminal release at all** — the reclaim sweep is the only status-driven releaser. PR B adds prompt terminal release, per-item liveness, and the closed-unmerged-PR abandonment path, after G2 settles the predicate. Accepted cost, stated plainly: with one dispatchable workspace at rollout, a merged item holds its lease until its session goes offline, so **the pool may look wedged when it is only waiting.** That is the correct direction to be wrong in — a lease held too long costs throughput, a lease released too early corrupts a working tree — and `GET .../workspaces` makes it observable rather than mysterious.
+
+Two process notes:
+
+- **The amendment commit `3835e3c` was never pushed**, so the agent reviewed a stale plan and finding 6 ("no supported way to operate the pool") was already fixed. A design is only as current as its last `git push`; "committed" is not "handed off."
+- **A plan is an API to the implementer, exactly as a brief is an API to an agent** (Finding 16's own lesson, one level out). The plan carried a "**NO new endpoint**" constraint the user never asked for — earned on 07-23, defensible on 07-26, then copy-forwarded twice without re-derivation until it was actively incoherent, since it left `provision_worktree` with no caller and made rollout require hand-edited DB rows. The general rule now: a constraint that encodes a *finding* must be restated every time; a constraint that encodes a *diff-size preference* must not, because repetition lends it unearned authority and the implementer cannot tell the two apart.
+
+Test obligations went 22 → 37. Items 14/15 **inverted**: `_mark_merged` and `_complete_and_notify` are now asserted *not* to release, since a future reader will find "release when merged" obvious and helpfully add it back.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
