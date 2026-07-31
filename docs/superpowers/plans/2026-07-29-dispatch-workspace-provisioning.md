@@ -1,8 +1,13 @@
-# Implementation plan — dispatch workspace provisioning (Finding 16, Steps 1+2+3a)
+# Implementation plan — dispatch workspace provisioning (Finding 16, **PR A**)
 
-Design: `../specs/2026-07-29-dispatch-workspace-provisioning-design.md` — **read it first**, especially §2.5 (reclaim) and §2.6 (`clean -fd`, not `-fdx`). Those two are where this task can do real damage.
+Design: `../specs/2026-07-29-dispatch-workspace-provisioning-design.md` — **read it first**, especially §2.4 (why nothing releases on terminal status), §2.5 (reclaim) and §2.6 (`clean -fd`, not `-fdx`, and the forced switch). Those three are where this task can do real damage.
 
-Scope: backend service + schema + two endpoints + four small frontend edits. Tasks 1-4 are the substance; Task 5 is surface area.
+**This is a revision.** An earlier version of this plan was reviewed and judged unsafe to implement; the review is at `/tmp/dispatch-workspace-provisioning-plan-review.md` and every blocking finding in it is now resolved in the design and reflected below. Two things follow from that:
+
+- **Where this plan and that review disagree, this plan wins** — it was written after it, with each finding either adopted or explicitly deferred (design §4.1, §4.2).
+- Review finding 6 ("no supported way to populate the pool") was already fixed before the review, in a commit that had not been pushed. That is why the reviewed copy still said "no new endpoints." Task 5b builds the two endpoints.
+
+Scope: backend service + schema + two endpoints + four small frontend edits. Tasks 1-3 are the substance; Task 4 is a **deliberate non-change** and must be read, not skipped; Task 5 is surface area.
 
 Work TDD: write the failing test, run it, confirm it fails for the *expected reason*, then implement.
 
@@ -22,14 +27,14 @@ Files that change:
 | `app/models/database.py` | new `GithubWorkspace`; 5 new `TeamGithubScope` columns |
 | `app/database.py` | compat-migration ladder entries for the 5 scope columns |
 | `app/services/github_workspace_service.py` | **new** |
-| `app/services/github_dispatch_service.py` | gate 6, brief rewrite, release on `ValueError` |
-| `app/services/github_verification_service.py` | release in `_mark_merged` |
-| `app/services/github_watcher_service.py` | release in `_complete_and_notify` |
+| `app/services/github_dispatch_service.py` | gate 6, brief rewrite, release on **every** launch-failure shape |
 | `app/models/schemas.py` | 5 scope fields; 3 workspace models; `workspace_path` on the work-item response |
 | `app/api/v1/agent_teams.py` | scope fields; 2 workspace endpoints; `workspace_path` on the work-items query |
 | `frontend/src/features/agent-teams/AutonomyPanel.tsx` | 3 pending reasons, 1 `<dl>` row, 1 label fix |
 | `frontend/src/types/agentTeams.ts` | `workspace_path` on `GithubWorkItem` |
 | `tests/agent_teams/*` | per the design's §6 |
+
+`github_verification_service.py` and `github_watcher_service.py` are **not** in that table, and their absence is the single biggest change from the reviewed draft. See Task 4.
 
 ---
 
@@ -39,19 +44,27 @@ Files that change:
 
 Add `GithubWorkspace` exactly as written in design §2.2. Place it **after** `GithubWorkItem` (it has an FK to it). Style-match `AgentTeamSlot` (`:137-162`) — `Mapped[...]` annotations, explicit `nullable=`, `datetime.utcnow` defaults.
 
-Both `UniqueConstraint`s are required. `uix_workspace_leased_item` on `leased_item_id` alone is the Finding 10 guard — SQLite allows many NULLs but only one non-NULL per value, which is precisely the invariant wanted. Do not "fix" it into a composite.
+Three details in that model are load-bearing and each has a finding behind it:
+
+- **`UniqueConstraint("leased_item_id")`** — the Finding 10 guard. SQLite allows many NULLs in a unique index but only one non-NULL per value, which is exactly the one-item-one-workspace invariant. Do not "fix" it into a composite.
+- **`UniqueConstraint("path")` is global, not `(scope_id, path)`.** A lease is an exclusivity claim on a *physical directory*, so the constraint must be at the granularity of the directory. Per-scope uniqueness would let scope A and scope B each register `/home/juan/work/repos/tizonia/tizonia-openmax-il-ws1` and each `reset --hard` it out from under the other.
+- **`dispatchable: Mapped[bool]`**, defaulting `True` in the column but set `False` for `kind="primary"` at registration (Task 5b). Without it, `acquire`'s `order_by(id)` hands the *first-registered* workspace to the first item — and deployment registers the primary first, so the very first autonomous dispatch would land in the human's shared checkout. That is the exact outcome this design exists to prevent, reintroduced by the ordering rule.
+
+`dispatchable` is deliberately **separate from `enabled`**: `enabled=False` means "broken, do not use", `dispatchable=False` means "healthy, deliberately not for autonomous work". Collapsing them makes a reserved primary indistinguishable from a workspace whose `fetch` failed.
 
 Then add five columns to `TeamGithubScope` (`:206-232`), after `max_auto_merges_per_day`:
 
 ```python
     base_ref: Mapped[str] = mapped_column(String, default="origin/HEAD", nullable=False)
     builds_out_of_tree: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    build_dir_template: Mapped[str | None] = mapped_column(String, nullable=True)
+    build_dir_template: Mapped[str | None] = mapped_column(String, default="build", nullable=True)
     build_command_hint: Mapped[str | None] = mapped_column(String, nullable=True)
     max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
 ```
 
 `builds_out_of_tree` defaults **False** and `max_build_parallelism` defaults **4**. Both defaults are deliberate (design §2.8) — do not raise them.
+
+`build_dir_template` defaults to the constant `"build"`, **not** `"build-issue-{issue_number}"`. Design §2.1 has the measurement: `git clean -fd` preserves ignored directories on purpose, so a per-issue template deposits another ~1.1 GB inside a fixed workspace on every issue and nothing ever collects it. Per-issue templating remains *possible* for repos that need it; it is not the default and the live scope will not use it.
 
 **File:** `app/database.py`
 
@@ -67,7 +80,9 @@ In `_run_sqlite_compat_migrations`, extend the existing `team_github_scopes` blo
             text("ALTER TABLE team_github_scopes ADD COLUMN builds_out_of_tree BOOLEAN DEFAULT 0 NOT NULL")
         )
     if scope_columns and "build_dir_template" not in scope_columns:
-        await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN build_dir_template VARCHAR"))
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN build_dir_template VARCHAR DEFAULT 'build'")
+        )
     if scope_columns and "build_command_hint" not in scope_columns:
         await conn.execute(text("ALTER TABLE team_github_scopes ADD COLUMN build_command_hint VARCHAR"))
     if scope_columns and "max_build_parallelism" not in scope_columns:
@@ -78,7 +93,11 @@ In `_run_sqlite_compat_migrations`, extend the existing `team_github_scopes` blo
 
 `github_workspaces` needs **no** ladder entry — `create_all` in `init_db` creates whole tables. Only added columns need the ladder.
 
-Tests: design §6 items 1-4, in `tests/agent_teams/test_github_scope_models.py`. Item 2 and 3 assert `IntegrityError` — the file already imports what you need and has a `db` fixture on `sqlite+aiosqlite:///:memory:`.
+Tests: design §6 items **1-5**, in `tests/agent_teams/test_github_scope_models.py`. Items 2 and 3 assert `IntegrityError` — the file already imports what you need and has a `db` fixture on `sqlite+aiosqlite:///:memory:`.
+
+Item 3 must register the duplicate path under **two different scopes**. A same-scope duplicate test would pass against the wrong (composite) constraint and prove nothing.
+
+Item 5 is the one that is easy to skip and shouldn't be: extend the **existing** `test_compat_migration_adds_new_columns_to_legacy_db` (`test_github_scope_models.py:100-139`) to cover all five new columns. Item 4 asserts ORM defaults on a fresh `create_all` database, which does not exercise the `ALTER TABLE` ladder at all — and the ladder is the code path that will run against the live soak DB. The test already exists and already builds a legacy table; you are adding assertions to it, not writing a new harness.
 
 Run. Then run the whole suite; nothing should break.
 
@@ -95,6 +114,17 @@ Module-level singleton at the bottom (`github_workspace_service = GithubWorkspac
 Tests must not shell out to real git. Take the runner as a constructor arg:
 
 ```python
+GIT_TIMEOUT_SECONDS = 300
+
+_GIT_ENV = {
+    **os.environ,
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_ASKPASS": "",
+    "SSH_ASKPASS": "",
+    "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+
 class GithubWorkspaceService:
     def __init__(self, runner=None):
         self._runner = runner or self._run_git
@@ -104,12 +134,22 @@ class GithubWorkspaceService:
             "git", *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=_GIT_ENV,
         )
-        stdout, _ = await process.communicate()
+        try:
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(), timeout=GIT_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return 124, f"git {' '.join(args)} timed out after {GIT_TIMEOUT_SECONDS}s"
         return process.returncode, stdout.decode("utf-8", "replace")
 ```
 
 `asyncio.create_subprocess_exec` — **not** `subprocess.run`. This runs inside the APScheduler event loop; a blocking `git fetch` would stall every other poll. `mcp_service.py:585` is the existing async-subprocess precedent in this codebase.
+
+The timeout and the env are **not** boilerplate; both are review findings. `git fetch` against an unreachable host blocks indefinitely, and without `GIT_TERMINAL_PROMPT=0` a credential prompt makes the subprocess wait forever for input that will never arrive — indistinguishable from a hang, inside the scheduler loop. Kill on timeout and `await process.wait()`, or the child is left orphaned.
 
 ### 2b. `acquire`
 
@@ -118,11 +158,16 @@ async def acquire(self, db, scope, item) -> GithubWorkspace | None:
 ```
 
 1. Already-held check first: `select` where `leased_item_id == item.id`. If found, return it (design §2.5, retry keeps its lease). No reset — the agent's work is in there.
-2. Otherwise pick the oldest available: `scope_id == scope.id`, `enabled.is_(True)`, `leased_item_id.is_(None)`, `order_by(GithubWorkspace.id)`. `None` → return `None`.
+2. Otherwise pick the oldest available: `scope_id == scope.id`, `enabled.is_(True)`, **`dispatchable.is_(True)`**, `leased_item_id.is_(None)`, `order_by(GithubWorkspace.id)`. `None` → return `None`.
 3. Stamp `leased_item_id = item.id`, `leased_at = utcnow()`, `released_at = None`, `updated_at`. Commit.
-4. If `kind != "primary"`, call `reset_workspace`. On failure: set `provision_error`, `enabled=False`, release the lease, commit, and **return `None`** — a workspace that failed reset is not usable. Do not raise; `dispatch_pending` treats `None` as "no capacity" and queues the item, which is the correct outcome.
+4. If `kind != "primary"`, call `reset_workspace`. Failure handling depends on **which** git step failed — see 2e; a `fetch` failure must not disable the workspace. In both failure cases release the lease, commit, and **return `None`** — a workspace that failed reset is not usable this poll. Do not raise; `dispatch_pending` treats `None` as "no capacity" and queues the item, which is the correct outcome.
+5. On success, clear any previous `provision_error` so a recovered workspace heals itself without operator action.
+
+**The `dispatchable.is_(True)` filter in step 2 is the finding-1 fix and it is one clause.** Omitting it means the primary — registered first, lowest `id` — wins the first dispatch and an autonomous agent starts editing the human's checkout on a branch they are using. Write design §6 item 10 first and watch it fail: a `dispatchable=False` primary at `id=1` and an available worktree at `id=2` must yield the worktree.
 
 `order_by(id)` gives deterministic assignment — tests can assert *which* workspace was picked, and repeat dispatches favour the same warm workspace.
+
+Tests for `acquire`: design §6 items **6-11**.
 
 ### 2c. `release`
 
@@ -138,7 +183,7 @@ Clear `leased_item_id`, stamp `released_at` and `updated_at`. Idempotent — no 
 async def reclaim_stale(self, db, scope) -> int:
 ```
 
-Join workspaces to their leasing item. For each whose item is `escalated` or `failed`:
+Join workspaces to their leasing item. For each whose item is in a **non-working** status — `escalated`, `failed`, `merged`, `completed`:
 
 ```python
 from app.services.github_dispatch_service import github_dispatch_service
@@ -152,9 +197,15 @@ await self.release(db, workspace.leased_item_id)
 
 Import inside the function: `github_dispatch_service` imports this module, so a top-level import is circular. The existing code does exactly this dance (`github_dispatch_service.py:438`, `:512`).
 
-`slot_has_live_owner_session` is **read-only here.** Do not modify it, do not "improve" it — Phase G2 owns it.
+`merged` and `completed` are in that list because **nothing else releases them** — this PR adds no terminal release at all (Task 4). The reclaim sweep is the only releaser in PR A, so its status list has to cover every non-working status or those leases are permanent.
+
+Never reclaim `dispatched`, `verifying`, `ready_for_review` or `awaiting_human_review`. In all four an agent is legitimately still expected to be working: `_record_failed_verification_attempt` sends `verifying` back to `dispatched` for a fix, and `record_approval_round` exists precisely because reviewers request changes.
+
+`slot_has_live_owner_session` is **read-only here.** Do not modify it, do not "improve" it — Phase G2 owns it. It is keyed on `slot_id` rather than on the item's own launch, so an unrelated live session on the same slot holds a lease longer than strictly necessary. That imprecision is **known and accepted**: it errs toward retention, and retention is the safe direction. Per-item liveness is PR B.
 
 Return the count released, for logging.
+
+Tests: design §6 items **18-23**. Items 18/19 are the pair that matters — same non-working status, live session versus dead session, opposite outcomes.
 
 ### 2e. `reset_workspace` — the dangerous one
 
@@ -168,14 +219,36 @@ That early return is not an optimisation, it is a safety property. Then, in orde
 
 ```python
 ["-C", path, "fetch", "origin", "--prune"]
-["-C", path, "switch", "--detach", scope.base_ref]
-["-C", path, "reset", "--hard"]
+["-C", path, "switch", "--detach", "--force", scope.base_ref]
+["-C", path, "reset", "--hard", scope.base_ref]
 ["-C", path, "clean", "-fd"]
 ```
 
-**`clean -fd`. NEVER `-fdx`.** Meson build directories self-ignore (each holds a `.gitignore` containing `*`), so `-fd` preserves the 1.1 GB build dir and its incremental-build value while `-fdx` would delete it and reintroduce the from-scratch compile that OOM'd this host. If you find yourself typing `-x`, stop and re-read design §2.6.
+**`--force` on the switch is required, and the earlier draft of this plan omitted it.** Verified empirically against a scratch repo:
 
-Non-zero exit from any step → raise; `acquire` catches and records `provision_error`.
+```
+$ git switch --detach origin/main          # one dirty tracked file present
+error: Your local changes to the following files would be overwritten by checkout:
+        f.txt
+Aborting                                    # exit 1
+```
+
+Step 2 fails, so step 3 never runs, so the tree is handed over still dirty — or, with this plan's error handling, the workspace is disabled. And a `failed`/`escalated` item is *precisely* the case most likely to have left tracked modifications behind, so the sequence broke exactly where reclaim needs it to work. Re-verified with `--force`: the switch succeeds, the tree lands clean at the base ref, and a self-ignoring `build/` directory survives.
+
+`reset --hard <base_ref>` names the ref rather than relying on bare `reset --hard`, so the post-condition is explicit rather than positional.
+
+**`clean -fd`. NEVER `-fdx`.** Meson build directories self-ignore (each holds a `.gitignore` containing `*`, which is why `git check-ignore -v build/` reports `build/.gitignore:2:*`), so `-fd` preserves the 1.1 GB build dir and its incremental-build value while `-fdx` would delete it and reintroduce the from-scratch compile that OOM'd this host. 90 seconds versus 40 minutes. If you find yourself typing `-x`, stop and re-read design §2.6.
+
+**Failure handling distinguishes transient from local, and this is review finding 7:**
+
+| Failing step | Meaning | `enabled` | `provision_error` |
+|---|---|---|---|
+| `fetch` | transient — network, DNS, auth, GitHub outage | **stays `True`** | recorded |
+| `switch` / `reset` / `clean` | the working tree is broken | set `False` | recorded |
+
+Disabling on *any* failure — which the earlier draft did — converts a network blip into a permanent wedge: reset runs on acquire, acquire walks the pool oldest-first, so one blip disables one workspace per poll until the pool is empty, and nothing clears `provision_error` or re-enables a row. The cure was worse than the disease. Signal the distinction to the caller however you prefer (two exception types, or a returned outcome) — but `acquire` must be able to tell them apart, and both paths return `None` so the item queues as `queued_no_workspace` and retries next poll.
+
+A successful reset clears `provision_error` (2b step 5). Recovery must not need an operator.
 
 ### 2f. `provision_worktree`
 
@@ -187,20 +260,26 @@ async def provision_worktree(self, db, scope, path: str) -> GithubWorkspace:
 
 `--detach` is required (design §2.6): git refuses the same branch in two worktrees, and Deck cannot know the agent's branch name. Detached HEAD leaves branch naming to the agent.
 
-For `kind="primary"`, `provision_worktree` is **not** called — the path already exists and is the human's. Register the row and issue no git commands at all (test 26).
+For `kind="primary"`, `provision_worktree` is **not** called — the path already exists and is the human's. Register the row and issue no git commands at all.
 
-This method gets an HTTP caller in Task 5 (design §2.9). It is not dead code and it is not driven from a REPL.
+**Ordering, and the resolution of a contradiction the review caught (finding 10):** `git worktree add` runs *before* any row exists, so a failure there has nowhere to write `provision_error`. On failure, raise, and **persist no row** — the API surfaces the git error to the operator, who is standing right there because registration is a synchronous human action. A half-registered disabled row would be worse: something they must then discover and clean up. So `provision_error` is only ever written for **reset** failures on an existing row, and the earlier "test 20" that said provisioning failure writes `provision_error` and returns quietly is withdrawn.
 
-Tests: design §6 items 17-20, in a new `tests/agent_teams/test_github_workspace_service.py`. Inject a fake runner that records `args` lists.
+This method gets an HTTP caller in Task 5 (design §2.10). It is not dead code and it is not driven from a REPL.
 
-**Item 18 must assert the absence of `-x`**, e.g.:
+Tests: design §6 items **24-31**, in a new `tests/agent_teams/test_github_workspace_service.py`. Inject a fake runner that records `args` lists and can be told which step fails.
+
+**Item 25 must assert the absence of `-x`**, e.g.:
 
 ```python
 assert ["-fd"] == [a for call in calls for a in call if a.startswith("-f")]
 assert not any("-x" in arg or "-fdx" == arg for call in calls for arg in call)
 ```
 
-**Item 19 must assert zero git calls** for `kind="primary"` — not "no destructive calls", *zero*.
+**Item 26 must assert `--force` on the switch and an explicit ref on the reset** — the exact regression the review found.
+
+**Item 27 must assert zero git calls** for `kind="primary"` — not "no destructive calls", *zero*.
+
+**Item 28 must assert `enabled is True` after a `fetch` failure.** This is the one whose absence let the earlier draft ship a pool-draining bug; it is worth writing first.
 
 ---
 
@@ -247,15 +326,25 @@ In the `launcher(...)` call (`:240`):
                         repo_path_override=workspace.path,
 ```
 
-### 3d. Release on launcher failure
+### 3d. Release on launch failure — **every** shape, not just `ValueError`
 
-In the `except ValueError:` block (`:244-250`), before `continue`:
+The earlier draft released only in the `except ValueError:` block. That is the *rare* path. Read `agent_team_service.py:606-649` before writing this: `_launch_slot` wraps spawning in `except Exception` and **returns** `AgentTeamLaunchResultItem(status="failed")` rather than raising. Dispatch then handles that at `:250-262` by setting `dispatch_status="failed"` — with no release. So the most likely real failure, tmux or the provider CLI refusing to start, leaks the lease.
 
-```python
-                await github_workspace_service.release(db, item.id)
-```
+Release in all of these:
 
-The session never started; nothing is in the directory. Holding the lease here would leak it on every routing failure — and `plan_blocked` is currently the most common escalation reason in the live soak (10 of 11 items), so this leak would be immediate and total.
+| Where | Outcome | Action |
+|---|---|---|
+| `except ValueError:` (`:244-250`) | escalate `plan_blocked` | release, then `continue` |
+| `:250-262`, returned `status="failed"` | `dispatch_status="failed"` | **release**, then `continue` |
+| same block, `status` starting `blocked` | blocked statuses | **release**, then `continue` |
+| any other exception | no handler today | release, then re-raise |
+| returned `status="launched"` | success | **do not release** |
+
+The unifying rule, and the reason this is not an exception to Task 4: **release is licensed by the absence of a process, never by a status.** A launch that failed produced no session, so nothing is in the directory and the next acquire's reset is safe. A merge does not produce that guarantee, which is why Task 4 releases nothing.
+
+Holding the lease on the failure paths would leak it constantly rather than occasionally — `plan_blocked` is currently the most common escalation reason in the live soak (10 of 11 items), and with one dispatchable workspace at rollout a single leak wedges autonomy until the next sweep.
+
+Tests: design §6 items 14-17. Item 15 (returned `failed` releases) is the one that maps to the real-world failure; do not settle for the `ValueError` test alone.
 
 ### 3e. `_dispatch_brief` takes a workspace
 
@@ -292,7 +381,7 @@ The explicit prohibition is the point. The agents inferred a worktree contract f
 
 Append to the "Code pipeline instructions" block (`:343-357`) when `scope.build_command_hint`:
 
-- if `builds_out_of_tree` and `build_dir_template`: render the template with `issue_number=item.issue_number`, render `build_command_hint` with `build_dir=<rendered>` and `parallelism=scope.max_build_parallelism`, and emit both.
+- if `builds_out_of_tree`: render `build_dir_template` with `issue_number=item.issue_number` (it defaults to the constant `"build"`, so this normally renders to `"build"` and no placeholder is involved), render `build_command_hint` with `build_dir=<rendered>` and `parallelism=scope.max_build_parallelism`, and emit both. If `build_dir_template` is somehow `None`, use `"build"` rather than omitting the command.
 - if not `builds_out_of_tree`: emit the hint with `build_dir=""` plus "Only one build may run in this workspace at a time; this project's build system does not support out-of-tree builds."
 
 Always emit, whenever `max_build_parallelism` is set:
@@ -304,28 +393,55 @@ Always emit, whenever `max_build_parallelism` is set:
 
 That last line is the highest-value sentence in the brief. `ninja` defaults to `-j18` here and `cc1plus` peaks near 1 GB — one unconstrained build can exhaust 15.6 GB by itself.
 
-Use `str.format` with explicit kwargs, and catch `KeyError`/`IndexError` around it: these templates are operator-supplied and a bad one must not take down the poll loop. On failure, log and omit the build lines.
+Use `str.format` with explicit kwargs, and catch **`(KeyError, IndexError, ValueError)`** around it. `KeyError`/`IndexError` alone — what the earlier draft said — misses the most likely typo of all. Verified:
 
-Tests: design §6 items 5-11, 21-22.
+```
+'build-{issue_number}'    → 'build-819'
+'build-{issue_number'     → ValueError: expected '}' before end of string
+'build-{0}'               → IndexError
+'build-{bogus}'           → KeyError
+'build-{issue_number!z}'  → ValueError: Unknown conversion specifier z
+```
+
+An unmatched brace propagates out of `_dispatch_brief` into the poll loop and takes down autonomy for the whole scope — which directly contradicts this plan's own stated requirement that a bad template must not do that. On failure: log, omit the build lines, **still produce the brief**. Also validate templates in the scope create/update path (Task 5a) so the operator learns at write time. Allowed placeholders are exactly `{issue_number}` for `build_dir_template` and `{build_dir}`/`{parallelism}` for `build_command_hint`.
+
+Tests: design §6 items **12, 13** (the workspace path reaches `repo_path_override`; the brief carries the contract lines) and **32-34** (build hints, including the malformed-template containment).
 
 ---
 
-## Task 4 — release on the terminal paths
+## Task 4 — the terminal paths: **write no code, write two tests**
 
-Two one-line additions. Both need a function-local import to avoid a cycle.
+This task is a deliberate non-change, and it is the reviewed draft's biggest reversal. Read it before you decide it's a no-op and skip it.
 
-**`app/services/github_verification_service.py`** — `_mark_merged` (`:413`) is sync; make it async or release at its call sites. Prefer making it async and awaiting — there are few callers and an async release keeps the release adjacent to the state change it belongs to.
+**The earlier draft told you to release in `_mark_merged` and `_complete_and_notify`. Do not. That instruction was wrong.**
 
-**`app/services/github_watcher_service.py`** — `_complete_and_notify`, after `item.dispatch_status = "completed"` (`:152`).
+It reasoned from logical state — `merged` and `completed` mean the work is done, so the directory is free — and ignored the physical process. Deck launches agents with `tmux new-session -d` (`agent_bridge/spawn.py:78-84`): a **detached, persistent** interactive CLI. Merging a PR does not terminate it. Closing the issue does not terminate it. The session keeps running, can still receive input, and can still write files.
 
-**Do NOT add a release to:**
+So releasing on `merged` hands the directory to the next item, whose `acquire` then runs `switch --force`, `reset --hard` and `clean -fd` underneath a live process. `_complete_and_notify` is worse: a human closing an issue by hand marks the item `completed` while its agent is mid-edit. That is Finding 10's mechanism — two owners, one directory — recreated through the release path instead of the dispatch path.
 
-- `reset_for_retry` (`github_dispatch_service.py:30-41`) — retry keeps its lease so the build dir stays warm.
-- `escalate` / `_apply_escalation` — escalation does not mean the agent stopped. `_send_escalation_broadcast` already warns the team that the owner may still be working. Releasing here recreates Finding 10.
-- `_record_failed_verification_attempt` — it sends the item back to `dispatched` for a fix.
-- `_fallback_to_human_merge` — reviewers may request changes.
+**In PR A the reclaim sweep is the only status-driven releaser** (Task 2d), because it is gated on observed process liveness rather than on status. One mechanism, one gate, physically grounded.
 
-Tests: design §6 items 12-16. **Item 13** (live session → NOT reclaimed) is the Finding 10 regression guard; it must fail if reclaim is unconditional. Write it before the reclaim implementation and watch it fail.
+**Add no release to any of these:**
+
+| Call site | Why not |
+|---|---|
+| `_mark_merged` (`github_verification_service.py:413`) | the tmux session outlives the merge |
+| `_complete_and_notify` (`github_watcher_service.py:152`) | a human can close an issue mid-edit |
+| `reset_for_retry` (`github_dispatch_service.py:30-41`) | retry keeps its lease so the build dir stays warm |
+| `escalate` / `_apply_escalation` | escalation does not mean the agent stopped; `_send_escalation_broadcast` already warns the team the owner may still be working |
+| `_record_failed_verification_attempt` | sends the item back to `dispatched` for a fix |
+| `_fallback_to_human_merge` | reviewers may request changes |
+
+Consequently **`github_verification_service.py` and `github_watcher_service.py` are not modified by this PR at all.** `_mark_merged` stays sync — the earlier instruction to make it async is withdrawn along with the release it existed to hold.
+
+What you *do* write here is the two tests that pin the reversal, because a future reader will find "release when merged" obvious and helpfully add it:
+
+- design §6 item 20 — `_mark_merged` does **not** release
+- design §6 item 21 — `_complete_and_notify` does **not** release
+
+Plus the reclaim guards: **item 19** (non-working status + live owner session → **NOT** reclaimed) is the Finding 10 regression guard. Write it before the reclaim implementation and watch it fail. Item 23 is its complement: a `merged` item whose session is gone **is** reclaimed, so capacity is genuinely recovered — just not promptly.
+
+**Known cost, accepted by the user:** with one dispatchable workspace at rollout, a merged item keeps its workspace until its tmux session goes offline, so the pool can look wedged when it is only waiting. `GET .../workspaces` (Task 5b) shows exactly which item holds what. Prompt terminal release needs *per-item* liveness (`MailAgentSession` via `item.launch_id`), and the existing predicate is slot-scoped and is already scheduled for rewrite in Phase G2 — building a second one now would leave two similarly-named liveness checks to reconcile, in the exact area where Finding 13 showed that identity confusion causes collisions. That is **PR B**, after G2. Do not build it here, and do not build an interim version of it.
 
 ---
 
@@ -333,13 +449,15 @@ Tests: design §6 items 12-16. **Item 13** (live session → NOT reclaimed) is t
 
 ### 5a. Scope fields
 
-**`app/models/schemas.py`** (`:2154-2199`) — add all five fields to `TeamGithubScopeCreate` (with the design's defaults), `TeamGithubScopeUpdate` (`Optional`, default `None`), and `TeamGithubScopeResponse`. Use `Field(default=4, ge=1)` for `max_build_parallelism`; `ge=1` matters, `-j0` is meaningless.
+**`app/models/schemas.py`** (`:2154-2199`) — add all five fields to `TeamGithubScopeCreate` (with the design's defaults, i.e. `build_dir_template: str = "build"`), `TeamGithubScopeUpdate` (`Optional`, default `None`), and `TeamGithubScopeResponse`. Use `Field(default=4, ge=1)` for `max_build_parallelism`; `ge=1` matters, `-j0` is meaningless.
+
+**Validate the two templates on write** (Task 3f): reject a `build_dir_template` or `build_command_hint` that `str.format` cannot render with the allowed placeholders, → 400. A pydantic `field_validator` that attempts the render and catches `(KeyError, IndexError, ValueError)` is enough. The operator should learn at write time, not discover it as a silently missing brief section at dispatch time.
 
 **`app/api/v1/agent_teams.py`** — five `if request.X is not None:` lines in `_apply_scope_create` (after `:151`), five kwargs in `_scope_response` (after `:85`). Match the surrounding style exactly.
 
-### 5b. Two workspace endpoints — read design §2.9 first
+### 5b. Two workspace endpoints — read design §2.10 first
 
-An earlier draft of this plan said "no new endpoints." That was copy-forwarded boilerplate from two earlier plans where it was actually derived, and it is wrong here: without an endpoint, `provision_worktree` has no caller and workspace registration can only happen by hand-editing the live database, which is forbidden. §2.9 has the full reasoning.
+An earlier draft of this plan said "no new endpoints." That was copy-forwarded boilerplate from two earlier plans where it was actually derived, and it is wrong here: without an endpoint, `provision_worktree` has no caller and workspace registration can only happen by hand-editing the live database, which is forbidden. §2.10 has the full reasoning. (The review copy you may have seen still carried the prohibition — it was written against a commit that had not been pushed.)
 
 **`app/models/schemas.py`** — three new models beside the scope ones:
 
@@ -347,6 +465,7 @@ An earlier draft of this plan said "no new endpoints." That was copy-forwarded b
 class GithubWorkspaceCreate(BaseModel):
     path: str
     kind: str = "worktree"
+    dispatchable: Optional[bool] = None      # None → defaulted by kind
     enabled: bool = True
 
 
@@ -356,6 +475,7 @@ class GithubWorkspaceResponse(BaseModel):
     path: str
     kind: str
     lease_state: str
+    dispatchable: bool
     leased_item_id: Optional[int] = None
     leased_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
@@ -377,8 +497,12 @@ def _workspace_lease_state(workspace: GithubWorkspace) -> str:
         return "leased"
     if not workspace.enabled:
         return "disabled"
+    if not workspace.dispatchable:
+        return "disabled_for_dispatch"
     return "available"
 ```
+
+**Four states, not three.** The earlier draft had three and would report the primary — registered `dispatchable=False` — as `available`, so the operator reads two usable workspaces where there is one. The whole argument for adding these endpoints (design §2.10) is that the operator must stop inferring physical capacity; a `lease_state` that over-counts it defeats the purpose.
 
 Order matters: a leased workspace that was then disabled reports `leased`, because something may still be writing in it. Add a `_workspace_response(workspace)` helper next to `_scope_response` (`:72`).
 
@@ -410,14 +534,16 @@ async def create_github_workspace(
 Behaviour, in order:
 
 1. `db.get(TeamGithubScope, scope_id)`; `None` → 404.
-2. Validate `kind` in `{"primary", "worktree"}` → 400 otherwise. Do not accept arbitrary strings; `reset_workspace`'s safety property is a `kind == "primary"` comparison, and a typo'd `"Primary"` would make it reset the human's checkout.
-3. Normalise `path` with `agent_team_service.normalize_repo_path` — the same call `_apply_scope_create` uses for `repo_path` (`:135-137`). Registering `~/foo` and `/home/juan/foo` as two pool members must be impossible.
-4. `kind == "worktree"` → `await github_workspace_service.provision_worktree(db, scope, path)`. `kind == "primary"` → insert the row directly, **zero git commands**.
-5. `IntegrityError` → 409 `"Workspace already registered for this scope"`, mirroring `create_github_scope` (`:337-339`). Without this the duplicate-path `UniqueConstraint` surfaces as a 500.
+2. Validate `kind` in `{"primary", "worktree"}` → 400 otherwise. Do not accept arbitrary strings; `reset_workspace`'s entire safety property is a `kind == "primary"` equality test, and a typo'd `"Primary"` would make Deck `reset --hard` the human's checkout.
+3. Normalise `path` with `agent_team_service.normalize_repo_path` — the same call `_apply_scope_create` uses for `repo_path` (`:135-137`). It runs `os.path.realpath`, so `~/foo`, `/home/juan/foo` and a symlink to either collapse to one string *before* the global `UniqueConstraint("path")` sees them. Without this the constraint is trivially bypassable and the exclusivity claim is fiction.
+4. Default `dispatchable` when the request leaves it `None`: **`False` for `kind="primary"`**, `True` for `kind="worktree"`. This is the finding-1 fix at the registration end — it must not be possible to register the human's checkout as dispatchable by accident, only deliberately.
+5. `kind == "worktree"` → `await github_workspace_service.provision_worktree(db, scope, path)`. `kind == "primary"` → insert the row directly, **zero git commands**.
+6. `git worktree add` failure → surface the error (409/422 with the git output) and persist **no row** (Task 2f).
+7. `IntegrityError` → 409 `"Workspace path already registered"`, mirroring `create_github_scope` (`:337-339`). Note the message is not "for this scope" — the constraint is global, and the conflicting row may belong to a different scope, which is exactly the case worth telling the operator about. Without this handler the duplicate-path constraint surfaces as a 500.
 
 **No `DELETE`.** Design §5 forbids Deck removing worktrees, and a delete whose lease check was wrong would pull the directory out from under a running agent.
 
-Tests: design §6 items 23-28.
+Tests: design §6 items 35-36.
 
 ### 5c. `workspace_path` on the work-item response
 
@@ -451,11 +577,11 @@ In `list_github_work_items` (`:378-402`), extend the existing join. Note this co
 
 The join cannot multiply rows: `UniqueConstraint("leased_item_id")` from Task 1 means at most one workspace references any item. The schema constraint that guards Finding 10 is the same one that keeps this query honest — worth noting in the PR, because an outer join into a lease table normally *would* need a `DISTINCT` and a reviewer will look for one.
 
-Test: design §6 item 29.
+Test: design §6 item 37.
 
-### 5d. Frontend — bounded (design §2.10)
+### 5d. Frontend — bounded (design §2.11)
 
-The earlier "do not touch the frontend" is withdrawn. Three changes, no more:
+The earlier "do not touch the frontend" is withdrawn. Four edits, no more — three in `AutonomyPanel.tsx`, one in `agentTeams.ts`:
 
 **`frontend/src/features/agent-teams/AutonomyPanel.tsx`** — `pendingReasonLabel` (`:85-91`) currently handles 2 of 4 reasons and returns `null` otherwise, so a queued workspace shortage renders as blank space. Add the new reason and the two that already render blank:
 
@@ -482,7 +608,7 @@ Leave the fallthrough as `null`: `retry_github_work_item` writes free prose into
 
 **`frontend/src/types/agentTeams.ts`** — add `workspace_path?: string | null` to `GithubWorkItem` (`:211-222`). Nothing else; the five scope fields stay out (design §5).
 
-**Not in this task:** the pool summary on the scope card (`Workspaces: 1/2 leased`). It needs a second fetch and its own loading/error state in a component that currently fetches scopes and items only. Design §2.10 lists it as worth doing; it is a follow-up, and `GET .../workspaces` plus `curl` covers deployment.
+**Not in this task:** the pool summary on the scope card. It needs a second fetch and its own loading/error state in a component that currently fetches scopes and items only. Design §2.11 lists it as worth doing; it is a follow-up, and `GET .../workspaces` plus `curl` covers deployment. If someone does build it later, it must count **dispatchable** rows — a summary that includes the primary reports twice the capacity that exists.
 
 Run `cd frontend && npm run lint` — TypeScript strict mode with `noUnusedLocals` will fail the build on a stray import.
 
@@ -496,18 +622,24 @@ pytest tests/ -q            # full suite; report any pre-existing failure, do no
 cd ../frontend && npm run lint && npx tsc --noEmit
 ```
 
-Expected: baseline + ~29 new tests. Report the actual number.
+Expected: baseline + ~37 new tests. Report the actual number.
 
-Sanity checks — all five must hold:
+Sanity checks — all eight must hold:
 
 ```bash
 grep -rn "fdx\|'-x'\|\"-x\"" app/services/github_workspace_service.py    # must be EMPTY
 grep -n "repo_path_override" app/services/github_dispatch_service.py     # must show workspace.path, NOT scope.repo_path
-git diff --stat app/services/github_client.py app/services/github_watcher_service.py
-# github_client.py: EMPTY. github_watcher_service.py: the ONE release line only.
+grep -n "dispatchable" app/services/github_workspace_service.py          # must appear in acquire's filter
+grep -n '"--force"' app/services/github_workspace_service.py             # must appear on the switch
+git diff --stat app/services/github_client.py app/services/github_watcher_service.py app/services/github_verification_service.py
+# ALL THREE must be EMPTY — Task 4 changes no production code
 grep -n "outerjoin" app/api/v1/agent_teams.py        # must exist in list_github_work_items
 grep -n "router.delete" app/api/v1/agent_teams.py    # must NOT mention workspaces
+grep -rn "release" app/services/github_verification_service.py app/services/github_watcher_service.py
+# must find NO call to github_workspace_service.release
 ```
+
+The third and fourth are the two findings the review caught that a passing test suite would not have caught on its own. The fifth is the Task 4 inversion in one command: if either file shows a diff, the terminal release went back in.
 
 The `outerjoin` check is not pedantry: an inner join there drops every unleased item from the work-items list, which is most of them, and the UI would look empty rather than broken.
 
@@ -515,15 +647,20 @@ Open ONE PR into `feature/autonomous-github-dispatch` describing:
 
 - the phantom-contract diagnosis, and that the brief now states the contract explicitly including the prohibitions;
 - the lease invariant and that `UniqueConstraint("leased_item_id")` enforces it in the schema rather than in query logic (the Finding 10 lesson);
-- the reclaim rule, and **why escalation alone does not release** — cite the live-session check;
-- `clean -fd` vs `-fdx` and the 1.1 GB build dir;
+- `UniqueConstraint("path")` being **global**, and why a per-scope constraint does not protect a physical directory;
+- `dispatchable`, and that without it the primary checkout would have won the first dispatch;
+- the reclaim rule, that it is the **only** status-driven releaser, and **why escalation alone does not release** — cite the live-session check;
+- **that nothing releases on `merged`/`completed`, and why** — `tmux new-session -d` outlives the merge. Name this as the PR's main deliberate limitation, with the latency cost stated, and point at PR B;
+- that launch failure *does* release, in every shape including the returned `status="failed"` — and that the unifying rule is "release is licensed by the absence of a process, never by a status";
+- `clean -fd` vs `-fdx` and the 1.1 GB build dir; `switch --detach --force` and the dirty-tree abort it fixes;
+- that a `fetch` failure does **not** disable a workspace, and why the alternative drains the pool;
 - that the primary checkout is never reset;
-- `builds_out_of_tree=False` / `max_build_parallelism=4` as deliberately conservative defaults;
+- `builds_out_of_tree=False`, `max_build_parallelism=4` and `build_dir_template="build"` as deliberately conservative defaults, the last one because `clean -fd` preserves ignored dirs;
 - that 3b (host-wide build semaphore) is **not** in this PR and is a documented prerequisite for a second scope (design §3.2);
-- the two new endpoints and why registration needs one — a service method with no caller would force hand-edited DB rows (design §2.9);
+- the two new endpoints and why registration needs one — a service method with no caller would force hand-edited DB rows (design §2.10);
 - that there is deliberately **no `DELETE`**;
-- the three bounded frontend changes, and that `queued_no_workspace` rendering as blank space would have made a correctly-working pool look like the Finding 14 wedge;
-- the final test count and the five sanity checks above.
+- the four bounded frontend changes, and that `queued_no_workspace` rendering as blank space would have made a correctly-working pool look like the Finding 14 wedge;
+- the final test count and the eight sanity checks above.
 
 Then STOP and report. Do not merge. Do not restart the backend. Do not register workspaces or edit any DB row — the orchestrator does that on the live soak after merge, through the endpoint you just built.
 
@@ -536,9 +673,28 @@ Then STOP and report. Do not merge. Do not restart the backend. Do not register 
 - NO new `dispatch_status` values. `queued_no_workspace` is a `pending_reason`.
 - Do not touch `slot_has_live_owner_session`, `reuse_existing`, or the launch path beyond the single `repo_path_override` argument (Phase G2 owns those).
 - Do not touch `github_client.py`, `_reconcile_closed_issues`, `escalate`, `_apply_escalation`, or any status constant.
+- **Do not modify `github_verification_service.py` or `github_watcher_service.py` at all** (Task 4). No terminal release, no per-item liveness predicate, no closed-unmerged-PR handling — all PR B.
 - No new dependencies.
-- **Exactly two new endpoints** — `GET` and `POST` on `/github-scopes/{scope_id}/workspaces` (Task 5b). No `DELETE`, no `PATCH`, no workspace routes anywhere else. (An earlier draft said "no new endpoints"; that was withdrawn for the reason in design §2.9. It does not license further endpoints.)
+- **Exactly two new endpoints** — `GET` and `POST` on `/github-scopes/{scope_id}/workspaces` (Task 5b). No `DELETE`, no `PATCH`, no workspace routes anywhere else. (An earlier draft said "no new endpoints"; that was withdrawn for the reason in design §2.10. It does not license further endpoints.)
 - **Frontend changes are limited to Task 5d's four edits.** No new components, no new pages, no scope-form fields.
 - Do not enable/disable autonomy, spawn or kill agent sessions, hand-edit DB rows, or restart the backend.
-- Report — do not rewrite — any pre-existing failing test.
-- **If a step looks wrong, STOP and report rather than improvising.** Two places in particular: if `clean -fd` seems insufficient, or if reclaiming unconditionally on escalation seems simpler. Both are traps with a soak finding behind them.
+- Report — do not rewrite — any pre-existing failing test. `tests/test_multi_provider_smoke.py:54` is known-failing on the base branch (stale monkeypatch target); it is not yours.
+- **If a step looks wrong, STOP and report rather than improvising.** Four traps in particular, each with a soak finding or a review finding behind it: if `clean -fd` seems insufficient; if reclaiming unconditionally on escalation seems simpler; if releasing on `merged` seems obviously correct; or if disabling a workspace on any git failure seems safer. All four are wrong, and the reasoning is in the design section each one cites.
+
+## What changed from the reviewed draft
+
+For the reviewer's benefit, and so nothing silently reverts. Review findings 1, 3, 4, 5, 8, 10, 11 are resolved here; 2 and 9 are deferred to PR B by decision; 6 was already fixed pre-review; 7 is resolved in Task 2e.
+
+| Review finding | Resolution | Where |
+|---|---|---|
+| 1 — primary wins first dispatch | `dispatchable` column; `acquire` filters on it; registration defaults primary to `False` | Tasks 1, 2b, 5b |
+| 2 — release while tmux alive | **no terminal release at all in PR A**; reclaim is the only status-driven releaser | Task 4 |
+| 3 — per-scope path uniqueness | `UniqueConstraint("path")` global + `normalize_repo_path` before insert | Tasks 1, 5b |
+| 4 — reset order fails on dirty tree | `switch --detach --force` + `reset --hard <base_ref>` | Task 2e |
+| 5 — unbounded disk via per-issue build dirs | `build_dir_template` defaults to `"build"`; deployment no longer sets a per-issue template | Task 1, design §7 |
+| 6 — no way to operate the pool | two endpoints (this predated the review; the reviewed copy was stale) | Task 5b |
+| 7 — transient fetch drains the pool | `fetch` failure does not disable; timeout + `GIT_TERMINAL_PROMPT=0`; success clears `provision_error` | Tasks 2a, 2b, 2e |
+| 8 — only `ValueError` releases | release on returned `failed`/`blocked*` and on unexpected exceptions | Task 3d |
+| 9 — closed-unmerged PR holds a lease | **deferred to PR B**; operator escape hatch is `GET .../workspaces` + retry | design §4.2 |
+| 10 — provisioning-failure contradiction | `worktree add` failure persists **no row** and surfaces the git error; `provision_error` is reset-only | Task 2f |
+| 11 — template errors miss `ValueError` | catch `(KeyError, IndexError, ValueError)`; validate at scope write time | Tasks 3f, 5a |

@@ -68,7 +68,27 @@ Three properties, each load-bearing:
 
 Pooling is what makes this affordable. A built tizonia worktree is ~2.4 GB, of which 1.1 GB is the Meson build directory. Creating a worktree per issue means a from-scratch C++ build every single time — the most expensive thing on this host, and the thing that OOM'd it. Reusing a warm workspace preserves the build directory and `ccache`, so the second issue through a workspace compiles incrementally.
 
-It also bounds disk. Per-item creation is unbounded (the soak already accumulated 6 stale build dirs, 2.4 GB); a pool of N is N × repo size, known in advance.
+It also bounds the number of *checkouts*: a pool of N is N, known in advance, where per-item creation is unbounded.
+
+**It does not by itself bound disk, and an earlier draft of this section wrongly claimed it did.** `git clean -fd` deliberately preserves ignored directories (§2.6), which is what keeps build caches warm — so anything the build system leaves behind accumulates *inside* a fixed workspace and is never collected. Pairing a fixed pool with a per-issue `build_dir_template` like `build-issue-{issue_number}` therefore bounds the directory count while leaving disk unbounded: every issue through a workspace deposits another ~1.1 GB that nothing will ever delete.
+
+The live soak already demonstrates this, measured rather than predicted:
+
+```
+1.1G  tizonia-openmax-il/build-issue-820
+1.1G  tizonia-openmax-il/build.pre-issue-820-verification
+1.1G  tizonia-openmax-il-issue-818/build-compat
+126M  tizonia-openmax-il/build-soundcloud
+116M  tizonia-openmax-il/build-soundcloud-audit
+ 34M  tizonia-openmax-il-issue-818/build
+ 13M  tizonia-openmax-il/build-core
+5.5M  tizonia-openmax-il/build
+                                    → 3.5 GB across 2 checkouts
+```
+
+So the build directory must be **stable per workspace**, not per issue: `build_dir_template` defaults to a constant (`"build"`) and per-issue templating is the exception, not the recommendation. The lease already serialises access to a workspace, so a single build dir has no concurrency problem — and reusing it is what makes the incremental build fast, which was the point of pooling. Disk then really is bounded at N × (repo + one build dir), ~2.4 GB per workspace for tizonia.
+
+`{issue_number}` remains available for repos that genuinely need per-issue build isolation, but choosing it is choosing unbounded growth, and §7 no longer sets it on scope 1.
 
 ### 2.2 Schema — `github_workspaces`
 
@@ -85,6 +105,7 @@ class GithubWorkspace(Base):
     )
     path: Mapped[str] = mapped_column(String, nullable=False)
     kind: Mapped[str] = mapped_column(String, default="worktree", nullable=False)
+    dispatchable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     leased_item_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("github_work_items.id", ondelete="SET NULL"), nullable=True
     )
@@ -96,7 +117,7 @@ class GithubWorkspace(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("scope_id", "path", name="uix_scope_workspace_path"),
+        UniqueConstraint("path", name="uix_workspace_path"),
         UniqueConstraint("leased_item_id", name="uix_workspace_leased_item"),
     )
 ```
@@ -105,13 +126,20 @@ class GithubWorkspace(Base):
 
 | Derived state | Condition |
 |---|---|
-| available | `enabled` AND `leased_item_id IS NULL` |
+| available | `enabled` AND `dispatchable` AND `leased_item_id IS NULL` |
 | leased | `leased_item_id IS NOT NULL` |
-| unavailable | NOT `enabled` |
+| disabled | NOT `enabled` — broken tree |
+| disabled_for_dispatch | `enabled` AND NOT `dispatchable` — healthy but reserved, e.g. the primary |
 
 `UniqueConstraint("leased_item_id")` is the important one. SQLite permits many NULLs in a unique index but only one non-NULL of each value, so this constraint means **one item can hold at most one workspace and one workspace can hold at most one item, enforced by the database**. Finding 10 was a duplicate-owner bug that got through because the invariant lived only in query logic. This time it lives in the schema.
 
-`kind` takes `"primary"` or `"worktree"`. It is not decoration — see §2.6.
+`UniqueConstraint("path")` is **global, not `(scope_id, path)`.** An earlier draft scoped it per scope, which does not protect the resource it is meant to protect: a lease is an exclusivity claim on a *physical directory*, so the same path registered under scope A and scope B yields two rows that each believe they own it exclusively, and each would reset it out from under the other. The constraint must live at the same granularity as the thing being protected. Paths are canonicalised through `agent_team_service.normalize_repo_path` before insert (§2.10), which calls `os.path.realpath` — so symlink aliases and `~` forms collapse to one string before the constraint sees them.
+
+`dispatchable` exists because of `kind="primary"`. `acquire` picks the oldest available workspace by `id`, and the deployment plan registers the primary checkout first — so the primary would take the lowest `id` and **win the very first dispatch**, putting an autonomous agent straight into the human's shared checkout. That is the exact behaviour this whole design exists to eliminate, reintroduced by the ordering rule. Registration therefore defaults `kind="primary"` rows to `dispatchable=False`, and `acquire` filters on `dispatchable.is_(True)`.
+
+The flag is separate from `enabled` because they mean different things: `enabled=False` is "broken, do not use," while `dispatchable=False` is "healthy, visible, deliberately not for autonomous work." Collapsing them would make a deliberately-reserved primary indistinguishable from a workspace whose `git fetch` failed.
+
+`kind` takes `"primary"` or `"worktree"` and is validated on write — an unconstrained string is unsafe here, because `reset_workspace`'s entire safety property is a `kind == "primary"` equality test and a typo'd `"Primary"` would silently make Deck `reset --hard` the human's checkout.
 
 ### 2.3 Where the lease is taken
 
@@ -146,7 +174,19 @@ repo_path_override=workspace.path,     # was scope.repo_path
 
 and the brief is built from `workspace`, not `scope` (§2.7).
 
-If the launcher raises `ValueError`, the existing `except` branch escalates `plan_blocked`. Release the workspace there — the session never started, so nothing is in the directory.
+**Launch failure must release, and `ValueError` is not the common shape.** An earlier draft released only in the existing `except ValueError:` branch (`:244`) that escalates `plan_blocked`. That misses the ordinary case: `agent_team_service._launch_slot` wraps spawning in `except Exception` and **returns** `AgentTeamLaunchResultItem(status="failed")` rather than raising (`agent_team_service.py:638-648`), and dispatch handles that by setting `dispatch_status="failed"` with no release (`github_dispatch_service.py:250-262`). So the most likely real failure — tmux or the provider CLI refusing to start — leaks the lease until a reclaim sweep, and can leak it indefinitely if the half-started session makes the slot-scoped liveness predicate true.
+
+Release on every outcome where no usable session was established:
+
+| Outcome | Where | Release? |
+|---|---|---|
+| `ValueError` raised | `except ValueError` → `plan_blocked` | yes |
+| returned `status="failed"` | `:250-262` → `dispatch_status="failed"` | **yes** |
+| returned `status="blocked"` / `blocked_provider_unavailable` / `blocked_agent_mail_not_configured` | same block | **yes** |
+| any other exception | no handler today | release, then re-raise |
+| returned `status="launched"` | success path | no |
+
+In all releasing cases the session never took, so nothing is in the directory and the reset-on-next-acquire is safe.
 
 ### 2.4 Where the lease is released
 
@@ -158,16 +198,30 @@ The lease must survive as long as an agent might still write to the directory. T
 - `merged` / `completed` — done. Release.
 - `failed` / `escalated` — ambiguous. See below.
 
-So: **two explicit releases plus one reclaim sweep.**
+An earlier draft concluded from this that `merged` and `completed` were safe points for an **unconditional** release. That was wrong, and it was wrong for the reason this whole finding is about: it reasoned from *logical* state and ignored the *physical* process.
 
-Explicit, unconditional:
+Deck launches agents with `tmux new-session -d` (`agent_bridge/spawn.py:78-84`) — a detached, persistent interactive CLI. **Merging a PR does not terminate it.** Neither does closing the issue. The tmux session keeps running, can still receive input, and can still write files. So releasing on `merged` hands the directory to the next item, whose `acquire` then runs `reset --hard` and `clean -fd` underneath a live process. `_complete_and_notify` is worse: a human closing an issue manually marks the item `completed` while its agent is mid-edit.
 
-| Call site | File:line | Why safe |
+That is Finding 10's mechanism — two owners on one directory — recreated through the release path instead of the dispatch path.
+
+**Resolution: this design ships with NO release on terminal status at all.** Capacity is freed by the reclaim sweep (§2.5), which is gated on observed process liveness rather than on status. One mechanism, one gate, physically grounded.
+
+| Call site | Releases? | Why |
 |---|---|---|
-| `_mark_merged` | `github_verification_service.py:413` | PR is merged; no further work exists |
-| `_complete_and_notify` | `github_watcher_service.py:152` | issue closed outside the pipeline |
+| `_mark_merged` | **no** | the agent's tmux session outlives the merge |
+| `_complete_and_notify` | **no** | a human can close an issue mid-edit |
+| `reset_for_retry` | no | retry keeps its lease so the build dir stays warm |
+| `escalate` / `_apply_escalation` | no | escalation does not mean the agent stopped |
+| launch failure, before any session exists | **yes** | nothing is in the directory (§2.3) |
+| reclaim sweep | **yes** | the only status-driven releaser; gated on liveness |
 
-The reclaim sweep handles `failed` and `escalated`, and it is the subtle part.
+The launch-failure release is not an exception to the rule — it is the same rule. The rule is *never release while a process might be writing*; a launch that failed produced no process. Every release in this design is licensed by a physical fact, never by a status.
+
+The cost is latency: a merged item holds its workspace until its session goes offline, so with only one dispatchable workspace at rollout (§7) the pool can *look* stuck while it is merely waiting. That is the correct direction to be wrong in — a lease held too long costs throughput, a lease released too early corrupts a working tree. It is also observable, which is what §2.10's `GET .../workspaces` is for.
+
+Prompt release on terminal status is deferred to a follow-up (**PR B**), because doing it safely needs *per-item* liveness — `MailAgentSession` joined through `item.launch_id` — and the existing predicate is slot-scoped, so it can be held true by an unrelated session on the same slot. Phase G2 (Finding 13) is already scheduled to rewrite that predicate; building a second one now would leave two similarly-named liveness checks to reconcile. See §4.
+
+The reclaim sweep therefore carries the entire release burden, which makes it the subtle part.
 
 ### 2.5 Reclaim — why escalation must not release unconditionally
 
@@ -180,13 +234,17 @@ Escalation does **not** mean the agent stopped. `_send_escalation_broadcast` alr
 
 Releasing a lease on escalation would hand the directory to a second item while a live agent is still editing it. That is Finding 10 reproduced by the very mechanism meant to prevent it.
 
-But never releasing is equally fatal: the soak currently holds **11 escalated items** (#821-#829, #834, #858). Eleven permanently-held leases against a pool of two is a permanent wedge — and a wedge is exactly how Finding 14 masked Finding 15 for a week.
+But never releasing is equally fatal: the soak currently holds **11 escalated items** (#821-#829, #834, #858). Eleven permanently-held leases against a one- or two-workspace pool is a permanent wedge — and a wedge is exactly how Finding 14 masked Finding 15 for a week.
 
 The resolution is to release on the *physical* condition rather than the *logical* one:
 
-> A lease held by a terminal-ish item (`escalated`, `failed`) is reclaimable **iff the owner slot has no live session.**
+> A lease is reclaimable **iff its item is in a non-working status AND the owner slot has no live session.**
 
-Deck already computes this: `slot_has_live_owner_session(db, slot_id)` (`github_dispatch_service.py:106-130`). Reusing it means the reclaim rule is grounded in an observed tmux/heartbeat fact, not a guess. No new endpoint, no human intervention, no wedge — and it cannot steal a directory from a running agent.
+Non-working statuses are `escalated`, `failed`, `merged` and `completed` — the last two arriving here rather than releasing promptly, per §2.4. `dispatched`, `verifying`, `ready_for_review` and `awaiting_human_review` are never reclaimed, because in all four an agent is legitimately expected to still be working.
+
+Deck already computes this: `slot_has_live_owner_session(db, slot_id)` (`github_dispatch_service.py:106-130`). Reusing it means the reclaim rule is grounded in an observed tmux/heartbeat fact, not a guess. No human intervention, no wedge — and it cannot steal a directory from a running agent.
+
+**Known imprecision, deliberately accepted.** The predicate is keyed on `slot_id`, not on the item's own launch, so an unrelated live session on the same slot keeps a lease held longer than strictly necessary. It errs toward retention, which is the safe direction, and the fix (per-item liveness via `item.launch_id`) belongs with PR B and Phase G2 rather than here (§2.4).
 
 Run the sweep once at the top of `dispatch_pending`, before `scope_active_count`. `dispatch_pending` is the only consumer of workspace capacity and runs every poll, so that is the one place capacity must be accurate.
 
@@ -211,10 +269,23 @@ The reset-on-acquire sequence, and one hazard:
 
 ```bash
 git -C <ws> fetch origin --prune
-git -C <ws> switch --detach <base_ref>
-git -C <ws> reset --hard
+git -C <ws> switch --detach --force <base_ref>
+git -C <ws> reset --hard <base_ref>
 git -C <ws> clean -fd          # NOT -fdx
 ```
+
+**`--force` on the switch, and an explicit ref on the reset, are both required.** An earlier draft omitted them and the sequence aborted on the very case reclaim exists to handle. Verified empirically:
+
+```
+$ git switch --detach origin/main          # dirty tracked file present
+error: Your local changes to the following files would be overwritten by checkout:
+        f.txt
+Aborting                                    # exit 1
+```
+
+Step 2 fails, so `reset --hard` at step 3 is never reached and the workspace is handed over still dirty — or, with the plan's error handling, disabled. A `failed`/`escalated` item is *precisely* the case most likely to leave tracked modifications behind, so the sequence broke exactly where it was needed. Re-verified with the fix: `switch --detach --force` succeeds, the tree lands clean at the base ref, and a `build/` directory containing a self-ignoring `.gitignore` **survives** — the `-fd`/`-fdx` invariant below still holds.
+
+`reset --hard <base_ref>` rather than bare `reset --hard` because after a forced detach the two are equivalent only if the switch fully succeeded; naming the ref makes the post-condition explicit rather than positional.
 
 **`-x` is forbidden.** `git clean -fd` removes untracked files but leaves *ignored* ones. Meson build directories are self-ignoring — each contains a `.gitignore` holding `*`, which is why `git check-ignore -v build/` reports `build/.gitignore:2:*`. So plain `clean -fd` preserves the 1.1 GB build dir and the incremental-build win; `clean -fdx` would delete it and reintroduce the from-scratch compile that OOM'd the host. The flag difference is the difference between a 90-second build and a 40-minute one.
 
@@ -246,7 +317,7 @@ Deck does not run builds; agents do. So Deck's contribution is to *tell* the age
 | Column | Default | Purpose |
 |---|---|---|
 | `builds_out_of_tree` | `False` | whether two builds can share one checkout |
-| `build_dir_template` | `None` | e.g. `build-issue-{issue_number}` |
+| `build_dir_template` | `"build"` | stable per workspace; `{issue_number}` available but discouraged (§2.1) |
 | `build_command_hint` | `None` | e.g. `meson compile -C {build_dir} -j{parallelism}` |
 | `max_build_parallelism` | `4` | the `-j` cap |
 
@@ -270,7 +341,41 @@ The flag changes what a lease has to *cover*, not whether leases are needed:
 
 **3a is advisory, not enforced.** These values reach the agent as brief text. An agent that ignores `-j4` still OOMs the host. Enforcement is 3b (§3).
 
-### 2.9 API surface — two new endpoints, and why the "no new endpoints" habit had to go
+Templates are **operator-supplied strings passed to `str.format`**, so rendering must be defensive. An earlier draft caught `KeyError`/`IndexError`; that is insufficient, verified directly:
+
+```
+'build-{issue_number}'    → 'build-819'
+'build-{issue_number'     → ValueError: expected '}' before end of string
+'build-{0}'               → IndexError
+'build-{bogus}'           → KeyError
+'build-{issue_number!z}'  → ValueError: Unknown conversion specifier z
+```
+
+An unmatched brace — the single most likely typo — raises `ValueError` and would propagate out of `_dispatch_brief` into the poll loop, taking down autonomy for the whole scope. So: catch `(KeyError, IndexError, ValueError)`, log, and omit the build lines. Validate templates at scope create/update time as well, so the operator learns at write time rather than at dispatch time. Allowed placeholders are exactly `{issue_number}` for `build_dir_template` and `{build_dir}` / `{parallelism}` for `build_command_hint`.
+
+Define the degenerate combination explicitly: `builds_out_of_tree=True` with a `build_command_hint` but no `build_dir_template` renders `{build_dir}` as the default `"build"` rather than silently omitting the command.
+
+### 2.9 Provisioning failure, and why a fetch failure must not disable a workspace
+
+Two failure modes look alike and must not be treated alike:
+
+| Failure | Meaning | Correct response |
+|---|---|---|
+| `git fetch` fails | transient — network, DNS, auth, GitHub outage | record, leave enabled, retry next poll |
+| `switch` / `reset` / `clean` fails | the working tree is broken | disable, record `provision_error` |
+
+An earlier draft disabled the workspace on *any* reset failure. Since reset runs on acquire and acquire walks the pool oldest-first, a single network blip during `fetch` would disable one workspace per poll until the pool was empty — converting a transient outage into a permanent autonomy wedge with no way back, because nothing clears `provision_error` and nothing re-enables a row. The failure mode is worse than the one it guards against.
+
+So `fetch` failure is **non-fatal**: record it in `provision_error`, leave `enabled=True`, return `None` from `acquire` so the item queues as `queued_no_workspace`, and try again next poll. Only local tree operations disable. A successful reset clears `provision_error`, so a recovered workspace heals itself without operator action.
+
+Two more properties of the git runner, both absent from the earlier draft:
+
+- **A timeout.** `git fetch` against an unreachable host can block indefinitely, and this runs inside the APScheduler event loop.
+- **`GIT_TERMINAL_PROMPT=0`** (and `GIT_ASKPASS=`/`SSH_ASKPASS=`). Without it a credential prompt makes the subprocess wait forever for input that will never come — indistinguishable from a hang.
+
+`provision_worktree` has an ordering subtlety worth stating, because it is the one place the earlier test obligations contradicted themselves: `git worktree add` runs **before** any row exists, so a failure there has nowhere to record `provision_error`. Resolution: the API surfaces that failure to the caller as an error response and persists **no row**. Registration is a synchronous operator action, so the operator sees the git error directly and can retry — which is better than a disabled row they must then discover and clean up. `provision_error` is therefore only ever written for *reset* failures on an existing row.
+
+### 2.10 API surface — two new endpoints, and why the "no new endpoints" habit had to go
 
 Earlier plans in this series carried a blanket **"NO new endpoint"** line. It was earned on 2026-07-23, where a suitable endpoint already existed and adding one would have been duplication, and it was defensible on 07-26 for three guards inside a single service. It was then copy-forwarded without being re-derived. For this change it is not merely unnecessary — it is incoherent:
 
@@ -285,31 +390,32 @@ So this change adds two endpoints, both scoped to workspaces:
 | `GET` | `/api/v1/agent-teams/github-scopes/{scope_id}/workspaces` | list the pool with derived lease state |
 | `POST` | `/api/v1/agent-teams/github-scopes/{scope_id}/workspaces` | register a workspace; `kind="worktree"` provisions via `git worktree add`, `kind="primary"` registers an existing path without touching it |
 
-`DELETE` is deliberately **absent**. §5 already forbids Deck removing worktrees, and a delete endpoint whose lease-holder check was wrong would silently orphan a running agent's directory. Disabling is what `enabled=False` is for, and it is reachable through the register endpoint's absence of a delete by simply not needing one — pool shrinkage is a human chore, as with the stale build dirs.
+`DELETE` is deliberately **absent**. §5 already forbids Deck removing worktrees, and a delete endpoint whose lease-holder check was wrong would silently orphan a running agent's directory. Pool shrinkage is a human chore, as with the stale build dirs.
 
-`GET` returns derived state rather than a stored column, consistent with §2.2's decision to have no `lease_state` field:
+`GET` returns derived state rather than a stored column, consistent with §2.2's decision to have no `lease_state` field. Note it must reflect **both** disable flags, or the primary — registered `dispatchable=False` per §7 — reads as `available` and the operator concludes there are two usable workspaces when there is one:
 
 ```
 lease_state = "leased" if leased_item_id is not None
-              else "disabled" if not enabled
+              else "disabled" if not enabled                     # broken tree
+              else "disabled_for_dispatch" if not dispatchable   # e.g. the primary
               else "available"
 ```
 
-The `POST` is the *only* mutating endpoint added, and it is the one that makes §7 step 2 executable without hand-editing rows. It must be synchronous with the `git worktree add` it triggers: a 202-style "queued" response would hide provisioning failure behind a second lookup, and provisioning failure is the case that most needs to be visible (`provision_error`, §2.2).
+The `POST` accepts `path`, `kind` and an optional `dispatchable`; `kind="primary"` defaults it to `False` (§2.6), `kind="worktree"` to `True`. It is the *only* mutating endpoint added, and it is what makes §7 step 2 executable without hand-editing rows. It must be synchronous with the `git worktree add` it triggers: a 202-style "queued" response would hide provisioning failure behind a second lookup, and provisioning failure is the case that most needs to be visible (§2.9).
 
-### 2.10 UI surface — one required change, two worth doing
+### 2.11 UI surface — one required change, two worth doing
 
 The plan's original "do not touch the frontend" was a diff-size decision, not an analysis. Reading `AutonomyPanel.tsx` shows one part of it does not survive.
 
 **Required — a queued workspace shortage currently renders as nothing.** `pendingReasonLabel` (`AutonomyPanel.tsx:85-91`) handles two of the four existing `pending_reason` values and returns `null` otherwise. `queued_low_memory` and `queued_owner_session_live` already display as blank; `queued_no_workspace` would join them.
 
-That matters more here than for the existing two, because **a workspace shortage is this design's expected steady state, not an exception.** A pool of 2 against 11 retried items means the normal picture is most items at `pending` with no owner, no badge and no explanation — visually identical to the Finding 14 wedge, which this soak has already spent two findings learning to diagnose. The mechanism working correctly must not look like the mechanism being stuck.
+That matters more here than for the existing two, because **a workspace shortage is this design's expected steady state, not an exception.** One dispatchable workspace against 11 retried items (§7) means the normal picture is ten items at `pending` with no owner, no badge and no explanation — visually identical to the Finding 14 wedge, which this soak has already spent two findings learning to diagnose. The mechanism working correctly must not look like the mechanism being stuck.
 
 **Worth doing with it:**
 
 - A **Workspace** row in the work-item detail `<dl>` (`:369-388`, currently exactly four rows: Status, Owner, Retries, PR). This needs a backend field: `GithubWorkItemResponse` (`schemas.py:2209-2234`) has no workspace field, and `_work_item_response` (`agent_teams.py:93`) takes `(item, scope)` and so cannot reach a third table. Add a nullable `workspace_path`, derived — not stored — for the same reason §2.2 has no `lease_state`.
 - The scope card's `Local checkout: {scope.repo_path}` (`:548-550`) is **the same sentence as the brief line this whole design exists to correct** (§2.7). After this change `scope.repo_path` is the worktree parent, not where agents work. Leaving it tells the operator the thing the brief has just stopped telling the agents.
-- A pool summary on the scope card, now that `GET .../workspaces` exists: `Workspaces: 1/2 leased`. This is the observability §2.9 argues for, at the point where the queue depth is already visible.
+- A pool summary on the scope card, now that `GET .../workspaces` exists: `Workspaces: 1 dispatchable, 1 leased`. Count **dispatchable** rows, not rows — a summary that includes the primary reports twice the capacity that exists. This is the observability §2.9 argues for, at the point where the queue depth is already visible.
 
 **Deferrable:** the five new scope fields in `types/agentTeams.ts:150-197` (three interfaces enumerate scope fields explicitly) and in the `ScopeDialog` form. Every field has a server-side default and all five are set on scope 1 via the API during deployment, so the UI is not on the critical path for them. Same for adding `max_build_parallelism` to the scope config summary line (`:551-553`).
 
@@ -374,6 +480,28 @@ Recorded now while the reasoning is fresh; none of it is in scope for the immedi
 
 Steps 1, 2 and 3a ship together — they are one coherent change and splitting them leaves the brief either lying or unimplementable.
 
+### 4.1 PR A / PR B
+
+Steps 1+2+3a ship as **PR A**, with one capability held back:
+
+| | PR A (now) | PR B (after Phase G2) |
+|---|---|---|
+| schema, provisioning, reset, gate 6, brief, API, UI | yes | — |
+| lease released by reclaim sweep | yes | — |
+| **prompt release on `merged` / `completed`** | **no** | yes |
+| per-item liveness via `item.launch_id` | no | yes |
+| closed-unmerged-PR abandonment path (§4.2) | no | yes |
+
+The split exists because prompt terminal release requires a liveness predicate that does not exist yet and that Phase G2 is already scheduled to rewrite (§2.4). Building an interim one would leave two similarly-named predicates to reconcile, in the exact area where Finding 13 showed that identity confusion causes collisions.
+
+**The cost of the split, stated plainly:** with a pool this small, a merged item keeps its workspace until its tmux session goes offline. The pool can therefore look wedged when it is only waiting, and on a quiet host a session can idle for a long time. Two mitigations, both already in PR A: the reclaim sweep runs every poll, and `GET .../workspaces` shows exactly which item holds what. If this proves too slow in practice, the fix is to bring PR B forward, not to release on status.
+
+### 4.2 Deferred to PR B: abandoned review items
+
+`_process_review_item` (`github_verification_service.py:217-230`) branches only on `pull.get("merged")`. A PR **closed without merging** matches no branch and returns silently, so the item stays in `ready_for_review` or `awaiting_human_review` indefinitely — and those statuses deliberately retain their lease (§2.4). Two abandoned reviews would therefore consume a two-workspace pool permanently — and at rollout, where only one workspace is dispatchable, one abandoned review is enough.
+
+This is a pre-existing lifecycle gap that the lease turns from an untidiness into a capacity leak. It needs a real terminal path — detect closed-unmerged, notify, escalate, wind down the session — which is PR B's territory since it needs the same session-liveness machinery. Until then the operator escape hatch is `GET .../workspaces` to see the held lease, plus retry or manual issue closure to move the item out of a review status.
+
 ---
 
 ## 5. Explicitly out of scope
@@ -384,59 +512,71 @@ Steps 1, 2 and 3a ship together — they are one coherent change and splitting t
 - **Finding 6** (distinct agent commit identity).
 - **G1c** (`2026-07-28-sweep-request-budget-design.md`) — different file, no overlap.
 - **New `dispatch_status` values.** `queued_no_workspace` is a `pending_reason`, not a status.
-- **Deleting worktrees.** Deck never removes a workspace. Cleaning up the 6 stale build dirs is a human chore. No `DELETE` endpoint (§2.9).
+- **Deleting worktrees.** Deck never removes a workspace. Cleaning up the eight stale build dirs (§7) is a human chore. No `DELETE` endpoint (§2.10).
 - **Deleting or resetting the primary checkout.** Never, under any circumstance.
 - **The five new scope fields in the frontend** — `types/agentTeams.ts` interfaces and the `ScopeDialog` form (§2.10, deferrable tier). Server-side defaults cover them and deployment sets them via the API.
-- **A workspaces management page.** The scope card and detail dialog are enough for a pool of two.
+- **A workspaces management page.** The scope card and detail dialog are enough for a pool this small.
+- **Prompt release on `merged`/`completed`, per-item session liveness, and the closed-unmerged-PR path.** All PR B (§4.1, §4.2).
+- **Deck terminating agent sessions.** Winding down a session to free a workspace is PR B's mechanism, and it needs its own safety argument — the standing rule is that a dispatched session is never killed unless positively confirmed dead.
 
 ---
 
 ## 6. Test obligations
 
-Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first. Items 23-29 were added when §2.9/§2.10 were, so the expected addition is ~29 tests, not ~22.
+Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first. This list grew from 22 to 37 across two revisions (API/UI, then the plan review); expect ~37 new tests.
+
+Items marked **★** are regression guards for a defect that has already occurred or was caught in review. They must be written *before* the code and observed to fail.
 
 **Schema** (`tests/agent_teams/test_github_scope_models.py`)
-1. `GithubWorkspace` round-trips with expected defaults (`kind="worktree"`, `enabled=True`, `leased_item_id=None`).
-2. Two workspaces cannot hold the same `leased_item_id` — `IntegrityError`. *This is the Finding 10 guard.*
-3. Two workspaces in one scope cannot share a `path` — `IntegrityError`.
-4. New scope columns default to `builds_out_of_tree=False`, `max_build_parallelism=4`, `build_dir_template=None`, `build_command_hint=None`, `base_ref="origin/HEAD"`.
+1. `GithubWorkspace` round-trips with expected defaults (`kind="worktree"`, `enabled=True`, `dispatchable=True`, `leased_item_id=None`).
+2. ★ Two workspaces cannot hold the same `leased_item_id` — `IntegrityError`. *The Finding 10 guard.*
+3. ★ Two workspaces cannot share a `path` **even in different scopes** — `IntegrityError`. *The constraint is global; a per-scope constraint would let two scopes reset one directory.*
+4. New scope columns default to `builds_out_of_tree=False`, `max_build_parallelism=4`, `build_dir_template="build"`, `build_command_hint=None`, `base_ref="origin/HEAD"`.
+5. ★ The compat-migration ladder adds all five scope columns to a legacy table and backfills defaults. *Extend `test_compat_migration_adds_new_columns_to_legacy_db` (`:100`), which already exists — ORM defaults on a fresh DB do not prove the live `ALTER TABLE` path.*
 
 **Lease mechanics** (`tests/agent_teams/test_github_dispatch_service.py`)
-5. Acquire returns an available workspace and stamps `leased_item_id` + `leased_at`.
-6. Acquire returns `None` when every workspace is leased; item gets `pending_reason="queued_no_workspace"` and stays `pending`.
-7. Acquire is idempotent for an item that already holds a workspace (the retry-keeps-its-lease path).
-8. Disabled workspaces are never acquired.
-9. `repo_path_override` receives the **workspace** path, not `scope.repo_path`. *Extend the existing `test_repo_path_override.py` idiom.*
-10. The brief contains the workspace path and the "leased exclusively" and "do NOT create worktrees" lines.
-11. Launcher `ValueError` → item escalates `plan_blocked` **and** the workspace is released.
+6. Acquire returns an available workspace and stamps `leased_item_id` + `leased_at`.
+7. Acquire returns `None` when every workspace is leased; item gets `pending_reason="queued_no_workspace"` and stays `pending`.
+8. Acquire is idempotent for an item that already holds a workspace (the retry-keeps-its-lease path).
+9. Disabled workspaces are never acquired.
+10. ★ **A `dispatchable=False` workspace is never acquired, even when it has the lowest `id` and is the only unleased row.** *Without this, the primary registered first wins the first dispatch and autonomous work lands in the human's checkout.*
+11. ★ A `kind="primary"`, `dispatchable=True` worktree loses to an available `kind="worktree"` row regardless of `id` ordering — or, if preference is implemented purely via `dispatchable`, assert that registration defaults primary rows to `dispatchable=False`.
+12. `repo_path_override` receives the **workspace** path, not `scope.repo_path`. *Extend the existing `test_repo_path_override.py` idiom.*
+13. The brief contains the workspace path and the "leased exclusively" and "do NOT create worktrees" lines.
+
+**Launch failure — every shape, not just `ValueError`**
+14. ★ Launcher raises `ValueError` → item escalates `plan_blocked` **and** the workspace is released.
+15. ★ Launcher **returns** a launch item with `status="failed"` → item becomes `failed` **and** the workspace is released. *`agent_team_service.py:638-648` catches `Exception` and returns `status="failed"`; it does not raise, so a `ValueError`-only release leaks the lease on the most common real failure.*
+16. ★ Each blocked status (`blocked`, `blocked_provider_unavailable`, `blocked_agent_mail_not_configured`) also releases.
+17. ★ An unexpected non-`ValueError` exception releases and re-raises rather than leaking the lease.
 
 **Reclaim** — the subtle ones
-12. A workspace leased by an `escalated` item whose owner slot has **no** live session is reclaimed.
-13. A workspace leased by an `escalated` item whose owner slot **has** a live session is **NOT** reclaimed. *This is the Finding 10 regression guard; it must fail if someone reclaims unconditionally on escalation.*
-14. `_mark_merged` releases.
-15. `_complete_and_notify` releases.
-16. `reset_for_retry` does **not** release.
+18. A workspace leased by an `escalated` item whose owner slot has **no** live session is reclaimed.
+19. ★ A workspace leased by an `escalated` item whose owner slot **has** a live session is **NOT** reclaimed. *The Finding 10 regression guard; must fail if someone reclaims unconditionally on escalation.*
+20. ★ `_mark_merged` does **not** release. *PR A has no prompt terminal release — the tmux session outlives the merge (§2.4).*
+21. ★ `_complete_and_notify` does **not** release.
+22. `reset_for_retry` does **not** release.
+23. A `merged` item whose owner slot has no live session **is** reclaimed by the sweep — capacity is recovered, just not promptly.
 
-**Provisioning** (new `tests/agent_teams/test_github_workspace_service.py`)
-17. Provisioning a worktree invokes `git worktree add --detach <path> <base_ref>` — assert on a fake runner, do not shell out.
-18. Reset-on-acquire issues `clean -fd` and **never** `-fdx`. *Assert the absence of `-x`.* Guards the 1.1 GB build dir.
-19. A `kind="primary"` workspace is **never** reset or cleaned — no git mutation commands at all.
-20. Provisioning failure records `provision_error`, sets `enabled=False`, and does not raise into the poll loop.
+**Provisioning and reset** (new `tests/agent_teams/test_github_workspace_service.py`)
+24. Provisioning a worktree invokes `git worktree add --detach <path> <base_ref>` — assert on a fake runner, do not shell out.
+25. ★ Reset-on-acquire issues `clean -fd` and **never** `-fdx`. *Assert the absence of `-x`.* Guards the 1.1 GB build dir.
+26. ★ Reset issues `switch --detach --force` and `reset --hard <base_ref>`. *Verified empirically: without `--force`, `switch` exits 1 on a dirty tracked file and `reset --hard` is never reached — on exactly the `escalated`/`failed` path reclaim exists to recover.*
+27. ★ A `kind="primary"` workspace is **never** reset or cleaned — **zero** git mutation commands, not merely no destructive ones.
+28. ★ A `fetch` failure leaves the workspace `enabled=True`, records the error, and returns `None` from `acquire`. *A transient outage must not disable one workspace per poll until the pool is empty.*
+29. A local tree failure (`switch`/`reset`/`clean`) **does** set `enabled=False` and records `provision_error`.
+30. A successful reset clears a previously-set `provision_error` — recovery needs no operator action.
+31. The git runner passes a timeout and `GIT_TERMINAL_PROMPT=0`; a credential prompt cannot hang the poll loop.
 
 **Config → brief** (`test_github_dispatch_service.py`)
-21. With `builds_out_of_tree=True` + template + hint, the brief renders the build dir and the `-j{max_build_parallelism}` command.
-22. With `builds_out_of_tree=False`, the brief states one build at a time in this workspace and omits the build-dir template.
+32. With `builds_out_of_tree=True` + template + hint, the brief renders the build dir and the `-j{max_build_parallelism}` command.
+33. With `builds_out_of_tree=False`, the brief states one build at a time in this workspace and omits the build-dir template.
+34. ★ A malformed template with an unmatched `{` (raises `ValueError`) is contained: build lines are omitted, the brief is still produced, the poll loop survives. *`KeyError`/`IndexError` alone do not cover the most likely typo.*
 
-**API** (`tests/agent_teams/test_github_workspace_api.py`, new — §2.9)
-23. `GET .../workspaces` returns the pool with `lease_state` derived: `available`, `leased` (with `leased_item_id`), `disabled`.
-24. `GET` on an unknown `scope_id` → 404.
-25. `POST .../workspaces` with `kind="worktree"` invokes `git worktree add --detach` via the injected runner and returns the created row.
-26. `POST` with `kind="primary"` registers the path and issues **zero** git commands. *Companion to item 19 at the API layer — the primary checkout is not Deck's to mutate even on registration.*
-27. `POST` with a duplicate `path` in the same scope → 409, not a 500 from the `IntegrityError`.
-28. `POST` whose `git worktree add` fails → the response surfaces the failure; no half-registered row is left `enabled=True`.
-
-**Work-item response** (`test_github_dispatch_service.py` or the existing work-items API test)
-29. `GithubWorkItemResponse.workspace_path` is the leased workspace's path, and `None` for an item holding no lease.
+**API** (`tests/agent_teams/test_github_workspace_api.py`, new — §2.10)
+35. `GET .../workspaces` returns the pool with `lease_state` derived over **all four** cases: `available`, `leased` (with `leased_item_id`), `disabled`, and ★ `disabled_for_dispatch` for a `dispatchable=False` row. *Without the fourth, the primary reads as `available` and the operator over-counts capacity.* `GET` on an unknown `scope_id` → 404.
+36. `POST .../workspaces` with `kind="worktree"` invokes `git worktree add --detach` and returns the created row; with `kind="primary"` it issues **zero** git commands and defaults `dispatchable=False`; an invalid `kind` → 400; a duplicate canonical `path` → 409 not 500; a `worktree add` failure surfaces the error and persists **no row**.
+37. `GithubWorkItemResponse.workspace_path` is the leased workspace's path, and `None` for an item holding no lease.
 
 ---
 
@@ -447,10 +587,23 @@ The schema change needs **no hand-surgery**. `_run_sqlite_compat_migrations` (`a
 Order of operations after the PR merges:
 
 1. Restart the backend — `create_all` adds `github_workspaces`, the ladder adds the five scope columns.
-2. Register scope 1's workspaces **via `POST .../workspaces`** (§2.9) — not by hand-writing rows. `kind="primary"` for `/home/juan/work/repos/tizonia/tizonia-openmax-il`; `kind="worktree"` for the existing `tizonia-openmax-il-issue-818`.
-3. Set scope 1's real values via `PATCH /github-scopes/{id}`: `builds_out_of_tree=True`, `build_dir_template="build-issue-{issue_number}"`, `build_command_hint="meson compile -C {build_dir} -j{parallelism}"`, `max_build_parallelism=4`. Conservative defaults are for unknown repos; tizonia via Meson is known.
-4. `GET .../workspaces` to confirm 2 rows, both `available`, no `provision_error`. This is the check that step 2 actually took, and it is the reason the endpoint exists.
+2. Register scope 1's workspaces **via `POST .../workspaces`** (§2.10) — not by hand-writing rows. `kind="primary", dispatchable=false` for `/home/juan/work/repos/tizonia/tizonia-openmax-il`; `kind="worktree"` for the existing `tizonia-openmax-il-issue-818`.
+3. Set scope 1's real values via `PATCH /github-scopes/{id}`: `builds_out_of_tree=True`, `build_dir_template="build"`, `build_command_hint="meson compile -C {build_dir} -j{parallelism}"`, `max_build_parallelism=4`. Conservative defaults are for unknown repos; tizonia via Meson is known.
+4. `GET .../workspaces` to confirm 2 rows — the primary `disabled_for_dispatch`, the worktree `available`, neither with a `provision_error`. This is the check that step 2 actually took, and it is the reason the endpoint exists.
 5. Retry the 11 escalated items so they re-dispatch against real workspaces.
+
+Note what step 2 means for capacity: **the pool that can actually be dispatched into is size 1**, because the primary is registered non-dispatchable. Combined with PR A having no terminal release (§2.4), a merged item holds its lease until the reclaim sweep sees its owner session gone. Expect autonomy to feel slow, and read `GET .../workspaces` rather than guessing. Adding a second real worktree is a one-`POST` fix and is the recommended follow-up once PR A is observed working.
+
+Step 3's `build_dir_template="build"` is deliberate and is the correction from finding 5. The live checkouts already show why:
+
+| checkout | build dirs present |
+|---|---|
+| `tizonia-openmax-il` | `build`, `build-core`, `build-issue-820`, `build-soundcloud`, `build-soundcloud-audit`, `build.pre-issue-820-verification` |
+| `tizonia-openmax-il-issue-818` | `build`, `build-compat` |
+
+Eight build trees across two checkouts, accumulated by hand over the soak, none of them reachable by `git clean -fd`. A per-issue template would have Deck reproduce that pattern automatically and unboundedly. One stable `build` per workspace is both bounded and faster — the lease already serialises the workspace, so there is no contention to avoid, and the incremental cache survives every reset (90 seconds instead of 40 minutes).
+
+Cleaning up the existing eight is separate operational work, not part of this PR.
 
 One caution on step 2, from Finding 13: `derive_repo_identity` hashes `--git-common-dir`, so the primary and the `issue-818` worktree share `repo_id` `4532704bf856d362` (§3.3). Registering both is correct and necessary, but slot matching cannot tell them apart — so a `kind="primary"` lease and a `kind="worktree"` lease look identical to routing. That is fine here because the *lease*, not the `repo_id`, is what enforces exclusivity; it is recorded because it will mislead anyone debugging routing against these two rows.
 
