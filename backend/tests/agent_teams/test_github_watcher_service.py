@@ -575,3 +575,140 @@ async def test_escalated_item_with_open_labeled_issue_is_untouched(db):
         (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
         for message in messages
     )
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_issues_already_in_labeled_list(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=824,
+        issue_title="open labeled work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    db.add(item)
+    await db.commit()
+    open_issue = _issue(824, ["claude-deck-ready"])
+    client = _FakeClient(labeled=[open_issue], by_number={824: open_issue})
+
+    await github_watcher_service.poll_scope(db, scope, client)
+
+    requested = [number for call in client.by_number_calls for number in call]
+    assert 824 not in requested
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_sweep_fetches_only_issues_absent_from_labeled_list(db):
+    scope = await _make_scope(db)
+    labeled_item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=825,
+        issue_title="open labeled work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    absent_item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=826,
+        issue_title="closed absent work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    db.add_all([labeled_item, absent_item])
+    await db.commit()
+    open_issue = _issue(825, ["claude-deck-ready"])
+    closed_issue = _issue(826, ["claude-deck-ready"])
+    closed_issue["state"] = "closed"
+    client = _FakeClient(
+        labeled=[open_issue],
+        by_number={825: open_issue, 826: closed_issue},
+    )
+
+    await github_watcher_service.poll_scope(db, scope, client)
+
+    requested = [number for call in client.by_number_calls for number in call]
+    assert requested == [826]
+    await db.refresh(labeled_item)
+    await db.refresh(absent_item)
+    assert labeled_item.dispatch_status == "escalated"
+    assert absent_item.dispatch_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_sweep_does_not_treat_absent_open_issue_as_closed(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=858,
+        issue_title="open unlabeled work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="dispatch_label_removed",
+        pr_number=860,
+    )
+    db.add(item)
+    await db.commit()
+    open_issue = _issue(858, [])
+    client = _FakeClient(labeled=[], by_number={858: open_issue})
+
+    await github_watcher_service.poll_scope(db, scope, client)
+
+    requested = [number for call in client.by_number_calls for number in call]
+    assert requested == [858]
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "dispatch_label_removed"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not any(
+        (message.payload or {}).get("kind") == "github_dispatch_blocker_merged"
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_sweep_makes_no_request_when_all_stalled_items_are_labeled(db):
+    scope = await _make_scope(db)
+    escalated = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=827,
+        issue_title="open escalated work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    failed = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=828,
+        issue_title="open failed work",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="failed",
+        escalation_reason="launch_failed",
+    )
+    db.add_all([escalated, failed])
+    await db.commit()
+    escalated_issue = _issue(827, ["claude-deck-ready"])
+    failed_issue = _issue(828, ["claude-deck-ready"])
+    client = _FakeClient(
+        labeled=[escalated_issue, failed_issue],
+        by_number={827: escalated_issue, 828: failed_issue},
+    )
+
+    await github_watcher_service.poll_scope(db, scope, client)
+
+    assert client.by_number_calls == []
+    await db.refresh(escalated)
+    await db.refresh(failed)
+    assert escalated.dispatch_status == "escalated"
+    assert failed.dispatch_status == "failed"
