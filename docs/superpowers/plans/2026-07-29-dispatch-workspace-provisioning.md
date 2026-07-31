@@ -2,11 +2,12 @@
 
 Design: `../specs/2026-07-29-dispatch-workspace-provisioning-design.md` — **read it first**, especially §2.4 (why nothing releases on terminal status), §2.5 (reclaim) and §2.6 (`clean -fd`, not `-fdx`, and the forced switch). Those three are where this task can do real damage.
 
-**This is the third version.** The first was reviewed and judged unsafe (`/tmp/dispatch-workspace-provisioning-plan-review.md`, 11 findings); the revision was reviewed again (`/tmp/dispatch-workspace-provisioning-plan-rereview.md`, 4 findings + a contract clarification) and judged "sound enough to implement" once those were amended. Every finding from both is now adopted or explicitly deferred. Three things follow:
+**This is the fourth version, and it has been through three reviews.** The first judged it unsafe (`/tmp/dispatch-workspace-provisioning-plan-review.md`, 11 findings); the second judged the lease design "sound enough to implement" with 4 findings + a contract clarification (`/tmp/dispatch-workspace-provisioning-plan-rereview.md`); the third found 2 further safety blockers, 3 contract inconsistencies and 1 stale instruction (`/tmp/dispatch-workspace-provisioning-plan-rereview-2.md`). Every finding from all three is adopted or explicitly deferred. Four things follow:
 
-- **Where this plan and either review disagree, this plan wins** — it was written after both, and each finding was verified against the code before being adopted (see the two "what changed" tables at the end). In two places the reviews' own proposed fixes were incomplete, and the plan says which.
+- **Where this plan and any review disagree, this plan wins** — it was written after all three, and each finding was verified against the code before being adopted (see the three "what changed" tables at the end). In four places a review's own proposed fix was incomplete or unsafe, and the plan says which and why.
 - First-review finding 6 ("no supported way to populate the pool") was already fixed before that review, in a commit that had not been pushed. That is why the first reviewed copy still said "no new endpoints."
 - The endpoint count went "none" → two → **four**. Each addition is derived from a traced deadlock, not from convenience; Task 5b shows the traces.
+- **Three of the third review's six findings are the same mistake in different clothes:** a check that proves a path *belongs* to the repo, used as if it proved *what the path is*. Registration therefore validates `kind` in both directions (Task 2f). If you find yourself writing a validator that answers "is this in the repo?", ask what it is being trusted to answer.
 
 Scope: backend service + schema + four endpoints + four small frontend edits. Tasks 1-3 are the substance; Task 4 is a **deliberate non-change** and must be read, not skipped; Task 5 is surface area.
 
@@ -253,13 +254,32 @@ Disabling on *any* failure — which the earlier draft did — converts a networ
 
 A successful reset clears `provision_error` (2b step 5). Recovery must not need an operator.
 
-### 2f. `provision_worktree` — provision **or adopt**
+### 2f. `register_workspace` — provision, adopt, or register the primary
+
+**Renamed, and it takes `kind`.** Third-review finding 3: the previous signature had no `kind` parameter while Task 5b called it for both kinds and said "the method decides" — which it could not do, since the one input it needed was the one not passed. Renaming rather than bolting `kind` onto `provision_worktree` is the honest fix: two of the three paths provision nothing, and a method named `provision_*` that sometimes runs no mutating git command at all is a name that will mislead the next reader exactly the way this one misled the plan.
 
 ```python
-async def provision_worktree(
-    self, db, scope, path: str, *, dispatchable: bool = True, enabled: bool = True
+async def register_workspace(
+    self,
+    db,
+    scope,
+    path: str,
+    *,
+    kind: str = "worktree",
+    dispatchable: bool = True,
+    enabled: bool = True,
 ) -> GithubWorkspace:
 ```
+
+Three paths, chosen after the probes below:
+
+| `kind` | Path state | Action |
+|---|---|---|
+| `worktree` | does not exist / empty dir | `_provision_worktree(...)` — the private helper that runs `git worktree add` |
+| `worktree` | existing linked worktree of this repo | adopt: insert a row, **no** `worktree add` |
+| `primary` | existing primary checkout of this repo | register: insert a row, zero mutating git commands |
+
+Keep `_provision_worktree` private and let it hold only the `worktree add` call, so the one mutating git command in this service has exactly one call site. Everything else — probing, validation, the row insert — belongs to `register_workspace`.
 
 Two cases, decided by probing the path **before** running anything mutating. This is re-review finding 1, and without it **the documented rollout cannot succeed** — verified against the real target:
 
@@ -278,16 +298,22 @@ exit=128
 
 **Case B — adoption.** Path already exists and is a git worktree of *this* repo. Register the row and run **no** `worktree add`. `tizonia-openmax-il-issue-818` is exactly this case: it holds #818's history, it is already a valid pool member, and design §7 says register rather than delete it.
 
-Adoption must be **validated, not assumed** — a path that exists is not necessarily a worktree of this repo. Two probes, both required:
+Adoption must be **validated, not assumed** — a path that exists is not necessarily a worktree of this repo, and even if it is, it may be the *primary*. Three probe values, all required:
 
 ```python
-["-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"]   # must equal scope's
-["-C", path, "rev-parse", "--show-toplevel"]                             # must equal path
+["-C", path, "rev-parse", "--path-format=absolute",
+ "--git-dir", "--git-common-dir", "--show-toplevel"]
+# line 1 (--git-dir):        == line 2 → primary checkout;  != line 2 → linked worktree
+# line 2 (--git-common-dir): must equal the scope's own --git-common-dir
+# line 3 (--show-toplevel):  must equal `path`
 ```
+
+One `rev-parse` invocation returns all three, one per line, in the order requested — no reason to spend three subprocesses.
 
 | Probe result | Meaning | Action |
 |---|---|---|
-| both match | a worktree (or the primary) of this repo, at its root | adopt |
+| all three match, `--git-dir` **differs** from `--git-common-dir` | a **linked worktree** of this repo, at its root | adopt as `kind="worktree"` |
+| all three match, `--git-dir` **equals** `--git-common-dir` | the **primary checkout** | adopt only as `kind="primary"` — reject for `worktree` (§2.9, third-review finding 2) |
 | `--git-common-dir` differs | belongs to **another repository** | reject, 409 |
 | exit 128 / "not a git repository" | plain directory with content in it | reject, 409 — `worktree add` would fail anyway |
 | common-dir matches, `--show-toplevel` differs | a **subdirectory** of a worktree | reject, 409 |
@@ -310,9 +336,56 @@ $ git -C .../tizonia-openmax-il-issue-818 rev-parse --path-format=absolute --git
 /home/juan/work/repos/tizonia/tizonia-openmax-il/.git
 ```
 
-**Apply the same repo-identity validation to `kind="primary"`.** Canonicalising a path proves directory identity, not repository membership; registering an unrelated repo as this scope's primary would be accepted silently today. For `primary`, additionally require that `--show-toplevel` equals the path and that the common dir matches — then issue **no** git commands beyond those two read-only probes. (`rev-parse` is read-only; "zero git commands" in the design meant zero *mutating* commands. State it that way in the test so the assertion is on mutation, not on call count.)
+**The third probe exists because the first two do not distinguish the primary from a worktree.** Third-review finding 2, verified and serious: the human checkout satisfies *both* the common-dir and `--show-toplevel` conditions, so `{"path": scope.repo_path, "kind": "worktree"}` would have been accepted — and since worktrees default `dispatchable=True`, that registers the human's checkout as an autonomous work target. It re-opens the *first* review's finding 1 through the validator that was written to make adoption safe. The discriminator is `--git-dir` vs `--git-common-dir`, verified on the real rollout target:
+
+```
+# primary
+$ git -C .../tizonia-openmax-il rev-parse --path-format=absolute --git-dir --git-common-dir
+/home/juan/work/repos/tizonia/tizonia-openmax-il/.git
+/home/juan/work/repos/tizonia/tizonia-openmax-il/.git          # equal → primary
+
+# linked worktree
+$ git -C .../tizonia-openmax-il-issue-818 rev-parse --path-format=absolute --git-dir --git-common-dir
+/home/juan/work/repos/tizonia/tizonia-openmax-il/.git/worktrees/tizonia-openmax-il-issue-818
+/home/juan/work/repos/tizonia/tizonia-openmax-il/.git          # differ → linked
+```
+
+**So validate `kind` semantics, not just repository membership** — both directions, because each protects something different:
+
+| Request | Rule | Rejecting it prevents |
+|---|---|---|
+| `kind="worktree"` | `--git-dir` must **differ** from `--git-common-dir`, and `path != scope.repo_path` | the human checkout becoming a dispatchable work target |
+| `kind="primary"` | `--git-dir` must **equal** `--git-common-dir`, and the common dir must match the scope's | an unrelated repo, or a linked worktree, being registered as this scope's primary |
+
+Check `path != scope.repo_path` **as well as** the git-dir test even though they overlap. They fail differently: the string test is free and catches the ordinary case with a clear message, while the git-dir test catches the case where a scope's `repo_path` is itself a linked worktree — legal, and then the primary of that repo is some third directory the scope never names.
+
+`rev-parse` is read-only, so this is not a violation of "the primary is not Deck's to mutate": the standing rule is zero *mutating* git commands on a primary, and three lines of `rev-parse` output are not a mutation. State the test that way (finding 6 below).
 
 If `worktree add` fails because a *stale* registration exists for a path whose directory was deleted, the git error names it and tells the operator to run `git worktree prune`. Do **not** run `prune` automatically — it mutates the primary's metadata for all worktrees, and Deck's standing rule is that the primary is not Deck's to mutate. Surface the error.
+
+**Adoption also needs an occupancy gate, which provisioning does not.** Third-review finding 4. A freshly provisioned worktree is known empty and known unoccupied; an adopted one is neither. Deck's *first* live action after this merges is adopting a hand-created soak worktree, so this is the one path where the guess is load-bearing. Two checks before an adopted row may be `dispatchable=True`:
+
+```python
+["-C", path, "status", "--porcelain"]        # must be empty
+```
+
+- **Clean tree.** Non-empty output → reject with 409 and the porcelain output. Note this is `--porcelain` *without* `--untracked-files=no`: untracked files matter here, because the next `acquire` runs `clean -fd` and will delete them. Ignored files are excluded by default, which is right — the whole point of §2.1 is that ignored build dirs survive.
+- **No live session using the path.** `discover_agent_sessions()` (`app/services/agent_bridge/discovery.py:98`) returns a `cwd` per pane (`:88`); reject if any session's `cwd` resolves to `path`. Compare with `os.path.realpath` on both sides, not raw strings — the whole reason `normalize_repo_path` exists.
+
+Both are advisory-strength rather than airtight — a pane can `cd` elsewhere and an agent can start writing a second after the check — and that is fine. This is a synchronous operator action, not an automated gate, and its job is to stop the obvious mistake of adopting a directory something is visibly working in.
+
+**Measured on the real rollout target, which is why this gate is cheap:**
+
+```
+$ git -C .../tizonia-openmax-il-issue-818 status --porcelain | wc -l
+0                                             # clean — adoption proceeds
+$ tmux list-panes -a -F '#{pane_current_path}' | sort | uniq -c
+      5 /home/juan/work/repos/tizonia/tizonia-openmax-il      # 5 live sessions — on the PRIMARY
+```
+
+Read those two together: the worktree Deck is about to adopt is clean and unoccupied, while the primary — the directory finding 2 would have let us register as dispatchable — has **five live agent sessions in it right now.** The gate passes for the intended target and would have caught the dangerous one. That is the argument for including it in PR A rather than deferring it.
+
+The review's alternative was to default adopted rows to `dispatchable=False` pending a separate activation action. Not adopted: it adds a third endpoint to un-stage them, and §7 step 2 would then register a pool with zero dispatchable workspaces, so rollout would appear to succeed and dispatch nothing. Validate at adoption instead, and let an operator who *wants* a staged row pass `dispatchable=false` explicitly — which Task 5b step 4 already honours.
 
 **Ordering, and the resolution of a contradiction the first review caught (finding 10):** `git worktree add` runs *before* any row exists, so a failure there has nowhere to write `provision_error`. On failure, raise, and **persist no row** — the API surfaces the git error to the operator, who is standing right there because registration is a synchronous human action. A half-registered disabled row would be worse: something they must then discover and clean up. So `provision_error` is only ever written for **reset** failures on an existing row, and the earlier "test 20" that said provisioning failure writes `provision_error` and returns quietly is withdrawn.
 
@@ -320,7 +393,7 @@ If `worktree add` fails because a *stale* registration exists for a path whose d
 
 This method gets an HTTP caller in Task 5 (design §2.10). It is not dead code and it is not driven from a REPL.
 
-Tests: design §6 items **24-31**, in a new `tests/agent_teams/test_github_workspace_service.py`. Inject a fake runner that records `args` lists and can be told which step fails.
+Tests: design §6 items **24 through 31 inclusive of every lettered sub-item** — 24, 24a-24k, 25-31 — in a new `tests/agent_teams/test_github_workspace_service.py`. The lettered ones are not optional extras; 24g and 24i/24j are the third review's safety blockers. Inject a fake runner that records `args` lists and can be told which step fails.
 
 **Item 25 must assert the absence of `-x`**, e.g.:
 
@@ -331,7 +404,11 @@ assert not any("-x" in arg or "-fdx" == arg for call in calls for arg in call)
 
 **Item 26 must assert `--force` on the switch and an explicit ref on the reset** — the exact regression the review found.
 
-**Item 27 must assert zero git calls** for `kind="primary"` — not "no destructive calls", *zero*.
+**Item 27 must assert zero *mutating* git calls** for `kind="primary"` — and additionally that the calls which *do* happen are exactly the read-only identity probes. Third-review finding 6: this line used to say "zero git calls, not 'no destructive calls', *zero*", which the same task now contradicts by requiring `rev-parse` probes on the primary. An implementer following it literally would either skip the probes (re-opening finding 2) or write a test that cannot pass. Assert on mutation, not on call count:
+
+```python
+assert all(call[2] == "rev-parse" for call in calls)   # ["-C", path, "rev-parse", ...]
+```
 
 **Item 28 must assert `enabled is True` after a `fetch` failure.** This is the one whose absence let the earlier draft ship a pool-draining bug; it is worth writing first.
 
@@ -384,17 +461,17 @@ In the `launcher(...)` call (`:240`):
 
 The earlier draft released only in the `except ValueError:` block. That is the *rare* path. Read `agent_team_service.py:606-649` before writing this: `_launch_slot` wraps spawning in `except Exception` and **returns** `AgentTeamLaunchResultItem(status="failed")` rather than raising. Dispatch then handles that at `:250-262` by setting `dispatch_status="failed"` — with no release. So the most likely real failure, tmux or the provider CLI refusing to start, leaks the lease.
 
-Release in all of these:
+Release on the *returned* failure statuses only. **No exception path releases** — third-review finding 1, and it goes further than that review proposed; see below.
 
 | Where | Outcome | Action |
 |---|---|---|
-| `except ValueError:` (`:244-250`) | escalate `plan_blocked` | release, then `continue` |
+| `except ValueError:` (`:244-250`) | escalate `plan_blocked` | **do not release** — escalation + reclaim handles it (below) |
 | `:250-262`, returned `status="failed"` | `dispatch_status="failed"` | **release**, then `continue` |
 | same block, `status="blocked"` / `"blocked_provider_unavailable"` / `"blocked_agent_mail_not_configured"` | blocked statuses | **release**, then `continue` |
-| any other exception | no handler today | release, then re-raise |
 | returned `status="pending_registration"` | **success — this is what a successful spawn returns** | **do not release** |
 | returned `status="reused"` | a session was reused (unreachable today — `reuse_existing=False`) | **do not release** |
 | anything else | unknown | **do not release — fail closed** |
+| **any exception escaping `launcher(...)`** | **unknown — may have spawned already** | **do not release**; escalate `launch_outcome_unknown`, re-raise (below) |
 
 **There is no `"launched"` status.** An earlier draft of this table invented one, and re-review finding 3 is right that following the table literally would have been dangerous: an implementer matching on `"launched"` finds no match, falls into the unknown/else branch, and releases the workspace out from under a session that just spawned successfully. Verified — `_execute_plan_item` returns `status="pending_registration"` on the success path (`agent_team_service.py:627-638`) and the full status vocabulary is a `Literal` at `schemas.py:2039-2050`:
 
@@ -430,9 +507,30 @@ Belt and braces, and cheap: **never release when the result item carries a real 
 
 The unifying rule, and the reason this is not an exception to Task 4: **release is licensed by the absence of a process, never by a status.** A launch that failed produced no session, so nothing is in the directory and the next acquire's reset is safe. A merge does not produce that guarantee, which is why Task 4 releases nothing.
 
-Holding the lease on the failure paths would leak it constantly rather than occasionally — `plan_blocked` is currently the most common escalation reason in the live soak (10 of 11 items), and with one dispatchable workspace at rollout a single leak wedges autonomy until the next sweep.
+Holding the lease on the *returned* failure statuses would leak it constantly rather than occasionally — those paths carry positive evidence that no session exists, and with one dispatchable workspace at rollout a single leak wedges autonomy until the next sweep.
 
-Tests: design §6 items 14-17. Item 15 (returned `failed` releases) is the one that maps to the real-world failure; do not settle for the `ValueError` test alone.
+### 3d-i. No exception releases the lease — and `except ValueError` is not a safe carve-out
+
+Third-review finding 1 is correct: an earlier draft of the table above ended "any other exception → release, then re-raise", which contradicts Task 4's own rule. Read design §2.3a for the full argument; the implementation consequences are these.
+
+**Why an exception is different from a returned `failed`.** `_execute_plan_item` wraps spawning in `except Exception` and *returns* `status="failed"` (`:639-648`), so a failed spawn reports itself as data and the no-process fact is part of that report. An exception carries no position information — dispatch calls `launcher(...)` once and cannot tell whether it raised before or after `tmux new-session`. And it can raise after: because spawn exceptions are swallowed, anything escaping `launch()` comes from the post-loop code — `await db.commit()`, `await db.refresh(launch)`, and the `AgentTeamLaunchResult(...)` construction (`:527-542`) — all of which run after every slot has already spawned.
+
+**The part to be careful about, which the review did not flag.** The review suggested `ValueError` from the pre-spawn plan gate "may remain a known-safe release path." **Do not implement that.** Two independent reasons, both verified:
+
+- The existing `except ValueError:` at `:244-250` does not wrap only the plan gate — it wraps `_dispatch_brief`, `_send_dispatch_brief_to_slot` *and* the whole `launcher(...)` call (`:213-243`). A `ValueError` arriving there could have come from `:495` (pre-spawn) or from anywhere inside `launch()` (post-spawn). The handler cannot distinguish them.
+- `ValueError` is not even a reliable proxy for "pre-spawn" inside `launch()`: `PlanConflictError` subclasses `ValueError` (`agent_team_service.py:54`) *and* `pydantic.ValidationError` subclasses `ValueError` (verified, pydantic 2.12.5) — and the `AgentTeamLaunchResult` construction that can raise the latter runs after every spawn.
+
+So `except ValueError: release` fails for exactly the reason matching on `"launched"` failed: the discriminator looks sound and does not hold.
+
+**What to do instead.** In the `except ValueError:` block, keep the existing `escalate(db, item, "plan_blocked")` untouched and simply **do not release**. In a new outer `except Exception:`, escalate with reason `launch_outcome_unknown` and re-raise. `launch_outcome_unknown` is a new **escalation reason string**, not a new `dispatch_status` — the hard constraints forbid new statuses and `escalated` already means what is needed.
+
+**Why this costs almost nothing, which is the objection to answer.** `plan_blocked` is the most common escalation in the live soak (10 of 11 items) and arrives as a `ValueError`, so retaining on it sounds like a constant leak. It is not, structurally: the `"Launch plan is blocked"` raise at `agent_team_service.py:495` happens *before* `db.add(launch)` at `:509`, so no `AgentTeamLaunch` and no `AgentTeamLaunchItem` row exists. `slot_has_live_owner_session` joins `MailAgentSession` **through** `AgentTeamLaunchItem` (`:106-130`), so with no launch item it cannot return true. The item is `escalated`, which reclaim's status set covers (Task 2d), and the very next sweep releases it — one poll interval, not a wedge.
+
+That is the general shape worth internalising: **a pre-spawn failure cannot fake liveness, so there is no need to guess about it.** Ask the liveness gate a question it can actually answer instead of encoding a guess in an exception type.
+
+Tests: design §6 items **17** and **17c** — both **inverted** from what an earlier draft asserted. Item 17 now requires that an unexpected exception *retains* the lease; if you find yourself writing "asserts release on exception", you are implementing the version the third review rejected.
+
+Tests: design §6 items 14, 15, 16, 17, 17a, 17b, 17c. Item 15 (returned `failed` releases) is the one that maps to the real-world failure; do not settle for the `ValueError` test alone — and note that 17/17c require the `ValueError` path *not* to release, which is the opposite of the earlier draft.
 
 ### 3e. `_dispatch_brief` takes a workspace
 
@@ -545,7 +643,7 @@ Plus the reclaim guards: **item 19** (non-working status + live owner session �
 
 ### 5b. Four workspace/lifecycle endpoints — read design §2.10 first
 
-An earlier draft of this plan said "no new endpoints." That was copy-forwarded boilerplate from two earlier plans where it was actually derived, and it is wrong here: without an endpoint, `provision_worktree` has no caller and workspace registration can only happen by hand-editing the live database, which is forbidden. §2.10 has the full reasoning. (The first review copy you may have seen still carried the prohibition — it was written against a commit that had not been pushed.)
+An earlier draft of this plan said "no new endpoints." That was copy-forwarded boilerplate from two earlier plans where it was actually derived, and it is wrong here: without an endpoint, `register_workspace` has no caller and workspace registration can only happen by hand-editing the live database, which is forbidden. §2.10 has the full reasoning. (The first review copy you may have seen still carried the prohibition — it was written against a commit that had not been pushed.)
 
 The count then went from two to **four** on re-review, because two endpoints register a pool but cannot *operate* one. Both additions close a deadlock, and each is derived, not preferred:
 
@@ -635,14 +733,17 @@ Behaviour, in order:
 3. Normalise `path` with `agent_team_service.normalize_repo_path` — the same call `_apply_scope_create` uses for `repo_path` (`:135-137`). It runs `os.path.realpath`, so `~/foo`, `/home/juan/foo` and a symlink to either collapse to one string *before* the global `UniqueConstraint("path")` sees them. Without this the constraint is trivially bypassable and the exclusivity claim is fiction.
 4. **Resolve `dispatchable` and `enabled` here, then pass both to the service.** `dispatchable` when the request leaves it `None`: **`False` for `kind="primary"`**, `True` for `kind="worktree"`. That is the finding-1 fix at the registration end — it must not be possible to register the human's checkout as dispatchable by accident, only deliberately. An **explicit** `dispatchable` in the request wins over the default in both directions: `dispatchable=false` on a worktree (staging a workspace before putting it in service) and `dispatchable=true` on a primary (a deliberate, unusual choice) must both be honoured. `enabled` passes through as given, defaulting `True`.
 
-   This is the re-review's contract clarification, and it is a real bug in the earlier draft, not a documentation gap: the request model exposed both fields while `provision_worktree(db, scope, path)` accepted neither, so the endpoint would have accepted `dispatchable=false` and silently produced a dispatchable row. Task 2f's signature now takes both keyword-only. There is exactly **one** place either value is written — the insert inside `provision_worktree` — for both the provisioning and adoption paths and for `kind="primary"`.
-5. `await github_workspace_service.provision_worktree(db, scope, path, dispatchable=..., enabled=...)` for **both** kinds. The method itself decides provision vs. adopt vs. primary-register (Task 2f); the endpoint does not branch on `kind` beyond validating it and defaulting `dispatchable`. Keeping the branch inside the service is what guarantees the identity probes run for `kind="primary"` too — an endpoint-level `if kind == "primary": db.add(...)` shortcut is how the earlier draft skipped them.
-6. Provisioning/adoption failure → surface the git error (409 with the git output) and persist **no row** (Task 2f). This covers `worktree add` failing, a foreign repo, a nested subdir, and a non-git directory.
-7. `IntegrityError` → 409 `"Workspace path already registered"`, mirroring `create_github_scope` (`:337-339`). Note the message is not "for this scope" — the constraint is global, and the conflicting row may belong to a different scope, which is exactly the case worth telling the operator about. Without this handler the duplicate-path constraint surfaces as a 500.
+   This is the second review's contract clarification, and it is a real bug in the earlier draft, not a documentation gap: the request model exposed both fields while `provision_worktree(db, scope, path)` accepted neither, so the endpoint would have accepted `dispatchable=false` and silently produced a dispatchable row. Task 2f's signature now takes both keyword-only. There is exactly **one** place either value is written — the insert inside `register_workspace` — for both the provisioning and adoption paths and for `kind="primary"`.
+5. **Query for the canonical `path` and 409 if a row already exists — before calling the service at all.** Third-review finding 5, and it is a real orphan-producing ordering bug, not just a nicer error: for a path that is registered in the DB but *missing on disk*, the earlier flow reached `git worktree add`, succeeded, and then failed the row insert on the global `UniqueConstraint("path")`. The `IntegrityError` handler returns a clean 409 and the request looks correctly rejected — while a **new git worktree now exists on disk that Deck has no row for.** Nothing will ever reset it, reclaim it, or tell the operator it is there. Do the `select` first; a mutating git command must not run on a path Deck already knows about.
+
+   Keep the `IntegrityError` handler anyway (step 8) for the concurrent-request race. Check-then-act is not atomic, and the constraint is the only thing that actually enforces uniqueness — the pre-check exists to protect the *filesystem*, the constraint to protect the *table*.
+6. `await github_workspace_service.register_workspace(db, scope, path, kind=kind, dispatchable=..., enabled=...)` for **both** kinds. The method decides provision vs. adopt vs. primary-register (Task 2f); the endpoint does not branch on `kind` beyond validating it and defaulting `dispatchable`. Keeping the branch inside the service is what guarantees the identity probes run for `kind="primary"` too — an endpoint-level `if kind == "primary": db.add(...)` shortcut is how an earlier draft skipped them.
+7. Provisioning/adoption failure → surface the git error (409 with the git output) and persist **no row** (Task 2f). This covers `worktree add` failing, a foreign repo, a nested subdir, a non-git directory, a `kind`/git-dir mismatch either way, and an adopted tree that is dirty or occupied.
+8. `IntegrityError` → 409 `"Workspace path already registered"`, mirroring `create_github_scope` (`:337-339`). Note the message is not "for this scope" — the constraint is global, and the conflicting row may belong to a different scope, which is exactly the case worth telling the operator about. Without this handler the duplicate-path constraint surfaces as a 500.
 
 **No `DELETE`.** Design §5 forbids Deck removing worktrees, and a delete whose lease check was wrong would pull the directory out from under a running agent.
 
-Tests: design §6 items 35, 36, **36a**.
+Tests: design §6 items 35, **35a**, 36, **36a**. Item 35a is the pre-check ordering test — a registered-but-missing path must 409 with zero mutating git commands.
 
 ### 5b-iii. `POST .../workspaces/{workspace_id}/reprobe` — the repair path
 
@@ -788,9 +889,9 @@ pytest tests/ -q            # full suite; report any pre-existing failure, do no
 cd ../frontend && npm run lint && npx tsc --noEmit
 ```
 
-Expected: baseline + ~51 new tests. Report the actual number.
+Expected: baseline + ~58 new tests. Report the actual number.
 
-Sanity checks — all twelve must hold:
+Sanity checks — all seventeen must hold:
 
 ```bash
 grep -rn "fdx\|'-x'\|\"-x\"" app/services/github_workspace_service.py    # must be EMPTY
@@ -809,11 +910,22 @@ grep -n "path-format=absolute" app/services/github_workspace_service.py  # must 
 grep -n "show-toplevel" app/services/github_workspace_service.py         # must appear beside it
 grep -rn "worktree.*prune\|\"prune\"" app/services/github_workspace_service.py
 # must show ONLY "--prune" on the fetch; NO "git worktree prune"
+grep -n "git-dir" app/services/github_workspace_service.py
+# must appear in the identity probe, beside --git-common-dir — this is the primary/linked discriminator
+grep -n "repo_path" app/services/github_workspace_service.py
+# must show the kind="worktree" guard: path must NOT equal scope.repo_path
+grep -n "status.*porcelain" app/services/github_workspace_service.py     # must appear in the adoption gate
+grep -n "except ValueError" app/services/github_dispatch_service.py
+# the existing handler stays, but must NOT contain a release call
+grep -n "provision_worktree" app/services/*.py app/api/v1/*.py
+# must be EMPTY or private-only — the public method is register_workspace(kind=...)
 ```
 
 The third and fourth are the two findings the first review caught that a passing test suite would not have caught on its own. The fifth is the Task 4 inversion in one command: if either file shows a diff, the terminal release went back in.
 
-The last four are the re-review's findings in the same form. `grep launched` catches the invented status: if it appears anywhere, a release condition is matching a string the launcher never emits. The two `rev-parse` greps catch an identity check that compiles and passes a naive test but rejects every real adoption (relative common-dir) or accepts a nested subdir. And the `prune` grep catches an implementer helpfully "fixing" a stale worktree registration by mutating the primary's metadata.
+The next four are the second review's findings in the same form. `grep launched` catches the invented status: if it appears anywhere, a release condition is matching a string the launcher never emits. The two `rev-parse` greps catch an identity check that compiles and passes a naive test but rejects every real adoption (relative common-dir) or accepts a nested subdir. And the `prune` grep catches an implementer helpfully "fixing" a stale worktree registration by mutating the primary's metadata.
+
+The last five are the third review's. `grep git-dir` is the important one: without that probe the identity check still passes every test written for the *second* review's findings while accepting `{"path": scope.repo_path, "kind": "worktree"}` — the human checkout, registered dispatchable. `grep except ValueError` catches the release that must not be there; if a release call sits in that handler, a `ValidationError` raised after tmux spawned will reset a directory under a live agent. And `grep provision_worktree` catches a half-applied rename, where the endpoint still calls a method that never learned about `kind`.
 
 The `outerjoin` check is not pedantry: an inner join there drops every unleased item from the work-items list, which is most of them, and the UI would look empty rather than broken.
 
@@ -827,8 +939,12 @@ Open ONE PR into `feature/autonomous-github-dispatch` describing:
 - **that nothing releases on `merged`/`completed`, and why** — `tmux new-session -d` outlives the merge. Name this as the PR's main deliberate limitation, with the latency cost stated, and point at PR B;
 - **that autonomy must stay off until PR B lands** (design §4.1a) — PR A is a staging PR whose only prompt releaser is a human, so unattended dispatch on a size-1 pool can stall indefinitely and will look like the Finding 14 wedge;
 - that launch failure *does* release, in every shape including the returned `status="failed"` — and that the unifying rule is "release is licensed by the absence of a process, never by a status";
+- **that no *exception* releases**, including `ValueError` — an exception says nothing about whether tmux already spawned, and `ValidationError` subclasses `ValueError` and can be raised post-spawn (design §2.3a);
+- that registration validates `kind` in **both** directions via `--git-dir` vs `--git-common-dir`, and that without it the human's checkout could be registered as a dispatchable worktree — the first review's finding 1 reopened through the adoption validator;
+- that adoption additionally requires a clean tree and no live session on the path, because a fresh worktree is known unoccupied and an adopted one is not;
+- that the duplicate-path check runs **before** any mutating git command, so a rejected request cannot leave an unregistered worktree on disk;
 - that the success status is **`pending_registration`**, that the release condition is a positive list with a **fail-closed** default, and that a non-`None` `tmux_target` vetoes release regardless of status;
-- **adoption** — `worktree add` exits 128 on an existing worktree, so registering `issue-818` requires it; and the two probes it needs (`--path-format=absolute --git-common-dir` *and* `--show-toplevel`), naming both traps: the relative common-dir from the primary, and a nested subdir sharing a common-dir;
+- **adoption** — `worktree add` exits 128 on an existing worktree, so registering `issue-818` requires it; and the three probe values it needs (`--git-dir`, `--git-common-dir` under `--path-format=absolute`, and `--show-toplevel`), naming all three traps: the relative common-dir from the primary, a nested subdir sharing a common-dir, and the primary satisfying every check that only tests repo membership;
 - the two operability endpoints and the deadlock each closes: `reprobe` (a disabled workspace can otherwise never be re-enabled) and `abandon` (a `ready_for_review` item holds the only workspace forever — all four pre-existing exits closed);
 - that `abandon` deliberately **does not** release the lease or kill the session — it changes status only, leaving the liveness gate as the single arbiter of release;
 - `clean -fd` vs `-fdx` and the 1.1 GB build dir; `switch --detach --force` and the dirty-tree abort it fixes;
@@ -859,13 +975,32 @@ Then STOP and report. Do not merge. Do not restart the backend. Do not register 
   - `POST` `/github-scopes/{scope_id}/workspaces/{workspace_id}/reprobe`
   - `POST` `/github-work-items/{work_item_id}/abandon`
 
-  No `DELETE` anywhere. No `PATCH` on workspaces — `reprobe` re-enables only on a successful reset, and a field write would let an operator assert a broken tree is healthy. No force-release endpoint — `abandon` changes status and leaves release to the liveness gate. (The count went "none" → two → four across two reviews. Each addition was derived from a traced deadlock, and the number is not a budget to spend.)
+  No `DELETE` anywhere. No `PATCH` on workspaces — `reprobe` re-enables only on a successful reset, and a field write would let an operator assert a broken tree is healthy. No force-release endpoint — `abandon` changes status and leaves release to the liveness gate. No workspace *activation* endpoint either: the third review suggested defaulting adopted rows to `dispatchable=False` pending one, and adoption validates instead (Task 2f). (The count went "none" → two → **four** and stayed there across the third review. Each addition was derived from a traced deadlock, and the number is not a budget to spend.)
+- **`register_workspace` is the only public entry point** to the service's registration path, and `_provision_worktree` — the one method that runs `git worktree add` — stays private with exactly one call site. Do not add a second caller of `worktree add`, and do not reintroduce a public `provision_worktree`.
+- **No release call inside `except ValueError`** (`github_dispatch_service.py:244-250`). The existing `escalate(db, item, "plan_blocked")` stays exactly as it is; the lease is released by the reclaim sweep, not there. Task 3d-i has the reasoning, and it is the third review's blocker 1.
 - **Frontend changes are limited to Task 5d's four edits.** No new components, no new pages, no scope-form fields.
 - Do not enable/disable autonomy, spawn or kill agent sessions, hand-edit DB rows, or restart the backend.
 - Report — do not rewrite — any pre-existing failing test. `tests/test_multi_provider_smoke.py:54` is known-failing on the base branch (stale monkeypatch target); it is not yours.
 - Do not run `git worktree prune`, and do not add it as a fallback when `worktree add` fails on a stale registration. It rewrites the primary's worktree metadata for every worktree. Surface the error (Task 2f).
 - **Autonomy stays off after this PR merges** (design §4.1a). Deployment is the orchestrator's job, but do not write anything in the PR description implying PR A is ready to run unattended.
-- **If a step looks wrong, STOP and report rather than improvising.** Seven traps in particular, each with a soak finding or a review finding behind it: if `clean -fd` seems insufficient; if reclaiming unconditionally on escalation seems simpler; if releasing on `merged` seems obviously correct; if disabling a workspace on any git failure seems safer; if `git worktree add` seems like it should handle an existing worktree; if comparing `--git-common-dir` alone seems sufficient to identify a worktree; or if `abandon` seems like it should release the lease directly. All seven are wrong, and the reasoning is in the design section each one cites.
+- **If a step looks wrong, STOP and report rather than improvising.** Eleven traps in particular, each with a soak finding or a review finding behind it: if `clean -fd` seems insufficient; if reclaiming unconditionally on escalation seems simpler; if releasing on `merged` seems obviously correct; if disabling a workspace on any git failure seems safer; if `git worktree add` seems like it should handle an existing worktree; if comparing `--git-common-dir` alone seems sufficient to identify a worktree; if `abandon` seems like it should release the lease directly; if an exception from the launcher seems like proof that nothing spawned; if `except ValueError` seems like a safe "pre-spawn only" release path; if adopting a worktree seems as safe as creating one; or if catching `IntegrityError` seems like enough to reject a duplicate path. All eleven are wrong, and the reasoning is in the design section each one cites.
+
+## What changed from the twice-reviewed draft (third review)
+
+The amended plan was reviewed a third time (`/tmp/dispatch-workspace-provisioning-plan-rereview-2.md`): 2 safety blockers, 3 contract inconsistencies, 1 stale instruction. **All six verified against the code before adoption**; all six were real, and two are worse than the review states.
+
+| Third-review finding | Verified? | Resolution | Where |
+|---|---|---|---|
+| 1 — an exception is not proof no process exists | **yes, and the fix goes further** — the review would have kept `except ValueError` as a safe release; that handler wraps the whole `launcher(...)` call, and `PlanConflictError` *and* `pydantic.ValidationError` both subclass `ValueError`, the latter raisable post-spawn | **no** exception path releases; escalate `launch_outcome_unknown` and re-raise | Task 3d-i, design §2.3a, items 17/17c |
+| 2 — adoption can register the primary as a dispatchable worktree | **yes — the most dangerous finding of all three reviews.** The primary satisfies both existing probes, and worktrees default `dispatchable=True`, so the fix for the *second* review's finding 1 reopened the *first* review's finding 1 | third probe `--git-dir` vs `--git-common-dir`, plus `path != scope.repo_path`; `kind` validated in **both** directions | Task 2f, design §2.9, items 24g/24h |
+| 3 — `provision_worktree` has no `kind` parameter | yes — Task 5b said "the method decides" and did not pass the deciding input | renamed **`register_workspace(..., kind=...)`**; `_provision_worktree` kept private as the single `worktree add` call site | Task 2f, item 24k |
+| 4 — adopted worktrees need dirty-tree and occupancy checks | yes; and measured — the adoption target is clean with **0** sessions while the primary has **5** | clean `status --porcelain` + no live session `cwd` on the path, before an adopted row may be dispatchable | Task 2f, design §2.9, items 24i/24j |
+| 5 — duplicate paths must be checked before mutating git | **yes, and it silently orphans a worktree** — for a path in the table but missing on disk, `worktree add` succeeds, the insert then 409s, and the request *looks* correctly rejected while an unregistered worktree sits on disk forever | canonical-path `select` before any mutating git command; constraint retained for the race | Task 5b step 5, design §2.10, item 35a |
+| 6 — stale "zero git calls" instruction | yes — contradicted by the probes the same task requires | reworded to zero **mutating** calls + assert the calls are exactly `rev-parse` | Task 2f, item 27 |
+
+One review recommendation **not** adopted as written: defaulting adopted rows to `dispatchable=False` pending a separate activation action. It needs a fifth endpoint, and §7 step 2 would then register a pool with no dispatchable workspaces — a rollout that appears to succeed and dispatches nothing. Validating at adoption keeps the staged case available to anyone who passes `dispatchable=false` explicitly.
+
+The finding worth generalising is 2, because it is the third time this plan has made the same class of error: **a check that proves a path belongs to the repo, trusted to prove what the path is.** Membership is not identity. The `--git-common-dir` check answered "is this in the repo?" for both the second review's foreign-repo case and this one, and only the second needed a different question. When a validator's output is used to make a *safety* decision, state which question it answers and check that it is the question being asked.
 
 ## What changed from the re-reviewed draft (second review)
 
@@ -873,11 +1008,11 @@ The revised plan was reviewed again (`/tmp/dispatch-workspace-provisioning-plan-
 
 | Re-review finding | Verified? | Resolution | Where |
 |---|---|---|---|
-| 1 — `issue-818` cannot be registered; `worktree add` rejects an existing worktree | **yes**, exit 128 reproduced, and on the real target | adoption path with two identity probes; primary validated too | Task 2f, design §2.9 |
+| 1 — `issue-818` cannot be registered; `worktree add` rejects an existing worktree | **yes**, exit 128 reproduced, and on the real target | adoption path with identity probes; primary validated too (a third probe was added by the next review — see above) | Task 2f, design §2.9 |
 | 2 — a disabled workspace has no repair path | **yes**, traced five composing decisions into an inescapable state | `POST .../workspaces/{id}/reprobe`, re-enables only on success | Task 5b-iii, design §2.10a |
 | 3 — `launched` is not a real status | **yes**, success is `pending_registration` (`agent_team_service.py:631`) | positive status list + fail-closed default + `tmux_target` veto | Task 3d |
 | 4 — PR A cannot recover an abandoned `ready_for_review` item | **yes, doubly** — the watcher also skips any item with a `pr_number`, so adding the status alone would not have helped | `POST .../github-work-items/{id}/abandon` **and** an explicit autonomy-off gate | Task 5b-iv, design §2.10b, §4.1a, §4.2 |
-| contract — `enabled`/`dispatchable` exposed but not accepted | **yes**, `provision_worktree(db, scope, path)` took neither | both are keyword-only params of `provision_worktree`; endpoint resolves defaults and passes them | Tasks 2f, 5b step 4 |
+| contract — `enabled`/`dispatchable` exposed but not accepted | **yes**, `provision_worktree(db, scope, path)` took neither | both are keyword-only params of `register_workspace`; endpoint resolves defaults and passes them | Tasks 2f, 5b step 4 |
 
 Three things found while verifying, which the reviews did not raise and which the plan now carries:
 

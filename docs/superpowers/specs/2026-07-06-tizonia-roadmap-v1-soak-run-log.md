@@ -423,6 +423,28 @@ Process notes, both about the same failure mode as the first review's:
 
 Test obligations 37 → **51**. Amendment committed and **pushed** — the first review's lesson applied.
 
+### Finding 16 — third review, amended 2026-07-31
+
+Reviewed again (`/tmp/dispatch-workspace-provisioning-plan-rereview-2.md`): 2 safety blockers, 3 contract inconsistencies, 1 stale instruction. All six verified before adopting; all six real, and **two are worse than the review states**. The plan is now on its fourth version.
+
+1. **The adoption validator reopened the hazard the first review closed.** The primary checkout satisfies *both* conditions added last round (common-dir matches, `--show-toplevel` equals the path), and `kind="worktree"` defaults `dispatchable=True`. So `POST {"path": scope.repo_path, "kind": "worktree"}` would have registered **the human's checkout as an autonomous work target** — first-review finding 1, arriving through the mechanism written to make its successor safe. The discriminator is `--git-dir` vs `--git-common-dir` (equal → primary, differ → linked), verified on both real checkouts. `kind` is now validated in both directions.
+
+   The generalisation, and this is the third time the same shape has appeared in this design: **membership is not identity.** Every check so far answered "does this path belong to the repo?" and was then trusted to answer "what is this path?" A validator whose output drives a safety decision needs its question stated, and checked against the question being asked.
+
+2. **An exception is not evidence that nothing spawned — and `except ValueError` cannot be carved out.** The plan said "any other exception → release, then re-raise", contradicting its own rule. The review proposed keeping `ValueError` as a known-safe release path. **That is also unsafe, for two reasons neither review found:** the existing `except ValueError:` handler (`github_dispatch_service.py:244-250`) wraps the entire `launcher(...)` call, not just the pre-spawn gate; and `pydantic.ValidationError` subclasses `ValueError` (verified) while the `AgentTeamLaunchResult` construction that can raise it runs *after* every slot has spawned (`agent_team_service.py:527-542`). Same failure mode as `"launched"`: a discriminator that looks sound and does not hold.
+
+   Now **no** exception releases. The cost objection answers itself structurally: `plan_blocked` (10 of 11 live items) raises at `:495`, *before* `db.add(launch)` at `:509`, so no `AgentTeamLaunchItem` exists and `slot_has_live_owner_session` — which joins through it — cannot return true. The item is `escalated`, reclaim covers it, one poll interval. **A pre-spawn failure cannot fake liveness, so there is nothing to guess about.**
+
+3. **Catching `IntegrityError` after the fact orphans a worktree.** For a path registered in the table but missing on disk, `git worktree add` ran and *succeeded*, then the insert failed the global constraint. The 409 made the request look correctly rejected while leaving a new worktree on disk with no row — invisible to `GET`, never reset, never reclaimed. Now: canonical-path `select` before any mutating git command, constraint retained for the race. The pre-check protects the filesystem; the constraint protects the table.
+
+4. **Adoption needs gates that provisioning does not** — a fresh worktree is known empty and unoccupied, an adopted one is neither, and adopting a hand-made worktree is Deck's *first* live action. Requires a clean `status --porcelain` and no live session `cwd` on the path. Measured, and the two numbers are the argument: the adoption target is **clean with 0 sessions**; the primary — the directory finding 1 above would have let us register dispatchable — has **5 live agent sessions in it right now**.
+
+5. Two contract fixes: `provision_worktree` had no `kind` parameter while the endpoint called it for both kinds and the plan claimed "the method decides" — renamed **`register_workspace(..., kind=...)`** with `_provision_worktree` private as the sole `worktree add` call site. And the stale "item 27 must assert **zero git calls**" contradicted the read-only probes the same task now requires — an implementer following it literally would either skip the probes or write an unpassable test. Reworded to zero *mutating* calls.
+
+Process note: **the reviews are now finding defects in the fixes for the previous reviews' findings, not in the original design.** Findings 1 and 3 above are both regressions introduced by amendments — one by the adoption validator, one by the ordering of a constraint check. That is the expected shape at this depth, and it is the argument for the plan carrying its own "what changed" tables: each amendment is a change to a safety-critical mechanism and deserves the same scrutiny as the original.
+
+Endpoints stayed at **four** (an activation endpoint was declined; adoption validates instead). Traps 7 → **11**, sanity greps 12 → **17**, test obligations 51 → **58**.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
