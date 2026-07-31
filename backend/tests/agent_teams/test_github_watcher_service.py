@@ -113,6 +113,7 @@ class _FakeClient:
     def __init__(self, labeled=None, by_number=None):
         self._labeled = labeled or []
         self._by_number = by_number or {}
+        self.by_number_calls = []
 
     async def list_issues_with_label(self, owner, repo, label):
         return list(self._labeled)
@@ -125,6 +126,7 @@ class _FakeClient:
         }
 
     async def get_issues_by_number(self, owner, repo, numbers):
+        self.by_number_calls.append(list(numbers))
         return {number: self._by_number[number] for number in numbers if number in self._by_number}
 
     async def list_repo_labels(self, owner, repo):
