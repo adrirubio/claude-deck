@@ -2,6 +2,8 @@
 
 Design: `../specs/2026-07-29-dispatch-workspace-provisioning-design.md` — **read it first**, especially §2.5 (reclaim) and §2.6 (`clean -fd`, not `-fdx`). Those two are where this task can do real damage.
 
+Scope: backend service + schema + two endpoints + four small frontend edits. Tasks 1-4 are the substance; Task 5 is surface area.
+
 Work TDD: write the failing test, run it, confirm it fails for the *expected reason*, then implement.
 
 **New sub-branch off `feature/autonomous-github-dispatch`: `feature/autonomous-github-dispatch-workspaces`.** ONE PR back into `feature/autonomous-github-dispatch`. Do not merge it yourself.
@@ -23,8 +25,10 @@ Files that change:
 | `app/services/github_dispatch_service.py` | gate 6, brief rewrite, release on `ValueError` |
 | `app/services/github_verification_service.py` | release in `_mark_merged` |
 | `app/services/github_watcher_service.py` | release in `_complete_and_notify` |
-| `app/models/schemas.py` | 5 scope fields on Create/Update/Response |
-| `app/api/v1/agent_teams.py` | `_apply_scope_create` + `_scope_response` for the 5 fields |
+| `app/models/schemas.py` | 5 scope fields; 3 workspace models; `workspace_path` on the work-item response |
+| `app/api/v1/agent_teams.py` | scope fields; 2 workspace endpoints; `workspace_path` on the work-items query |
+| `frontend/src/features/agent-teams/AutonomyPanel.tsx` | 3 pending reasons, 1 `<dl>` row, 1 label fix |
+| `frontend/src/types/agentTeams.ts` | `workspace_path` on `GithubWorkItem` |
 | `tests/agent_teams/*` | per the design's §6 |
 
 ---
@@ -183,7 +187,9 @@ async def provision_worktree(self, db, scope, path: str) -> GithubWorkspace:
 
 `--detach` is required (design §2.6): git refuses the same branch in two worktrees, and Deck cannot know the agent's branch name. Detached HEAD leaves branch naming to the agent.
 
-No HTTP endpoint for this. Registration is an operator action for now; keep the API surface unchanged.
+For `kind="primary"`, `provision_worktree` is **not** called — the path already exists and is the human's. Register the row and issue no git commands at all (test 26).
+
+This method gets an HTTP caller in Task 5 (design §2.9). It is not dead code and it is not driven from a REPL.
 
 Tests: design §6 items 17-20, in a new `tests/agent_teams/test_github_workspace_service.py`. Inject a fake runner that records `args` lists.
 
@@ -325,11 +331,160 @@ Tests: design §6 items 12-16. **Item 13** (live session → NOT reclaimed) is t
 
 ## Task 5 — API and schemas
 
+### 5a. Scope fields
+
 **`app/models/schemas.py`** (`:2154-2199`) — add all five fields to `TeamGithubScopeCreate` (with the design's defaults), `TeamGithubScopeUpdate` (`Optional`, default `None`), and `TeamGithubScopeResponse`. Use `Field(default=4, ge=1)` for `max_build_parallelism`; `ge=1` matters, `-j0` is meaningless.
 
 **`app/api/v1/agent_teams.py`** — five `if request.X is not None:` lines in `_apply_scope_create` (after `:151`), five kwargs in `_scope_response` (after `:85`). Match the surrounding style exactly.
 
-**Do not touch the frontend.** `AutonomyPanel.tsx` and `types/agentTeams.ts` will simply not send the new fields, and every one has a server-side default. Frontend exposure is a follow-up.
+### 5b. Two workspace endpoints — read design §2.9 first
+
+An earlier draft of this plan said "no new endpoints." That was copy-forwarded boilerplate from two earlier plans where it was actually derived, and it is wrong here: without an endpoint, `provision_worktree` has no caller and workspace registration can only happen by hand-editing the live database, which is forbidden. §2.9 has the full reasoning.
+
+**`app/models/schemas.py`** — three new models beside the scope ones:
+
+```python
+class GithubWorkspaceCreate(BaseModel):
+    path: str
+    kind: str = "worktree"
+    enabled: bool = True
+
+
+class GithubWorkspaceResponse(BaseModel):
+    id: int
+    scope_id: int
+    path: str
+    kind: str
+    lease_state: str
+    leased_item_id: Optional[int] = None
+    leased_at: Optional[datetime] = None
+    released_at: Optional[datetime] = None
+    provision_error: Optional[str] = None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class GithubWorkspaceListResponse(BaseModel):
+    workspaces: List[GithubWorkspaceResponse] = Field(default_factory=list)
+```
+
+`lease_state` is **derived in the response builder**, never stored (design §2.2 — state that cannot contradict itself):
+
+```python
+def _workspace_lease_state(workspace: GithubWorkspace) -> str:
+    if workspace.leased_item_id is not None:
+        return "leased"
+    if not workspace.enabled:
+        return "disabled"
+    return "available"
+```
+
+Order matters: a leased workspace that was then disabled reports `leased`, because something may still be writing in it. Add a `_workspace_response(workspace)` helper next to `_scope_response` (`:72`).
+
+**`app/api/v1/agent_teams.py`** — two routes, placed after `delete_github_scope` (`:367`) to keep the scope-scoped routes together:
+
+```python
+@router.get(
+    "/github-scopes/{scope_id}/workspaces",
+    response_model=GithubWorkspaceListResponse,
+)
+async def list_github_workspaces(scope_id: int, db: AsyncSession = Depends(get_db)):
+```
+
+404 if the scope is missing — follow the `delete_github_scope` idiom, which does `db.get` then raises. Order by `GithubWorkspace.id` to match `acquire`'s ordering, so the list reads in the order workspaces will be handed out.
+
+```python
+@router.post(
+    "/github-scopes/{scope_id}/workspaces",
+    response_model=GithubWorkspaceResponse,
+    status_code=201,
+)
+async def create_github_workspace(
+    scope_id: int,
+    request: GithubWorkspaceCreate,
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+Behaviour, in order:
+
+1. `db.get(TeamGithubScope, scope_id)`; `None` → 404.
+2. Validate `kind` in `{"primary", "worktree"}` → 400 otherwise. Do not accept arbitrary strings; `reset_workspace`'s safety property is a `kind == "primary"` comparison, and a typo'd `"Primary"` would make it reset the human's checkout.
+3. Normalise `path` with `agent_team_service.normalize_repo_path` — the same call `_apply_scope_create` uses for `repo_path` (`:135-137`). Registering `~/foo` and `/home/juan/foo` as two pool members must be impossible.
+4. `kind == "worktree"` → `await github_workspace_service.provision_worktree(db, scope, path)`. `kind == "primary"` → insert the row directly, **zero git commands**.
+5. `IntegrityError` → 409 `"Workspace already registered for this scope"`, mirroring `create_github_scope` (`:337-339`). Without this the duplicate-path `UniqueConstraint` surfaces as a 500.
+
+**No `DELETE`.** Design §5 forbids Deck removing worktrees, and a delete whose lease check was wrong would pull the directory out from under a running agent.
+
+Tests: design §6 items 23-28.
+
+### 5c. `workspace_path` on the work-item response
+
+**`app/models/schemas.py`** — add to `GithubWorkItemResponse` (`:2209-2234`):
+
+```python
+    workspace_path: Optional[str] = None
+```
+
+**`app/api/v1/agent_teams.py`** — `_work_item_response` (`:93`) takes `(item, scope)` and so cannot reach the workspace table. Add a third optional parameter rather than a relationship:
+
+```python
+def _work_item_response(
+    item: GithubWorkItem,
+    scope: TeamGithubScope,
+    workspace_path: str | None = None,
+) -> GithubWorkItemResponse:
+```
+
+Default `None` keeps `retry_github_work_item` (`:435`) and any other caller working unchanged.
+
+In `list_github_work_items` (`:378-402`), extend the existing join. Note this codebase declares **no ORM `relationship()` anywhere** — every join is explicit in the query — so use an outer join, not `selectinload`:
+
+```python
+        select(GithubWorkItem, TeamGithubScope, GithubWorkspace.path)
+        .join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id)
+        .outerjoin(GithubWorkspace, GithubWorkspace.leased_item_id == GithubWorkItem.id)
+```
+
+**`outerjoin`, not `join`.** An inner join would silently drop every item without a lease — which is every `pending` item, i.e. most of the list. If the work-items table suddenly shows only 1-2 rows, this is why.
+
+The join cannot multiply rows: `UniqueConstraint("leased_item_id")` from Task 1 means at most one workspace references any item. The schema constraint that guards Finding 10 is the same one that keeps this query honest — worth noting in the PR, because an outer join into a lease table normally *would* need a `DISTINCT` and a reviewer will look for one.
+
+Test: design §6 item 29.
+
+### 5d. Frontend — bounded (design §2.10)
+
+The earlier "do not touch the frontend" is withdrawn. Three changes, no more:
+
+**`frontend/src/features/agent-teams/AutonomyPanel.tsx`** — `pendingReasonLabel` (`:85-91`) currently handles 2 of 4 reasons and returns `null` otherwise, so a queued workspace shortage renders as blank space. Add the new reason and the two that already render blank:
+
+```typescript
+  if (item.pending_reason === 'queued_no_workspace') return 'queued · no free workspace'
+  if (item.pending_reason === 'queued_low_memory') return 'queued · low memory'
+  if (item.pending_reason === 'queued_owner_session_live') {
+    return `queued · ${ownerName ?? 'owner'} session still live`
+  }
+```
+
+Leave the fallthrough as `null`: `retry_github_work_item` writes free prose into `pending_reason` (`"retry requested: ..."`, `agent_teams.py:431`), and that must not be rendered as a queue reason.
+
+**Same file** — one row in the detail `<dl>` (`:369-388`), matching the existing `grid-cols-[150px_1fr]` shape, before the PR row:
+
+```tsx
+                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                    <dt className="text-muted-foreground">Workspace</dt>
+                    <dd className="truncate">{item.workspace_path ?? 'None leased'}</dd>
+                  </div>
+```
+
+**Same file** — the scope card at `:548-550` reads `Local checkout: {scope.repo_path}`, which is the exact wording design §2.7 identifies as misleading. Change the label to `Worktree parent: {scope.repo_path}`.
+
+**`frontend/src/types/agentTeams.ts`** — add `workspace_path?: string | null` to `GithubWorkItem` (`:211-222`). Nothing else; the five scope fields stay out (design §5).
+
+**Not in this task:** the pool summary on the scope card (`Workspaces: 1/2 leased`). It needs a second fetch and its own loading/error state in a component that currently fetches scopes and items only. Design §2.10 lists it as worth doing; it is a follow-up, and `GET .../workspaces` plus `curl` covers deployment.
+
+Run `cd frontend && npm run lint` — TypeScript strict mode with `noUnusedLocals` will fail the build on a stray import.
 
 ---
 
@@ -338,18 +493,23 @@ Tests: design §6 items 12-16. **Item 13** (live session → NOT reclaimed) is t
 ```bash
 cd backend && source venv/bin/activate && pytest tests/agent_teams tests/agent_mail -q
 pytest tests/ -q            # full suite; report any pre-existing failure, do not fix it
+cd ../frontend && npm run lint && npx tsc --noEmit
 ```
 
-Expected: baseline + ~22 new tests. Report the actual number.
+Expected: baseline + ~29 new tests. Report the actual number.
 
-Sanity checks — all three must hold:
+Sanity checks — all five must hold:
 
 ```bash
 grep -rn "fdx\|'-x'\|\"-x\"" app/services/github_workspace_service.py    # must be EMPTY
 grep -n "repo_path_override" app/services/github_dispatch_service.py     # must show workspace.path, NOT scope.repo_path
 git diff --stat app/services/github_client.py app/services/github_watcher_service.py
 # github_client.py: EMPTY. github_watcher_service.py: the ONE release line only.
+grep -n "outerjoin" app/api/v1/agent_teams.py        # must exist in list_github_work_items
+grep -n "router.delete" app/api/v1/agent_teams.py    # must NOT mention workspaces
 ```
+
+The `outerjoin` check is not pedantry: an inner join there drops every unleased item from the work-items list, which is most of them, and the UI would look empty rather than broken.
 
 Open ONE PR into `feature/autonomous-github-dispatch` describing:
 
@@ -360,9 +520,12 @@ Open ONE PR into `feature/autonomous-github-dispatch` describing:
 - that the primary checkout is never reset;
 - `builds_out_of_tree=False` / `max_build_parallelism=4` as deliberately conservative defaults;
 - that 3b (host-wide build semaphore) is **not** in this PR and is a documented prerequisite for a second scope (design §3.2);
-- the final test count and the three sanity checks above.
+- the two new endpoints and why registration needs one — a service method with no caller would force hand-edited DB rows (design §2.9);
+- that there is deliberately **no `DELETE`**;
+- the three bounded frontend changes, and that `queued_no_workspace` rendering as blank space would have made a correctly-working pool look like the Finding 14 wedge;
+- the final test count and the five sanity checks above.
 
-Then STOP and report. Do not merge. Do not restart the backend. Do not register workspaces or edit any DB row — the orchestrator does that on the live soak after merge.
+Then STOP and report. Do not merge. Do not restart the backend. Do not register workspaces or edit any DB row — the orchestrator does that on the live soak after merge, through the endpoint you just built.
 
 ---
 
@@ -373,7 +536,9 @@ Then STOP and report. Do not merge. Do not restart the backend. Do not register 
 - NO new `dispatch_status` values. `queued_no_workspace` is a `pending_reason`.
 - Do not touch `slot_has_live_owner_session`, `reuse_existing`, or the launch path beyond the single `repo_path_override` argument (Phase G2 owns those).
 - Do not touch `github_client.py`, `_reconcile_closed_issues`, `escalate`, `_apply_escalation`, or any status constant.
-- No new dependencies. No new endpoints.
+- No new dependencies.
+- **Exactly two new endpoints** — `GET` and `POST` on `/github-scopes/{scope_id}/workspaces` (Task 5b). No `DELETE`, no `PATCH`, no workspace routes anywhere else. (An earlier draft said "no new endpoints"; that was withdrawn for the reason in design §2.9. It does not license further endpoints.)
+- **Frontend changes are limited to Task 5d's four edits.** No new components, no new pages, no scope-form fields.
 - Do not enable/disable autonomy, spawn or kill agent sessions, hand-edit DB rows, or restart the backend.
 - Report — do not rewrite — any pre-existing failing test.
 - **If a step looks wrong, STOP and report rather than improvising.** Two places in particular: if `clean -fd` seems insufficient, or if reclaiming unconditionally on escalation seems simpler. Both are traps with a soak finding behind them.

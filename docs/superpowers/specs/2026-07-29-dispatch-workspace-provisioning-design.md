@@ -270,6 +270,49 @@ The flag changes what a lease has to *cover*, not whether leases are needed:
 
 **3a is advisory, not enforced.** These values reach the agent as brief text. An agent that ignores `-j4` still OOMs the host. Enforcement is 3b (§3).
 
+### 2.9 API surface — two new endpoints, and why the "no new endpoints" habit had to go
+
+Earlier plans in this series carried a blanket **"NO new endpoint"** line. It was earned on 2026-07-23, where a suitable endpoint already existed and adding one would have been duplication, and it was defensible on 07-26 for three guards inside a single service. It was then copy-forwarded without being re-derived. For this change it is not merely unnecessary — it is incoherent:
+
+- `provision_worktree` (§2.6) with no endpoint is a service method **with no caller**. It is reachable only from a Python REPL against the live database.
+- §7 step 2 requires registering scope 1's workspaces. With no endpoint, "operator action" resolves to hand-writing `INSERT` statements — which violates the standing, well-founded constraint that DB rows are never hand-edited. Hand-edited state is state the code never produced, so it drifts from what the code *can* produce and every later diagnosis is against a fiction.
+- The design's whole premise is that Deck must stop inferring physical capacity from logical status. Shipping a workspace table with no way to read it means the **operator** keeps making exactly that inference. That coupling is what turned Findings 10, 11, 13 and 14 each from a status bug into a capacity bug.
+
+So this change adds two endpoints, both scoped to workspaces:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/agent-teams/github-scopes/{scope_id}/workspaces` | list the pool with derived lease state |
+| `POST` | `/api/v1/agent-teams/github-scopes/{scope_id}/workspaces` | register a workspace; `kind="worktree"` provisions via `git worktree add`, `kind="primary"` registers an existing path without touching it |
+
+`DELETE` is deliberately **absent**. §5 already forbids Deck removing worktrees, and a delete endpoint whose lease-holder check was wrong would silently orphan a running agent's directory. Disabling is what `enabled=False` is for, and it is reachable through the register endpoint's absence of a delete by simply not needing one — pool shrinkage is a human chore, as with the stale build dirs.
+
+`GET` returns derived state rather than a stored column, consistent with §2.2's decision to have no `lease_state` field:
+
+```
+lease_state = "leased" if leased_item_id is not None
+              else "disabled" if not enabled
+              else "available"
+```
+
+The `POST` is the *only* mutating endpoint added, and it is the one that makes §7 step 2 executable without hand-editing rows. It must be synchronous with the `git worktree add` it triggers: a 202-style "queued" response would hide provisioning failure behind a second lookup, and provisioning failure is the case that most needs to be visible (`provision_error`, §2.2).
+
+### 2.10 UI surface — one required change, two worth doing
+
+The plan's original "do not touch the frontend" was a diff-size decision, not an analysis. Reading `AutonomyPanel.tsx` shows one part of it does not survive.
+
+**Required — a queued workspace shortage currently renders as nothing.** `pendingReasonLabel` (`AutonomyPanel.tsx:85-91`) handles two of the four existing `pending_reason` values and returns `null` otherwise. `queued_low_memory` and `queued_owner_session_live` already display as blank; `queued_no_workspace` would join them.
+
+That matters more here than for the existing two, because **a workspace shortage is this design's expected steady state, not an exception.** A pool of 2 against 11 retried items means the normal picture is most items at `pending` with no owner, no badge and no explanation — visually identical to the Finding 14 wedge, which this soak has already spent two findings learning to diagnose. The mechanism working correctly must not look like the mechanism being stuck.
+
+**Worth doing with it:**
+
+- A **Workspace** row in the work-item detail `<dl>` (`:369-388`, currently exactly four rows: Status, Owner, Retries, PR). This needs a backend field: `GithubWorkItemResponse` (`schemas.py:2209-2234`) has no workspace field, and `_work_item_response` (`agent_teams.py:93`) takes `(item, scope)` and so cannot reach a third table. Add a nullable `workspace_path`, derived — not stored — for the same reason §2.2 has no `lease_state`.
+- The scope card's `Local checkout: {scope.repo_path}` (`:548-550`) is **the same sentence as the brief line this whole design exists to correct** (§2.7). After this change `scope.repo_path` is the worktree parent, not where agents work. Leaving it tells the operator the thing the brief has just stopped telling the agents.
+- A pool summary on the scope card, now that `GET .../workspaces` exists: `Workspaces: 1/2 leased`. This is the observability §2.9 argues for, at the point where the queue depth is already visible.
+
+**Deferrable:** the five new scope fields in `types/agentTeams.ts:150-197` (three interfaces enumerate scope fields explicitly) and in the `ScopeDialog` form. Every field has a server-side default and all five are set on scope 1 via the API during deployment, so the UI is not on the critical path for them. Same for adding `max_build_parallelism` to the scope config summary line (`:551-553`).
+
 ---
 
 ## 3. Multi-scope / multi-repo — documented for later
@@ -341,14 +384,16 @@ Steps 1, 2 and 3a ship together — they are one coherent change and splitting t
 - **Finding 6** (distinct agent commit identity).
 - **G1c** (`2026-07-28-sweep-request-budget-design.md`) — different file, no overlap.
 - **New `dispatch_status` values.** `queued_no_workspace` is a `pending_reason`, not a status.
-- **Deleting worktrees.** Deck never removes a workspace. Cleaning up the 6 stale build dirs is a human chore.
+- **Deleting worktrees.** Deck never removes a workspace. Cleaning up the 6 stale build dirs is a human chore. No `DELETE` endpoint (§2.9).
 - **Deleting or resetting the primary checkout.** Never, under any circumstance.
+- **The five new scope fields in the frontend** — `types/agentTeams.ts` interfaces and the `ScopeDialog` form (§2.10, deferrable tier). Server-side defaults cover them and deployment sets them via the API.
+- **A workspaces management page.** The scope card and detail dialog are enough for a pool of two.
 
 ---
 
 ## 6. Test obligations
 
-Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first.
+Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first. Items 23-29 were added when §2.9/§2.10 were, so the expected addition is ~29 tests, not ~22.
 
 **Schema** (`tests/agent_teams/test_github_scope_models.py`)
 1. `GithubWorkspace` round-trips with expected defaults (`kind="worktree"`, `enabled=True`, `leased_item_id=None`).
@@ -382,6 +427,17 @@ Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mai
 21. With `builds_out_of_tree=True` + template + hint, the brief renders the build dir and the `-j{max_build_parallelism}` command.
 22. With `builds_out_of_tree=False`, the brief states one build at a time in this workspace and omits the build-dir template.
 
+**API** (`tests/agent_teams/test_github_workspace_api.py`, new — §2.9)
+23. `GET .../workspaces` returns the pool with `lease_state` derived: `available`, `leased` (with `leased_item_id`), `disabled`.
+24. `GET` on an unknown `scope_id` → 404.
+25. `POST .../workspaces` with `kind="worktree"` invokes `git worktree add --detach` via the injected runner and returns the created row.
+26. `POST` with `kind="primary"` registers the path and issues **zero** git commands. *Companion to item 19 at the API layer — the primary checkout is not Deck's to mutate even on registration.*
+27. `POST` with a duplicate `path` in the same scope → 409, not a 500 from the `IntegrityError`.
+28. `POST` whose `git worktree add` fails → the response surfaces the failure; no half-registered row is left `enabled=True`.
+
+**Work-item response** (`test_github_dispatch_service.py` or the existing work-items API test)
+29. `GithubWorkItemResponse.workspace_path` is the leased workspace's path, and `None` for an item holding no lease.
+
 ---
 
 ## 7. Deployment on the live soak
@@ -391,9 +447,12 @@ The schema change needs **no hand-surgery**. `_run_sqlite_compat_migrations` (`a
 Order of operations after the PR merges:
 
 1. Restart the backend — `create_all` adds `github_workspaces`, the ladder adds the five scope columns.
-2. Register scope 1's workspaces. `kind="primary"` for `/home/juan/work/repos/tizonia/tizonia-openmax-il`; one `kind="worktree"`.
-3. Set scope 1's real values: `builds_out_of_tree=True`, `build_dir_template="build-issue-{issue_number}"`, `build_command_hint="meson compile -C {build_dir} -j{parallelism}"`, `max_build_parallelism=4`. Conservative defaults are for unknown repos; tizonia via Meson is known.
-4. Retry the 11 escalated items so they re-dispatch against real workspaces.
+2. Register scope 1's workspaces **via `POST .../workspaces`** (§2.9) — not by hand-writing rows. `kind="primary"` for `/home/juan/work/repos/tizonia/tizonia-openmax-il`; `kind="worktree"` for the existing `tizonia-openmax-il-issue-818`.
+3. Set scope 1's real values via `PATCH /github-scopes/{id}`: `builds_out_of_tree=True`, `build_dir_template="build-issue-{issue_number}"`, `build_command_hint="meson compile -C {build_dir} -j{parallelism}"`, `max_build_parallelism=4`. Conservative defaults are for unknown repos; tizonia via Meson is known.
+4. `GET .../workspaces` to confirm 2 rows, both `available`, no `provision_error`. This is the check that step 2 actually took, and it is the reason the endpoint exists.
+5. Retry the 11 escalated items so they re-dispatch against real workspaces.
+
+One caution on step 2, from Finding 13: `derive_repo_identity` hashes `--git-common-dir`, so the primary and the `issue-818` worktree share `repo_id` `4532704bf856d362` (§3.3). Registering both is correct and necessary, but slot matching cannot tell them apart — so a `kind="primary"` lease and a `kind="worktree"` lease look identical to routing. That is fine here because the *lease*, not the `repo_id`, is what enforces exclusivity; it is recorded because it will mislead anyone debugging routing against these two rows.
 
 The existing hand-made `tizonia-openmax-il-issue-818` worktree should be **registered rather than deleted** — it holds #818's history and is already a valid pool member.
 
