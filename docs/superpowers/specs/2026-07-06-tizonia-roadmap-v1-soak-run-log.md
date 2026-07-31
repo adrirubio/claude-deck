@@ -400,6 +400,29 @@ Two process notes:
 
 Test obligations went 22 → 37. Items 14/15 **inverted**: `_mark_merged` and `_complete_and_notify` are now asserted *not* to release, since a future reader will find "release when merged" obvious and helpfully add it back.
 
+### Finding 16 — second review, amended 2026-07-31
+
+The revised plan was reviewed again (`/tmp/dispatch-workspace-provisioning-plan-rereview.md`). Verdict: the original safety blockers are resolved and the lease design is "sound enough to implement", with 4 remaining issues + a contract clarification. **All five verified independently before adopting**; all five were real. Two of them are worth recording as facts, and two as process.
+
+1. **`git worktree add` cannot register an existing worktree** — `fatal: 'ws1' already exists`, exit 128, reproduced. The rollout instructions said to register the existing `tizonia-openmax-il-issue-818` through a `POST` that always ran `worktree add`, so **the documented deployment could not have succeeded.** Fix: probe first, adopt when the path is already a valid worktree of this repo. Two traps found in the review's *own* proposed fix, both empirical: `rev-parse --git-common-dir` returns the **relative** `.git` when run from the primary (so a raw comparison rejects every adoption — needs `--path-format=absolute`), and a **nested subdirectory** of a worktree reports the *same* common dir (so a common-dir-only check registers `ws1/sub` as an independent workspace: two rows, one physical tree — the exact defect the global path constraint exists to prevent, arriving through the validator). `--show-toplevel` equality closes it.
+
+2. **Five individually-correct decisions composed into two inescapable states.** Neither is a bug in any one place, which is why neither was visible when each piece was designed:
+   - A workspace disabled by a local reset failure is **permanently** dead: `acquire` filters `enabled`, reset runs only from `acquire`, `provision_error` clears only on a successful reset, duplicate `POST` 409s on the global path constraint, and there is no `PATCH`/`DELETE`. §2.9a's careful transient-vs-local split was written to *avoid* a permanent wedge, and its local branch created one.
+   - An item wedged in `ready_for_review` behind an unmerged PR holds the only dispatchable workspace forever. All four exits are closed: retry 409s on both status *and* `pr_number`; `_reconcile_closed_issues` excludes the status *and* skips any item with a `pr_number` (two independent reasons, so adding the status alone would not have helped); `_ACTIVE_STATUSES` omits it; reclaim excludes it deliberately.
+
+   Fix: two narrowly-scoped endpoints — `POST .../workspaces/{id}/reprobe` (re-enables **only** on a successful reset; 409s while leased) and `POST .../github-work-items/{id}/abandon`. Endpoint count went two → four.
+
+3. **`abandon` deliberately does not release the lease.** It sets `escalated` and lets reclaim's liveness gate decide. An operator clicking abandon knows the *item* should stop; they do not know whether the *tmux session* is alive, and neither does the HTTP handler. This keeps the releaser count at exactly two — launch failure and reclaim — however many lifecycle actions get added later, and preserves the invariant: **release is licensed by the absence of a process, never by a status.**
+
+4. **The plan named a launch status that does not exist.** Task 3d said `status="launched"` means success; the launcher returns **`pending_registration`** (`agent_team_service.py:631`). An implementer matching the table literally would find no match on the real success status, fall into the unknown branch, and release a workspace under a session that had just spawned. Fixed by writing the condition as a positive list of *failure* statuses with a **fail-closed** default, plus a `tmux_target`-present veto. Two related findings neither review raised: `"spawned"` is in the `AgentTeamLaunchStatus` `Literal` with **no producer anywhere**, so an unknown status is a live possibility; and dispatch's own status branch is **fail-open** (`else → "dispatched"`), which is safe only because an item wrongly marked `dispatched` *keeps* its lease.
+
+Process notes, both about the same failure mode as the first review's:
+
+- **A plan that invents an identifier is worse than a plan that omits one.** `"launched"` is plausible, adjacent to real vocabulary, and would have passed a code review by anyone not grepping the launcher. The lesson generalises past this plan: every string a plan tells an implementer to match on must be quoted from the code, with a file:line, or not written at all.
+- **The gate that was missing was the one about *not running*.** The design had argued correctly that PR A's recovery is entirely manual, then never said "so do not turn autonomy back on." The reviewer had to infer the gate from the cost analysis. Now explicit as **§4.1a**: autonomy stays off until PR B lands, one item dispatched by hand to prove the mechanism. A stated cost is not a stated constraint.
+
+Test obligations 37 → **51**. Amendment committed and **pushed** — the first review's lesson applied.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
