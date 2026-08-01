@@ -283,6 +283,28 @@ Run the sweep once at the top of `dispatch_pending`, before `scope_active_count`
 
 > **Coupling to note:** Phase G2 (Finding 13) plans to *delete* `slot_has_live_owner_session`. The reclaim rule depends on it. G2 must therefore either keep a liveness predicate under some name, or replace this rule. Flagged here so G2 does not silently remove the only thing preventing a workspace wedge.
 
+#### 2.5a ⚠️ The predicate is correct and its input is stale — Finding 17, found at deployment
+
+**Amended 2026-08-01, after deploying PR A to §7 step 4.** Everything above reasons about the *logic* of the liveness gate and that reasoning still holds. What it never asked is **who keeps the gate's input true.** On the live host, the answer is nobody:
+
+- All five tmux-bound sessions have `last_seen_at = 2026-07-28 16:49:51` against `OBSERVED_TTL_SECONDS = 300` (`agent_mail_service.py:40`), so `_effective_status` returns `offline` for every one of them.
+- All five processes are **alive** (`kill -0` on pids 149168/149179/149190/159009/379552; `tmux list-panes` shows five panes in the primary).
+- Run against a copy of the live DB, `slot_has_live_owner_session` returns **False for slots 4, 5 and 6**.
+
+So reclaim would treat every escalated item's lease as reclaimable, and the next `acquire` would run `switch --force` / `reset --hard` / `clean -fd` on a workspace whose agent is live. **The invariant of §2.4 does not fail; the evidence it consumes does.** A safety rule grounded in "an observed tmux fact" is only as good as the freshness of that observation.
+
+**Root cause.** `last_seen_at` on `source="observed"` rows is refreshed only by `sync_observed_sessions` (`agent_mail_service.py:350`), and **no caller is on the autonomy poll path.** All seven are interactive or launch-time: `GET /agent-mail/team?sync=true`, `create_from_agent_mail`, `plan_launch`, `auto_nudge_members`, and the three wake paths. `poll_scope`, `dispatch_pending`, `monitor_dispatched` and `process_scope` reference it zero times. The freshness of a fact that licenses a destructive git command is therefore a side effect of a human having the Agent Mail page open.
+
+**A partial self-repair exists, and it is positioned exactly wrong.** `dispatch_pending` sends the brief before launching, and `send_direct_message` → `send_message(auto_nudge=True)` → `auto_nudge_members` → `sync_observed_sessions`. So a cycle that reaches a brief does refresh liveness. But `reclaim_stale` runs at the **top** of `dispatch_pending`, before any brief — so the one caller that needs fresh evidence is the one caller structurally guaranteed not to have it.
+
+**The fix probably already exists one branch away.** For `source="mcp"`, `_effective_status` consults `_pid_is_running(session.pid)` and returns `connected` on a live pid *even past the TTL* (`:615-619`). Observed rows carry a `pid` too — all five above do — and that branch is simply not applied to them. But this is the predicate **Phase G2 owns**, so G2 makes the change; it is not a hotfix to slip into PR A.
+
+**Consequences for this design:**
+
+- **§4.1a gains a second condition.** PR B landing is necessary but *not sufficient* for re-enabling autonomy. Liveness evidence must be refreshed on the poll path — by whoever owns the predicate — before dispatch runs unattended.
+- **Test obligation, PR B or G2:** reclaim must not release a lease whose owner session has a live pid but a stale `last_seen_at`. No existing test can catch this class, because every test supplies its own fixture timestamps; a stale-data defect is invisible to fixtures by construction.
+- **Generalisation** (third in this design, after *membership is not identity* and *name the actor*): **an invariant is only as good as the freshness of the evidence it reads.** 60 tests and 12 mutation tests verified this rule as logic. None asked who keeps its input true.
+
 ### 2.6 The primary checkout is special and must never be reset
 
 `scope.repo_path` is the human's checkout. It has their branch checked out, their build dirs, possibly their uncommitted work. Deck may lease it — but Deck must **never** clean or reset it.
@@ -668,6 +690,18 @@ Steps 1+2+3a ship as **PR A**, with one capability held back:
 
 The split exists because prompt terminal release requires a liveness predicate that does not exist yet and that Phase G2 is already scheduled to rewrite (§2.4). Building an interim one would leave two similarly-named predicates to reconcile, in the exact area where Finding 13 showed that identity confusion causes collisions.
 
+#### 4.1b ⚠️ PR B's stated mechanism does not survive G2 — Finding 18
+
+**Amended 2026-08-01, while writing PR B's handoff.** The row above reading "per-item liveness via `item.launch_id`" is **not implementable as written**, and it fails for the same reason PR B is sequenced after G2 in the first place.
+
+`_record_launch_item` (`agent_team_service.py:653`) writes `tmux_target=result.tmux_target` for **every** action. On the `reuse` branch (`:554-574`) that value is `plan_item.matching_session["tmux_target"]` — the **standing session's** target. Under G2's intended model (`reuse_existing=True`, one long-lived session per slot, brief delivered as a message) every item dispatched to a slot records the *same* `tmux_target`. A join through `item.launch_id` therefore resolves to the standing session for all of them, and per-item liveness **degenerates into exactly the slot-scoped liveness it was introduced to replace.**
+
+It looks discriminating today only because dispatch passes `reuse_existing=False` — i.e. because of Finding 13, the defect G2 exists to fix. Confirmed on live data: all 11 slot-6 launch items are `action=spawn` with distinct targets, and exactly **one** `reuse` row exists in the whole table (a hand launch), so dispatch has never taken that path.
+
+Same shape as Finding 13, and as *membership is not identity*: **a field whose name implies a granularity its values do not carry.** `launch_id` identifies a *launch*. PR B needs to answer "which session owns this work item?", and after G2 those are no longer the same question.
+
+**Consequence for sequencing:** G2's scope grows. It must now answer *what identifies the session owning a work item* — a per-item session reference, or an explicit item↔session link written at dispatch — and PR B cannot be specified until it does. Combined with §2.5a, **G2 owns three coupled questions**: delivering `prompt_override` on the reuse path (Finding 13), item→session identity (this finding), and who keeps liveness evidence fresh (Finding 17). No PR B handoff was written; a handoff resting on a falsified premise is worse than no handoff.
+
 **The cost of the split, stated plainly:** with a pool this small, a merged item keeps its workspace until its tmux session goes offline. The pool can therefore look wedged when it is only waiting, and on a quiet host a session can idle for a long time. Three mitigations, all in PR A: the reclaim sweep runs every poll, `GET .../workspaces` shows exactly which item holds what, and `abandon` + `reprobe` give the operator a supported way to clear the two dead ends that would otherwise need DB surgery. If the latency proves too slow in practice, the fix is to bring PR B forward, not to release on status.
 
 #### 4.1a Autonomy stays off until PR B lands
@@ -683,6 +717,13 @@ So the rollout is:
 | PR A merged, backend restarted | **off** | §7 steps 1-4: migrate, register the pool, verify `GET .../workspaces` |
 | one item dispatched by hand | **off** | prove the lease, the brief, the reset and the release on one real issue |
 | PR B merged | **on** | prompt terminal release exists; the pool recovers without a human |
+
+**Amended 2026-08-01 — this gate now has two conditions, not one.** PR B landing is necessary but **not sufficient**. Finding 17 (§2.5a) shows the reclaim sweep's liveness input is stale on the live host: five running agents read as `offline`, so a lease could be reclaimed and its workspace `reset --hard` under a working session. Autonomy must not be re-enabled until **both** hold:
+
+1. PR B (or its successor) ships prompt terminal release, so the pool recovers without a human; **and**
+2. liveness evidence is refreshed on the autonomy poll path, so the gate that licenses a reset reads a fact that is actually current.
+
+Condition 2 was invisible when this section was written, because it is not a property of any code path in PR A — it is a property of what *else* runs on the host. Note also that the hand-dispatch row above is **not yet done**: §7 step 5 turned out to have no actor once step 0 removes the scheduler job. See §7's status block.
 
 Adding a second dispatchable worktree (a one-`POST` change) reduces the stall risk but does not remove it, so it is not a substitute for this gate.
 
@@ -739,6 +780,13 @@ So PR A ships `POST .../github-work-items/{item_id}/abandon` (§2.10b). The divi
 Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first. This list grew from 22 → 37 → 51 → 58 → **60** across five revisions (API/UI, the first three reviews, then the agent-operator pass of §2.10c); expect ~60 new tests. Items marked ★★ are the two that would have let PR A damage a live checkout.
 
 Items marked **★** are regression guards for a defect that has already occurred or was caught in review. They must be written *before* the code and observed to fail.
+
+**Two obligations carried forward to PR B / G2, both found by mutation-testing the merged PR A (2026-08-01).** PR A's code is correct on both counts; what is missing is a test pinning it, and each sits on a line PR B must edit:
+
+- **M12 — reclaim must NOT release a lease for `ready_for_review`.** Adding that status to `_RECLAIMABLE_STATUSES` (`github_workspace_service.py:24`) **passed the entire suite.** §2.5 argues the exclusion explicitly — reclaiming there would steal a workspace from a review legitimately in progress — but no test asserts it, and PR B edits that exact tuple. The general shape, worth stating because it recurs: **exclusion lists are systematically under-tested.** Tests naturally assert "X happens for these statuses"; nobody writes "X does *not* happen for that one" unless the omission is understood as a decision rather than an oversight. Items 14/15 were already inverted for this reason (§ first review); this is the same fix one level down.
+- **Finding 17 — reclaim must NOT release when the owner session has a live pid but a stale `last_seen_at`** (§2.5a). No current test can catch this class: every test supplies its own fixture timestamps, so stale-data defects are invisible to fixtures by construction. This test must therefore construct the *skew* deliberately — a live pid with a `last_seen_at` past `OBSERVED_TTL_SECONDS` — rather than a plainly-offline or plainly-live session.
+
+For the record, the other ten mutations were killed, including both ★★ items, the `-fdx` prohibition, the forbidden release in `except ValueError`, and reclaim's liveness gate. One further survivor, **M4** (dropping the `path == repo_path` guard at `:198`), was proven **redundant** rather than untested: on real git a primary reports `--git-dir` == `--git-common-dir`, so the `linked` check at `:224` rejects it with the same `workspace_is_primary` code. Keep the guard as defence in depth; no test is owed.
 
 **Schema** (`tests/agent_teams/test_github_scope_models.py`)
 1. `GithubWorkspace` round-trips with expected defaults (`kind="worktree"`, `enabled=True`, `dispatchable=True`, `leased_item_id=None`).
@@ -845,6 +893,15 @@ Order of operations after the PR merges. **Autonomy stays off throughout — see
 4. `GET .../workspaces` to confirm 2 rows — the primary `disabled_for_dispatch`, the worktree `available`, neither with a `provision_error`. This is the check that step 2 actually took, and it is the reason the endpoint exists.
 5. Retry **one** escalated item, by hand, with autonomy still off. Confirm on that single item: the lease appears in `GET .../workspaces`, the brief names the worktree path, the reset ran, and the lease is released once the session goes offline. Do not retry the other ten yet — one item exercises every mechanism, and ten make a diagnosis ambiguous.
 6. After PR B lands: enable autonomy and retry the rest.
+
+> **⛔ Status 2026-08-01: steps 0–4 done and verified; step 5 NOT run and not runnable as written.** Two structural blockers, both found by attempting it:
+>
+> 1. **This step has no actor.** `dispatch_pending` runs *only* from the scheduler job, and **step 0 above removes that job.** `retry` sets an item to `pending`; nothing then consumes it. No manual poll/dispatch route exists (`POST /dispatch-status` is the agent's status-*report* endpoint). Step 5 assumed retry→dispatch is a continuation; they are coupled only through the scheduler step 0 turns off. This is the same defect class as §2.10d's — *a step whose recovery argument names an actor whose existence was never checked* — this time the actor is a scheduler rather than a human.
+> 2. **Gate 6 rejects the obvious subject.** Item 23's owner is slot 6, which carries three sessions. Once §2.5a is fixed, `slot_has_live_owner_session` returns true and the item parks at `queued_owner_session_live` without acquiring a lease. Note the trap: step 5 would appear to *work* today only because Finding 17 makes the gate answer wrongly.
+>
+> **What steps 0–4 did and did not verify.** Verified on real git: migrations (both UniqueConstraints, all five scope columns), `register_workspace` for both kinds, the trap-6 identity guard **rejecting live** (`409 workspace_not_a_worktree` on a nested path sharing the common dir), adoption's clean/occupancy gates, the primary defaulting non-dispatchable, and `GET .../workspaces`. **Still unverified — the entire dispatch half:** `acquire` under a real dispatch, `reset_workspace`'s four commands on a real worktree, that `clean -fd` preserves the 1.1 GB meson cache in practice, the brief naming the worktree path, release-on-launch-failure, and `reclaim_stale` after a session dies.
+>
+> **When step 5 is re-run** (after G2 gives it a trigger and a trustworthy predicate): prefer a **fresh work item on a slot with no standing session** over item 23. It exercises the same mechanisms without needing gate 6 to be wrong, and it avoids retrying an item whose owner session is still alive.
 
 Note what step 2 means for capacity: **the pool that can actually be dispatched into is size 1**, because the primary is registered non-dispatchable. Combined with PR A having no terminal release (§2.4), a merged item holds its lease until the reclaim sweep sees its owner session gone — which is the substance of the §4.1a gate, not merely a latency annoyance. Read `GET .../workspaces` rather than guessing. Adding a second real worktree is a one-`POST` fix and is the recommended follow-up once PR A is observed working, but it reduces the stall risk rather than removing it.
 

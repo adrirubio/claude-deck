@@ -461,6 +461,70 @@ The lesson, and it rhymes with the membership-vs-identity one from the third rev
 
 Design gained §2.10c (rejection codes) and §2.10d (what is out of scope and why); plan gained Task 5b-v. Sanity greps 17 → **19**, traps 11 → **12**, test obligations 58 → **60**. Endpoints still **four** — the count has now survived three reviews and this pass.
 
+### Finding 16 — PR A merged (`c92b044`) and deployed to step 4; **step 5 blocked**, two new findings
+
+PR #305 reviewed and merged 2026-08-01. Review was verify-don't-trust: all three of the impl agent's numbers reproduced independently in a scratch worktree (364 focused / 530 full / the one known-stale `test_multi_provider_smoke.py:54`), all nineteen sanity greps re-run by hand, then **12 mutation tests** against the new guards. **10 killed** — the `dispatchable` filter, the `-fdx` prohibition, the `linked` check, the occupancy gate, the `tmux_target` veto, the forbidden release in `except ValueError`, reclaim's liveness gate, `transient=False`, reset-on-primary, and `acquire`'s reset-failure release. **2 survived**, both understood rather than waved through:
+
+- **M4** (drop the `path == repo_path` guard, §2.9) is **provably redundant**: probed on real git in a scratch repo, a primary reports `--git-dir` == `--git-common-dir`, so the `linked` check rejects it with the *same* `workspace_is_primary` code. Defence in depth, not dead code — keep it, no test owed.
+- **M12** (add `ready_for_review` to `_RECLAIMABLE_STATUSES`) is a **genuine test gap on correct code**. §2.5 argues that exclusion explicitly and no test pins it. Deferred to PR B, which must touch the release rules anyway — recorded as a required item on PR B's issue with the mutation result as its justification. The general shape, worth naming: **exclusion lists are systematically under-tested**, because tests assert "X happens for these statuses" and nobody writes "X does *not* happen for that one" unless the omission is understood as a decision.
+
+Deployment ran §7 steps 0–4, all verified, then stopped:
+
+| Step | Result |
+|---|---|
+| 0 | autonomy off via `PATCH /presets/2` (not by row edit); `last_polled_at` frozen at `20:33:21` across a 75 s wait → scheduler job confirmed gone |
+| 1 | DB backed up; checkout fast-forwarded `fdf38be` → `c92b044`; backend restarted clean; `github_workspaces` created with **both** UniqueConstraints, all five scope columns present, work items unchanged (11 escalated / 11 completed / 6 merged) |
+| 2 | primary registered → `disabled_for_dispatch`, `dispatchable=false` **by kind**; issue-818 adopted → `available`, no `provision_error`. §7's measurements re-taken at deployment time as instructed: issue-818 clean/0 sessions, primary 5 sessions |
+| 2 | **trap 6 rejected live, on real git**: an unregistered nested path sharing the common dir → `409 workspace_not_a_worktree`. The single most dangerous case any review found, refused by the deployed code |
+| 3 | `builds_out_of_tree=true`, `build_dir_template=build`, `meson compile -C {build_dir} -j{parallelism}`, `max_build_parallelism=4`, `base_ref=origin/master` (resolves) |
+| 4 | `GET .../workspaces` → 2 rows, 1 dispatchable, states exactly as designed |
+
+Process note on step 3: the values were first set **wrong** from memory (`builds_out_of_tree=false`, a `meson setup && ninja` hint) and corrected only after reading §7. A runbook step must be read immediately before it is executed, not recalled — the design had been read in full earlier the same session, which is precisely what made recall feel sufficient.
+
+#### Finding 17 (SERIOUS) — the liveness predicate that licenses `reset --hard` reads five live agents as offline
+
+Step 5 surfaced this, and no test could have. Every tmux-bound session in the live DB is **stale past its TTL**:
+
+```
+$ # all five observed sessions
+last_seen_at = 2026-07-28 16:49:51   (all five)     vs now 2026-08-01 20:48
+OBSERVED_TTL_SECONDS = 300                          → _effective_status = "offline" ×5
+$ # but the processes are alive
+pid 149168/149179/149190 ALIVE 4-16:17   pid 159009 ALIVE 4-16:12   pid 379552 ALIVE 4-04:07
+$ tmux list-panes -a → 5 panes, all cwd=/home/juan/work/repos/tizonia/tizonia-openmax-il
+```
+
+Verified by running the real predicate against a **copy** of the live DB (never the live file): `slot_has_live_owner_session` returns **False for slots 4, 5 and 6** while all five agents are physically running. So the sweep would consider every escalated item's lease reclaimable, and `acquire` would then run `switch --force` / `reset --hard` / `clean -fd` on a workspace whose agent is alive. **That is Finding 10's mechanism arriving through the release path — exactly what §2.4's invariant exists to prevent — and the invariant is not what fails. The evidence feeding it is.**
+
+**Root cause: `last_seen_at` for `source="observed"` rows is only refreshed by `sync_observed_sessions`, and nothing on the autonomy poll path calls it.** Its seven callers are all interactive or launch-time: `GET /agent-mail/team?sync=true`, `create_from_agent_mail`, `plan_launch`, `auto_nudge_members`, the wake paths. `poll_scope`, `dispatch_pending`, `monitor_dispatched` and `process_scope` contain **zero** references. So the freshness of the fact that gates a destructive git command is a side effect of somebody having the Agent Mail page open. The last refresh, 07-28 16:49, is when a human last loaded that page.
+
+There is a **hidden self-repair** that makes this less than certain to fire, and it is worth stating because it is the kind of accident that hides a defect: `dispatch_pending` sends the brief *before* launching, via `send_direct_message` → `send_message(auto_nudge=True)` → `auto_nudge_members` → `sync_observed_sessions`. So a dispatch that gets far enough to send a brief refreshes liveness as a side effect. But `reclaim_stale` runs at the **top** of `dispatch_pending`, before any brief is sent — so on the *first* poll after a quiet period, reclaim reads stale data, and only later work in the same cycle repairs it. Reclaim is the one caller that needs fresh data and the one that structurally cannot have it.
+
+`_effective_status` already has the fix in miniature for a different source: for `source="mcp"` it consults `_pid_is_running(session.pid)` and returns `connected` on a live pid **even past the TTL**. Observed rows carry a `pid` too — all five above — and that branch simply is not applied to them. So the correction is likely small; but it is a change to the predicate G2 owns, so it is G2's to make, not a hotfix to slip in.
+
+**Why this is not a live fire right now:** every consumer of the pool — `acquire` (`:222`) and `reclaim_stale` (`:171`) — lives inside `dispatch_pending`, which runs only from the scheduler job that step 0 removed. With autonomy off the two registered rows are inert. This is a **precondition on re-enabling autonomy**, and it now joins §4.1a as a second gate: PR B is not sufficient by itself.
+
+The generalisation, third of its kind in this design after *membership is not identity* and *name the actor*: **an invariant is only as good as the freshness of the evidence it reads.** "Release is licensed by the absence of a process" was verified as *logic* by 60 tests and 12 mutations. Nobody asked who keeps its input true, or how recently. Tests supply their own fixtures, so a stale-data defect is invisible to every one of them by construction.
+
+#### Finding 18 (blocker for PR B as designed) — `launch_id` will not carry per-item liveness once G2 lands
+
+PR B's stated mechanism is per-item liveness via `MailAgentSession` joined through `item.launch_id` (§2.4, §4.1). Tracing it: `_record_launch_item` (`agent_team_service.py:653`) writes `tmux_target=result.tmux_target` for **every** action, and on the `reuse` branch (`:554-574`) that value is `plan_item.matching_session["tmux_target"]` — the **standing session's** target. Under G2's intended model (`reuse_existing=True`, one session per slot for its whole life, brief delivered as a message) every item dispatched to a slot therefore records the *same* `tmux_target`, and "per-item liveness via `launch_id`" collapses straight back into slot-scoped liveness. **PR B's mechanism stops working the moment its own prerequisite lands.**
+
+Confirmed against live data: all 11 slot-6 launch items are `action=spawn` with distinct targets, because dispatch currently passes `reuse_existing=False` — that is Finding 13, and it is the only reason the field looks discriminating today. Exactly one `reuse` row exists anywhere in the table (id 21, a hand launch), so the reuse path has **never** been exercised by dispatch.
+
+Same shape as Finding 13 and as *membership is not identity*: **a field whose name implies a granularity its values do not carry.** `launch_id` identifies a *launch*; the question PR B needs answered is "which session owns this work item?", and after G2 those stop being the same question. So G2 must now also answer **what identifies the session owning a work item** — and PR B cannot be written before it does. No handoff was written; a handoff on a falsified premise is worse than none.
+
+#### Why step 5 could not be run, and what it costs
+
+Two independent blockers, both structural rather than incidental:
+
+1. **No dispatch trigger exists with autonomy off.** Enumerated every route on `agent_teams.py`: `dispatch_pending` runs *only* from the scheduler job, and §7 step 0 deliberately removed it. `retry` sets an item to `pending`; nothing then consumes it. There is no manual poll/dispatch endpoint (`POST /dispatch-status` is the agent's *status-report* endpoint, not a trigger). §7 step 5 assumed retry→dispatch is a continuation, but the two are coupled only through the scheduler that step 0 turns off — **the runbook's own step 0 disables the actor its step 5 depends on.**
+2. **Gate 6 would reject item 23 regardless.** Its owner is slot 6, which carries three sessions. Once Finding 17 is fixed — i.e. once liveness is read correctly — `slot_has_live_owner_session` returns **true** and the item parks at `queued_owner_session_live` without ever acquiring a lease. Note the trap: step 5 would "work" *today* only because Finding 17 makes the gate answer wrongly.
+
+So steps 0–4 verified the **registration** half of PR A on real git; the **dispatch** half stays unexercised. Specifically unverified: `acquire` under a real dispatch, `reset_workspace`'s four commands on a real worktree, that `clean -fd` preserves the 1.1 GB meson cache in practice, the brief naming the worktree path, and release-on-launch-failure. That is deferred risk, not removed risk.
+
+**Decision (user, 2026-08-01): stop at step 4.** Autonomy stays off, both rows stay registered, findings 17 and 18 recorded, and the next unit of work is the **Phase G2 design** — which now owns three coupled questions rather than one: the reuse path delivering `prompt_override` (Finding 13), what identifies the session owning a work item (Finding 18), and who keeps liveness evidence fresh (Finding 17). Step 5 is re-run after G2, when a trigger exists and the predicate can be trusted; a fresh work item on a slot with no standing session is the cleaner subject for it than item 23.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
