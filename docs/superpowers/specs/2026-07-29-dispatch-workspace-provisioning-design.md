@@ -539,6 +539,39 @@ The registration `POST` accepts `path`, `kind`, and optional `dispatchable` and 
 
 It is the only endpoint that mutates the **filesystem**, and it must be synchronous with the `git worktree add` it triggers: a 202-style "queued" response would hide provisioning failure behind a second lookup, and provisioning failure is the case that most needs to be visible (§2.9a). `reprobe` also touches the filesystem, but only ever on a row that already exists and is unleased (§2.10a).
 
+#### 2.10c The operator may not be human — machine-readable rejection codes
+
+Everything above says "operator", and every argument made from it silently assumed a human at a terminal. Three of this design's own sentences give that away: `reprobe` and `abandon` need no UI because they are "one `curl` away" (§2.11); pool shrinkage is "a human chore" (§2.10); on provisioning failure "the operator sees the git error directly and can retry" (§2.9a). Each is sound about a person. None is sound about **Deck's other class of operator**.
+
+Deck already treats non-human operators as first-class, and not incidentally — `mcp_shim/agent_mail_server.py` exposes 18 `deck_*` tools, and the Agent Team ones are exactly the configure-and-supervise surface this design's endpoints belong to: `deck_create_team`, `deck_plan_team_launch` → `deck_launch_team`, `deck_list_work_items`, `deck_retry_work_item`. The launch pair even carries the same shape of safety idiom this design uses: plan first, pass `confirm_plan_hash`, and bypass only via an explicit `force_without_plan`. So an agent operator is not a hypothetical future user of Deck; it is how the surrounding subsystem is already driven, and this is the first significant operator surface in Deck that does not extend the pattern.
+
+**What must be in this PR: rejection codes.** Not the MCP tools — those are additive and change no invariant here (§2.10d). Codes are different, because they are a wire contract, and the cheap moment to define one is before anything parses around its absence. The relevant 409s are precisely the ones an agent hits and a human shrugs off, and the required recovery differs per code:
+
+| Code | Meaning | What a caller should do differently |
+|---|---|---|
+| `workspace_path_registered` | canonical path already in the table (§2.10 pre-check) | read `GET .../workspaces`; it may need `reprobe`, not registration |
+| `workspace_not_a_worktree` | path exists but is not a git worktree of this scope | fix the path; never retry as-is |
+| `workspace_is_primary` | `kind="worktree"` resolved to `scope.repo_path` (§2.9) | **never** retry — the ★★ guard |
+| `workspace_dirty` | adopted tree has uncommitted or untracked work (§2.9) | commit/stash, *then* retry |
+| `workspace_occupied` | a live session's `cwd` is that path (§2.9) | wait and retry — transient, unlike the two above |
+| `workspace_leased` | `reprobe` on a leased row (§2.10a) | wait for reclaim, then retry |
+| `workspace_reset_failed` | `reprobe`'s reset failed again (§2.10a) | escalate to a human; the tree needs hands |
+| `work_item_not_abandonable` | `abandon` from a status that does not accept it (§2.10b) | re-read status; may already be reclaimable |
+
+`workspace_dirty` and `workspace_occupied` are the pair that proves the point. Both are 409s on the same request, both read as "adoption refused", and their correct handling is opposite: one needs an action taken before retrying, the other needs only patience. A human reads two English sentences and knows which is which. An agent given only prose must pattern-match on wording that no test pins — so the first reword silently converts "wait and retry" into "give up", or worse, the reverse.
+
+**The wire format already exists and needs no invention.** `agent_teams.py:49` raises `detail={"message": ..., "block_code": ...}`, and the shim's `_http_error_result` reads a dict `detail`, extracting `message` and surfacing `block_code` on the returned error object. Plain-string details still work and stay the message. So these codes ship as `detail={"message": <human sentence>, "block_code": <code>}` — a human reading a `curl` sees the sentence, an agent reads the code, and no existing caller changes.
+
+#### 2.10d What is deliberately *not* in this PR: MCP tools and the external-supervisor question
+
+The four endpoints get no `deck_*` tools here, and that is a scoping decision with a reason rather than an oversight.
+
+MCP tools are strictly additive over REST: the shim is a thin `httpx` wrapper (`_deck_request`) and a tool for each of these endpoints touches no lease invariant, no status set, and no git command. Nothing in this design becomes harder to add them later, which is exactly why they need not be here — where the codes above *do*, since they are the contract those tools would speak.
+
+The deeper reason is that the obvious next step runs into a real question this design should not answer by accident. Deck's existing agent-operator model is **team-scoped**: `deck_list_work_items` calls `_ensure_registered()`, reads `team_preset_id` from the caller's own membership, and returns `no_team_preset` when there is none — it is documented "Leader-only". That model fits an agent *inside* a team acting on *its own* team. It does not describe an **external supervising agent** — a personal assistant agent with no slot, no preset, and no bootstrap environment — which is the operator the roadmap actually wants for delegated configuration and supervision. Such a caller cannot use the current supervision tools at all, and the gap is an identity model, not a missing route. Relatedly, `autonomy_enabled` exists only on the REST scope endpoints (`agent_teams.py:274,278`) and appears **zero** times in the shim, so "delegate turning autonomy on" is not expressible today regardless of this change.
+
+Whether an unscoped external agent should be able to `abandon` a work item, or register a directory as an autonomous work target, is a trust-boundary decision deserving its own design pass — and one that must not be settled implicitly by whichever tools were convenient to add alongside a lease refactor. This PR therefore ships the codes, states the principle, and leaves the boundary explicitly open.
+
 ### 2.11 UI surface — one required change, two worth doing
 
 The plan's original "do not touch the frontend" was a diff-size decision, not an analysis. Reading `AutonomyPanel.tsx` shows one part of it does not survive.
@@ -555,7 +588,7 @@ That matters more here than for the existing two, because **a workspace shortage
 
 **Deferrable:** the five new scope fields in `types/agentTeams.ts:150-197` (three interfaces enumerate scope fields explicitly) and in the `ScopeDialog` form. Every field has a server-side default and all five are set on scope 1 via the API during deployment, so the UI is not on the critical path for them. Same for adding `max_build_parallelism` to the scope config summary line (`:551-553`).
 
-**Deliberately absent: UI for `reprobe` and `abandon`** (§2.10a, §2.10b). Both are exceptional-path operator actions, both are one `curl` away, and an `abandon` button beside the existing retry button would invite clicking it on an item that is merely queued — which is the exact confusion the required `pendingReasonLabel` fix above exists to prevent. Revisit after PR B, when abandonment is detected automatically and the manual action is rare rather than routine.
+**Deliberately absent: UI for `reprobe` and `abandon`** (§2.10a, §2.10b). Both are exceptional-path operator actions, both are reachable by one `curl` — or, once §2.10d's tools exist, by an agent operator reading the §2.10c codes — and an `abandon` button beside the existing retry button would invite clicking it on an item that is merely queued — which is the exact confusion the required `pendingReasonLabel` fix above exists to prevent. Revisit after PR B, when abandonment is detected automatically and the manual action is rare rather than routine.
 
 ---
 
@@ -695,12 +728,15 @@ So PR A ships `POST .../github-work-items/{item_id}/abandon` (§2.10b). The divi
 - **A workspaces management page.** The scope card and detail dialog are enough for a pool this small.
 - **Prompt release on `merged`/`completed`, per-item session liveness, and the closed-unmerged-PR path.** All PR B (§4.1, §4.2).
 - **Deck terminating agent sessions.** Winding down a session to free a workspace is PR B's mechanism, and it needs its own safety argument — the standing rule is that a dispatched session is never killed unless positively confirmed dead.
+- **`deck_*` MCP tools for the four new endpoints.** §2.10d: additive over REST, no invariant touched, so they need not ship here — but the rejection codes they would speak (§2.10c) must.
+- **An external-supervisor identity model.** §2.10d: today's agent-operator tools derive authority from the caller's own team membership (`_ensure_registered`), which cannot express an unscoped supervising agent. Whether such a caller may `abandon` an item or register a work target is a trust boundary needing its own design pass, and this PR must not settle it implicitly.
+- **Exposing `autonomy_enabled` over MCP.** Absent from the shim today (§2.10d). Real gap, same axis, but it is a scope-config surface rather than a workspace one, and §4.1a keeps autonomy off through PR A regardless.
 
 ---
 
 ## 6. Test obligations
 
-Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first. This list grew from 22 → 37 → 51 → **58** across four revisions (API/UI, then the first review, the second, the third); expect ~58 new tests. Items marked ★★ are the two that would have let PR A damage a live checkout.
+Baseline to preserve: **290 passing** (`pytest tests/agent_teams tests/agent_mail -q`), or 294 if G1c has merged first. This list grew from 22 → 37 → 51 → 58 → **60** across five revisions (API/UI, the first three reviews, then the agent-operator pass of §2.10c); expect ~60 new tests. Items marked ★★ are the two that would have let PR A damage a live checkout.
 
 Items marked **★** are regression guards for a defect that has already occurred or was caught in review. They must be written *before* the code and observed to fail.
 
@@ -774,6 +810,8 @@ Items marked **★** are regression guards for a defect that has already occurre
 36d. `reprobe` on a `kind="primary"` row → 409, zero mutating git commands.
 36e. ★ `POST .../github-work-items/{id}/abandon` on a `ready_for_review` item with a `pr_number` sets `dispatch_status="escalated"` / `escalation_reason="abandoned_by_operator"` and does **not** release the lease; the next reclaim sweep releases it **only** once the owner session is offline. *All four pre-existing exits are closed for this item — retry 409s on both status and `pr_number`, and the watcher's reconcilable set excludes `ready_for_review` and skips items with a PR (§2.10b).*
 36f. `abandon` on an already-terminal item (`merged`, `completed`) → 409; those are already reclaimable.
+36g. ★ **Every rejection in §2.10c carries its `block_code`** in a dict `detail` alongside a human `message`, asserted per code — table-driven over all eight. *An agent operator cannot act on prose. `workspace_dirty` and `workspace_occupied` are the pair that matters: same endpoint, same 409, opposite recovery (act-then-retry vs. wait-and-retry), and nothing but the code distinguishes them once the wording is reworded.*
+36h. `detail` remains a **dict** with both keys, so `_http_error_result`'s dict branch (`mcp_shim/agent_mail_server.py`) extracts `message` and surfaces `block_code`; plain-string details elsewhere in `agent_teams.py` keep working unchanged. *The wire format is the existing `agent_teams.py:49` one — this asserts it was reused, not re-invented.*
 37. `GithubWorkItemResponse.workspace_path` is the leased workspace's path, and `None` for an item holding no lease.
 
 ---

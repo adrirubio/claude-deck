@@ -2,12 +2,13 @@
 
 Design: `../specs/2026-07-29-dispatch-workspace-provisioning-design.md` — **read it first**, especially §2.4 (why nothing releases on terminal status), §2.5 (reclaim) and §2.6 (`clean -fd`, not `-fdx`, and the forced switch). Those three are where this task can do real damage.
 
-**This is the fourth version, and it has been through three reviews.** The first judged it unsafe (`/tmp/dispatch-workspace-provisioning-plan-review.md`, 11 findings); the second judged the lease design "sound enough to implement" with 4 findings + a contract clarification (`/tmp/dispatch-workspace-provisioning-plan-rereview.md`); the third found 2 further safety blockers, 3 contract inconsistencies and 1 stale instruction (`/tmp/dispatch-workspace-provisioning-plan-rereview-2.md`). Every finding from all three is adopted or explicitly deferred. Four things follow:
+**This is the fifth version, and it has been through three reviews plus one design pass.** The first judged it unsafe (`/tmp/dispatch-workspace-provisioning-plan-review.md`, 11 findings); the second judged the lease design "sound enough to implement" with 4 findings + a contract clarification (`/tmp/dispatch-workspace-provisioning-plan-rereview.md`); the third found 2 further safety blockers, 3 contract inconsistencies and 1 stale instruction (`/tmp/dispatch-workspace-provisioning-plan-rereview-2.md`). Every finding from all three is adopted or explicitly deferred. The fifth version then added machine-readable rejection codes (Task 5b-v), because all three reviews and the plan itself had read "operator" as "human" throughout, while Deck's Agent Team surface is already driven by agents. Four things follow:
 
 - **Where this plan and any review disagree, this plan wins** — it was written after all three, and each finding was verified against the code before being adopted (see the three "what changed" tables at the end). In four places a review's own proposed fix was incomplete or unsafe, and the plan says which and why.
 - First-review finding 6 ("no supported way to populate the pool") was already fixed before that review, in a commit that had not been pushed. That is why the first reviewed copy still said "no new endpoints."
 - The endpoint count went "none" → two → **four**. Each addition is derived from a traced deadlock, not from convenience; Task 5b shows the traces.
 - **Three of the third review's six findings are the same mistake in different clothes:** a check that proves a path *belongs* to the repo, used as if it proved *what the path is*. Registration therefore validates `kind` in both directions (Task 2f). If you find yourself writing a validator that answers "is this in the repo?", ask what it is being trusted to answer.
+- **"The operator" in this plan means a human *or* an agent.** Deck already exposes 18 `deck_*` MCP tools and its Agent Team surface is routinely driven by agents, so every rejection these endpoints emit carries a machine-readable `block_code` (Task 5b-v). Reasoning that ends "the operator will see the error and retry" is only valid for one of the two.
 
 Scope: backend service + schema + four endpoints + four small frontend edits. Tasks 1-3 are the substance; Task 4 is a **deliberate non-change** and must be read, not skipped; Task 5 is surface area.
 
@@ -810,6 +811,45 @@ One thing to know rather than change: `escalate` computes `owner_may_be_active` 
 
 Tests: design §6 items **36e, 36f**.
 
+### 5b-v. Every rejection carries a `block_code` — the operator may be an agent
+
+Read design §2.10c before writing this. The short version: Deck has two classes of operator, and everything written above about "the operator" assumed the human one. `mcp_shim/agent_mail_server.py` already exposes 18 `deck_*` tools including `deck_create_team`, `deck_plan_team_launch`, `deck_launch_team`, `deck_list_work_items` and `deck_retry_work_item` — so an agent driving Deck's Agent Team surface is the existing pattern, not a future idea. These four endpoints are the first significant operator surface that does not extend it.
+
+**Do not add MCP tools in this PR** (design §2.10d — they are additive over REST and the external-supervisor identity question needs its own design pass). **Do** add the codes, because they are the wire contract those tools would speak and retrofitting one after something parses prose is a breaking change.
+
+Use the format that already exists — do not invent one. `_bad_request` at `agent_teams.py:45-51` raises `detail={"message": str(exc), "block_code": exc.block_code}` for `ProviderLaunchError`, and the shim's `_http_error_result` reads a dict `detail`, taking `message` for humans and surfacing `block_code` on the error object. A plain-string `detail` still becomes the message, so the ~40 existing string-detail raises in this file are unaffected.
+
+Add a small helper next to `_bad_request` rather than inlining dicts at eight call sites:
+
+```python
+def _conflict(message: str, block_code: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"message": message, "block_code": block_code},
+    )
+```
+
+The eight codes, and the endpoint step each replaces:
+
+| Code | Raised from | Caller's correct response |
+|---|---|---|
+| `workspace_path_registered` | 5b step 5 (pre-check) **and** step 8 (`IntegrityError`) | read `GET .../workspaces`; may need `reprobe`, not registration |
+| `workspace_not_a_worktree` | 5b step 7 — path exists, is not a worktree of this scope | fix the path; never retry unchanged |
+| `workspace_is_primary` | 5b step 7 — `kind="worktree"` resolved to `scope.repo_path` | **never** retry; this is the ★★ guard |
+| `workspace_dirty` | 5b step 7 — adopted tree unclean | commit or stash, **then** retry |
+| `workspace_occupied` | 5b step 7 — a live session's `cwd` is that path | wait, then retry — transient |
+| `workspace_leased` | 5b-iii step 2 | wait for reclaim, then retry |
+| `workspace_reset_failed` | 5b-iii step 4 | escalate to a human; the tree needs hands |
+| `work_item_not_abandonable` | 5b-iv step 2 | re-read status; may already be reclaimable |
+
+Two of these carry the argument for the whole subsection: `workspace_dirty` and `workspace_occupied` are 409s on the same request with the same English shape ("adoption refused") and **opposite** correct handling — one requires an action before retrying, the other requires only patience. A human reads the sentence and knows. An agent given only prose must match on wording that no test pins, so the first reword silently turns "wait and retry" into "give up" or the reverse.
+
+Note `workspace_path_registered` is deliberately the same code from both the pre-check and the race-losing `IntegrityError`: the caller's situation is identical and it has no way to tell them apart, so distinct codes would imply a distinction it cannot act on.
+
+Keep `kind` validation (5b step 2) a **400** with its existing string detail — it is a malformed request, not a state conflict, and it is the one rejection where the caller's bug is in the request itself.
+
+Tests: design §6 items **36g, 36h**. 36g is table-driven over all eight codes; 36h asserts the dict shape stays compatible with `_http_error_result`.
+
 ### 5c. `workspace_path` on the work-item response
 
 **`app/models/schemas.py`** — add to `GithubWorkItemResponse` (`:2209-2234`):
@@ -889,9 +929,9 @@ pytest tests/ -q            # full suite; report any pre-existing failure, do no
 cd ../frontend && npm run lint && npx tsc --noEmit
 ```
 
-Expected: baseline + ~58 new tests. Report the actual number.
+Expected: baseline + ~60 new tests. Report the actual number.
 
-Sanity checks — all seventeen must hold:
+Sanity checks — all nineteen must hold:
 
 ```bash
 grep -rn "fdx\|'-x'\|\"-x\"" app/services/github_workspace_service.py    # must be EMPTY
@@ -919,13 +959,19 @@ grep -n "except ValueError" app/services/github_dispatch_service.py
 # the existing handler stays, but must NOT contain a release call
 grep -n "provision_worktree" app/services/*.py app/api/v1/*.py
 # must be EMPTY or private-only — the public method is register_workspace(kind=...)
+grep -c "block_code" app/api/v1/agent_teams.py
+# must be >= 9 — the existing _bad_request one, plus the eight of Task 5b-v
+grep -n "workspace_dirty\|workspace_occupied" app/api/v1/agent_teams.py
+# BOTH must appear — same 409, opposite recovery; prose alone cannot tell them apart
 ```
 
 The third and fourth are the two findings the first review caught that a passing test suite would not have caught on its own. The fifth is the Task 4 inversion in one command: if either file shows a diff, the terminal release went back in.
 
 The next four are the second review's findings in the same form. `grep launched` catches the invented status: if it appears anywhere, a release condition is matching a string the launcher never emits. The two `rev-parse` greps catch an identity check that compiles and passes a naive test but rejects every real adoption (relative common-dir) or accepts a nested subdir. And the `prune` grep catches an implementer helpfully "fixing" a stale worktree registration by mutating the primary's metadata.
 
-The last five are the third review's. `grep git-dir` is the important one: without that probe the identity check still passes every test written for the *second* review's findings while accepting `{"path": scope.repo_path, "kind": "worktree"}` — the human checkout, registered dispatchable. `grep except ValueError` catches the release that must not be there; if a release call sits in that handler, a `ValidationError` raised after tmux spawned will reset a directory under a live agent. And `grep provision_worktree` catches a half-applied rename, where the endpoint still calls a method that never learned about `kind`.
+The final two are the agent-operator pass. Deck's other class of operator cannot read an English sentence, and `workspace_dirty` / `workspace_occupied` are the pair that proves it: same endpoint, same 409, and opposite correct handling (act-then-retry vs. wait-and-retry). If only one of them appears, an agent operator has no way to choose.
+
+The five before those are the third review's. `grep git-dir` is the important one: without that probe the identity check still passes every test written for the *second* review's findings while accepting `{"path": scope.repo_path, "kind": "worktree"}` — the human checkout, registered dispatchable. `grep except ValueError` catches the release that must not be there; if a release call sits in that handler, a `ValidationError` raised after tmux spawned will reset a directory under a live agent. And `grep provision_worktree` catches a half-applied rename, where the endpoint still calls a method that never learned about `kind`.
 
 The `outerjoin` check is not pedantry: an inner join there drops every unleased item from the work-items list, which is most of them, and the UI would look empty rather than broken.
 
@@ -955,7 +1001,9 @@ Open ONE PR into `feature/autonomous-github-dispatch` describing:
 - the four new endpoints and why registration needs one at all — a service method with no caller would force hand-edited DB rows (design §2.10);
 - that there is deliberately **no `DELETE`**, no `PATCH` on workspaces, and no force-release;
 - the four bounded frontend changes, and that `queued_no_workspace` rendering as blank space would have made a correctly-working pool look like the Finding 14 wedge;
-- the final test count and the twelve sanity checks above.
+- **that every rejection carries a `block_code`, because Deck's operator may be an agent** — the Agent Team surface is already driven by 18 `deck_*` MCP tools, and `workspace_dirty` vs `workspace_occupied` are two 409s with opposite correct recovery that prose cannot distinguish (design §2.10c). Note the format reuses the existing `_bad_request` / `_http_error_result` contract rather than inventing one;
+- that MCP tools for these four endpoints are deliberately **not** in this PR, and that the reason is a real open question rather than scope-trimming: today's agent-operator tools derive authority from the caller's own team membership, which cannot express an external supervising agent (design §2.10d);
+- the final test count and the nineteen sanity checks above.
 
 Then STOP and report. Do not merge. Do not restart the backend. Do not register workspaces or edit any DB row — the orchestrator does that on the live soak after merge, through the endpoints you just built.
 
@@ -979,11 +1027,28 @@ Then STOP and report. Do not merge. Do not restart the backend. Do not register 
 - **`register_workspace` is the only public entry point** to the service's registration path, and `_provision_worktree` — the one method that runs `git worktree add` — stays private with exactly one call site. Do not add a second caller of `worktree add`, and do not reintroduce a public `provision_worktree`.
 - **No release call inside `except ValueError`** (`github_dispatch_service.py:244-250`). The existing `escalate(db, item, "plan_blocked")` stays exactly as it is; the lease is released by the reclaim sweep, not there. Task 3d-i has the reasoning, and it is the third review's blocker 1.
 - **Frontend changes are limited to Task 5d's four edits.** No new components, no new pages, no scope-form fields.
+- **No `deck_*` MCP tools, and do not touch `mcp_shim/agent_mail_server.py`** (design §2.10d). The eight `block_code` values of Task 5b-v are required; the tools that would consume them are a separate design pass, and adding them here would implicitly settle a trust-boundary question about external agent operators. Read the shim if it helps you match the error format — do not edit it.
 - Do not enable/disable autonomy, spawn or kill agent sessions, hand-edit DB rows, or restart the backend.
 - Report — do not rewrite — any pre-existing failing test. `tests/test_multi_provider_smoke.py:54` is known-failing on the base branch (stale monkeypatch target); it is not yours.
 - Do not run `git worktree prune`, and do not add it as a fallback when `worktree add` fails on a stale registration. It rewrites the primary's worktree metadata for every worktree. Surface the error (Task 2f).
 - **Autonomy stays off after this PR merges** (design §4.1a). Deployment is the orchestrator's job, but do not write anything in the PR description implying PR A is ready to run unattended.
-- **If a step looks wrong, STOP and report rather than improvising.** Eleven traps in particular, each with a soak finding or a review finding behind it: if `clean -fd` seems insufficient; if reclaiming unconditionally on escalation seems simpler; if releasing on `merged` seems obviously correct; if disabling a workspace on any git failure seems safer; if `git worktree add` seems like it should handle an existing worktree; if comparing `--git-common-dir` alone seems sufficient to identify a worktree; if `abandon` seems like it should release the lease directly; if an exception from the launcher seems like proof that nothing spawned; if `except ValueError` seems like a safe "pre-spawn only" release path; if adopting a worktree seems as safe as creating one; or if catching `IntegrityError` seems like enough to reject a duplicate path. All eleven are wrong, and the reasoning is in the design section each one cites.
+- **If a step looks wrong, STOP and report rather than improvising.** Twelve traps in particular, each with a soak finding or a review finding behind it: if `clean -fd` seems insufficient; if reclaiming unconditionally on escalation seems simpler; if releasing on `merged` seems obviously correct; if disabling a workspace on any git failure seems safer; if `git worktree add` seems like it should handle an existing worktree; if comparing `--git-common-dir` alone seems sufficient to identify a worktree; if `abandon` seems like it should release the lease directly; if an exception from the launcher seems like proof that nothing spawned; if `except ValueError` seems like a safe "pre-spawn only" release path; if adopting a worktree seems as safe as creating one; if catching `IntegrityError` seems like enough to reject a duplicate path; or if a prose error message seems like enough for a caller that may be an agent. All twelve are wrong, and the reasoning is in the design section each one cites.
+
+## What changed from the thrice-reviewed draft (agent-operator pass)
+
+Not a review finding — a design principle the three reviews and this plan had all silently dropped. Deck is operated by humans **and** by agents; the roadmap's intent is that team configuration, autonomy start, and supervision can all be delegated to a non-human operator. Checked against the code rather than assumed:
+
+| Question | Answer |
+|---|---|
+| Does Deck already treat agents as operators? | **Yes, extensively.** `mcp_shim/agent_mail_server.py` exposes 18 `deck_*` tools; the Agent Team ones are the same configure-and-supervise surface these endpoints belong to (`deck_create_team`, `deck_plan_team_launch` → `deck_launch_team`, `deck_list_work_items`, `deck_retry_work_item`) |
+| Did this design consider it? | **No.** `MCP` appeared twice in the design, both inside the deferred build-semaphore entry 3b (§5), and once in the plan as an async-subprocess precedent. Zero of the four new endpoints had an agent-facing contract |
+| Where did the omission show? | Three arguments that only hold for humans: `reprobe`/`abandon` need no UI because they are "one `curl` away"; pool shrinkage is "a human chore"; on provisioning failure "the operator sees the git error directly and can retry" |
+
+What that costs, concretely: the new 409s are exactly the ones an agent operator hits, and **`workspace_dirty` and `workspace_occupied` require opposite handling** — commit/stash then retry, versus simply wait and retry. Same endpoint, same status, indistinguishable in prose. So the eight `block_code` values of Task 5b-v are in this PR, using the format that already exists (`_bad_request` at `agent_teams.py:45-51` → the shim's `_http_error_result`), not a new one.
+
+What is deliberately **not** in this PR, and why it is a question rather than a chore: MCP tools are additive over REST and settle nothing, but the natural next step runs straight into a trust boundary. `deck_list_work_items` calls `_ensure_registered()` and reads `team_preset_id` off the **caller's own membership** — it is documented "Leader-only" and returns `no_team_preset` otherwise. That models an agent inside a team acting on its own team; it cannot express an *external* supervising agent with no slot and no preset, which is the operator the roadmap wants. Whether such a caller may `abandon` an item or register a directory as an autonomous work target deserves deciding on purpose. Related and pre-existing: `autonomy_enabled` exists only on the REST scope endpoints and appears **zero** times in the shim, so delegating "turn autonomy on" is not expressible today either.
+
+The generalisation, which is the same shape as the membership-vs-identity lesson below: **"the operator will see the error and retry" names an actor whose capabilities were never checked.** When a design's safety or recoverability argument rests on an actor, say which actor, and confirm they can actually do the thing.
 
 ## What changed from the twice-reviewed draft (third review)
 
