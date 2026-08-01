@@ -12,6 +12,7 @@ from app.models.database import (
     AgentTeamLaunchItem,
     AgentTeamSlot,
     GithubWorkItem,
+    GithubWorkspace,
     MailAgentSession,
     MailTeamMember,
     TeamGithubScope,
@@ -19,9 +20,16 @@ from app.models.database import (
 from app.models.schemas import AgentTeamLaunchRequest
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
+from app.services.github_workspace_service import github_workspace_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
+_LAUNCH_FAILED_STATUSES = {
+    "failed",
+    "blocked",
+    "blocked_provider_unavailable",
+    "blocked_agent_mail_not_configured",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +168,7 @@ class GithubDispatchService:
         issue_details_by_number = issue_details_by_number or {}
         slots_dispatched_this_batch: set[int] = set()
         scope_dispatched_this_batch = 0
+        await github_workspace_service.reclaim_stale(db, scope)
         scope_active = await self.scope_active_count(db, scope.id)
 
         pending = (
@@ -210,6 +219,14 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            workspace = await github_workspace_service.acquire(db, scope, item)
+            if workspace is None:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_no_workspace"
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
             try:
                 leader = self._leader_slot(preset_slots)
                 leader_member = (
@@ -218,6 +235,7 @@ class GithubDispatchService:
                 brief = self._dispatch_brief(
                     item,
                     scope,
+                    workspace,
                     owner_slot_id=owner_slot_id,
                     preset_slots=preset_slots,
                     leader_member=leader_member,
@@ -237,7 +255,7 @@ class GithubDispatchService:
                         slot_ids=[owner_slot_id],
                         reuse_existing=False,
                         skip_plan_confirmation=True,
-                        repo_path_override=scope.repo_path,
+                        repo_path_override=workspace.path,
                         slot_prompt_overrides={owner_slot_id: brief},
                     ),
                 )
@@ -248,18 +266,23 @@ class GithubDispatchService:
                 await self.escalate(db, item, "plan_blocked")
                 await db.commit()
                 continue
+            except Exception:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = None
+                await self.escalate(db, item, "launch_outcome_unknown")
+                await db.commit()
+                raise
             item.owner_slot_id = owner_slot_id
             item.routing_method = method
             item.launch_id = getattr(result, "launch_id", None)
             launch_item = next(iter(getattr(result, "items", []) or []), None)
             launch_status = getattr(launch_item, "status", None)
-            if launch_status in {
-                "failed",
-                "blocked",
-                "blocked_provider_unavailable",
-                "blocked_agent_mail_not_configured",
-            }:
+            tmux_target = getattr(launch_item, "tmux_target", None)
+            if launch_status in _LAUNCH_FAILED_STATUSES:
                 item.dispatch_status = "failed"
+                if tmux_target is None:
+                    await github_workspace_service.release(db, item.id)
             else:
                 item.dispatch_status = "dispatched"
                 item.dispatched_at = datetime.utcnow()
@@ -273,6 +296,7 @@ class GithubDispatchService:
         self,
         item: GithubWorkItem,
         scope: TeamGithubScope,
+        workspace: GithubWorkspace,
         *,
         owner_slot_id: int,
         preset_slots: list[AgentTeamSlot],
@@ -296,12 +320,33 @@ class GithubDispatchService:
             "",
             f"- Work item ID: {item.id}",
             f"- Repo: {scope.repo_owner}/{scope.repo_name}",
-            f"- Local checkout: {scope.repo_path}",
+            f"- Workspace: {workspace.path}",
+            "- This workspace is leased exclusively to this work item. No other "
+            "dispatched agent will be working in it.",
             f"- Issue: #{item.issue_number} — {item.issue_title}",
             f"- Issue URL: {item.issue_url}",
             f"- Pipeline: {item.issue_type}",
             f"- Owner slot: {owner.display_name if owner else owner_slot_id}",
         ]
+        if workspace.kind == "worktree":
+            lines.extend(
+                [
+                    f"- It is a git worktree on a detached HEAD at {scope.base_ref}. "
+                    "Create your own branch with `git switch -c <branch>` before committing.",
+                    "- Do NOT create, move or remove git worktrees yourself. Claude Deck "
+                    "provisions the workspace; you work inside the one you were given.",
+                    "- Do NOT work in any other checkout of this repository.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "- This is a shared human checkout, not a Deck-managed worktree. Its "
+                    "current branch is not Deck's to change; confirm with the team leader "
+                    "before switching branches.",
+                    "- Do NOT work in any other checkout of this repository.",
+                ]
+            )
         if leader is not None:
             if leader_member is not None:
                 lines.append(
@@ -355,7 +400,54 @@ class GithubDispatchService:
                     "- After opening the draft PR, report `pr_opened` with the PR number and wait for CI verification.",
                 ]
             )
+            lines.extend(self._build_instructions(item, scope))
         return "\n".join(lines)
+
+    def _build_instructions(
+        self,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+    ) -> list[str]:
+        instructions: list[str] = []
+        try:
+            if scope.build_command_hint:
+                if scope.builds_out_of_tree:
+                    build_dir = (scope.build_dir_template or "build").format(
+                        issue_number=item.issue_number
+                    )
+                    command = scope.build_command_hint.format(
+                        build_dir=build_dir,
+                        parallelism=scope.max_build_parallelism,
+                    )
+                    instructions.extend(
+                        [
+                            f"- Build directory: {build_dir}",
+                            f"- Build command: `{command}`",
+                        ]
+                    )
+                else:
+                    command = scope.build_command_hint.format(
+                        build_dir="",
+                        parallelism=scope.max_build_parallelism,
+                    )
+                    instructions.extend(
+                        [
+                            f"- Build command: `{command}`",
+                            "- Only one build may run in this workspace at a time; this "
+                            "project's build system does not support out-of-tree builds.",
+                        ]
+                    )
+        except (KeyError, IndexError, ValueError):
+            logger.exception(
+                "Invalid build template for GitHub scope %s; omitting build hints",
+                scope.id,
+            )
+        if scope.max_build_parallelism:
+            instructions.append(
+                f"- Cap build parallelism at -j{scope.max_build_parallelism}. "
+                "Higher values have OOM-killed this host."
+            )
+        return instructions
 
     def _leader_slot(self, preset_slots: list[AgentTeamSlot]) -> AgentTeamSlot | None:
         enabled = sorted(

@@ -221,6 +221,7 @@ export interface GithubWorkItem {
   escalation_reason?: string | null
   status_note?: string | null
   auto_merged_at?: string | null
+  workspace_path?: string | null
   created_at: string
   updated_at: string
 }

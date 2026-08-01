@@ -222,6 +222,11 @@ class TeamGithubScope(Base):
     max_concurrent_dispatched: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     max_verification_retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     max_auto_merges_per_day: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    base_ref: Mapped[str] = mapped_column(String, default="origin/HEAD", nullable=False)
+    builds_out_of_tree: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    build_dir_template: Mapped[str | None] = mapped_column(String, default="build", nullable=True)
+    build_command_hint: Mapped[str | None] = mapped_column(String, nullable=True)
+    max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -274,6 +279,35 @@ class GithubWorkItem(Base):
 
     __table_args__ = (
         UniqueConstraint("scope_id", "issue_number", name="uix_scope_issue"),
+    )
+
+
+class GithubWorkspace(Base):
+    """A checkout a dispatched work item may exclusively occupy."""
+
+    __tablename__ = "github_workspaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
+    path: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, default="worktree", nullable=False)
+    dispatchable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    leased_item_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_work_items.id", ondelete="SET NULL"), nullable=True
+    )
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    provision_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("path", name="uix_workspace_path"),
+        UniqueConstraint("leased_item_id", name="uix_workspace_leased_item"),
     )
 
 

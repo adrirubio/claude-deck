@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from string import Formatter
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
@@ -10,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.database import GithubWorkItem, TeamGithubScope
+from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.models.schemas import (
     AgentTeamCreateFromBridgeRequest,
     AgentTeamCreateFromMailRequest,
@@ -25,9 +26,13 @@ from app.models.schemas import (
     AgentTeamSlotReorderRequest,
     AgentTeamSlotUpdate,
     DispatchStatusReport,
+    GithubWorkItemAbandonRequest,
     GithubWorkItemListResponse,
     GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
+    GithubWorkspaceCreate,
+    GithubWorkspaceListResponse,
+    GithubWorkspaceResponse,
     TeamGithubScopeCreate,
     TeamGithubScopeListResponse,
     TeamGithubScopeResponse,
@@ -35,11 +40,27 @@ from app.models.schemas import (
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_workspace_service import (
+    GithubWorkspaceError,
+    GithubWorkspaceResetError,
+    github_workspace_service,
+)
 from app.services.github_verification_service import github_verification_service
 from app.services.agent_team_service import PlanConflictError, agent_team_service
 from app.services.providers.base import ProviderLaunchError
 
 router = APIRouter()
+
+_WORKSPACE_CONFLICT_CODES = {
+    "workspace_path_registered",
+    "workspace_not_a_worktree",
+    "workspace_is_primary",
+    "workspace_dirty",
+    "workspace_occupied",
+    "workspace_leased",
+    "workspace_reset_failed",
+    "work_item_not_abandonable",
+}
 
 
 def _bad_request(exc: ValueError) -> HTTPException:
@@ -49,6 +70,13 @@ def _bad_request(exc: ValueError) -> HTTPException:
             detail={"message": str(exc), "block_code": exc.block_code},
         )
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _conflict(message: str, block_code: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"message": message, "block_code": block_code},
+    )
 
 
 def _clean_required(value: str | None, label: str) -> str:
@@ -69,6 +97,30 @@ def _clean_label(value: str | None, label: str) -> str:
     return _clean_required(value, label)
 
 
+def _validate_template(
+    value: str,
+    *,
+    label: str,
+    allowed_fields: set[str],
+    render_values: dict[str, object],
+) -> str:
+    try:
+        for _, field_name, format_spec, conversion in Formatter().parse(value):
+            if field_name is None:
+                continue
+            if (
+                field_name not in allowed_fields
+                or format_spec
+                or conversion is not None
+            ):
+                raise ValueError
+        value.format(**render_values)
+    except (KeyError, IndexError, ValueError) as exc:
+        allowed = ", ".join(f"{{{field}}}" for field in sorted(allowed_fields))
+        raise ValueError(f"{label} may only use placeholders: {allowed}") from exc
+    return value
+
+
 def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
     return TeamGithubScopeResponse(
         id=scope.id,
@@ -83,6 +135,11 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         max_concurrent_dispatched=scope.max_concurrent_dispatched,
         max_verification_retries=scope.max_verification_retries,
         max_auto_merges_per_day=scope.max_auto_merges_per_day,
+        base_ref=scope.base_ref,
+        builds_out_of_tree=scope.builds_out_of_tree,
+        build_dir_template=scope.build_dir_template,
+        build_command_hint=scope.build_command_hint,
+        max_build_parallelism=scope.max_build_parallelism,
         enabled=scope.enabled,
         last_polled_at=scope.last_polled_at,
         created_at=scope.created_at,
@@ -90,7 +147,39 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
     )
 
 
-def _work_item_response(item: GithubWorkItem, scope: TeamGithubScope) -> GithubWorkItemResponse:
+def _workspace_lease_state(workspace: GithubWorkspace) -> str:
+    if workspace.leased_item_id is not None:
+        return "leased"
+    if not workspace.enabled:
+        return "disabled"
+    if not workspace.dispatchable:
+        return "disabled_for_dispatch"
+    return "available"
+
+
+def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
+    return GithubWorkspaceResponse(
+        id=workspace.id,
+        scope_id=workspace.scope_id,
+        path=workspace.path,
+        kind=workspace.kind,
+        lease_state=_workspace_lease_state(workspace),
+        dispatchable=workspace.dispatchable,
+        leased_item_id=workspace.leased_item_id,
+        leased_at=workspace.leased_at,
+        released_at=workspace.released_at,
+        provision_error=workspace.provision_error,
+        enabled=workspace.enabled,
+        created_at=workspace.created_at,
+        updated_at=workspace.updated_at,
+    )
+
+
+def _work_item_response(
+    item: GithubWorkItem,
+    scope: TeamGithubScope,
+    workspace_path: str | None = None,
+) -> GithubWorkItemResponse:
     return GithubWorkItemResponse(
         id=item.id,
         scope_id=item.scope_id,
@@ -115,6 +204,7 @@ def _work_item_response(item: GithubWorkItem, scope: TeamGithubScope) -> GithubW
         escalation_reason=item.escalation_reason,
         status_note=item.status_note,
         auto_merged_at=item.auto_merged_at,
+        workspace_path=workspace_path,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -149,6 +239,26 @@ def _apply_scope_create(
         scope.max_verification_retries = request.max_verification_retries
     if request.max_auto_merges_per_day is not None:
         scope.max_auto_merges_per_day = request.max_auto_merges_per_day
+    if request.base_ref is not None:
+        scope.base_ref = _clean_required(request.base_ref, "Base ref")
+    if request.builds_out_of_tree is not None:
+        scope.builds_out_of_tree = request.builds_out_of_tree
+    if request.build_dir_template is not None:
+        scope.build_dir_template = _validate_template(
+            request.build_dir_template,
+            label="Build directory template",
+            allowed_fields={"issue_number"},
+            render_values={"issue_number": 1},
+        )
+    if request.build_command_hint is not None:
+        scope.build_command_hint = _validate_template(
+            request.build_command_hint,
+            label="Build command hint",
+            allowed_fields={"build_dir", "parallelism"},
+            render_values={"build_dir": "build", "parallelism": 4},
+        )
+    if request.max_build_parallelism is not None:
+        scope.max_build_parallelism = request.max_build_parallelism
     if request.enabled is not None:
         scope.enabled = request.enabled
     scope.updated_at = datetime.utcnow()
@@ -376,6 +486,128 @@ async def delete_github_scope(scope_id: int, db: AsyncSession = Depends(get_db))
 
 
 @router.get(
+    "/github-scopes/{scope_id}/workspaces",
+    response_model=GithubWorkspaceListResponse,
+)
+async def list_github_workspaces(
+    scope_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    workspaces = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(GithubWorkspace.scope_id == scope_id)
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().all()
+    return GithubWorkspaceListResponse(
+        workspaces=[_workspace_response(workspace) for workspace in workspaces]
+    )
+
+
+@router.post(
+    "/github-scopes/{scope_id}/workspaces",
+    response_model=GithubWorkspaceResponse,
+    status_code=201,
+)
+async def create_github_workspace(
+    scope_id: int,
+    request: GithubWorkspaceCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    if request.kind not in {"primary", "worktree"}:
+        raise HTTPException(status_code=400, detail="Workspace kind must be primary or worktree")
+    try:
+        path, _ = agent_team_service.normalize_repo_path(request.path)
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    existing = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.path == path))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise _conflict(
+            "Workspace path already registered",
+            block_code="workspace_path_registered",
+        )
+    dispatchable = (
+        request.dispatchable
+        if request.dispatchable is not None
+        else request.kind == "worktree"
+    )
+    try:
+        workspace = await github_workspace_service.register_workspace(
+            db,
+            scope,
+            path,
+            kind=request.kind,
+            dispatchable=dispatchable,
+            enabled=request.enabled,
+        )
+    except GithubWorkspaceError as exc:
+        block_code = (
+            exc.block_code
+            if exc.block_code in _WORKSPACE_CONFLICT_CODES
+            else "workspace_not_a_worktree"
+        )
+        raise _conflict(str(exc), block_code=block_code) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        raise _conflict(
+            "Workspace path already registered",
+            block_code="workspace_path_registered",
+        ) from exc
+    return _workspace_response(workspace)
+
+
+@router.post(
+    "/github-scopes/{scope_id}/workspaces/{workspace_id}/reprobe",
+    response_model=GithubWorkspaceResponse,
+)
+async def reprobe_github_workspace(
+    scope_id: int,
+    workspace_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    workspace = await db.get(GithubWorkspace, workspace_id)
+    if workspace is None or workspace.scope_id != scope_id:
+        raise HTTPException(status_code=404, detail="GitHub workspace not found")
+    if workspace.leased_item_id is not None:
+        raise _conflict(
+            "Workspace is currently leased",
+            block_code="workspace_leased",
+        )
+    if workspace.kind == "primary":
+        raise _conflict(
+            "Primary workspaces are never reset",
+            block_code="workspace_is_primary",
+        )
+    was_enabled = workspace.enabled
+    try:
+        await github_workspace_service.reset_workspace(db, scope, workspace)
+    except GithubWorkspaceResetError as exc:
+        workspace.enabled = was_enabled if exc.transient else False
+        workspace.provision_error = str(exc)
+        workspace.updated_at = datetime.utcnow()
+        await db.commit()
+        raise _conflict(str(exc), block_code="workspace_reset_failed") from exc
+    workspace.enabled = True
+    workspace.provision_error = None
+    workspace.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(workspace)
+    return _workspace_response(workspace)
+
+
+@router.get(
     "/presets/{preset_id}/github-work-items",
     response_model=GithubWorkItemListResponse,
 )
@@ -390,15 +622,19 @@ async def list_github_work_items(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     rows = (
         await db.execute(
-            select(GithubWorkItem, TeamGithubScope)
+            select(GithubWorkItem, TeamGithubScope, GithubWorkspace.path)
             .join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id)
+            .outerjoin(GithubWorkspace, GithubWorkspace.leased_item_id == GithubWorkItem.id)
             .where(TeamGithubScope.preset_id == preset_id)
             .order_by(GithubWorkItem.updated_at.desc(), GithubWorkItem.id.desc())
             .limit(limit)
         )
     ).all()
     return GithubWorkItemListResponse(
-        items=[_work_item_response(item, scope) for item, scope in rows]
+        items=[
+            _work_item_response(item, scope, workspace_path)
+            for item, scope, workspace_path in rows
+        ]
     )
 
 
@@ -430,6 +666,50 @@ async def retry_github_work_item(
     github_dispatch_service.reset_for_retry(item)
     if request is not None and request.reason:
         item.pending_reason = f"retry requested: {request.reason}"
+    await db.commit()
+    await db.refresh(item)
+    return _work_item_response(item, scope)
+
+
+@router.post(
+    "/github-work-items/{work_item_id}/abandon",
+    response_model=GithubWorkItemResponse,
+)
+async def abandon_github_work_item(
+    work_item_id: int,
+    request: GithubWorkItemAbandonRequest | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="GitHub work item not found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    if item.dispatch_status not in {
+        "ready_for_review",
+        "awaiting_human_review",
+        "dispatched",
+        "verifying",
+    }:
+        raise _conflict(
+            f"Work item in status {item.dispatch_status} cannot be abandoned",
+            block_code="work_item_not_abandonable",
+        )
+    note = (
+        request.reason
+        if request is not None and request.reason
+        else (
+            "Abandoned by operator; workspace lease will be reclaimed once the "
+            "owner session is offline."
+        )
+    )
+    await github_dispatch_service.escalate(
+        db,
+        item,
+        "abandoned_by_operator",
+        note=note,
+    )
     await db.commit()
     await db.refresh(item)
     return _work_item_response(item, scope)

@@ -2162,6 +2162,11 @@ class TeamGithubScopeCreate(BaseModel):
     max_concurrent_dispatched: int = Field(default=3, ge=1)
     max_verification_retries: int = Field(default=2, ge=0)
     max_auto_merges_per_day: int = Field(default=5, ge=0)
+    base_ref: str = "origin/HEAD"
+    builds_out_of_tree: bool = False
+    build_dir_template: str = "build"
+    build_command_hint: Optional[str] = None
+    max_build_parallelism: int = Field(default=4, ge=1)
     enabled: bool = True
 
 
@@ -2176,6 +2181,11 @@ class TeamGithubScopeUpdate(BaseModel):
     max_concurrent_dispatched: Optional[int] = Field(default=None, ge=1)
     max_verification_retries: Optional[int] = Field(default=None, ge=0)
     max_auto_merges_per_day: Optional[int] = Field(default=None, ge=0)
+    base_ref: Optional[str] = None
+    builds_out_of_tree: Optional[bool] = None
+    build_dir_template: Optional[str] = None
+    build_command_hint: Optional[str] = None
+    max_build_parallelism: Optional[int] = Field(default=None, ge=1)
     enabled: Optional[bool] = None
 
 
@@ -2192,6 +2202,11 @@ class TeamGithubScopeResponse(BaseModel):
     max_concurrent_dispatched: int
     max_verification_retries: int
     max_auto_merges_per_day: int
+    base_ref: str
+    builds_out_of_tree: bool
+    build_dir_template: Optional[str] = None
+    build_command_hint: Optional[str] = None
+    max_build_parallelism: int
     enabled: bool
     last_polled_at: Optional[datetime] = None
     created_at: datetime
@@ -2204,6 +2219,37 @@ class TeamGithubScopeListResponse(BaseModel):
 
 class GithubWorkItemRetryRequest(BaseModel):
     reason: Optional[str] = None
+
+
+class GithubWorkItemAbandonRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class GithubWorkspaceCreate(BaseModel):
+    path: str
+    kind: str = "worktree"
+    dispatchable: Optional[bool] = None
+    enabled: bool = True
+
+
+class GithubWorkspaceResponse(BaseModel):
+    id: int
+    scope_id: int
+    path: str
+    kind: str
+    lease_state: str
+    dispatchable: bool
+    leased_item_id: Optional[int] = None
+    leased_at: Optional[datetime] = None
+    released_at: Optional[datetime] = None
+    provision_error: Optional[str] = None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class GithubWorkspaceListResponse(BaseModel):
+    workspaces: List[GithubWorkspaceResponse] = Field(default_factory=list)
 
 
 class GithubWorkItemResponse(BaseModel):
@@ -2230,6 +2276,7 @@ class GithubWorkItemResponse(BaseModel):
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None
+    workspace_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

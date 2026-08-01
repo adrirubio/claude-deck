@@ -395,6 +395,26 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(
             text("ALTER TABLE team_github_scopes ADD COLUMN max_auto_merges_per_day INTEGER DEFAULT 5 NOT NULL")
         )
+    if scope_columns and "base_ref" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN base_ref VARCHAR DEFAULT 'origin/HEAD' NOT NULL")
+        )
+    if scope_columns and "builds_out_of_tree" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN builds_out_of_tree BOOLEAN DEFAULT 0 NOT NULL")
+        )
+    if scope_columns and "build_dir_template" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN build_dir_template VARCHAR DEFAULT 'build'")
+        )
+    if scope_columns and "build_command_hint" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN build_command_hint VARCHAR")
+        )
+    if scope_columns and "max_build_parallelism" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_build_parallelism INTEGER DEFAULT 4 NOT NULL")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
     work_item_columns = {row[1] for row in result.fetchall()}

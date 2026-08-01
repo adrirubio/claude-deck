@@ -2,6 +2,7 @@
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -11,6 +12,7 @@ from app.models.database import (
     AgentTeamSlot,
     TeamGithubScope,
     GithubWorkItem,
+    GithubWorkspace,
 )
 
 
@@ -46,7 +48,89 @@ async def test_team_github_scope_round_trips(db):
     assert scope.max_concurrent_dispatched == 3
     assert scope.max_verification_retries == 2
     assert scope.max_auto_merges_per_day == 5
+    assert scope.base_ref == "origin/HEAD"
+    assert scope.builds_out_of_tree is False
+    assert scope.build_dir_template == "build"
+    assert scope.build_command_hint is None
+    assert scope.max_build_parallelism == 4
     assert scope.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_github_workspace_defaults(db):
+    preset = AgentTeamPreset(name="Workspace", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="owner",
+        repo_name="repo",
+        repo_path="/tmp/repo",
+    )
+    db.add(scope)
+    await db.flush()
+    workspace = GithubWorkspace(scope_id=scope.id, path="/tmp/repo-ws1")
+    db.add(workspace)
+    await db.commit()
+    await db.refresh(workspace)
+    assert workspace.kind == "worktree"
+    assert workspace.enabled is True
+    assert workspace.dispatchable is True
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_github_workspace_leased_item_is_unique(db):
+    preset = AgentTeamPreset(name="Lease", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="owner",
+        repo_name="repo",
+        repo_path="/tmp/repo",
+    )
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=1,
+        issue_title="Issue",
+        issue_url="https://github.com/owner/repo/issues/1",
+        github_updated_at=__import__("datetime").datetime.utcnow(),
+    )
+    db.add(item)
+    await db.flush()
+    db.add_all([
+        GithubWorkspace(scope_id=scope.id, path="/tmp/repo-ws1", leased_item_id=item.id),
+        GithubWorkspace(scope_id=scope.id, path="/tmp/repo-ws2", leased_item_id=item.id),
+    ])
+    with pytest.raises(IntegrityError):
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_github_workspace_path_is_globally_unique(db):
+    preset = AgentTeamPreset(name="Path", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    scopes = [
+        TeamGithubScope(
+            preset_id=preset.id,
+            repo_owner="owner",
+            repo_name=repo_name,
+            repo_path=f"/tmp/{repo_name}",
+        )
+        for repo_name in ("repo-a", "repo-b")
+    ]
+    db.add_all(scopes)
+    await db.flush()
+    db.add_all([
+        GithubWorkspace(scope_id=scopes[0].id, path="/tmp/shared-ws"),
+        GithubWorkspace(scope_id=scopes[1].id, path="/tmp/shared-ws"),
+    ])
+    with pytest.raises(IntegrityError):
+        await db.commit()
 
 
 @pytest.mark.asyncio
@@ -137,4 +221,9 @@ async def test_compat_migration_adds_new_columns_to_legacy_db():
     assert "max_concurrent_dispatched" in scope_cols
     assert "max_verification_retries" in scope_cols
     assert "max_auto_merges_per_day" in scope_cols
+    assert "base_ref" in scope_cols
+    assert "builds_out_of_tree" in scope_cols
+    assert "build_dir_template" in scope_cols
+    assert "build_command_hint" in scope_cols
+    assert "max_build_parallelism" in scope_cols
     await engine.dispose()

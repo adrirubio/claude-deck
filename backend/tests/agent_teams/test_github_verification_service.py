@@ -15,6 +15,7 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
+    GithubWorkspace,
     MailMessage,
     MailTeamMember,
     TeamGithubScope,
@@ -95,6 +96,25 @@ async def _owner(db, scope):
     db.add(member)
     await db.flush()
     return slot, member
+
+
+@pytest.mark.asyncio
+async def test_mark_merged_does_not_release_workspace(db):
+    scope = await _scope(db)
+    item = await _item(db, scope)
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/r-ws-1",
+        leased_item_id=item.id,
+    )
+    db.add(workspace)
+    await db.commit()
+
+    github_verification_service._mark_merged(item)
+    await db.commit()
+
+    assert item.dispatch_status == "merged"
+    assert workspace.leased_item_id == item.id
 
 
 class _Client:

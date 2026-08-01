@@ -198,6 +198,11 @@ async def test_github_scope_crud_endpoints(client, monkeypatch, tmp_path):
             "max_concurrent_dispatched": 2,
             "max_verification_retries": 3,
             "max_auto_merges_per_day": 1,
+            "base_ref": "origin/main",
+            "builds_out_of_tree": True,
+            "build_dir_template": "build-{issue_number}",
+            "build_command_hint": "meson compile -C {build_dir} -j{parallelism}",
+            "max_build_parallelism": 3,
             "enabled": True,
         },
     )
@@ -206,6 +211,10 @@ async def test_github_scope_crud_endpoints(client, monkeypatch, tmp_path):
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
     assert scope["max_verification_retries"] == 3
+    assert scope["base_ref"] == "origin/main"
+    assert scope["builds_out_of_tree"] is True
+    assert scope["build_dir_template"] == "build-{issue_number}"
+    assert scope["max_build_parallelism"] == 3
 
     list_response = await client.get(
         f"/api/v1/agent-teams/presets/{preset_id}/github-scopes"
@@ -215,10 +224,17 @@ async def test_github_scope_crud_endpoints(client, monkeypatch, tmp_path):
 
     update_response = await client.patch(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}",
-        json={"merge_policy": "human", "enabled": False},
+        json={
+            "merge_policy": "human",
+            "build_dir_template": "build",
+            "max_build_parallelism": 4,
+            "enabled": False,
+        },
     )
     assert update_response.status_code == 200
     assert update_response.json()["merge_policy"] == "human"
+    assert update_response.json()["build_dir_template"] == "build"
+    assert update_response.json()["max_build_parallelism"] == 4
     assert update_response.json()["enabled"] is False
 
     delete_response = await client.delete(
@@ -226,6 +242,42 @@ async def test_github_scope_crud_endpoints(client, monkeypatch, tmp_path):
     )
     assert delete_response.status_code == 204
     assert sync_calls == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("build_dir_template", "build-{issue_number"),
+        ("build_dir_template", "build-{unknown}"),
+        ("build_command_hint", "make -C {unknown}"),
+    ],
+)
+async def test_github_scope_rejects_invalid_build_templates(
+    client, monkeypatch, tmp_path, field, value
+):
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    repo = tmp_path / f"repo-{field}-{len(value)}"
+    repo.mkdir()
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": f"Template team {field} {len(value)}", "slots": []},
+    )
+
+    response = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_response.json()['id']}/github-scopes",
+        json={
+            "repo_owner": "owner",
+            "repo_name": repo.name,
+            "repo_path": str(repo),
+            field: value,
+        },
+    )
+
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

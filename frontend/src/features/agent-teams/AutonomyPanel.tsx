@@ -87,6 +87,11 @@ function pendingReasonLabel(item: GithubWorkItem, ownerName?: string) {
     return `queued · behind ${ownerName ?? 'assigned slot'}`
   }
   if (item.pending_reason === 'queued_repo_cap') return 'queued · repo cap reached'
+  if (item.pending_reason === 'queued_no_workspace') return 'queued · no free workspace'
+  if (item.pending_reason === 'queued_low_memory') return 'queued · low memory'
+  if (item.pending_reason === 'queued_owner_session_live') {
+    return `queued · ${ownerName ?? 'owner'} session still live`
+  }
   return null
 }
 
@@ -380,6 +385,10 @@ function WorkItemDialog({
                     <dt className="text-muted-foreground">Retries</dt>
                     <dd>{item.retry_count}</dd>
                   </div>
+                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                    <dt className="text-muted-foreground">Workspace</dt>
+                    <dd className="truncate">{item.workspace_path ?? 'None leased'}</dd>
+                  </div>
                   <div className="grid grid-cols-[150px_1fr] p-3">
                     <dt className="text-muted-foreground">PR</dt>
                     <dd>{item.pr_number ? `#${item.pr_number}` : 'None yet'}</dd>
@@ -546,7 +555,7 @@ export function AutonomyPanel({
                     {!scope.enabled && <Badge variant="secondary">disabled</Badge>}
                   </div>
                   <p className="mt-2 truncate text-sm text-muted-foreground">
-                    Local checkout: {scope.repo_path}
+                    Worktree parent: {scope.repo_path}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Approval rounds: {scope.max_approval_rounds} · Concurrent: {scope.max_concurrent_dispatched} · Verification retries: {scope.max_verification_retries} · Auto-merges/day: {scope.max_auto_merges_per_day} · Last polled {formatDateTime(scope.last_polled_at)}
