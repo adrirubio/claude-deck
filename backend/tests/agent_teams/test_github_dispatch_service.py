@@ -4,7 +4,7 @@ from io import StringIO
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -16,12 +16,14 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
+    GithubWorkspace,
     MailAgentSession,
     MailMessage,
     MailTeamMember,
     TeamGithubScope,
 )
 from app.services.github_dispatch_service import GithubDispatchService, github_dispatch_service
+from app.services.github_workspace_service import github_workspace_service
 
 
 @pytest_asyncio.fixture
@@ -43,6 +45,11 @@ def host_has_enough_memory(monkeypatch):
         lambda: 999_999,
         raising=False,
     )
+
+    async def reset_succeeds(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", reset_succeeds)
 
 
 async def _team(db):
@@ -81,6 +88,13 @@ async def _team(db):
     await db.flush()
     scope = TeamGithubScope(preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/r")
     db.add(scope)
+    await db.flush()
+    db.add_all(
+        [
+            GithubWorkspace(scope_id=scope.id, path=f"/tmp/r-ws-{index}")
+            for index in range(1, 6)
+        ]
+    )
     await db.commit()
     return preset, [architect, backend], scope
 
@@ -357,6 +371,36 @@ def test_reset_for_retry_clears_ack_received_at():
     github_dispatch_service.reset_for_retry(item)
 
     assert item.ack_received_at is None
+
+
+@pytest.mark.asyncio
+async def test_reset_for_retry_does_not_release_workspace(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=909,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(GithubWorkspace.scope_id == scope.id)
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    await db.commit()
+
+    github_dispatch_service.reset_for_retry(item)
+    await db.commit()
+
+    assert item.dispatch_status == "pending"
+    assert workspace.leased_item_id == item.id
 
 
 def test_ack_not_satisfied_by_ack_older_than_current_dispatch():
@@ -643,7 +687,7 @@ async def test_dispatch_pending_launches_and_marks_dispatched(db):
     assert item.routing_method == "label"
     assert item.launch_id == 99
     assert item.pending_reason is None
-    assert launched["override"] == scope.repo_path
+    assert launched["override"] == "/tmp/r-ws-1"
 
 
 @pytest.mark.asyncio
@@ -700,6 +744,9 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     assert f"to_member_id={architect.id}" not in prompt
     assert "wait for acknowledgment before starting implementation" in prompt
     assert "open a draft PR" in prompt
+    assert "Workspace: /tmp/r-ws-1" in prompt
+    assert "leased exclusively" in prompt
+    assert "Do NOT create, move or remove git worktrees" in prompt
 
     member = (
         await db.execute(select(MailTeamMember).where(MailTeamMember.team_slot_id == backend.id))
@@ -841,7 +888,7 @@ async def test_dispatch_pending_disables_reuse_for_repo_override(db):
     )
 
     assert launched["reuse_existing"] is False
-    assert launched["override"] == scope.repo_path
+    assert launched["override"] == "/tmp/r-ws-1"
 
 
 @pytest.mark.asyncio
@@ -2156,3 +2203,337 @@ async def test_monitor_leaves_item_when_leader_not_registered_yet(db):
     )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_queues_when_no_workspace_is_available(db):
+    preset, slots, scope = await _team(db)
+    await db.execute(delete(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id))
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=950,
+        issue_title="No workspace",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(*_args, **_kwargs):
+        raise AssertionError("launcher must not run without a workspace")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={950: ["area:backend"]},
+    )
+
+    assert item.dispatch_status == "pending"
+    assert item.pending_reason == "queued_no_workspace"
+    assert item.owner_slot_id == slots[1].id
+    assert item.routing_method == "label"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "launch_status",
+    [
+        "failed",
+        "blocked",
+        "blocked_provider_unavailable",
+        "blocked_agent_mail_not_configured",
+    ],
+)
+async def test_known_launch_failure_releases_workspace(db, launch_status):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=951,
+        issue_title="Launch failure",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = launch_status
+        tmux_target = None
+
+    class _Result:
+        launch_id = 951
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={951: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id).order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    assert item.dispatch_status == "failed"
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("launch_status", ["pending_registration", "reused", "spawned"])
+async def test_success_or_unknown_launch_status_retains_workspace(db, launch_status):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=952,
+        issue_title="Launch",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = launch_status
+        tmux_target = "deck:0.0" if launch_status != "spawned" else None
+
+    class _Result:
+        launch_id = 952
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={952: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalar_one()
+    assert workspace.path == "/tmp/r-ws-1"
+
+
+@pytest.mark.asyncio
+async def test_tmux_target_vetoes_release_for_failure_status(db):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=953,
+        issue_title="Ambiguous launch",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "failed"
+        tmux_target = "deck:0.0"
+
+    class _Result:
+        launch_id = 953
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={953: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalar_one()
+    assert workspace.path == "/tmp/r-ws-1"
+
+
+@pytest.mark.asyncio
+async def test_value_error_retains_lease_until_reclaim_sweep(db):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=954,
+        issue_title="Plan blocked",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(*_args, **_kwargs):
+        raise ValueError("blocked plan")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={954: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalar_one()
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "plan_blocked"
+    assert workspace.leased_item_id == item.id
+
+    assert await github_workspace_service.reclaim_stale(db, scope) == 1
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_unexpected_launch_exception_retains_lease_and_escalates(db):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=955,
+        issue_title="Unknown launch",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def fake_launcher(*_args, **_kwargs):
+        raise RuntimeError("commit failed after spawn")
+
+    with pytest.raises(RuntimeError, match="commit failed after spawn"):
+        await github_dispatch_service.dispatch_pending(
+            db,
+            scope,
+            slots,
+            launcher=fake_launcher,
+            issue_labels_by_number={955: ["area:backend"]},
+        )
+
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalar_one()
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "launch_outcome_unknown"
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_dispatch_brief_renders_out_of_tree_build_hints(db):
+    _, slots, scope = await _team(db)
+    scope.builds_out_of_tree = True
+    scope.build_dir_template = "build-{issue_number}"
+    scope.build_command_hint = "meson compile -C {build_dir} -j{parallelism}"
+    scope.max_build_parallelism = 4
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=956,
+        issue_title="Build",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id).order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item,
+        scope,
+        workspace,
+        owner_slot_id=slots[1].id,
+        preset_slots=slots,
+    )
+
+    assert "build-956" in brief
+    assert "meson compile -C build-956 -j4" in brief
+    assert "Cap build parallelism at -j4" in brief
+
+
+@pytest.mark.asyncio
+async def test_dispatch_brief_describes_in_tree_build_limit(db):
+    _, slots, scope = await _team(db)
+    scope.builds_out_of_tree = False
+    scope.build_command_hint = "make -C {build_dir} -j{parallelism}"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=957,
+        issue_title="Build",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id).order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item,
+        scope,
+        workspace,
+        owner_slot_id=slots[1].id,
+        preset_slots=slots,
+    )
+
+    assert "Only one build may run in this workspace at a time" in brief
+    assert "build-957" not in brief
+
+
+@pytest.mark.asyncio
+async def test_dispatch_brief_contains_malformed_build_template(db):
+    _, slots, scope = await _team(db)
+    scope.builds_out_of_tree = True
+    scope.build_dir_template = "build-{issue_number"
+    scope.build_command_hint = "make -C {build_dir} -j{parallelism}"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=958,
+        issue_title="Build",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id).order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item,
+        scope,
+        workspace,
+        owner_slot_id=slots[1].id,
+        preset_slots=slots,
+    )
+
+    assert "Issue: #958" in brief
+    assert "make -C" not in brief

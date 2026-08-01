@@ -13,6 +13,7 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
+    GithubWorkspace,
     MailMessage,
     MailTeamMember,
     TeamGithubScope,
@@ -155,6 +156,33 @@ def _issue(number, labels, updated="2026-07-04T00:00:00Z"):
         "state": "open",
         "labels": [{"name": name} for name in labels],
     }
+
+
+@pytest.mark.asyncio
+async def test_complete_and_notify_does_not_release_workspace(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=99,
+        issue_title="closed",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/r-ws-1",
+        leased_item_id=item.id,
+    )
+    db.add(workspace)
+    await db.commit()
+
+    await github_watcher_service._complete_and_notify(db, scope, item)
+
+    assert item.dispatch_status == "completed"
+    assert workspace.leased_item_id == item.id
 
 
 @pytest.mark.asyncio
