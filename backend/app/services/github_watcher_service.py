@@ -35,7 +35,12 @@ class GithubWatcherService:
         for issue in labeled:
             await self._upsert_item(db, scope, issue)
         await self._recheck_active_items(db, scope, client)
-        await self._reconcile_closed_issues(db, scope, client)
+        await self._reconcile_closed_issues(
+            db,
+            scope,
+            client,
+            open_labeled_numbers=frozenset(issue["number"] for issue in labeled),
+        )
         scope.last_polled_at = datetime.utcnow()
         await db.commit()
 
@@ -112,7 +117,12 @@ class GithubWatcherService:
                 )
 
     async def _reconcile_closed_issues(
-        self, db: AsyncSession, scope: TeamGithubScope, client: GithubClient
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        client: GithubClient,
+        *,
+        open_labeled_numbers: frozenset[int] = frozenset(),
     ) -> None:
         stalled = (
             await db.execute(
@@ -124,6 +134,13 @@ class GithubWatcherService:
                 )
             )
         ).scalars().all()
+        # Presence in the open labeled response proves an issue is open; absence
+        # proves nothing, so absent issues must still be fetched by number.
+        stalled = [
+            item
+            for item in stalled
+            if item.issue_number not in open_labeled_numbers
+        ]
         if not stalled:
             return
         current = await client.get_issues_by_number(
