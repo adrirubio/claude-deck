@@ -184,9 +184,10 @@ and `in_progress` branches (`app/api/v1/agent_teams.py:277-313`) already demonst
 report statuses that do not move `dispatch_status`, so the standing "NO new
 `dispatch_status` values" constraint holds *for the report*.
 
-**It does not hold for the design as a whole.** §3.1a-bis introduces one genuinely new status,
-`retry_requested`, and that is flagged as a deliberate exception requiring approval — see there
-for why `pending_reason` cannot carry it.
+**And it holds for the design as a whole.** The draft of §3.1a-bis proposed one new status as a
+deliberate exception; that was withdrawn (user decision, 2026-08-02) in favour of a nullable
+`retry_requested_at` column, because `escalated` already carries every property the new value
+was invented for. No status is added anywhere in G2.
 
 ```python
 elif report.status == "workspace_released":
@@ -269,39 +270,96 @@ Trace it with both amendments in force:
 So the lease is stuck with a token nobody can use, and the *worst* outcome is not the wedge —
 it is step 4 silently skipping the reset that isolation depends on.
 
-**Fix: retry becomes a two-phase transition, and dispatch never re-acquires a leased
-workspace.**
+**Fix: retry becomes a two-phase transition — intent recorded now, status flipped only once the
+lease is gone — so dispatch never re-acquires a leased workspace.**
 
-- `reset_for_retry` no longer jumps straight to `pending`. If the item still holds a lease it
-  moves to a new durable state **`retry_requested`**, which is:
-  - **terminal for release purposes** (§3.1c) — so the old owner can still release, and is
-    reminded to (§6);
-  - **added to `_RECLAIMABLE_STATUSES`** — so the crash backstop can clear it;
-  - **not dispatchable** — `dispatch_pending` selects `pending` only, so it cannot be picked
-    up while leased.
-- Once the lease is released (by report or backstop), the item moves `retry_requested` →
-  `pending` on the poll path, and the next dispatch acquires **fresh**, minting T2 and running
-  `reset_workspace`.
-- If the item holds no lease when retry is requested, it goes straight to `pending` as today —
-  no behavioural change for the common case.
+**Decision (user, 2026-08-02): record the intent in a nullable `retry_requested_at` column on
+`github_work_items`; the item stays `escalated`.** The draft of this section proposed a new
+`dispatch_status` value, `retry_requested`, and argued for it as a deliberate exception to the
+standing "NO new `dispatch_status` values" constraint. That was unnecessary. `escalated`
+already has all three properties the new state was invented to supply:
 
-This is a **new `dispatch_status` value**, which the standing constraint forbids. The
-constraint exists to stop values being invented for *reporting* convenience, and it was right
-to block `workspace_released` (§3.1). Here the state is genuinely new: "wants re-dispatch, not
-yet dispatchable, still owned". Encoding it in `pending_reason` would not work — `pending` is
-exactly the status that makes it dispatchable. **This is called out as a deliberate exception
-to be approved with the plan, not slipped through**, and it is confined to PR1.
+| Property needed | Where `escalated` already provides it |
+|---|---|
+| terminal for release (§3.1c) | already in the legal-release list |
+| reclaimable by the backstop | `_RECLAIMABLE_STATUSES` (`github_workspace_service.py:24`) |
+| not dispatchable | `dispatch_pending` selects `dispatch_status == "pending"` only (`:174-181`) |
+
+So the state machine does not change, no exception needs approving, and the UI, the MCP tool
+(`deck_retry_work_item`) and every `dispatch_status` consumer keep working untouched.
+
+- **`reset_for_retry` becomes conditional.** If the item holds no lease it behaves exactly as
+  today — straight to `pending`, all fields cleared. If a lease **is** held it does nothing
+  except stamp `retry_requested_at` and write a `status_note` saying re-dispatch is waiting on
+  the workspace release.
+- **The whole reset defers, not just the status** — see the trap below.
+- **A promotion sweep** completes the transition once the lease is gone: for each item with
+  `dispatch_status in ("escalated", "failed")`, `retry_requested_at IS NOT NULL`, and no
+  `GithubWorkspace` row where `leased_item_id == item.id`, apply the deferred
+  `reset_for_retry` in full (status → `pending`, `retry_requested_at` → NULL). The next
+  dispatch then acquires **fresh**, minting T2 and running `reset_workspace`.
+
+**Where the sweep runs, and why not the obvious place.** The natural home looks like
+`dispatch_pending`, immediately after its `reclaim_stale` call (`:171`) and before its
+`pending` select (`:174`) — release, promote, dispatch in one pass. That is wrong.
+`github_dispatch_scheduler.py:132` fetches issue labels and details for `pending` items
+**before** calling `dispatch_pending` at `:137`, so an item promoted inside `dispatch_pending`
+would be routed with an **empty label set** — falling through `route_item`'s label branch to
+`leader_fallback` (`:64-76`) — and briefed with `issue_details=None`. A retried item would
+silently route worse than a fresh one.
+
+So the sweep runs at the **end of `github_watcher_service.poll_scope`** (after `:43`), which
+the scheduler calls at `:124`, before the label fetch. Logic lives in
+`github_dispatch_service` (it owns retry semantics); the watcher owns only the schedule. Cost:
+a lease released by the *backstop* — which runs inside `dispatch_pending`, after the sweep —
+is promoted on the following poll rather than the current one. One poll interval of latency on
+a path that already waited 6 hours, in exchange for correct routing.
+
+**The trap: deferring only the status corrupts recovery.** The tempting minimal change is to
+skip the `dispatch_status = "pending"` line and let the rest of `reset_for_retry`
+(`:38-49`) run. It breaks two things, because `escalation_reason` is load-bearing while the
+item remains `escalated`:
+
+1. `record_pr_opened` treats an escalated item as recoverable only when
+   `escalation_reason in _PR_OPENED_RECOVERABLE_ESCALATIONS`
+   (`github_verification_service.py:29-37, 50-59`). Cleared reason → the owner reporting
+   `pr_opened` gets a `ValueError` instead of recovering. The retry request would *destroy*
+   the very recovery path the owner was about to use.
+2. `_apply_escalation`'s idempotence guard is `dispatch_status == "escalated" and
+   escalation_reason` (`github_dispatch_service.py:774-779`). Cleared reason → a re-escalation
+   that should no-op instead overwrites `status_note`, discarding the operator's original
+   escalation context.
+
+Hence: while a lease is held, `reset_for_retry` mutates **nothing but** `retry_requested_at`,
+`status_note` and `updated_at`.
+
+**And `retry_requested_at` must be cleared by whatever invalidates it.** If the owner recovers
+the item through `record_pr_opened` while the stamp is set, the item leaves the recoverable
+statuses legitimately — and a stamp left behind would re-pend it the *next* time it escalates,
+weeks later, as a re-dispatch nobody requested. Same family as everything else in this design:
+a stale signal answering a question that has moved on. So `record_pr_opened`'s recoverable
+branch clears `retry_requested_at` alongside the `escalation_reason = None` it already sets
+(`github_verification_service.py:60-61`), and the sweep clears it when it fires.
+
+The manual endpoint needs one visible change. `POST .../retry`
+(`agent_teams.py:645-671`) currently returns an item whose `dispatch_status` has flipped to
+`pending`; in the deferred case it returns one still reading `escalated`, which looks like the
+call did nothing. `retry_requested_at` is therefore added to `GithubWorkItemResponse`
+(`schemas.py:2255-2281`), and the deferred branch writes its explanation to `status_note`
+rather than `pending_reason` — `pending_reason` is cleared by `_apply_escalation` and is not
+displayed for escalated items.
 
 Note the corrected test. The stale-replay test in §5.2 asserted a 409 on T1 after
 re-acquisition — but with this fix **re-acquisition cannot happen while T1 is outstanding**,
 so the test must instead assert that no second attempt starts until T1 is released: after the
-watcher re-pend, the item is `retry_requested`, the lease is still held, `dispatch_pending`
-dispatches nothing, and `reset_workspace` has not run. Then release with T1 → the item becomes
-`pending` → the next dispatch mints T2 and *does* reset. The original 409 assertion survives
-only for a genuinely stale token (release twice with T1 across a completed re-acquire).
+watcher re-pend, the item is still `escalated` with `retry_requested_at` set, the lease is
+still held, `dispatch_pending` dispatches nothing, and `reset_workspace` has not run. Then
+release with T1 → the sweep promotes to `pending` → the next dispatch mints T2 and *does*
+reset. The original 409 assertion survives only for a genuinely stale token (release twice
+with T1 across a completed re-acquire).
 
-Any disagreement retains the lease — the same safe-direction rule as §3.2's conjunction. A
-third new column, `lease_token`, joins the two in §3.2.
+Any disagreement retains the lease — the same safe-direction rule as §3.2's conjunction. The
+columns this section and §3.1a add are inventoried with the rest in §3.2.
 
 #### 3.1b "Owner-only" is cooperative, not authenticated
 
@@ -332,9 +390,14 @@ released at `pr_opened` would then need a workspace it no longer holds.
 **Decision (user, 2026-08-02): hold until terminal, with a dirty-tree veto.**
 
 - Release is legal **only** once the item is in a terminal state for that owner —
-  `merged`, `completed`, `escalated`, `failed`, or `retry_requested` (§3.1a-bis). Reporting
+  `merged`, `completed`, `escalated`, or `failed`. Reporting
   `workspace_released` while `dispatch_status` is `dispatched`, `verifying`,
   `ready_for_review` or `awaiting_human_review` is a **409**, naming the current status.
+
+  A pending retry does not change this list: under §3.1a-bis the item stays `escalated` (or
+  `failed`) while `retry_requested_at` is set, so the legal-release states are exactly the four
+  above and the old owner's release path is never withdrawn mid-flight. That is the whole point
+  of choosing a column over a status.
 
   **`failed` is in that list deliberately** (second impl-agent review). Dispatch releases the
   lease on a failed launch *only when `tmux_target is None`*
@@ -364,7 +427,8 @@ ever needs to hand a worktree back to an owner mid-item.
 `reclaim_stale`'s gate changes from `slot_has_live_owner_session` to a conjunction. **All**
 must hold to release:
 
-1. item in `_RECLAIMABLE_STATUSES` (now including `retry_requested`, §3.1a-bis), **and**
+1. item in `_RECLAIMABLE_STATUSES` — **unchanged** by this design, since a pending retry leaves
+   the item `escalated` (§3.1a-bis), **and**
 2. `leased_at` older than `STALE_LEASE_BACKSTOP_SECONDS` (6h), **and**
 3. the recorded owner process is dead, **and**
 4. the lease's `lease_token` is still the one the *current* owner was briefed with
@@ -393,8 +457,8 @@ nullable columns on `github_workspaces`:
 - `leased_owner_proc_start` — field 22 of `/proc/<pid>/stat`, guarding pid reuse
 - `lease_last_owner_contact_at` — last owner status report on this lease (§3.2a)
 
-Plus two on `github_work_items` for delivery tracking (§4.1a): `brief_delivery_nudge_at` and
-`brief_delivery_nudge_count`.
+Plus three on `github_work_items`: `brief_delivery_nudge_at` and `brief_delivery_nudge_count`
+for delivery tracking (§4.1a), and `retry_requested_at` for the deferred retry (§3.1a-bis).
 
 `pid_max` on this host is 4194304, so reuse is unlikely; the pairing makes "alive" mean
 *this* process rather than *a* process. This is Finding 18's trap one level down — an
@@ -687,6 +751,7 @@ green suite, and its canary asserted the bug as the requirement.
 | `test_reclaim_releases_non_working_item_without_live_owner` (`test_github_workspace_service.py:211`) | Monkeypatches the deleted predicate. Becomes the **five**-condition conjunction (§3.2, incl. owner-contact recency). |
 | `test_reclaim_retains_non_working_item_with_live_owner` (`:236`) | Same. Becomes: retained because the pid is alive, **or** the owner reported recently, **or** the tree is dirty. |
 | `test_queued_owner_session_dispatches_after_session_goes_offline` (`:1299`) | Tests a queue state that no longer exists (`queued_owner_session_live`). Deleted. |
+| `test_reset_for_retry_does_not_release_workspace` (`test_github_dispatch_service.py:377`) | **Asserts `dispatch_status == "pending"` with the lease still held** — the exact state §3.1a-bis makes unreachable. Its *name* stays true and its lease assertion is still right; only the status assertion inverts. Becomes: lease retained **and** status still `escalated` **and** `retry_requested_at` set. Found by grepping `reset_for_retry`'s callers, not by either review — it is the one existing test the retry fix breaks, and it would have surfaced as a red suite mid-implementation. |
 
 ### 5.2 New tests, each pinned to a finding
 
@@ -712,14 +777,35 @@ Added after the impl-agent review, one per amendment above:
 
 - **Retry does not overtake release (§3.1a-bis) — the highest-value test in this PR.** Acquire
   for item X → token T1 → escalate → drive a watcher re-pend with an advanced
-  `github_updated_at` (`github_watcher_service.py:74-78`) → assert **all** of: item is
-  `retry_requested`, the lease is **still held with T1**, `dispatch_pending` dispatches nothing,
-  and **`reset_workspace` has not run**. Then release with T1 → item becomes `pending` → next
-  dispatch mints a **different** token and *does* reset. The `reset_workspace`-not-run assertion
-  is the load-bearing one: that is the silent isolation loss.
+  `github_updated_at` (`github_watcher_service.py:74-78`) → assert **all** of: item is still
+  `escalated` with `retry_requested_at` set, the lease is **still held with T1**,
+  `dispatch_pending` dispatches nothing, and **`reset_workspace` has not run**. Then release
+  with T1 → the sweep promotes it to `pending` → next dispatch mints a **different** token and
+  *does* reset. The `reset_workspace`-not-run assertion is the load-bearing one: that is the
+  silent isolation loss.
 - **Via the watcher, not the operator.** The re-pend above must go through watcher reconcile
   rather than calling `reset_for_retry` directly — the point of the finding is that no human is
   involved. A second case covers the manual `POST .../retry` endpoint reaching the same state.
+- **The deferred retry preserves `escalation_reason` (§3.1a-bis).** Escalate with a recoverable
+  reason (`plan_blocked`), lease held, then request retry → assert `escalation_reason` is
+  **unchanged** and `record_pr_opened` still succeeds via the
+  `_PR_OPENED_RECOVERABLE_ESCALATIONS` path (`github_verification_service.py:50-59`). Companion:
+  a re-escalation while the stamp is set must still no-op, leaving `status_note` intact
+  (`_apply_escalation`'s guard, `github_dispatch_service.py:774-779`). This pair pins the trap
+  that a status-only deferral would have walked into.
+- **`retry_requested_at` is cleared by recovery, not just by the sweep (§3.1a-bis).** Stamp set,
+  lease held, owner reports `pr_opened` → the stamp is NULL afterwards, so a later, unrelated
+  escalation does not silently re-pend the item.
+- **The sweep does not run inside `dispatch_pending` (§3.1a-bis).** An item promoted by the
+  sweep must be dispatched **with** its issue labels: promote via `poll_scope`, then run a full
+  scheduler pass, and assert the routing method is `label` (not `leader_fallback`) for an item
+  whose issue carries a slot's `area_labels`. This is the routing regression the placement
+  choice avoids, and only a scheduler-level test can see it.
+- **No lease → unchanged behaviour (§3.1a-bis).** Retry on an escalated item with no workspace
+  row → `pending` immediately, `retry_requested_at` NULL, every field cleared as today. Pins
+  that the common path did not change; `test_reset_for_retry_clears_ack_received_at`
+  (`test_github_dispatch_service.py:360`) already covers the clearing and must keep passing
+  untouched.
 - **Genuinely stale token still 409s (§3.1a).** After a *completed* release-then-reacquire
   cycle, a replay of T1 → 409, lease retained. This is what remains of the original replay test.
 - **Replacement owner defeats nothing (§3.2a).** Lease with a **dead** recorded pid, clean tree,
@@ -790,10 +876,18 @@ same destructive path (`reset --hard` / `clean -fd` under a lease).
   Three mitigations, all in PR1, because "indefinitely" is not an acceptable ceiling:
 
   1. **Repeated release reminders.** While an item is terminal (`merged` / `completed` /
-     `escalated`) and still holds a lease, the poll path re-notifies the owner at
+     `escalated` / `failed` — all four legal-release states of §3.1c, `failed` included for the
+     live-pane reason given there) and still holds a lease, the poll path re-notifies the owner at
      `github_nudge_grace_seconds` intervals, quoting the `lease_token` and the exact
      `deck_report_dispatch_status` call. Reuses the existing nudge machinery
      (`_nudge_owner_for_progress`, `github_dispatch_service.py:714`).
+
+     **A pending retry makes the reminder more urgent, and the reminder must say so.** When
+     `retry_requested_at` is set (§3.1a-bis) the lease is the only thing standing between a
+     requested re-dispatch and its execution, so the reminder names that: the work is queued
+     behind this release. This is also the answer to "who tells the old owner its item was
+     re-pended" — under a column rather than a new status, nothing about the item's visible
+     status changes, so the reminder is the sole notification path.
   2. **Operator-visible staleness.** `GET .../workspaces` reports lease age and whether the
      owner has been reminded, so a forgotten lease is visible rather than inferred from a
      stalled queue — the Finding 14 lesson.
@@ -843,10 +937,13 @@ Re-arming order:
    So the four new `github_workspaces` columns (`lease_token`, `leased_owner_pid`,
    `leased_owner_proc_start`, `lease_last_owner_contact_at`) are added as a new
    `github_workspaces` block in that ladder — the table has no entries there yet — using the
-   established `_sqlite_columns(conn, "github_workspaces")` guard, and the two
-   `github_work_items` delivery columns (§4.1a) join that table's existing block. Migration
-   then happens **automatically on backend restart**, with three consequences that all favour
-   it over hand-applied SQL:
+   established `_sqlite_columns(conn, "github_workspaces")` guard, and the three
+   `github_work_items` columns (`brief_delivery_nudge_at`, `brief_delivery_nudge_count` from
+   §4.1a and `retry_requested_at` from §3.1a-bis) join that table's existing block at
+   `database.py:419-432`. All seven are **nullable with no default**, which is what makes the
+   `ADD COLUMN` form legal on SQLite and what makes every pre-existing row read as "no
+   information" rather than as a false negative. Migration then happens **automatically on
+   backend restart**, with three consequences that all favour it over hand-applied SQL:
 
    - it is idempotent and re-runnable, so a second restart is a no-op;
    - every other checkout (including `claude-deck-g1`) migrates itself, instead of silently
@@ -933,11 +1030,12 @@ New from the impl-agent review (2026-08-02):
 
 New from the second impl-agent review (2026-08-02) — approvals needed, not just work:
 
-- **⚠️ `retry_requested` is a new `dispatch_status` value** (§3.1a-bis), which the standing
-  impl-agent constraint forbids. It is the one deliberate exception in this design and must be
-  **approved explicitly with the implementation plan**. If it is refused, the retry/release
-  deadlock needs a different fix — the deadlock itself is not optional, since it silently skips
-  `reset_workspace`.
+- ~~**⚠️ `retry_requested` is a new `dispatch_status` value** (§3.1a-bis), which the standing
+  impl-agent constraint forbids and which must be approved explicitly with the plan.~~
+  **Withdrawn 2026-08-02 (user decision): no approval needed.** §3.1a-bis now uses a nullable
+  `retry_requested_at` column and the item stays `escalated`, so the constraint holds unqualified
+  and no state-machine or UI change is required. The deadlock fix itself was never optional — it
+  silently skips `reset_workspace` — but it turned out not to need the exception.
 - **PR A's §2.9 says a force-release endpoint is "deliberately not built"**
   (`2026-07-29-…-design.md:797`, and the invariant argument at `:569`). §6 mitigation 3 reverses
   that. The reversal is sound — PR A's reasoning was that release must be licensed by process
