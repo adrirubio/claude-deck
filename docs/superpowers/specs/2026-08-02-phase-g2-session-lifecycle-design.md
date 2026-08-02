@@ -163,6 +163,25 @@ display, not the retained resource.
 
 `_pid_is_running` is unchanged and stays the single implementation for both sources.
 
+**Two implementation details the table alone does not settle**, both visible only by reading
+`_effective_status` (`agent_mail_service.py:614-632`) line by line:
+
+1. **Only the TTL-expiry branch changes.** The function's *first* block
+   (`:615-619`) gives `source == "mcp"` rows a pre-emptive live-pid check that can return
+   `connected` even when `mailbox_status == "offline"` — an explicit disconnect is overridden by
+   a running process. That block must **not** be extended to observed rows: row 5 of the table
+   says an explicit disconnect wins, so the only edit is inside the
+   `last_seen_at < now - ttl` branch at `:628-631`, changing
+   `if session.source == "mcp" and session.pid:` to admit observed rows with a pid. Extending
+   the first block instead would satisfy rows 2–4 while silently inverting row 5.
+2. **`_pid_is_running(None)` already returns `False`** (`:603-605`, `if not pid`), so the
+   NULL-pid case in row 4 needs no separate guard — it falls out of the existing
+   implementation. Note this also means the fail-closed direction for an unreadable `/proc` is
+   already what `_pid_is_running` does (`except OSError: return False`, `:611-612`), which is
+   the *opposite* of the backstop's treatment of the same error (§3.2, "any other `OSError` →
+   treated as alive"). Both are deliberate and they must not be unified: the backstop retains a
+   resource, the UI reports a status.
+
 ### 2.5 Finding 18 dissolves rather than being solved
 
 G2's answer to "what identifies the session owning a work item" is: **nothing does, and
@@ -320,7 +339,7 @@ skip the `dispatch_status = "pending"` line and let the rest of `reset_for_retry
 (`:38-49`) run. It breaks two things, because `escalation_reason` is load-bearing while the
 item remains `escalated`:
 
-1. `record_pr_opened` treats an escalated item as recoverable only when
+1. `report_pr_opened` treats an escalated item as recoverable only when
    `escalation_reason in _PR_OPENED_RECOVERABLE_ESCALATIONS`
    (`github_verification_service.py:29-37, 50-59`). Cleared reason → the owner reporting
    `pr_opened` gets a `ValueError` instead of recovering. The retry request would *destroy*
@@ -334,10 +353,10 @@ Hence: while a lease is held, `reset_for_retry` mutates **nothing but** `retry_r
 `status_note` and `updated_at`.
 
 **And `retry_requested_at` must be cleared by whatever invalidates it.** If the owner recovers
-the item through `record_pr_opened` while the stamp is set, the item leaves the recoverable
+the item through `report_pr_opened` while the stamp is set, the item leaves the recoverable
 statuses legitimately — and a stamp left behind would re-pend it the *next* time it escalates,
 weeks later, as a re-dispatch nobody requested. Same family as everything else in this design:
-a stale signal answering a question that has moved on. So `record_pr_opened`'s recoverable
+a stale signal answering a question that has moved on. So `report_pr_opened`'s recoverable
 branch clears `retry_requested_at` alongside the `escalation_reason = None` it already sets
 (`github_verification_service.py:60-61`), and the sweep clears it when it fires.
 
@@ -429,7 +448,7 @@ must hold to release:
 
 1. item in `_RECLAIMABLE_STATUSES` — **unchanged** by this design, since a pending retry leaves
    the item `escalated` (§3.1a-bis), **and**
-2. `leased_at` older than `STALE_LEASE_BACKSTOP_SECONDS` (6h), **and**
+2. `leased_at` older than the 6h threshold, **and**
 3. the recorded owner process is dead, **and**
 4. the lease's `lease_token` is still the one the *current* owner was briefed with
    (§3.2a), **and**
@@ -463,6 +482,15 @@ for delivery tracking (§4.1a), and `retry_requested_at` for the deferred retry 
 `pid_max` on this host is 4194304, so reuse is unlikely; the pairing makes "alive" mean
 *this* process rather than *a* process. This is Finding 18's trap one level down — an
 identifier whose uniqueness is assumed rather than guaranteed.
+
+**The 6h threshold is a `settings` field, not a module constant.** Earlier drafts called it
+`STALE_LEASE_BACKSTOP_SECONDS`, which reads like a module-level constant; every other dispatch
+threshold in this subsystem is a `pydantic-settings` field
+(`github_leader_ack_timeout_seconds`, `github_owner_idle_timeout_seconds`,
+`github_nudge_grace_seconds`, `config.py:38-47`), and this one needs the same operator
+override — 6h is explicitly a guess (§6). So: `github_stale_lease_backstop_seconds: int =
+21600` in `app/config.py`, alongside the others. It is also the threshold condition 4 reuses
+for owner-contact ageing (§3.2a), so there is exactly one number to tune.
 
 **Correction (2026-08-02, impl-agent review): the pid cannot be captured "at acquire time".**
 `acquire` runs at `github_dispatch_service.py:222`, **before** `launcher(...)` at `:251`. On
@@ -788,7 +816,7 @@ Added after the impl-agent review, one per amendment above:
   involved. A second case covers the manual `POST .../retry` endpoint reaching the same state.
 - **The deferred retry preserves `escalation_reason` (§3.1a-bis).** Escalate with a recoverable
   reason (`plan_blocked`), lease held, then request retry → assert `escalation_reason` is
-  **unchanged** and `record_pr_opened` still succeeds via the
+  **unchanged** and `report_pr_opened` still succeeds via the
   `_PR_OPENED_RECOVERABLE_ESCALATIONS` path (`github_verification_service.py:50-59`). Companion:
   a re-escalation while the stamp is set must still no-op, leaving `status_note` intact
   (`_apply_escalation`'s guard, `github_dispatch_service.py:774-779`). This pair pins the trap
