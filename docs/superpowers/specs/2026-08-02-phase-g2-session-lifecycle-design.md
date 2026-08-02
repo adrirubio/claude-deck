@@ -132,7 +132,38 @@ Two consequences worth recording:
    agent working a worktree *from* a standing session — it only catches a session
    **spawned** there. Its occupancy check is weaker than it appears.
 
-### 2.4 Finding 18 dissolves rather than being solved
+### 2.4 Finding 17's fix, stated as a rule
+
+**Added 2026-08-02 after the second impl-agent review, which correctly noted that Finding 17
+had a test obligation (§5.2) and an owner (PR1) but no stated implementation rule — so two
+implementers could satisfy the test differently.**
+
+The asymmetry is in `_effective_status` (`agent_mail_service.py:614-632`): for
+`source == "mcp"` it consults `_pid_is_running(pid)` and returns `connected` on a live pid
+*even past the TTL* (`:629-631`), while `source == "observed"` rows — which carry pids too —
+get no such treatment and go `offline` the moment `OBSERVED_TTL_SECONDS` (300s) lapses. That
+is why five live agents displayed as offline.
+
+**The rule:** for `source == "observed"` past its TTL, resolve on the pid exactly as the mcp
+branch already does:
+
+| `last_seen_at` vs TTL | pid state | `_effective_status` |
+|---|---|---|
+| within TTL | any | `session.mailbox_status` (unchanged) |
+| expired | live | **`connected`** (currently `offline`) |
+| expired | dead | `offline` (unchanged) |
+| expired | NULL / unreadable `/proc` | `offline` — **fail closed** |
+| any | `mailbox_status == "offline"` | `offline` (unchanged; an explicit disconnect wins) |
+
+Failing closed on an unreadable pid is the opposite choice from §3.2's backstop, and
+deliberately so: here the consequence of guessing "alive" is a **UI** that claims an agent is
+present when it may not be, and possibly a nudge into a dead pane. Nothing destructive hangs
+off this predicate any more — §1.2 removed that — so the conservative direction is the honest
+display, not the retained resource.
+
+`_pid_is_running` is unchanged and stays the single implementation for both sources.
+
+### 2.5 Finding 18 dissolves rather than being solved
 
 G2's answer to "what identifies the session owning a work item" is: **nothing does, and
 nothing needs to.** The lease identifies the workspace, `slot_is_busy` identifies the
@@ -151,7 +182,11 @@ A new **report status** `workspace_released` on `POST /dispatch-status` and
 This adds **no new `dispatch_status` value**. The endpoint's `triaging`, `ack_received`
 and `in_progress` branches (`app/api/v1/agent_teams.py:277-313`) already demonstrate
 report statuses that do not move `dispatch_status`, so the standing "NO new
-`dispatch_status` values" constraint holds.
+`dispatch_status` values" constraint holds *for the report*.
+
+**It does not hold for the design as a whole.** §3.1a-bis introduces one genuinely new status,
+`retry_requested`, and that is flagged as a deliberate exception requiring approval — see there
+for why `pending_reason` cannot carry it.
 
 ```python
 elif report.status == "workspace_released":
@@ -212,6 +247,59 @@ and stores it on the workspace row. `release_by_token` releases only on an exact
 | token names a lease already released, nothing leased now | 200 (idempotent) |
 | token does not match the **current** lease | **409**, lease retained, logged |
 
+#### 3.1a-bis Retry must wait for release — the token alone does not fix this
+
+**Added 2026-08-02 after the second impl-agent review, and it is right: §3.1a fixed the wrong
+half.** The token makes a *stale release* harmless. It does not stop the **retry** from
+overtaking the release, and combined with §3.1c the two amendments deadlock.
+
+Trace it with both amendments in force:
+
+1. item is `escalated`, lease held, token T1
+2. watcher sees an advanced `updated_at` → `reset_for_retry` → `dispatch_status = "pending"`
+3. the old owner now tries to release. **409** — §3.1c permits release only from a terminal
+   status, and the item is no longer terminal. *The legitimate releaser has been locked out by
+   a state transition it did not cause and cannot see.*
+4. dispatch re-acquires. `acquire` returns the **existing** lease unchanged via its
+   `held is not None` early return (`github_workspace_service.py:67-73`) — so **T2 is never
+   minted, and `reset_workspace` never runs**. The new owner inherits the previous attempt's
+   dirty tree, believing it has a clean one.
+5. `reclaim_stale` cannot help either: `pending` is not in `_RECLAIMABLE_STATUSES`.
+
+So the lease is stuck with a token nobody can use, and the *worst* outcome is not the wedge —
+it is step 4 silently skipping the reset that isolation depends on.
+
+**Fix: retry becomes a two-phase transition, and dispatch never re-acquires a leased
+workspace.**
+
+- `reset_for_retry` no longer jumps straight to `pending`. If the item still holds a lease it
+  moves to a new durable state **`retry_requested`**, which is:
+  - **terminal for release purposes** (§3.1c) — so the old owner can still release, and is
+    reminded to (§6);
+  - **added to `_RECLAIMABLE_STATUSES`** — so the crash backstop can clear it;
+  - **not dispatchable** — `dispatch_pending` selects `pending` only, so it cannot be picked
+    up while leased.
+- Once the lease is released (by report or backstop), the item moves `retry_requested` →
+  `pending` on the poll path, and the next dispatch acquires **fresh**, minting T2 and running
+  `reset_workspace`.
+- If the item holds no lease when retry is requested, it goes straight to `pending` as today —
+  no behavioural change for the common case.
+
+This is a **new `dispatch_status` value**, which the standing constraint forbids. The
+constraint exists to stop values being invented for *reporting* convenience, and it was right
+to block `workspace_released` (§3.1). Here the state is genuinely new: "wants re-dispatch, not
+yet dispatchable, still owned". Encoding it in `pending_reason` would not work — `pending` is
+exactly the status that makes it dispatchable. **This is called out as a deliberate exception
+to be approved with the plan, not slipped through**, and it is confined to PR1.
+
+Note the corrected test. The stale-replay test in §5.2 asserted a 409 on T1 after
+re-acquisition — but with this fix **re-acquisition cannot happen while T1 is outstanding**,
+so the test must instead assert that no second attempt starts until T1 is released: after the
+watcher re-pend, the item is `retry_requested`, the lease is still held, `dispatch_pending`
+dispatches nothing, and `reset_workspace` has not run. Then release with T1 → the item becomes
+`pending` → the next dispatch mints T2 and *does* reset. The original 409 assertion survives
+only for a genuinely stale token (release twice with T1 across a completed re-acquire).
+
 Any disagreement retains the lease — the same safe-direction rule as §3.2's conjunction. A
 third new column, `lease_token`, joins the two in §3.2.
 
@@ -244,9 +332,18 @@ released at `pr_opened` would then need a workspace it no longer holds.
 **Decision (user, 2026-08-02): hold until terminal, with a dirty-tree veto.**
 
 - Release is legal **only** once the item is in a terminal state for that owner —
-  `merged`, `completed`, or `escalated`. Reporting `workspace_released` while
-  `dispatch_status` is `dispatched`, `verifying`, `ready_for_review` or
-  `awaiting_human_review` is a **409**, naming the current status.
+  `merged`, `completed`, `escalated`, `failed`, or `retry_requested` (§3.1a-bis). Reporting
+  `workspace_released` while `dispatch_status` is `dispatched`, `verifying`,
+  `ready_for_review` or `awaiting_human_review` is a **409**, naming the current status.
+
+  **`failed` is in that list deliberately** (second impl-agent review). Dispatch releases the
+  lease on a failed launch *only when `tmux_target is None`*
+  (`github_dispatch_service.py:282-285`) — when a pane **was** created, the lease is retained on
+  purpose, because something may be running in it. Under the amended protocol that state would
+  otherwise have no release path at all: `failed` is reclaimable by the backstop, but the
+  backstop needs 6h and a dead pid, and the agent in that pane is the one entity that knows
+  whether it is doing anything. So it must be able to report. The release reminders in §6 cover
+  `failed` for the same reason.
 - Release is **refused (409) when `git status --porcelain` is non-empty.** The response names
   the dirty paths and instructs the agent to commit and push, or to say so in its
   `status_note` and leave the lease held for an operator.
@@ -267,12 +364,14 @@ ever needs to hand a worktree back to an owner mid-item.
 `reclaim_stale`'s gate changes from `slot_has_live_owner_session` to a conjunction. **All**
 must hold to release:
 
-1. item in `_RECLAIMABLE_STATUSES` (unchanged), **and**
+1. item in `_RECLAIMABLE_STATUSES` (now including `retry_requested`, §3.1a-bis), **and**
 2. `leased_at` older than `STALE_LEASE_BACKSTOP_SECONDS` (6h), **and**
 3. the recorded owner process is dead, **and**
-4. `git status --porcelain` on the worktree is empty.
+4. the lease's `lease_token` is still the one the *current* owner was briefed with
+   (§3.2a), **and**
+5. `git status --porcelain` on the worktree is empty.
 
-Condition 4 applies only where it is meaningful: `reset_workspace` already no-ops on
+Condition 5 applies only where it is meaningful: `reset_workspace` already no-ops on
 `kind == "primary"` (`github_workspace_service.py:154-155`), and the primary checkout is
 `dispatchable=0` on this scope, so it is never leased. If a primary workspace is ever made
 dispatchable, the backstop must not run `git status` against a human's working tree and
@@ -286,12 +385,16 @@ process death the pid record vanishes rather than going false — and absence is
 indistinguishable from a discovery failure, which `sync_observed_sessions` swallows with an
 early return (`:354-356`).
 
-So the pid is captured **onto the lease** at dispatch and read back from `/proc`. Three new
+So the pid is captured **onto the lease** at dispatch and read back from `/proc`. Four new
 nullable columns on `github_workspaces`:
 
 - `lease_token` — per-acquisition token (§3.1a)
 - `leased_owner_pid` — the owner session's pid
 - `leased_owner_proc_start` — field 22 of `/proc/<pid>/stat`, guarding pid reuse
+- `lease_last_owner_contact_at` — last owner status report on this lease (§3.2a)
+
+Plus two on `github_work_items` for delivery tracking (§4.1a): `brief_delivery_nudge_at` and
+`brief_delivery_nudge_count`.
 
 `pid_max` on this host is 4194304, so reuse is unlikely; the pairing makes "alive" mean
 *this* process rather than *a* process. This is Finding 18's trap one level down — an
@@ -334,13 +437,57 @@ starttime = fields[19]          # field 22 overall = index 19 after state
 `FileNotFoundError` / `ProcessLookupError` → the process is dead (condition 3 satisfied). Any
 *other* `OSError` → **unknown**, treated as alive, lease retained.
 
+#### 3.2a A replacement owner must not be mistaken for a dead one
+
+**Added 2026-08-02 after the second impl-agent review; the finding is correct and the fix
+needs care, because the obvious fix relapses into Finding 19.**
+
+The hole: the recorded pid can be dead while the *item* is very much alive. A slot's standing
+session is restarted (host reboot, `codex` reconnect, an operator killing a hung pane), the
+replacement session re-registers against the same durable member id, and the agent resumes the
+item. Now the lease records attempt N's pid — dead — while attempt N's *work* continues under a
+new process. Dead pid + clean tree at a quiescent moment → the backstop releases the lease → the
+next `acquire` runs `reset --hard` under a live agent. Finding 10 once more, and this time the
+backstop itself is the weapon.
+
+**Why the reviewer's proposed fix cannot be used as stated.** It asks for "fresh confirmation
+that no current live/nudgeable owner-slot session exists". That is `slot_has_live_owner_session`
+rebuilt under a new name — the predicate **Finding 19 proved is permanently true** under
+one-session-per-slot. Adding it as a conjunct would make the backstop unfireable and restore the
+wedge this entire design exists to remove. The finding is real; that mechanism would undo §1.2.
+
+**Fix: bind the *lease* to the owner session's identity, not to the slot's liveness.** The brief
+already carries `lease_token`, and only the briefed owner has it. So:
+
+- When an owner reports **any** status for the item (`triaging`, `in_progress`, `ack_received`,
+  `pr_opened`, …), the endpoint stamps `lease_last_owner_contact_at` on the workspace row.
+- Backstop condition 4: release only if there has been **no owner contact** on this lease since
+  `leased_at`, or the last contact is itself older than the 6h threshold.
+
+That distinguishes the two cases the pid cannot. A replacement owner that resumed the item is,
+by definition, an owner that *reports* — the §3.3 evidence is that every one of 28 items
+reported. A genuinely crashed owner stops reporting, and its contact timestamp ages out. Where
+the pid asks "is a process alive?", this asks "has the thing holding this lease spoken
+recently?" — which is the question the backstop actually needs, and it stays false-under-crash
+rather than true-by-design.
+
+A fourth column, `lease_last_owner_contact_at`, joins the three in §3.2. It is *cheap* — the
+report endpoints already write to the item on every status — and it does not depend on session
+discovery, tmux, or `last_seen_at`, so Finding 17's staleness cannot corrupt it.
+
+**Residual risk, stated rather than fixed:** an owner that resumes work after a restart and then
+does 6h of silent work with a clean tree at the sampling moment is still reclaimable. That
+requires simultaneous pid death, 6h silence, and a clean tree — and the operator-visible
+staleness in §6 is the intended detector. Narrowing further means asking the agent to heartbeat,
+which is a bigger change than this design should carry.
+
 **Why the conjunction, not either signal alone.** The two conditions fail in opposite
 directions. A stale pid resolving to an unrelated live process says "alive" → the lease is
 held too long → throughput lost. A clean tree says "idle" → release → possible
 `reset --hard` under a working agent → corruption. Requiring both means the **safe** error
 dominates: any disagreement retains the lease.
 
-Note what condition 4 is really doing. Git-quiescence was declined as the *primary*
+Note what condition 5 is really doing. Git-quiescence was declined as the *primary*
 release signal and it is not one here — it is a veto. It can only prevent a release, never
 cause one, so it grants Deck no new authority over the workspace.
 
@@ -425,10 +572,7 @@ get an explicit non-throttled wake path.
 
 **A nudge is not a delivery guarantee** (impl-agent review, and correct). A successful
 `tmux send-keys` proves keystrokes were written to a pane — not that the agent read the
-brief. So the non-throttled wake is paired with a **receipt check**: the dispatch brief's
-`MailReceipt.read_at` is the delivery signal, and while it is NULL the owner is re-nudged on
-the poll path at `github_nudge_grace_seconds` intervals, up to a bounded number of attempts,
-after which the item escalates with a new reason `brief_unread`.
+brief. So the non-throttled wake is paired with a **delivery check**, specified in §4.1a.
 
 **One part of that review comment is declined.** It also proposed not starting acknowledgment
 timing until the receipt is read. `dispatched_at` is set at
@@ -436,7 +580,46 @@ timing until the receipt is read. `dispatched_at` is set at
 (`:689, :650`). Gating that clock on a read receipt means an **unread brief produces silence
 instead of an escalation** — it converts a loud, already-implemented failure into a quiet one.
 The clock stays where it is; the unread receipt gets its *own* escalation reason, so an unread
-brief is now detected by two independent mechanisms rather than neither.
+brief is now detected by two independent mechanisms rather than neither. §4.1a states how the
+two timers coexist without masking each other.
+
+#### 4.1a Delivery evidence: three corrections to the receipt check above
+
+**Added 2026-08-02 after the second impl-agent review. All three sub-claims verified and all
+three hold.**
+
+**(1) The receipt is the wrong signal on the spawn path, so it must not be the only one.** A
+spawned owner receives the brief as its *prompt* (§4.0) and may act on the issue correctly while
+never opening its mailbox — `MailReceipt.read_at` stays NULL and `brief_unread` fires against an
+agent that is working. **So delivery is proven by either of two things: the receipt's `read_at`,
+or any owner status report for the item.** A report is strictly stronger evidence than a read
+receipt — it proves comprehension, not just retrieval — so it must count. This reuses the same
+timestamp §3.2a introduces (`lease_last_owner_contact_at`), which is not a coincidence: "has the
+owner spoken?" is the question in both places.
+
+**(2) `last_nudge_at` cannot carry a third timer.** One column already multiplexes the leader-ack
+nudge and the owner-idle nudge (`github_dispatch_service.py:645-663`), with the ack branch
+`continue`-ing before the idle branch is reached. Adding a delivery timer to it would make the
+three interfere: whichever fires first resets the shared clock, and `escalate` then reports
+whichever reason its branch happened to be in. **Delivery gets dedicated fields** on
+`github_work_items`: `brief_delivery_nudge_at` and `brief_delivery_nudge_count`. The bounded
+retry is then countable rather than inferred from a timestamp comparison.
+
+**(3) `leader_ack_timeout` can mask `brief_unread`, permanently.** The ack branch escalates first
+and `escalate` is terminal, so an undelivered brief is reported as *the leader failing to ack* —
+a wrong diagnosis pointing at the wrong actor, which is precisely the Finding 14 cost (two
+findings spent on a misattributed stall). Fix, and this is the narrow form of the review's
+"anchor leader-ack timing to receipt/first owner activity":
+
+- **Delivery is evaluated before ack.** If the brief is undelivered by test (1) and the delivery
+  retries are exhausted, escalate `brief_unread` and skip the ack branch for that item on that
+  pass.
+- The ack clock keeps its `dispatched_at` anchor, so it still fires when delivery *succeeded* and
+  the leader is simply silent. Nothing becomes quieter; the two failures just stop being
+  confused for one another.
+
+The declined half of the earlier comment stands: neither timer is gated on the other's evidence,
+because that is how a loud failure becomes a silent one.
 
 ### 4.2 `_nudge_session_for_member` picks an arbitrary pane
 
@@ -461,13 +644,32 @@ takes a new `pending_reason` of `queued_ambiguous_sessions` and a `status_note` 
 competing tmux targets, so the UI shows which panes to converge.
 
 This is chosen over persisting the briefed session on the lease, which would work but would
-re-introduce a per-item session reference — the identity §2.4 deliberately withdrew (Finding
+re-introduce a per-item session reference — the identity §2.5 deliberately withdrew (Finding
 18). Refusing to guess costs a stalled queue until an operator acts; guessing costs a brief
 delivered to the wrong pane, which is undetectable. Note the failure mode this replaces is
 *silent*, so blocking is strictly more visible even though it stalls.
 
 The ambiguity check must be a **precondition, not a post-hoc reconciliation**: it runs before
 `acquire`, so an ambiguous slot never leases a workspace it cannot be briefed about.
+
+**And it must read fresh evidence, or it is Finding 17 rebuilt** (second impl-agent review, and
+this one is sharp). `dispatch_pending` never calls `sync_observed_sessions` — confirmed by grep
+across `github_dispatch_service.py` and `github_watcher_service.py`. So the check would count
+rows last refreshed whenever a human opened the Agent Mail page, and a slot that has *since*
+grown a second pane would read as unambiguous. Dispatch would then proceed and hand the brief to
+`auto_nudge_members`, which **does** call `sync_observed_sessions` first (`:1131`) and so nudges
+an arbitrary pane from the freshly-discovered set. The stale check would pass and the live
+delivery would coin-flip — the exact skew that made Finding 17 worth recording.
+
+So the ambiguity check **calls `sync_observed_sessions` itself, immediately before counting**,
+and **fails closed**: `sync_observed_sessions` swallows discovery failures with an early return
+(`:354-356`), so "the sync did not raise" is not evidence that discovery worked. If discovery
+yields no observed sessions at all for a slot that mail believes has some, the item is held with
+`queued_ambiguous_sessions` rather than dispatched on the assumption that zero means zero.
+
+This is the concrete instance of the memory rule: *for any predicate gating a destructive or
+irreversible action, confirm at least one writer of its input runs on the same schedule as the
+consumer.* Here the consumer is dispatch, so dispatch must do the writing.
 
 ---
 
@@ -482,8 +684,8 @@ green suite, and its canary asserted the bug as the requirement.
 | Test | Why it is wrong now |
 |---|---|
 | `test_dispatch_proceeds_with_only_standing_session` (`test_github_dispatch_service.py:1256`) | Asserts a second session is spawned when a standing one exists — encodes Finding 13. Becomes: **the brief reached the standing session** (a `MailReceipt` for the owner member, `reuse_existing=True`, exactly one session after dispatch). |
-| `test_reclaim_releases_non_working_item_without_live_owner` (`test_github_workspace_service.py:211`) | Monkeypatches the deleted predicate. Becomes the four-condition conjunction. |
-| `test_reclaim_retains_non_working_item_with_live_owner` (`:236`) | Same. Becomes: retained because the pid is alive **or** the tree is dirty. |
+| `test_reclaim_releases_non_working_item_without_live_owner` (`test_github_workspace_service.py:211`) | Monkeypatches the deleted predicate. Becomes the **five**-condition conjunction (§3.2, incl. owner-contact recency). |
+| `test_reclaim_retains_non_working_item_with_live_owner` (`:236`) | Same. Becomes: retained because the pid is alive, **or** the owner reported recently, **or** the tree is dirty. |
 | `test_queued_owner_session_dispatches_after_session_goes_offline` (`:1299`) | Tests a queue state that no longer exists (`queued_owner_session_live`). Deleted. |
 
 ### 5.2 New tests, each pinned to a finding
@@ -492,8 +694,8 @@ green suite, and its canary asserted the bug as the requirement.
   a deliberately constructed *skew*, not a plainly-live or plainly-offline fixture. This is
   the class of defect fixtures hide by construction, since every test supplies its own
   timestamps.
-- **Backstop conjunction, four cases.** dead+clean → release; alive+clean → retain;
-  dead+dirty → retain; within-threshold → retain. The three *retain* cases are the ones
+- **Backstop conjunction, five cases.** dead+silent+clean → release; alive+clean → retain;
+  dead+dirty → retain; dead+clean+recent-contact → retain (§3.2a); within-threshold → retain. The three *retain* cases are the ones
   that matter: exclusion lists are systematically under-tested (M12), because nobody writes
   "X does **not** happen" unless the omission is understood as a decision.
 - **Pid reuse.** Same pid, different `proc_start` → treated as dead.
@@ -508,14 +710,43 @@ green suite, and its canary asserted the bug as the requirement.
 
 Added after the impl-agent review, one per amendment above:
 
-- **Stale-report replay (§3.1a) — the highest-value test in this PR.** Acquire for item X →
-  capture token T1 → escalate → `reset_for_retry` → re-acquire (token T2) → report
-  `workspace_released` with **T1**. Must be a 409 with the lease **still held**. Then repeat
-  with T2 → released. This is the test that would have caught the draft's hole.
-- **Token replay via the watcher, not the operator.** The re-pend in the case above must be
-  driven through `github_watcher_service` reconcile with an advanced `github_updated_at`
-  (`:74-78`), not by calling `reset_for_retry` directly — the point of the finding is that no
-  human is involved.
+- **Retry does not overtake release (§3.1a-bis) — the highest-value test in this PR.** Acquire
+  for item X → token T1 → escalate → drive a watcher re-pend with an advanced
+  `github_updated_at` (`github_watcher_service.py:74-78`) → assert **all** of: item is
+  `retry_requested`, the lease is **still held with T1**, `dispatch_pending` dispatches nothing,
+  and **`reset_workspace` has not run**. Then release with T1 → item becomes `pending` → next
+  dispatch mints a **different** token and *does* reset. The `reset_workspace`-not-run assertion
+  is the load-bearing one: that is the silent isolation loss.
+- **Via the watcher, not the operator.** The re-pend above must go through watcher reconcile
+  rather than calling `reset_for_retry` directly — the point of the finding is that no human is
+  involved. A second case covers the manual `POST .../retry` endpoint reaching the same state.
+- **Genuinely stale token still 409s (§3.1a).** After a *completed* release-then-reacquire
+  cycle, a replay of T1 → 409, lease retained. This is what remains of the original replay test.
+- **Replacement owner defeats nothing (§3.2a).** Lease with a **dead** recorded pid, clean tree,
+  past threshold, but `lease_last_owner_contact_at` recent → **retained**. Its complement:
+  same fixture with contact older than the threshold → released. This pair is the whole of
+  §3.2a.
+- **Delivery proven by report, not only by receipt (§4.1a).** Spawned owner, `MailReceipt.read_at`
+  NULL, but a `triaging` report recorded → **no** `brief_unread` escalation. Complement: no
+  receipt and no report past the bounded retries → `brief_unread`.
+- **`brief_unread` is not masked by `leader_ack_timeout` (§4.1a).** Fixture where both are
+  overdue → the escalation reason must be `brief_unread`. Guards the misattribution that cost
+  two findings in Finding 14.
+- **Delivery counters are independent (§4.1a).** A leader-ack nudge must not reset
+  `brief_delivery_nudge_at` / `_count`, and vice versa.
+- **Ambiguity check syncs first and fails closed (§4.2).** With a second pane present in
+  discovery but **not** in the DB, dispatch must still block — proving the check re-synced rather
+  than trusting stale rows. Second case: discovery returning nothing for a slot mail believes is
+  populated → held, not dispatched.
+- **`failed` with a live pane can release (§3.1c).** Launch fails with a non-None `tmux_target`
+  → lease retained by dispatch → owner reports `workspace_released` → 200, released.
+- **Force-release is compare-and-swap (§6).** Wrong/stale token → 409 naming both; correct
+  token → released.
+- **Finding 17's table (§2.4), one case per row.** Expired TTL + live pid → `connected`;
+  expired + dead → `offline`; expired + NULL pid → `offline`; expired + unreadable `/proc` →
+  `offline`; `mailbox_status == "offline"` + live pid → `offline`. The skew test above is the
+  second row's live-pid case stated as a defect; this pins the rest so the rule cannot be
+  satisfied differently by two implementers.
 - **Release refused before terminal (§3.1c).** `workspace_released` while `dispatch_status`
   is `dispatched` / `verifying` / `ready_for_review` → 409, lease held.
 - **Release refused on a dirty tree (§3.1c).** `escalated` + non-empty
@@ -567,10 +798,18 @@ same destructive path (`reset --hard` / `clean -fd` under a lease).
      owner has been reminded, so a forgotten lease is visible rather than inferred from a
      stalled queue — the Finding 14 lesson.
   3. **Force-release tooling.** An explicit operator endpoint that releases a lease
-     regardless of the conjunction, requiring the workspace id and logging who did it. This
-     is deliberately **not** automatic: `abandon` and `reprobe` (PR A §2.10a/b) exist for the
-     same reason, and the pattern of "give the operator a supported way out instead of DB
-     surgery" is already established.
+     regardless of the conjunction, logging who did it. This is deliberately **not**
+     automatic: `abandon` and `reprobe` (PR A §2.10a/b) exist for the same reason, and the
+     pattern of "give the operator a supported way out instead of DB surgery" is already
+     established.
+
+     **It takes the expected `lease_token` as a compare-and-swap guard, not just the workspace
+     id** (second impl-agent review, and correct). An operator acts from a UI page that was
+     rendered some time ago; between render and click the lease may have been released and
+     re-acquired by a *new* owner. Workspace-id-only force-release would then destroy a live
+     lease — the same stale-identity failure as §3.1a, arriving through the operator instead of
+     the agent. Mismatch → 409 showing both tokens, so the operator refreshes and re-decides.
+     The token is displayed by `GET .../workspaces` for exactly this purpose.
 
   890 GB free at ~2.4 GB per worktree also makes a larger pool cheap, but that is throughput,
   and it does not fix an unbounded hold — only mitigation 1 and 3 do.
@@ -601,9 +840,11 @@ Re-arming order:
    ladder with roughly thirty existing entries, invoked from `init_db` at `:458` on every
    startup. `CLAUDE.md` describes an intent the code outgrew.
 
-   So the three new columns (`lease_token`, `leased_owner_pid`, `leased_owner_proc_start`) are
-   added as a new `github_workspaces` block in that ladder — the table has no entries there
-   yet — using the established `_sqlite_columns(conn, "github_workspaces")` guard. Migration
+   So the four new `github_workspaces` columns (`lease_token`, `leased_owner_pid`,
+   `leased_owner_proc_start`, `lease_last_owner_contact_at`) are added as a new
+   `github_workspaces` block in that ladder — the table has no entries there yet — using the
+   established `_sqlite_columns(conn, "github_workspaces")` guard, and the two
+   `github_work_items` delivery columns (§4.1a) join that table's existing block. Migration
    then happens **automatically on backend restart**, with three consequences that all favour
    it over hand-applied SQL:
 
@@ -689,3 +930,20 @@ New from the impl-agent review (2026-08-02):
   G2 PR, since it misleads every future reader of the repo, not just this design.
 - **A sixth deployment step is owed** (§7): step 4 exercises only the spawn path, so one
   dispatch to a slot *with* a standing session is needed before autonomy resumes.
+
+New from the second impl-agent review (2026-08-02) — approvals needed, not just work:
+
+- **⚠️ `retry_requested` is a new `dispatch_status` value** (§3.1a-bis), which the standing
+  impl-agent constraint forbids. It is the one deliberate exception in this design and must be
+  **approved explicitly with the implementation plan**. If it is refused, the retry/release
+  deadlock needs a different fix — the deadlock itself is not optional, since it silently skips
+  `reset_workspace`.
+- **PR A's §2.9 says a force-release endpoint is "deliberately not built"**
+  (`2026-07-29-…-design.md:797`, and the invariant argument at `:569`). §6 mitigation 3 reverses
+  that. The reversal is sound — PR A's reasoning was that release must be licensed by process
+  absence, which Finding 19 retired — but PR A's text must be amended so the two documents do
+  not contradict each other. Owed as a `docs:` amendment alongside PR1.
+- **UI surface for the new columns.** `GET .../workspaces` must expose `lease_token`,
+  `lease_last_owner_contact_at` and lease age (§6 mitigation 2, and the force-release
+  compare-and-swap depends on the operator seeing the token). Frontend work is otherwise out of
+  scope for both PRs; this is the exception.

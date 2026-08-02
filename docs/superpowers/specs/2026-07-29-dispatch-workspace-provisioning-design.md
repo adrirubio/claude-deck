@@ -568,6 +568,14 @@ So the wedge is real, it is reachable from the normal flow, and `GET .../workspa
 
 Point 3 is the whole safety argument. The endpoint changes the item's *status*, which is Deck's to change; it does not assert anything about the *process*, which Deck cannot observe from an HTTP request. An operator who abandons an item whose agent is still live gets exactly the right outcome: the item is marked for human attention, and the lease is held until the agent actually goes away. This keeps the §2.4 invariant — release is licensed by the absence of a process, never by a status — intact, and it is why `abandon` is not "an operator force-release endpoint." A force-release would break that invariant, and it is deliberately not being built.
 
+> **⛔ Amended 2026-08-02 (G2 §6).** The final two sentences above no longer hold. Finding 19
+> showed the liveness gate cannot be "the single arbiter of release" under one session per slot,
+> because the process never goes absent — so `abandon`'s deliberate refusal to release leaves the
+> lease held forever rather than held until the agent goes away. G2 keeps `abandon` exactly as
+> designed (status only, never kills a session) and *adds* a separate operator force-release,
+> compare-and-swapped on the lease token. The safety argument in point 3 survives intact for
+> `abandon`; what changed is that it is no longer sufficient on its own.
+
 `abandon` also subsumes the general case §4.2 worried about: any item wedged in a status the automation will never advance can be cleared by an operator without touching the database.
 
 `GET` returns derived state rather than a stored column, consistent with §2.2's decision to have no `lease_state` field. Note it must reflect **both** disable flags, or the primary — registered `dispatchable=False` per §7 — reads as `available` and the operator concludes there are two usable workspaces when there is one:
@@ -794,7 +802,7 @@ So PR A ships `POST .../github-work-items/{item_id}/abandon` (§2.10b). The divi
 - **Releasing a lease on any exception.** §2.3a: an exception carries no information about whether tmux already spawned, and `except ValueError` is not a usable proxy for "pre-spawn". Escalate `launch_outcome_unknown` and let the liveness gate release.
 - **Activating a staged workspace.** No endpoint flips `dispatchable=False` → `True`. An operator who wants a staged row passes `dispatchable=false` at registration and re-registers deliberately; adoption validates instead (§2.9), so there is nothing to activate on the normal path.
 - **`git worktree prune`.** Deck never runs it (§2.9); it rewrites the primary's metadata for every worktree.
-- **An operator force-release endpoint.** `abandon` (§2.10b) changes an item's status and lets the liveness gate decide; a direct lease-clearing endpoint would break §2.4's invariant and is deliberately not built.
+- **An operator force-release endpoint.** `abandon` (§2.10b) changes an item's status and lets the liveness gate decide; a direct lease-clearing endpoint would break §2.4's invariant and is deliberately not built. **⛔ Reversed 2026-08-02 in G2 (§6 mitigation 3).** The invariant this protected — *release is licensed by the absence of a process, never by a status* — was retired by Finding 19: under one session per slot the process never goes absent, so "let the liveness gate decide" means "never decide". With the gate gone, an operator path is the only way out of a lease whose owner is alive but silent, and G2 builds one, guarded by a compare-and-swap on the lease token so it cannot clear a newer lease from stale UI state.
 - **A general `PATCH` on workspaces.** `reprobe` (§2.10a) re-enables only on a successful reset. Writing `enabled=true` by hand would let an operator assert a broken tree is healthy.
 - **Resuming autonomous dispatch on PR A.** See §4.1a — that is a PR B gate.
 - **The five new scope fields in the frontend** — `types/agentTeams.ts` interfaces and the `ScopeDialog` form (§2.10, deferrable tier). Server-side defaults cover them and deployment sets them via the API.
