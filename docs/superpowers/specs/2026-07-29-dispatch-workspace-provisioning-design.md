@@ -283,6 +283,16 @@ Run the sweep once at the top of `dispatch_pending`, before `scope_active_count`
 
 > **Coupling to note:** Phase G2 (Finding 13) plans to *delete* `slot_has_live_owner_session`. The reclaim rule depends on it. G2 must therefore either keep a liveness predicate under some name, or replace this rule. Flagged here so G2 does not silently remove the only thing preventing a workspace wedge.
 
+> **⛔ Resolved 2026-08-02 — and the coupling bit from the opposite direction (Finding 19).**
+> G2 does **not** delete the predicate and leave a gap; the predicate *survives* and becomes
+> the wedge. Under G2's chosen model (one session per slot for its whole life) the slot's
+> session is alive permanently by design, so this rule's gate is permanently true and the
+> sweep releases nothing — measured `reclaim_stale released: 0` against a copy of the live DB
+> with the worktree leased to a terminal item. **This rule is replaced in G2 PR1**: release
+> becomes an explicit owner report (`workspace_released`), and the sweep degrades to a
+> crash-only backstop gated on *dead owner process* **and** *clean worktree* past a
+> threshold. See `2026-08-02-phase-g2-session-lifecycle-design.md` §1.2 and §3.
+
 #### 2.5a ⚠️ The predicate is correct and its input is stale — Finding 17, found at deployment
 
 **Amended 2026-08-01, after deploying PR A to §7 step 4.** Everything above reasons about the *logic* of the liveness gate and that reasoning still holds. What it never asked is **who keeps the gate's input true.** On the live host, the answer is nobody:
@@ -298,6 +308,18 @@ So reclaim would treat every escalated item's lease as reclaimable, and the next
 **A partial self-repair exists, and it is positioned exactly wrong.** `dispatch_pending` sends the brief before launching, and `send_direct_message` → `send_message(auto_nudge=True)` → `auto_nudge_members` → `sync_observed_sessions`. So a cycle that reaches a brief does refresh liveness. But `reclaim_stale` runs at the **top** of `dispatch_pending`, before any brief — so the one caller that needs fresh evidence is the one caller structurally guaranteed not to have it.
 
 **The fix probably already exists one branch away.** For `source="mcp"`, `_effective_status` consults `_pid_is_running(session.pid)` and returns `connected` on a live pid *even past the TTL* (`:615-619`). Observed rows carry a `pid` too — all five above do — and that branch is simply not applied to them. But this is the predicate **Phase G2 owns**, so G2 makes the change; it is not a hotfix to slip into PR A.
+
+> **Amended 2026-08-02 (G2 design).** Two corrections. (1) **Finding 17 is narrower than it
+> looked here.** G2 deletes the predicate entirely, so the destructive-release consequence
+> above disappears with it; the remaining victim is the **UI**, which showed five live agents
+> as offline. The fix and its skew test stay in G2 PR1 — user-facing truth, and the test is
+> owed from §6 — but as an accuracy fix, not a blocker. (2) **The pid must not be read from
+> observed rows.** `_remove_stale_observed_sessions` (`agent_mail_service.py:530-542`)
+> *deletes* the row when tmux stops reporting it, so on process death the pid record vanishes
+> rather than going false, and absence is indistinguishable from a discovery failure (which
+> `sync_observed_sessions` swallows with an early return at `:354-356`). G2's backstop
+> therefore captures the pid **onto the lease** and reads `/proc` directly, paired with the
+> process start time to survive pid reuse.
 
 **Consequences for this design:**
 
@@ -701,6 +723,16 @@ It looks discriminating today only because dispatch passes `reuse_existing=False
 Same shape as Finding 13, and as *membership is not identity*: **a field whose name implies a granularity its values do not carry.** `launch_id` identifies a *launch*. PR B needs to answer "which session owns this work item?", and after G2 those are no longer the same question.
 
 **Consequence for sequencing:** G2's scope grows. It must now answer *what identifies the session owning a work item* — a per-item session reference, or an explicit item↔session link written at dispatch — and PR B cannot be specified until it does. Combined with §2.5a, **G2 owns three coupled questions**: delivering `prompt_override` on the reuse path (Finding 13), item→session identity (this finding), and who keeps liveness evidence fresh (Finding 17). No PR B handoff was written; a handoff resting on a falsified premise is worse than no handoff.
+
+> **⛔ Resolved 2026-08-02 (G2 design) — by deleting the question, not answering it.** G2
+> does **not** introduce a per-item session reference or an item↔session link. Nothing
+> identifies the session owning a work item, and nothing needs to: the **lease** identifies
+> the workspace, `slot_is_busy` identifies the slot, and the owner's **report**
+> (`workspace_released`) identifies completion. So the "per-item liveness via
+> `item.launch_id`" row above is not deferred to PR B — it is **withdrawn**. Prompt terminal
+> release lands in G2 PR1 as an explicit report, which is why it never needed the liveness
+> predicate this section was waiting on. See
+> `2026-08-02-phase-g2-session-lifecycle-design.md` §2.4 and §3.1.
 
 **The cost of the split, stated plainly:** with a pool this small, a merged item keeps its workspace until its tmux session goes offline. The pool can therefore look wedged when it is only waiting, and on a quiet host a session can idle for a long time. Three mitigations, all in PR A: the reclaim sweep runs every poll, `GET .../workspaces` shows exactly which item holds what, and `abandon` + `reprobe` give the operator a supported way to clear the two dead ends that would otherwise need DB surgery. If the latency proves too slow in practice, the fix is to bring PR B forward, not to release on status.
 

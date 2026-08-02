@@ -525,6 +525,100 @@ So steps 0–4 verified the **registration** half of PR A on real git; the **dis
 
 **Decision (user, 2026-08-01): stop at step 4.** Autonomy stays off, both rows stay registered, findings 17 and 18 recorded, and the next unit of work is the **Phase G2 design** — which now owns three coupled questions rather than one: the reuse path delivering `prompt_override` (Finding 13), what identifies the session owning a work item (Finding 18), and who keeps liveness evidence fresh (Finding 17). Step 5 is re-run after G2, when a trigger exists and the predicate can be trusted; a fresh work item on a slot with no standing session is the cleaner subject for it than item 23.
 
+## 2026-08-02 — Phase G2 designed; Finding 19 (blocker) found while designing it
+
+Design committed at `docs/superpowers/specs/2026-08-02-phase-g2-session-lifecycle-design.md`.
+Four decisions taken (user): one session per slot for its whole life; **agent-reported**
+workspace release; backstop = dead owner process AND clean worktree past a threshold;
+release protocol ships before the delivery flip.
+
+### Finding 19 (NEW — blocker) — the chosen session model makes PR A's reclaim sweep unfireable
+
+PR A made the reclaim sweep the *only* releaser, gated on `slot_has_live_owner_session`.
+That predicate was discriminating **only because dispatch spawned a session per item**: the
+item's session exited, the predicate went false, the lease returned. Under one session per
+slot for its whole life, the slot's session is alive **permanently by design** — the
+predicate is permanently true and the sweep returns 0 forever. With
+`max_concurrent_dispatched=1` and one dispatchable worktree, the first terminal item wedges
+the pool permanently.
+
+Verified by running the real code against a **throwaway copy** of the live DB (live file
+never touched), simulating G2's end state — liveness fresh, reuse recording the standing
+session's `tmux_target`, `item.launch_id` pointing at that launch, worktree leased to
+terminal item 23:
+
+```
+slot 6: slot_has_live_owner_session=True   slot_is_busy=False
+reclaim_stale released: 0
+```
+
+This is §2.5's coupling arriving from the opposite direction. That note predicted G2 would
+*delete* the predicate and leave nothing preventing a wedge; what actually happens is the
+predicate **survives and causes** the wedge. **Lease release, not brief delivery, is the
+hard part of G2.**
+
+Same family as 13/17/18 at a fourth site: **a signal answering a question it is no longer
+being asked.** "No process is running" was a proxy for *is anything mutating this
+directory?* Per-item spawn made process-exit faithful, because session death and work
+completion coincided. One session per slot severs them — the process now outlives the work
+by design, so the proxy reports "busy" during idleness.
+
+### Finding 13's recorded fix turned out to be unnecessary
+
+The run log's fix shape ("make the reuse path deliver `prompt_override`, then flip to
+`reuse_existing=True`") is **half wrong**. `_send_dispatch_brief_to_slot` already delivers
+the brief as Agent Mail *before* `launcher(...)` runs, and `_send_tmux_inbox_check` already
+exists to make a standing session read its inbox. Verified: all 14 recent dispatch briefs
+carry a `read_at` (msg 342 / issue #821 read by member 17 **six seconds** after send). The
+brief already arrives; only the *guarantee* is missing.
+
+Process lesson, and the second time this shape has bitten: **a queued fix must be
+re-derived after its prerequisite lands, not replayed.** Finding 13's fix predates PR A;
+PR A's worktree leasing made isolation structural, which *retired* the fix rather than
+enabling it. Compare Finding 16's copy-forwarded "NO new endpoint" constraint.
+
+### Two delivery defects the flip would otherwise expose
+
+1. **The 30s nudge cooldown can silently drop a brief.** `AUTO_NUDGE_COOLDOWN_SECONDS = 30`
+   over an in-memory dict. Under spawn the nudge was decorative; under reuse it is the
+   *only* thing that makes the agent read the brief, so any unrelated message to that member
+   in the prior 30s skips it. Tested today only as a throttle **feature**, never as a
+   delivery risk.
+2. **`_nudge_session_for_member` picks an arbitrary pane** — orders by `last_seen_at desc`
+   among a member's sessions, which `sync_observed_sessions` stamps within microseconds of
+   each other one line earlier. With slot 6 carrying three sessions, which pane gets the
+   prompt is a coin flip *today*.
+
+### Also established (evidence, not inference)
+
+- **Isolation is behavioral under this model, and accepted as such.** A reused session's cwd
+  is fixed at spawn and `repo_path_override` is ignored on the reuse branch. All five live
+  panes report `path=…/tizonia-openmax-il` even while their agents were demonstrably working
+  inside `…-issue-818`. Corollary: Deck **cannot** identify an owner by "which pane sits in
+  the leased workspace" — `pane_current_path` does not follow the agent's `cd`.
+- **Agent self-reporting has been reliable**, which is what makes agent-reported release
+  defensible: across all 28 work items, **zero** reached a terminal state with no
+  self-report (every escalated item has a `status_note`, 9/11 an ack); 25/28 needed no
+  retry; all 11 escalations were *plan* blockages, not silent agent deaths. The soak's
+  failure mode was never "agent vanished" but "agent reported `blocked` and stopped" — and a
+  report can release.
+- **The backstop's pid cannot come from `MailAgentSession`.**
+  `_remove_stale_observed_sessions` **deletes** the row when tmux stops reporting it, so on
+  process death the pid vanishes rather than going false — and absence is indistinguishable
+  from a discovery failure, which `sync_observed_sessions` swallows with an early return. The
+  pid must be captured onto the lease and read from `/proc`, paired with the process start
+  time (`pid_max` here is 4194304).
+- **Finding 17 is narrower than it looked.** With the predicate deleted, its remaining victim
+  is the **UI** (five live agents displayed offline); the two paths G2 depends on already
+  self-refresh (`plan_launch` and `auto_nudge_members` both call `sync_observed_sessions`).
+  Still in PR1 — the skew test is owed and the display is user-facing truth — but an accuracy
+  fix, not a blocker.
+- **Finding 18 dissolves.** Nothing identifies the session owning a work item, and nothing
+  needs to: the lease identifies the workspace, `slot_is_busy` the slot, the owner's report
+  the completion.
+
+Test baseline before any G2 change: **239 passed** in `tests/agent_teams/`.
+
 ## Per-issue outcome log
 
 | Issue | Type | Owner | Outcome (latest) | Escalation explainable? | Notes |
