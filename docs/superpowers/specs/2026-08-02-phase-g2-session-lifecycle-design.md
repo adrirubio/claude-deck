@@ -387,7 +387,9 @@ From PR A's §6, still owed and now assigned to PR1:
 
 New from this design:
 
-- **Finding 19** must be recorded in the soak run log alongside Findings 17 and 18.
+- ~~**Finding 19** must be recorded in the soak run log alongside Findings 17 and 18.~~
+  **Done** (`b87be45`), together with the three PR A coupling notes it resolves (§2.4,
+  §2.5a, §4.1b).
 - The **`_validate_adoption_is_available` blind spot** (§2.3, consequence 2) is recorded,
   not fixed. It weakens an occupancy check that no longer gates anything destructive under
   this design, but it will mislead a future reader.
