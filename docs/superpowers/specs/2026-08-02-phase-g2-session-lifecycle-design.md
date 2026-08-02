@@ -150,10 +150,21 @@ branch already does:
 | `last_seen_at` vs TTL | pid state | `_effective_status` |
 |---|---|---|
 | within TTL | any | `session.mailbox_status` (unchanged) |
-| expired | live | **`connected`** (currently `offline`) |
+| expired | live | **`session.mailbox_status`** (currently `offline`) |
 | expired | dead | `offline` (unchanged) |
 | expired | NULL / unreadable `/proc` | `offline` — **fail closed** |
 | any | `mailbox_status == "offline"` | `offline` (unchanged; an explicit disconnect wins) |
+
+**Row 2 returns the row's own `mailbox_status`, not the literal `connected`** (corrected
+2026-08-02 while writing the plan; the draft said `connected`, borrowing the word from the mcp
+branch). Observed rows are written with `mailbox_status = "observed"` (`:317`, `:393`), and
+`_session_can_nudge` tests `_effective_status(session, now) == "observed"` **exactly**
+(`:600`). Returning `connected` would therefore make every revived observed row fail that
+test and stop being nudgeable — converting a display fix into a delivery outage, and silently
+defeating §4.2's ambiguity check, which counts *nudgeable* sessions. Returning the row's own
+status is also what the within-TTL path already does (`:632`), so row 1 and row 2 agree by
+construction. An explicit `mailbox_status == "offline"` cannot be resurrected by this: it
+returned earlier, at `:620`.
 
 Failing closed on an unreadable pid is the opposite choice from §3.2's backstop, and
 deliberately so: here the consequence of guessing "alive" is a **UI** that claims an agent is
@@ -856,11 +867,16 @@ Added after the impl-agent review, one per amendment above:
   → lease retained by dispatch → owner reports `workspace_released` → 200, released.
 - **Force-release is compare-and-swap (§6).** Wrong/stale token → 409 naming both; correct
   token → released.
-- **Finding 17's table (§2.4), one case per row.** Expired TTL + live pid → `connected`;
+- **Finding 17's table (§2.4), one case per row.** Expired TTL + live pid → the row's own
+  `mailbox_status` (`observed`, per the correction under the table);
   expired + dead → `offline`; expired + NULL pid → `offline`; expired + unreadable `/proc` →
   `offline`; `mailbox_status == "offline"` + live pid → `offline`. The skew test above is the
   second row's live-pid case stated as a defect; this pins the rest so the rule cannot be
   satisfied differently by two implementers.
+
+  **Plus one test that a revived row is still nudgeable** — `_session_can_nudge` returns True
+  for it. Asserting the returned string alone would pass with `connected` and still have broken
+  every wake path; this is the assertion that actually protects the delivery guarantee.
 - **Release refused before terminal (§3.1c).** `workspace_released` while `dispatch_status`
   is `dispatched` / `verifying` / `ready_for_review` → 409, lease held.
 - **Release refused on a dirty tree (§3.1c).** `escalated` + non-empty
