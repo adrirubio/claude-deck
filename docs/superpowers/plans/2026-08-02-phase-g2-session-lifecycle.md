@@ -77,13 +77,13 @@ This is the single most important section. Everything below is reachable from yo
 
 ## File Structure
 
-No new files. Both PRs are edits to eight existing backend modules, and the responsibility boundaries already in place are the right ones — the release protocol is workspace-lifecycle logic, so it belongs in the workspace service, and dispatch only calls into it.
+No new files. Both PRs are edits to the eleven existing backend modules below, plus one frontend file (Task 13, `AutonomyPanel.tsx`). The responsibility boundaries already in place are the right ones — the release protocol is workspace-lifecycle logic, so it belongs in the workspace service, and dispatch only calls into it.
 
 | File | Responsibility here | Tasks |
 |---|---|---|
-| `app/models/database.py` | The eight new nullable columns | 1 |
+| `app/models/database.py` | The nine new nullable columns | 1 |
 | `app/database.py` | Migration ladder entries (new `github_workspaces` block) | 1 |
-| `app/config.py` | `github_stale_lease_backstop_seconds` | 1 |
+| `app/config.py` | `github_stale_lease_backstop_seconds`, `github_brief_delivery_max_nudges` | 1 |
 | `app/services/github_workspace_service.py` | Owns the lease: token minting, pid liveness, the release conjunction, dirty-tree veto, owner-contact stamping | 2, 3, 4, 6 |
 | `app/services/github_dispatch_service.py` | Owns dispatch: pid capture after launch, retry deferral + promotion, release reminders, delivery evidence, ambiguity refusal, the `reuse_existing` flip | 3, 4, 5, 8, 10, 12, 13 |
 | `app/api/v1/agent_teams.py` | The `workspace_released` report branch, force-release, response fields | 5, 6, 9 |
@@ -92,6 +92,7 @@ No new files. Both PRs are edits to eight existing backend modules, and the resp
 | `app/services/github_watcher_service.py` | Calls the promotion sweep from `poll_scope` | 5 |
 | `app/services/github_verification_service.py` | Clears `retry_requested_at` on legitimate recovery | 5 |
 | `mcp_shim/agent_mail_server.py` | Forwards `lease_token` from the agent-facing tool | 6 |
+| `frontend/src/features/agent-teams/AutonomyPanel.tsx` | Labels `queued_ambiguous_sessions` — the only frontend change in either PR | 13 |
 
 `github_dispatch_service.py` is the one file taking most of the change, and it is already large. Do **not** split it as part of these PRs — it is the live soak's hottest file and a reorganisation would make the diff unreviewable against the spec. If it needs splitting, that is its own change on a quiet branch.
 
@@ -786,6 +787,12 @@ Implements spec §3.2 (the conjunction), §3.2a (owner-contact recency), §2.2 (
 
 **Read spec §1.2 before starting this task.** The predicate being deleted is not merely wrong — it is *permanently true* under one-session-per-slot, which is why `reclaim_stale` released 0 forever. Do not replace it with anything that asks "is the slot's session alive?"; that is the trap §3.2a documents.
 
+**The replacement-owner race is a known, accepted residual risk — do not "fix" it here.** A third review raised it as a blocker: the conjunction can release when the recorded spawn pid is dead and owner contact is 6h stale, even though a *replacement* owner session could be alive and working silently. The observation is correct. The recommended remedy — "add a fresh no-live-owner/session check before automatic release" — is **the defect this task exists to delete**, and adding it back would restore Finding 19 verbatim: under one-session-per-slot a live session is the normal state, so that check is permanently true and `reclaim_stale` releases nothing again, forever. `reclaim_stale released: 0` across the entire soak is the measured evidence.
+
+The race is already stated and accepted in spec §3.2a (`:581-585`), and G2 narrows it substantially rather than ignoring it. Releasing now requires **all five** conditions simultaneously: dead pid (with pid-reuse defeated by `proc_start`, Task 2), 6h of no owner contact *on this lease token* (Task 6), a clean tree, **and** zero unpushed commits (the correction below). A replacement owner that is genuinely working fails at least two of those — it reports (§3.3: all 28 soak items reported), and it has either dirty files or local commits. The detector for the remaining sliver is operator-visible lease staleness (§6 mitigation 2, Task 9), which is why that task is in PR1 and not deferred.
+
+What would actually close it is an agent heartbeat, which spec §3.2a explicitly declines as a larger change than this design should carry. If you believe the residual sliver is unacceptable, **stop and report** — that is a product decision for the orchestrator, not something to patch in mid-task. Do not add a session-liveness check to buy it.
+
 **Correction (2026-08-03, orchestrator verification): condition 5 is two checks, not one.** The spec (§3.2 condition 5, §3.2a residual risk) defines the quiescence veto as `git status --porcelain` being empty. That is **insufficient**, and this was verified experimentally rather than reasoned about:
 
 ```
@@ -1263,7 +1270,7 @@ async def test_reset_for_retry_defers_while_a_lease_is_held(db):
     workspace.leased_item_id = item.id
     await db.commit()
 
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
     await db.commit()
 
     assert item.dispatch_status == "escalated"
@@ -1293,7 +1300,7 @@ async def test_reset_for_retry_without_a_lease_is_unchanged(db):
     db.add(item)
     await db.commit()
 
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
 
     assert item.dispatch_status == "pending"
     assert item.retry_requested_at is None
@@ -1400,8 +1407,12 @@ async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
     item.escalation_reason = "plan_blocked"
     await db.commit()
 
-    # Re-pend the way production does it: via the watcher, no human involved.
-    github_dispatch_service.reset_for_retry(item)
+    # Call the service directly here: this test isolates the DEFERRAL, so it
+    # drives the one function under test. Flow test 1 below covers the same
+    # sequence triggered through watcher reconcile, which is how production
+    # reaches it with no human involved. Both are needed — see the note after
+    # this snippet.
+    await github_dispatch_service.reset_for_retry(db, item)
     await db.commit()
 
     assert item.dispatch_status == "escalated"          # still not dispatchable
@@ -1426,6 +1437,8 @@ async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
 
 `_team` provisions the scope's workspace; check the existing fixture's shape and adapt the `acquire` call if it needs a `FakeGitRunner`-backed service instance rather than the module singleton — `acquire` calls `reset_workspace`, which shells out to git, so the spy above is what keeps this a unit test.
 
+**On the direct call in the middle of that test.** It invokes `reset_for_retry` rather than going through the watcher, and that is deliberate: this test's subject is the *deferral mechanism* — lease held → no re-pend, no second reset, same token — so it drives that function directly and keeps the failure diagnosable. What it therefore does **not** prove is that production ever reaches this path, and spec §5.2's finding is precisely that production reaches it with **no human involved**. Flow test 1 below closes that gap by triggering the identical sequence through watcher reconcile. Write both; neither substitutes for the other. If you write only this one, a regression that stops the watcher from re-pending at all leaves the suite green.
+
 Then the remaining four from spec §5.2 (`:825-847`), one test each:
 
 1. **Via the watcher, not the operator.** Same flow, but trigger the re-pend through watcher reconcile with an advanced `github_updated_at` (`github_watcher_service.py:74-78`) instead of calling `reset_for_retry`. The point of the finding is that no human is involved, so a test that calls the function directly cannot see it. Companion case: the manual `POST .../retry` endpoint reaches the same deferred state.
@@ -1438,7 +1451,12 @@ If any of these five cannot be written because a fixture does not reach that far
 - [ ] **Step 3: Run and watch them fail**
 
 Run: `python -m pytest tests/agent_teams/test_github_dispatch_service.py -k retry -v`
-Expected: FAIL
+
+Expected: FAIL with `TypeError: reset_for_retry() takes 2 positional arguments but 3 were given` — the tests above are written against the **new** async two-argument signature that Step 4 introduces, while the current method (`github_dispatch_service.py:38`) is synchronous and takes only the item.
+
+That `TypeError` is the correct first failure and not a defect in the tests: this task changes the signature, so the tests must be written against the signature the task produces. Do **not** "fix" them back to `reset_for_retry(item)` to get a cleaner failure message — you would then be testing the method you are about to delete. After Step 4 the same tests fail on *behaviour* (the deferral) rather than on arity, which is the failure you actually want to watch turn green.
+
+Note the existing suite will also break here: `test_reset_for_retry_does_not_release_workspace` is one of the four tests Task 5 rewrites (Step 1 above), and the two production call sites move to `await` in Step 5.
 
 - [ ] **Step 4: Make `reset_for_retry` conditional**
 
@@ -1841,9 +1859,70 @@ The second test is the load-bearing one. Without it, a token mismatch that raise
 
 - [ ] **Step 7: Teach the brief to name the token**
 
-In `_dispatch_brief` (`github_dispatch_service.py:295`), add a `workspace_released` instruction alongside the existing `triaging` / `pr_opened` / `blocked` ones. It **must** include `workspace.lease_token` verbatim — the agent cannot derive it. State that release is required once the item reaches a terminal state, that the tree must be committed and pushed first, and give the exact `deck_report_dispatch_status` call.
+**Every** `deck_report_dispatch_status` instruction in the brief gains `lease_token`, not just the new one. This is the step where Step 6's stamp becomes reachable, and getting it wrong is silent.
+
+The three existing instructions are at `github_dispatch_service.py:372-374` (`triaging`, `pr_opened`, `blocked`) and are built as f-strings that already interpolate `item.id`. Add the token to each, and add the `workspace_released` instruction alongside:
+
+```python
+                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f'status="triaging", lease_token="{workspace.lease_token}", note="...")`.',
+                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f'status="pr_opened", lease_token="{workspace.lease_token}", pr_number=<PR number>)`.',
+                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f'status="blocked", lease_token="{workspace.lease_token}", note="...")`.',
+```
+
+**Why this is not cosmetic.** `touch_owner_contact` (Step 6) stamps `lease_last_owner_contact_at` only when the report's token matches, and a token mismatch is a **deliberate silent no-op** — it does not raise, because the report's own branch already succeeded. So an instruction that omits the token produces a report that looks entirely successful while recording no contact evidence. `lease_last_owner_contact_at` is backstop **condition 4**: the lease then ages past `github_stale_lease_backstop_seconds` with no contact ever recorded, and a live, correctly-reporting owner becomes backstop-eligible. The failure needs 6h to appear, produces no error at any point, and looks exactly like the abandoned-lease case the backstop is *supposed* to catch.
+
+There is also an `ack_received` instruction at `:468` that is prose rather than a call template. Leave it: ack is the *leader's* report, not the owner's, and `touch_owner_contact` is gated on `report.reporting_slot_id == item.owner_slot_id` (Step 6), so a leader ack never stamps owner contact regardless of its token.
+
+Then the new instruction. It must quote `workspace.lease_token` verbatim — the agent cannot derive it — state that release is required once the item reaches a terminal state, and that the tree must be committed and pushed first.
 
 Update `deck_report_dispatch_status` in `backend/mcp_shim/agent_mail_server.py` to accept and forward `lease_token`.
+
+**Brief-content test, and make it enumerate rather than spot-check:**
+
+```python
+@pytest.mark.asyncio
+async def test_every_report_instruction_carries_the_lease_token(db):
+    """Condition 4 is stamped only on token-matched reports, and a mismatch is a
+    silent no-op — so an instruction missing the token yields a report that
+    succeeds while recording no contact evidence.
+    """
+    preset, slots, scope = await _team(db)
+    workspace = (
+        await db.execute(select(GithubWorkspace).order_by(GithubWorkspace.id))
+    ).scalars().first()
+    workspace.lease_token = "tok-brief"
+    await db.commit()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=94,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item, scope, workspace,
+        owner_slot_id=slots[1].id,
+        preset_slots=slots,
+    )
+
+    # Every generated call template, not just the new one.
+    call_lines = [
+        line for line in brief.splitlines()
+        if "deck_report_dispatch_status(work_item_id=" in line
+    ]
+    assert len(call_lines) >= 4          # triaging, pr_opened, blocked, workspace_released
+    for line in call_lines:
+        assert 'lease_token="tok-brief"' in line, f"missing token: {line}"
+```
+
+Filtering on `work_item_id=` is what makes this test enumerate *call templates* and skip the `:468` prose mention — asserting `brief.count('lease_token')` instead would pass on a brief that mentions the token four times in one paragraph and never in an instruction.
 
 - [ ] **Step 8: Run everything**
 
@@ -2272,9 +2351,9 @@ Find the existing workspace-endpoint tests (`grep -rln "workspaces" backend/test
 1. `GET .../workspaces` exposes `lease_token`, `lease_last_owner_contact_at`, `lease_release_reminded_at` and a computed `lease_age_seconds` for a leased workspace, and nulls for an unleased one.
 2. Force-release with the **matching** token → 200, lease returned.
 3. Force-release with a **stale** token → 409 whose detail shows **both** tokens.
-4. Force-release with a **dirty** tree → 200 and the lease still released, with `discarded_paths` naming the dirty files. This is the deliberate difference from agent-reported release: the operator endpoint exists precisely for the case where the normal path refuses, so a dirty-tree veto here would make it useless.
+4. Force-release with a **dirty** tree → 200 and the lease still released, with `discarded_paths` containing the porcelain lines for the dirty files. This is the deliberate difference from agent-reported release: the operator endpoint exists precisely for the case where the normal path refuses, so a dirty-tree veto here would make it useless.
 5. Force-release on an **unleased** workspace → 409, not a 500.
-6. Force-release with **unpushed commits** → 200, released, and `discarded_paths` mentions the unpushed commits. Same asymmetry as test 4: the backstop and the agent path veto, the operator path reports and proceeds.
+6. Force-release with **unpushed commits and a clean tree** → 200, released, `unpushed_commits == 3` and `discarded_paths is None`. Same asymmetry as test 4: the backstop and the agent path veto, the operator path reports and proceeds. Assert **both** fields: this is the case where a clean `porcelain` coexists with real work at risk, so a test that only checked `discarded_paths` would pass against an implementation that reported nothing at all.
 7. Force-release **omitting** `expected_lease_token` → 422 from pydantic. Pins the field as required; an optional token would compare `None` against a pre-migration lease's NULL token and match.
 8. Force-release **omitting** `reason` → 422.
 
@@ -2317,6 +2396,17 @@ class GithubWorkspaceForceReleaseResponse(BaseModel):
     unpushed_commits: Optional[int] = None  # commits ahead of base_ref at force time
 ```
 
+**Field semantics, exactly.** These two fields answer different questions and must not be merged or cross-populated:
+
+| Field | Source | Meaning when NULL |
+|---|---|---|
+| `discarded_paths` | Raw `git status --porcelain` output, verbatim and untruncated | The working tree was clean |
+| `unpushed_commits` | `git rev-list --count <base_ref>..HEAD` as an **int** | Zero commits ahead, *or* the count could not be determined |
+
+`unpushed_commits` is a count, not a list of subjects or SHAs. That is what condition 5 already computes (Task 4), so this endpoint reuses that value rather than shelling out again — and reusing it is the point: the operator sees the same number the backstop would have vetoed on, not a second independent measurement that could disagree.
+
+The two are reported separately because a clean `porcelain` with a nonzero commit count is the dangerous case — the tree *looks* safe to discard and is not. Folding the commit count into `discarded_paths` prose would hide exactly the state Task 4's condition-5 correction exists to surface.
+
 `expected_lease_token` is `str`, not `Optional[str]`: an absent token would make the CAS guard vacuous, and `None == workspace.lease_token` is *true* for a pre-migration lease — so an omitted field would silently force exactly the leases whose owner is least knowable. `reason` is required because this endpoint discards another party's work; an unexplained force is the thing the audit log exists to prevent.
 
 On identity: there is **no authentication on this router** (§3.1b records the same gap for `/dispatch-status`), so `requested_by` is a self-asserted label, not a verified principal. Log it as such and do not build any authorization on it. Do not invent a header-based or session-based identity to fill the gap — endpoint-wide auth is listed as owed below and is a larger change than this task.
@@ -2336,22 +2426,75 @@ On identity: there is **no authentication on this router** (§3.1b records the s
     # Capture what is about to be discarded BEFORE releasing — after release the
     # next acquire may reset the tree, and then nothing can report what was lost.
     scope = await db.get(TeamGithubScope, workspace.scope_id)
-    blocker = await github_workspace_service.release_blocker(scope, workspace)
+    discarded_paths, unpushed_commits = await github_workspace_service.pending_work(
+        scope, workspace
+    )
     released_item_id = workspace.leased_item_id
     logger.warning(
-        "force-release workspace %s (item %s) by %s: %s; discarding: %s",
+        "force-release workspace %s (item %s) by %s: %s; discarding: %s dirty "
+        "path(s), %s unpushed commit(s)",
         workspace.id,
         released_item_id,
         request.requested_by or "unknown",
         request.reason,
-        blocker or "nothing (tree was quiescent)",
+        len((discarded_paths or "").splitlines()),
+        unpushed_commits if unpushed_commits is not None else "unknown",
     )
     await github_workspace_service.release(db, released_item_id)
+    await db.refresh(workspace)
+    return GithubWorkspaceForceReleaseResponse(
+        workspace=_workspace_response(workspace),
+        released_item_id=released_item_id,
+        discarded_paths=discarded_paths,
+        unpushed_commits=unpushed_commits,
+    )
 ```
+
+`released_item_id` is read into a local **before** `release`, because `release` sets `workspace.leased_item_id = None` — reading it afterwards returns `None` and the response model would reject it (the field is a required `int`). That is the one ordering error in this route that fails loudly; the other two fail silently, so:
+
+**`pending_work` is a second helper on `github_workspace_service`, beside `release_blocker`.** `release_blocker` returns one prose string and so cannot populate two typed fields; splitting them is what keeps `discarded_paths` and `unpushed_commits` independently machine-readable while both helpers still read the same two git commands:
+
+```python
+    async def pending_work(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> tuple[str | None, int | None]:
+        """(porcelain output, commits ahead of base_ref) — for reporting, not gating.
+
+        The observation half of release_blocker's veto. That method answers
+        'may this be released?' and this one answers 'what is in there?'; the
+        force-release endpoint needs the second because it deliberately does
+        NOT gate. Returns (None, None) for a primary workspace, which is never
+        leased and whose tree is not Deck's to inspect.
+
+        Both halves return None on a git failure rather than raising: this runs
+        while an operator is discarding work, and failing the call because the
+        report could not be assembled would leave the lease stuck — the exact
+        wedge force-release exists to break. A None here means 'unknown', and
+        the endpoint logs it as such.
+        """
+        if workspace.kind == "primary":
+            return None, None
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        paths = output.strip() or None if return_code == 0 else None
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        try:
+            commits = int(output.strip()) if return_code == 0 else None
+        except ValueError:
+            commits = None
+        return paths, commits
+```
+
+Note `pending_work` fails **open** (unknown → None → the release still proceeds) while `release_blocker` fails **closed** (unknown → a blocker string → refuse). Same two git commands, opposite error contracts, and both are correct: `release_blocker` gates a destructive action, so ignorance must block it; `pending_work` only annotates an action the operator has already authorised, so ignorance must not block it. This is the same asymmetry as `_owner_process_is_alive` vs `_brief_delivered` — do not "make them consistent."
+
+`_workspace_response` is the existing serialiser used by the other workspace routes; Step 3 extends it with the lease fields, so it is already in scope here.
 
 The compare-and-swap is the point (§6 mitigation 3). An operator clicks from a page rendered some time ago; between render and click the lease may have been released and re-acquired by a **new** owner. A workspace-id-only force-release would then destroy a live lease — the same stale-identity failure as §3.1a, arriving through the operator instead of the agent.
 
-Note the ordering above is load-bearing: `release_blocker` is called *before* `release`, and the `blocker` string is what populates `discarded_paths`. Reversing those two lines yields a response that always reports nothing discarded — a report that reads as reassuring precisely when it is least true.
+Note the ordering is load-bearing twice over: `pending_work` runs *before* `release`, and `released_item_id` is captured before it too. Calling `pending_work` afterwards yields a response that reports nothing discarded — reassuring precisely when it is least true.
 
 Do **not** call `reset_workspace` here — release only. The next `acquire` resets, and doing it twice would discard the operator's chance to inspect the tree first.
 
@@ -2697,7 +2840,11 @@ This comes first because every test below needs it. `_send_dispatch_brief_to_slo
 Two things about that block:
 
 - **Clearing the two counters here is the "counter clearing on fresh dispatch" requirement.** A retried item that escalated `brief_unread` last time starts at count 0, or the second attempt escalates on its first monitor pass with no nudge sent. This is the same class of bug Task 1 avoids by keeping the reminder stamp off `last_nudge_at` — a counter surviving into a new attempt. Note it must clear on the **success** path only; the `except` branch leaves `brief_message_id` NULL, which Step 3 reads as "no brief recorded" and treats as undelivered.
-- **Do not add `await db.commit()`.** `dispatch_pending` commits at the end of the item's loop iteration (`:288-290`), and on the failure paths it rolls back or escalates. Committing here would persist a `brief_message_id` for a dispatch that then failed to launch.
+- **Do not add `await db.commit()`.** `dispatch_pending` already commits at the end of the item's loop iteration (`:288-290`) and inside each failure branch, so a commit here buys nothing and only adds a partial-state window mid-dispatch.
+
+  **A failed launch DOES persist `brief_message_id`, and that is correct — do not add a clearing path.** Being precise, because an earlier draft of this plan claimed otherwise: `_send_dispatch_brief_to_slot` runs *before* `launcher` (`:244-259`), and both `except` branches call `escalate` followed by `await db.commit()` (`:262-274`). So when the launcher raises, the id is already set and gets committed. That is faithful rather than leaky — the brief **was** genuinely sent to the member's mailbox, and `MailMessage` rows are never deleted. Clearing the id would be the lie: it would erase a message the owner can actually read.
+
+  Nothing downstream misreads it either, because both failure branches escalate. `monitor_dispatched` early-returns on anything not `dispatch_status == "dispatched"`, so the delivery branch (Step 5) never evaluates an escalated item, and a later retry re-enters `_send_dispatch_brief_to_slot`, which overwrites all three fields on its success path. The one thing that would break this is clearing the counters *outside* the success path — see the previous bullet.
 
 - [ ] **Step 2: Write the failing tests**
 
