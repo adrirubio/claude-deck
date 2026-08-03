@@ -300,7 +300,10 @@ of every other dispatch threshold."
 
 **Interfaces:**
 - Consumes: Task 1's columns.
-- Produces: `GithubWorkspaceService._read_proc_start(self, pid: int) -> str | None` and `GithubWorkspaceService._owner_process_is_alive(self, workspace: GithubWorkspace) -> bool`. Task 4's conjunction calls `_owner_process_is_alive`; Task 3's dispatch capture calls `_read_proc_start`.
+- Produces three methods, all on `GithubWorkspaceService`:
+  - `_parse_proc_start(self, raw: str) -> str | None` — the parse, tested directly because it is the silent one
+  - `_read_proc_start(self, pid: int) -> str | None` — the `/proc` read; Task 3's dispatch capture calls this
+  - `_owner_process_is_alive(self, workspace: GithubWorkspace) -> bool` — Task 4's conjunction calls this
 
 Implements spec §3.2 (the `/proc` parse, pid-reuse guard, and the unknown→alive rule).
 
@@ -316,15 +319,37 @@ def test_read_proc_start_handles_comm_containing_spaces_and_parens():
 
     A naive split() puts starttime at the wrong index. Spec §3.2 pins the
     rindex(")") recipe; this fixture is the case that breaks the naive version.
+
+    Correction (2026-08-03): an earlier draft used range(100, 118) filler and
+    landed the sentinel at index 25, so the test failed on its own arithmetic
+    before reaching any production code. The field list is now built explicitly
+    and its length asserted, because the bug was a hand-count and a hand-count
+    is exactly what must not be trusted twice.
     """
     service = GithubWorkspaceService(runner=FakeGitRunner())
-    raw = "12345 (weird (proc) name) S 1 12345 12345 0 -1 4194560 " + " ".join(
-        str(n) for n in range(100, 118)
-    ) + " 987654321 " + " ".join(str(n) for n in range(200, 210))
 
-    fields = raw[raw.rindex(")") + 2:].split()
+    # Everything after comm and before starttime: state + the six fixed numeric
+    # fields (ppid pgrp session tty_nr tpgid flags), then filler. starttime is
+    # field 22 overall = index 19 counting from state, so exactly 19 values
+    # precede it.
+    before_starttime = ["S", "1", "12345", "12345", "0", "-1", "4194560"] + [
+        str(n) for n in range(100, 112)
+    ]
+    assert len(before_starttime) == 19  # guards the fixture, not the code
+    raw = (
+        "12345 (weird (proc) name) "
+        + " ".join(before_starttime)
+        + " 987654321 "
+        + " ".join(str(n) for n in range(200, 210))
+    )
 
-    assert fields[19] == "987654321"
+    assert raw[raw.rindex(")") + 2:].split()[19] == "987654321"
+    # The fixture must also DISCRIMINATE: every naive parse has to miss. If any
+    # of these ever equals the sentinel, the fixture stopped testing the defect.
+    assert raw.split()[19] != "987654321"                       # no comm handling
+    assert raw.split()[21] != "987654321"                       # 1-indexed field 22
+    assert raw[raw.index(")") + 2:].split()[19] != "987654321"  # first ')' not last
+
     assert service._parse_proc_start(raw) == "987654321"
 
 
@@ -444,6 +469,8 @@ Add `import os` to the test file's imports if absent.
 
 Run: `cd backend && source venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py -k "proc_start or owner_process_alive" -v`
 Expected: FAIL — `AttributeError: ... has no attribute '_parse_proc_start'`
+
+If instead you get an `AssertionError` from inside `test_read_proc_start_...`, the **fixture** is wrong, not the code — those four assertions run before the service is ever called. Stop and report the index it actually produced; do not adjust the index to match the fixture, because index 19 is verified against a real `/proc/self/stat` (50 post-comm fields, `[19]` is starttime). Adjust the filler length instead.
 
 - [ ] **Step 3: Implement**
 
