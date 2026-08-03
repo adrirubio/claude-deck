@@ -8,7 +8,15 @@
 
 **Tech Stack:** FastAPI, async SQLAlchemy 2.0 (`Mapped`/`mapped_column`), aiosqlite, pydantic-settings, pytest + pytest-asyncio. Frontend React 19 + TS (one small change in PR1).
 
-**Spec:** `docs/superpowers/specs/2026-08-02-phase-g2-session-lifecycle-design.md` — read §1 and §3 before starting. Every task below cites the spec section it implements; where this plan and the spec disagree, the spec wins and you should stop and report the disagreement.
+**Spec:** `docs/superpowers/specs/2026-08-02-phase-g2-session-lifecycle-design.md` — read §1 and §3 before starting. Every task below cites the spec section it implements.
+
+**Precedence, when documents disagree** — one rule, and the same rule appears in the Codex handoff prompt:
+
+| Disagreement | Rule |
+|---|---|
+| Plan vs spec, and the plan marks it **"Correction (date, review)"** | **The plan wins.** Implement the plan. There are exactly two: the §2.4 `mailbox_status` rule (Task 7) and the pid-capture ordering (Task 3). In both, the spec text is the version a review rejected. |
+| Plan vs spec, **unmarked** | **Stop and report.** Unmarked divergence is drift in a 2000-line document, not a decision, and resolving it silently is how a rejected design gets shipped. |
+| Plan (or spec) vs **the code** | **Stop and report.** A moved line number is fine to adapt to; a different *shape* means the reasoning may not hold. |
 
 ---
 
@@ -97,7 +105,7 @@ Tasks 8 and 9 are §6's mitigations. They are **not optional trimming**: without
 
 ---
 
-### Task 1: Schema — eight nullable columns and one setting
+### Task 1: Schema — nine nullable columns and one setting
 
 **Files:**
 - Modify: `backend/app/models/database.py:285-311` (`GithubWorkspace`), `:240-282` (`GithubWorkItem`)
@@ -107,13 +115,19 @@ Tasks 8 and 9 are §6's mitigations. They are **not optional trimming**: without
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `GithubWorkspace.lease_token: str | None`, `.leased_owner_pid: int | None`, `.leased_owner_proc_start: str | None`, `.lease_last_owner_contact_at: datetime | None`, `.lease_release_reminded_at: datetime | None`; `GithubWorkItem.retry_requested_at: datetime | None`, `.brief_delivery_nudge_at: datetime | None`, `.brief_delivery_nudge_count: int | None`; `settings.github_stale_lease_backstop_seconds: int`.
+- Produces: `GithubWorkspace.lease_token: str | None`, `.leased_owner_pid: int | None`, `.leased_owner_proc_start: str | None`, `.lease_last_owner_contact_at: datetime | None`, `.lease_release_reminded_at: datetime | None`; `GithubWorkItem.retry_requested_at: datetime | None`, `.brief_delivery_nudge_at: datetime | None`, `.brief_delivery_nudge_count: int | None`, `.brief_message_id: int | None`; `settings.github_stale_lease_backstop_seconds: int`, `settings.github_brief_delivery_max_nudges: int`.
 
 Implements spec §3.2 (column inventory), §7 step 1 (migration mechanism).
 
-**Why all eight land in one task:** they are one `ADD COLUMN` sweep against two tables plus one settings line. Splitting them would produce commits that add a column no code reads, and the migration ladder is the single riskiest step in the deployment (§7) — it deserves one reviewable diff. `brief_delivery_nudge_*` belong to PR2 but the columns are added here so PR2 needs no second migration.
+**Why all nine land in one task:** they are one `ADD COLUMN` sweep against two tables plus two settings lines. Splitting them would produce commits that add a column no code reads, and the migration ladder is the single riskiest step in the deployment (§7) — it deserves one reviewable diff. `brief_delivery_nudge_*` and `brief_message_id` belong to PR2 but the columns are added here so PR2 needs no second migration.
 
-**One deliberate delta from the spec.** §3.2 and §7 step 1 both inventory **seven** columns. This task adds an eighth, `lease_release_reminded_at`, needed by §6 mitigation 1 (release reminders, Task 8) — the spec specifies that mitigation without naming its clock. Do not substitute `last_nudge_at` for it: that field already multiplexes the leader-ack and owner-idle timers, `reset_for_retry` does **not** clear it, and `monitor_dispatched:645` reads `if item.last_nudge_at is None: nudge_leader` **else escalate**. A reminder timestamp surviving into a retried item would therefore escalate `leader_ack_timeout` without the leader ever being nudged. Putting it on the workspace row instead means `release` clears it for free, and it is exactly the field §6 mitigation 2 wants exposed. This is §4.1a's multiplexing lesson recurring one column over.
+**Two deliberate deltas from the spec.** §3.2 and §7 step 1 both inventory **seven** columns; this task adds two more.
+
+**The ninth, `brief_message_id`, is required by §4.1a test (1)** and the spec does not name it either. §4.1a says delivery is proven by "the receipt's `read_at`" — but *which* receipt? `MailReceipt` is unique on `(message_id, member_id)` only (`database.py:451`), with nothing attempt-scoped, and `_send_dispatch_brief_to_slot` (`github_dispatch_service.py:517-546`) **discards** the `MailMessageResponse` it gets back. So "the owner has an unread receipt" is answerable today only by guessing which of the member's messages was the brief — and a re-dispatched item has more than one. Worse, the guess fails in the unsafe direction: an *older* brief that was read would prove delivery for an attempt whose brief was never delivered. Same defect family as everything else in this design — a signal answering *which member?* when the question is *which dispatch?*
+
+Storing the id makes the lookup exact and single-row. See Task 12 Step 3.
+
+**The eighth, `lease_release_reminded_at`,** is needed by §6 mitigation 1 (release reminders, Task 8) — the spec specifies that mitigation without naming its clock. Do not substitute `last_nudge_at` for it: that field already multiplexes the leader-ack and owner-idle timers, `reset_for_retry` does **not** clear it, and `monitor_dispatched:645` reads `if item.last_nudge_at is None: nudge_leader` **else escalate**. A reminder timestamp surviving into a retried item would therefore escalate `leader_ack_timeout` without the leader ever being nudged. Putting it on the workspace row instead means `release` clears it for free, and it is exactly the field §6 mitigation 2 wants exposed. This is §4.1a's multiplexing lesson recurring one column over.
 
 - [ ] **Step 1: Read the migration ladder before touching it**
 
@@ -156,6 +170,7 @@ async def test_lease_columns_default_to_null(db, tmp_path):
     assert item.retry_requested_at is None
     assert item.brief_delivery_nudge_at is None
     assert item.brief_delivery_nudge_count is None
+    assert item.brief_message_id is None
 ```
 
 - [ ] **Step 3: Run it and watch it fail**
@@ -183,9 +198,12 @@ Inside `class GithubWorkItem`, after `last_nudge_at` (`:273`):
     retry_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     brief_delivery_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     brief_delivery_nudge_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    brief_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 ```
 
 `brief_delivery_nudge_count` is nullable rather than `default=0, nullable=False`: an `ADD COLUMN` on an existing SQLite table cannot backfill a NOT NULL column without a default, and treating NULL as "never nudged" is exactly right. PR2 reads it as `(item.brief_delivery_nudge_count or 0)`.
+
+`brief_message_id` is a **plain Integer with no `ForeignKey`**, deliberately. SQLite cannot add a column with a foreign-key constraint via `ALTER TABLE ADD COLUMN`, and the reference is advisory: PR2 reads it with `await db.get(MailMessage, ...)` and treats `None` as "no brief recorded", which is the same branch it takes for a pre-migration item. Do not add `ondelete` behaviour or a relationship — nothing in the codebase deletes `mail_messages` rows (verified: no `delete(MailMessage)` anywhere in `app/`), so there is no dangling-id path to defend against.
 
 - [ ] **Step 5: Add the migration entries**
 
@@ -198,6 +216,8 @@ In `backend/app/database.py`, extend the existing `github_work_items` block (aft
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_at DATETIME"))
     if work_item_columns and "brief_delivery_nudge_count" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_count INTEGER"))
+    if work_item_columns and "brief_message_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_message_id INTEGER"))
 ```
 
 Then add a **new** block for `github_workspaces`, which has no entries yet:
@@ -222,17 +242,20 @@ Then add a **new** block for `github_workspaces`, which has no entries yet:
 
 Place it **before** the final `await conn.commit()` at `:449`. Use `_sqlite_columns` (the helper at `:64`) for the new block rather than an inline `PRAGMA`; both styles exist in the file and the helper is the better one.
 
-All eight are nullable with no default — that is what makes `ADD COLUMN` legal on SQLite and what makes every pre-existing row read as "no information".
+All nine are nullable with no default — that is what makes `ADD COLUMN` legal on SQLite and what makes every pre-existing row read as "no information".
 
-- [ ] **Step 6: Add the setting**
+- [ ] **Step 6: Add the two settings**
 
 In `backend/app/config.py`, after `github_min_available_memory_mb` (`:47`):
 
 ```python
     github_stale_lease_backstop_seconds: int = 21600  # 6h; see G2 design §3.2, §6
+    github_brief_delivery_max_nudges: int = 2  # bounded retry; see §4.1a, Task 12
 ```
 
-A settings field, not a module constant — matching `github_leader_ack_timeout_seconds` and its four neighbours. 6h is explicitly a guess (spec §6) and needs an operator override. Condition 2 and condition 4's contact-ageing share this one number.
+Settings fields, not module constants — matching `github_leader_ack_timeout_seconds` and its four neighbours. 6h is explicitly a guess (spec §6) and needs an operator override. Condition 2 and condition 4's contact-ageing share that one number.
+
+`github_brief_delivery_max_nudges = 2` is what makes §4.1a's "bounded retry" a number rather than a phrase: two re-nudges spaced by `github_nudge_grace_seconds` (180s, `config.py:46`) before `brief_unread`. Chosen to sit **inside** `github_owner_idle_timeout_seconds` (900s) so a genuinely undelivered brief escalates as `brief_unread` and not as `owner_idle_timeout` — the same misattribution §4.1a correction (3) exists to prevent, arriving via the other timer. Do not raise it past 4 without also raising the idle timeout.
 
 - [ ] **Step 7: Run the new test and the full suite**
 
@@ -249,13 +272,21 @@ git add backend/app/models/database.py backend/app/database.py backend/app/confi
         backend/tests/agent_teams/test_github_workspace_service.py
 git commit -m "feat(g2): add lease-identity and retry-deferral columns
 
-Eight nullable columns via the existing compat ladder (database.py:290), so
+Nine nullable columns via the existing compat ladder (database.py:290), so
 every checkout migrates itself on restart and no SQL is hand-applied to the
 live soak DB. NULL on pre-existing rows means 'no information', which keeps
 item 23's lease un-reclaimable — the correct outcome.
 
-Adds github_stale_lease_backstop_seconds (6h) as a settings field, matching
-the pattern of every other dispatch threshold."
+brief_message_id is here rather than in PR2 so PR2 needs no second migration.
+It exists because MailReceipt is unique on (message_id, member_id) only: with
+no recorded id, 'is the brief unread?' has to guess which of the member's
+messages was the brief, and a re-dispatched item has several. The guess fails
+unsafely — an older, read brief would prove delivery for an attempt whose
+brief never arrived.
+
+Adds github_stale_lease_backstop_seconds (6h) and
+github_brief_delivery_max_nudges (2) as settings fields, matching the pattern
+of every other dispatch threshold."
 ```
 
 ---
@@ -311,18 +342,30 @@ async def test_owner_process_alive_is_true_when_pid_is_null(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_owner_process_alive_is_false_for_dead_pid(db, tmp_path):
+async def test_owner_process_alive_is_false_for_dead_pid(db, tmp_path, monkeypatch):
+    """A dead pid must be proven dead, not assumed dead by picking a big number.
+
+    Correction (2026-08-03): an earlier draft used a literal 4194303. pid_max on
+    this host is 4194304, so that pid is legal and allocatable — the test would
+    invert the day the host assigns it, with no code change. Monkeypatch the
+    /proc read to raise instead, which also names WHICH exception maps to dead.
+    """
     scope, _, item = await _context(db, tmp_path / "repo")
     workspace = GithubWorkspace(
         scope_id=scope.id,
         path=str(tmp_path / "ws"),
         leased_item_id=item.id,
-        leased_owner_pid=4194303,
+        leased_owner_pid=123456,
         leased_owner_proc_start="123",
     )
     db.add(workspace)
     await db.commit()
     service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    def _dead(pid):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(service, "_read_proc_start", _dead)
 
     assert service._owner_process_is_alive(workspace) is False
 
@@ -602,9 +645,62 @@ In `backend/app/models/schemas.py`, in `AgentTeamLaunchResultItem` (`:2336-2347`
     pane_pid: Optional[int] = None
 ```
 
-Then populate it in `agent_team_service.py` wherever `tmux_target` is set on a result item — for both the spawn and reuse branches. Search for `tmux_target=` in that file. The pane pid is already available from `agent_bridge/discovery.py` (`pane_pid`, `:20`/`:92`); prefer whatever value the launch path already has in hand over a fresh discovery call, because a second tmux round-trip can race the pane's own startup (spec §3.2).
+Then populate it in `agent_team_service.py` wherever `tmux_target` is set on a result item — for both the spawn and reuse branches. Search for `tmux_target=` in that file.
 
-If the launch path genuinely has no pid available without a discovery call, leave `pane_pid=None` and **report this** — a NULL pid is a supported outcome (the lease simply stays un-reclaimable), and adding a racy discovery call to avoid it would be the worse trade.
+**Correction (2026-08-03, impl-agent review + orchestrator verification): the spawn path has no pid to pass through, so there must be a resolution step.** The earlier draft said to prefer a value "the launch path already has in hand" and, failing that, to leave `pane_pid=None`. Verified: `spawn_session` (`agent_bridge/spawn.py:101-106`) returns exactly `{provider, provider_display_name, tmux_target, session_name}` — **no pid at all**. So on the spawn path there is no value in hand, the fallback would always be taken, `leased_owner_pid` would be NULL on every newly spawned lease, and backstop condition 3 would be unsatisfiable for all of them. The backstop would release nothing — Finding 19 restored through a different door. A NULL pid is only an acceptable *exception*; it cannot be the standard outcome.
+
+Resolve `tmux_target` → pid instead. Add to `github_dispatch_service.py`:
+
+```python
+    def _resolve_pane_pid(self, tmux_target: str | None) -> int | None:
+        """Resolve a tmux target to its pane pid. Best-effort by contract.
+
+        Verified on this host 2026-08-03:
+          $ tmux display-message -p -t <live target> '#{pane_pid}'  -> "149190", exit 0
+          $ tmux display-message -p -t <bogus target> '#{pane_pid}' -> "",       exit 0
+
+        A bogus target exits ZERO with empty stdout, so the return code is not a
+        validity signal — the output must be parsed and empty output treated as
+        failure. Checking only `returncode == 0` would store None while looking
+        like it succeeded.
+        """
+        if not tmux_target:
+            return None
+        try:
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", tmux_target, "#{pane_pid}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            logger.warning("could not resolve pane pid for %s", tmux_target)
+            return None
+        if result.returncode != 0:
+            return None
+        raw = result.stdout.strip()
+        if not raw.isdigit():
+            logger.warning(
+                "tmux returned no pane pid for %s (stdout=%r) — the lease will "
+                "not be auto-reclaimable",
+                tmux_target,
+                raw,
+            )
+            return None
+        return int(raw)
+```
+
+Add `import subprocess` and use the module's existing `logger`. Prefer `launch_item.pane_pid` when the launch result carries one (the reuse branch may), and fall back to this resolver:
+
+```python
+pane_pid = getattr(launch_item, "pane_pid", None) or self._resolve_pane_pid(tmux_target)
+```
+
+Why a second tmux round-trip is acceptable here, reversing the draft's reasoning: the race the draft feared is against the pane's *startup*, but `display-message -p '#{pane_pid}'` asks tmux for the pane's own pid, which exists the moment the pane does — it does not depend on the agent process inside having finished initialising. `discover_agent_sessions()` would be the racy choice, because it filters panes by *recognized provider command* (`discovery.py:124-125`), and a pane whose provider has not yet exec'd is skipped. So use `display-message`, **not** `discover_agent_sessions`.
+
+**Write a test that the fallback is actually exercised on the spawn path**, monkeypatching `_resolve_pane_pid` to return a known pid and asserting `workspace.leased_owner_pid` equals it. Without that test, this whole correction can silently regress to NULL — which is the failure mode that reads as working.
+
+The logged warning is required, not decorative: a NULL pid means an operator is now the only thing that can clear that lease, and Task 9's staleness view is the only other place that becomes visible.
 
 - [ ] **Step 6: Capture the pid after launch**
 
@@ -614,21 +710,36 @@ In `github_dispatch_service.py`, in the `else` branch where dispatch succeeds (`
             else:
                 item.dispatch_status = "dispatched"
                 item.dispatched_at = datetime.utcnow()
-                pane_pid = getattr(launch_item, "pane_pid", None)
+                pane_pid = getattr(launch_item, "pane_pid", None) or self._resolve_pane_pid(
+                    tmux_target
+                )
                 if pane_pid is not None:
-                    workspace.leased_owner_pid = pane_pid
                     try:
-                        workspace.leased_owner_proc_start = (
-                            github_workspace_service._read_proc_start(pane_pid)
-                        )
+                        proc_start = github_workspace_service._read_proc_start(pane_pid)
                     except OSError:
-                        workspace.leased_owner_proc_start = None
-                    workspace.updated_at = datetime.utcnow()
+                        proc_start = None
+                    # Store the pair or NEITHER. A pid without its start time
+                    # cannot be checked for reuse: _owner_process_is_alive
+                    # returns True whenever proc_start is None (Task 2), so a
+                    # half-written pair silently makes the lease permanent.
+                    if proc_start is not None:
+                        workspace.leased_owner_pid = pane_pid
+                        workspace.leased_owner_proc_start = proc_start
+                        workspace.updated_at = datetime.utcnow()
+                    else:
+                        logger.warning(
+                            "captured pane pid %s for item %s but could not read "
+                            "its start time; lease will not be auto-reclaimable",
+                            pane_pid,
+                            item.id,
+                        )
                 slots_dispatched_this_batch.add(owner_slot_id)
                 scope_dispatched_this_batch += 1
 ```
 
-A failed pid capture must **never** fail a dispatch that otherwise succeeded (spec §3.2) — hence the bare `except OSError` and the absence of any re-raise.
+A failed pid capture must **never** fail a dispatch that otherwise succeeded (spec §3.2) — hence the caught `OSError` and the absence of any re-raise.
+
+Note the all-or-nothing pairing, which the draft got wrong: it wrote `leased_owner_pid` first and then set `leased_owner_proc_start = None` on failure. Task 2's `_owner_process_is_alive` returns **True** when `leased_owner_proc_start is None` (it cannot rule out pid reuse), so that combination is indistinguishable from a live owner and holds the lease forever. Both columns are written together or neither is. Test this explicitly: monkeypatch `_read_proc_start` to raise `OSError` and assert `leased_owner_pid is None` afterwards.
 
 - [ ] **Step 7: Run the tests**
 
@@ -650,8 +761,12 @@ performs no reset, so a fresh token there would be a lie. Task 5's retry
 deferral is what keeps that path from being reached.
 
 Pid is captured after launch, not in acquire: acquire runs before launcher(),
-so on the spawn path the pane does not exist yet. A failed capture leaves NULL
-and never fails the dispatch."
+so on the spawn path the pane does not exist yet. spawn_session returns no pid
+(spawn.py:101-106), so tmux_target is resolved via display-message; a bogus
+target exits ZERO with empty stdout, so the output is parsed rather than the
+return code trusted. pid and proc_start are stored as a pair or not at all: a
+pid without a start time reads as ALIVE and would hold the lease forever. A
+failed capture never fails the dispatch."
 ```
 
 ---
@@ -671,11 +786,78 @@ Implements spec §3.2 (the conjunction), §3.2a (owner-contact recency), §2.2 (
 
 **Read spec §1.2 before starting this task.** The predicate being deleted is not merely wrong — it is *permanently true* under one-session-per-slot, which is why `reclaim_stale` released 0 forever. Do not replace it with anything that asks "is the slot's session alive?"; that is the trap §3.2a documents.
 
+**Correction (2026-08-03, orchestrator verification): condition 5 is two checks, not one.** The spec (§3.2 condition 5, §3.2a residual risk) defines the quiescence veto as `git status --porcelain` being empty. That is **insufficient**, and this was verified experimentally rather than reasoned about:
+
+```
+$ git commit -qm "agent: implement feature"   # agent commits, does not push
+$ git status --porcelain                       # -> EMPTY
+```
+
+An agent that has committed its work locally and not yet pushed produces a **clean** porcelain output. So the veto passes, the lease is released, and the next `acquire` runs `reset --hard <base_ref>` + `clean -fd` (`github_workspace_service.py:155-159`) — which removes those commits from the tree. Recovery is reflog-only, in an object store shared with the live checkout. Committed-but-unpushed work is *exactly* what a dispatched agent holds between starting and opening a PR, so this is the common state, not an exotic one.
+
+Spec §3.2a's residual-risk paragraph (`:581-585`) frames the danger as "a clean tree at the sampling moment", implying the tree must merely *happen* to be quiescent. The sharper statement: the tree can be clean **because** the agent committed. Condition 5 therefore requires both halves:
+
+1. `git status --porcelain` is empty (no uncommitted or untracked changes), **and**
+2. `git rev-list --count <base_ref>..HEAD` is `0` (no unpushed commits).
+
+Either check failing, **or erroring**, retains the lease. This preserves the veto's one-directional contract: it can only prevent a release.
+
 - [ ] **Step 1: Rewrite the two tests that monkeypatch the deleted predicate**
+
+First extend `FakeGitRunner` (`:38-59`). Two gaps block the tests below:
+
+```python
+class FakeGitRunner:
+    def __init__(self):
+        self.calls: list[list[str]] = []
+        self.identities: dict[str, tuple[str, str, str] | None] = {}
+        self.statuses: dict[str, str] = {}
+        self.rev_counts: dict[str, str] = {}     # NEW: path -> unpushed commit count
+        self.failures: dict[str, str] = {}
+
+    async def __call__(self, args: list[str]) -> tuple[int, str]:
+        self.calls.append(args)
+        path = args[1] if len(args) > 1 and args[0] == "-C" else ""
+        command = args[2] if len(args) > 2 else ""
+        # NEW: check failures FIRST so a test can make status/rev-list exit nonzero.
+        # Previously the status branch returned before failures was consulted, so
+        # the fail-closed paths were untestable.
+        failure = self.failures.get(command)
+        if failure is not None:
+            return 1, failure
+        if command == "rev-parse":
+            identity = self.identities.get(path)
+            if identity is None:
+                return 128, "fatal: not a git repository"
+            return 0, "\n".join(identity) + "\n"
+        if command == "status":
+            return 0, self.statuses.get(path, "")
+        if command == "rev-list":                # NEW
+            return 0, self.rev_counts.get(path, "0") + "\n"
+        return 0, ""
+```
+
+`rev_counts` **must default to `"0"`**, not to the `return 0, ""` fall-through. An empty string is not `"0"`, so a bare fall-through would read as "unpushed work present" and every release test below would retain instead of release — a fixture that silently inverts the whole task. Run the existing suite after this change alone and confirm it is still green before writing new tests; moving the `failures` check first is a behaviour change to a shared fixture.
 
 `test_reclaim_releases_non_working_item_without_live_owner` (`:211`) and `test_reclaim_retains_non_working_item_with_live_owner` (`:236`) both `monkeypatch.setattr(github_dispatch_service, "slot_has_live_owner_session", ...)`. That attribute will not exist. Rewrite them as the five cases of the conjunction:
 
 ```python
+@pytest.fixture
+def dead_owner(monkeypatch):
+    """Make the recorded owner pid provably dead for the whole test.
+
+    Correction (2026-08-03): an earlier draft encoded 'dead' as the literal pid
+    4194303. pid_max here is 4194304, so that pid is legal and allocatable — on
+    the day the host assigns it, every release test below would flip to 'retain'
+    and the suite would report the backstop as working while it released
+    nothing. Patch the class so any service instance in the test is covered.
+    """
+    def _dead(self, pid):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(GithubWorkspaceService, "_read_proc_start", _dead)
+
+
 def _stale_lease(scope, tmp_path, item, **overrides):
     """A lease that satisfies every RELEASE condition unless overridden."""
     fields = dict(
@@ -684,7 +866,7 @@ def _stale_lease(scope, tmp_path, item, **overrides):
         leased_item_id=item.id,
         leased_at=datetime.utcnow() - timedelta(seconds=25000),  # > 6h
         lease_token="t1",
-        leased_owner_pid=4194303,       # dead
+        leased_owner_pid=123456,           # dead via the dead_owner fixture
         leased_owner_proc_start="123",
         lease_last_owner_contact_at=None,  # never spoke
     )
@@ -694,7 +876,7 @@ def _stale_lease(scope, tmp_path, item, **overrides):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["escalated", "failed", "merged", "completed"])
-async def test_reclaim_releases_dead_silent_clean_lease(db, tmp_path, status):
+async def test_reclaim_releases_dead_silent_clean_lease(db, tmp_path, dead_owner, status):
     scope, _, item = await _context(db, tmp_path / "repo")
     item.dispatch_status = status
     db.add(_stale_lease(scope, tmp_path, item))
@@ -707,6 +889,9 @@ async def test_reclaim_releases_dead_silent_clean_lease(db, tmp_path, status):
 
 @pytest.mark.asyncio
 async def test_reclaim_retains_lease_with_live_owner_process(db, tmp_path):
+    """Deliberately does NOT request the dead_owner fixture — it needs the real
+    /proc read against a genuinely live process (this one). Do not add
+    dead_owner here 'for consistency'; it would invert the test."""
     scope, _, item = await _context(db, tmp_path / "repo")
     item.dispatch_status = "escalated"
     service = GithubWorkspaceService(runner=FakeGitRunner())
@@ -721,7 +906,7 @@ async def test_reclaim_retains_lease_with_live_owner_process(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reclaim_retains_lease_within_threshold(db, tmp_path):
+async def test_reclaim_retains_lease_within_threshold(db, tmp_path, dead_owner):
     scope, _, item = await _context(db, tmp_path / "repo")
     item.dispatch_status = "escalated"
     db.add(_stale_lease(
@@ -733,7 +918,7 @@ async def test_reclaim_retains_lease_within_threshold(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reclaim_retains_lease_with_dirty_tree(db, tmp_path):
+async def test_reclaim_retains_lease_with_dirty_tree(db, tmp_path, dead_owner):
     """Git-quiescence is a VETO, never a cause (spec §3.2).
 
     Deck must not discard uncommitted work its own sweep can see.
@@ -749,7 +934,71 @@ async def test_reclaim_retains_lease_with_dirty_tree(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reclaim_retains_lease_with_recent_owner_contact(db, tmp_path):
+async def test_reclaim_retains_lease_with_unpushed_commits(db, tmp_path, dead_owner):
+    """A CLEAN tree can still hold the agent's whole deliverable.
+
+    Verified 2026-08-03: an agent that commits locally without pushing leaves
+    `git status --porcelain` EMPTY. The next acquire runs reset --hard + clean
+    -fd, so releasing here discards committed work with reflog-only recovery.
+    Committed-but-unpushed is the normal state between starting an item and
+    opening its PR, so this is the common case, not an edge one.
+    """
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    runner.statuses[str(tmp_path / "ws")] = ""        # clean, deliberately
+    runner.rev_counts[str(tmp_path / "ws")] = "3"     # three unpushed commits
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_command", ["status", "rev-list"])
+async def test_reclaim_retains_lease_when_quiescence_cannot_be_determined(
+    db, tmp_path, dead_owner, failing_command
+):
+    """The veto fails CLOSED. An unreadable worktree counts as occupied.
+
+    Same safe direction as an unknown pid in Task 2, and it matches the
+    established contract at github_workspace_service.py:271-274, where a
+    nonzero `status` exit raises rather than being read as clean.
+    """
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    runner.failures[failing_command] = "fatal: not a git repository"
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_checks_unpushed_commits_against_the_scope_base_ref(db, tmp_path, dead_owner):
+    """The comparison point is the scope's base_ref, not a hardcoded branch.
+
+    base_ref is per-scope and defaults to origin/HEAD (database.py:225).
+    Diffing against the wrong ref would count every commit on the base branch
+    as 'unpushed' and wedge the backstop permanently — Finding 19's shape.
+    """
+    scope, _, item = await _context(db, tmp_path / "repo")
+    scope.base_ref = "origin/feature/integration"
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope)
+
+    rev_list = [c for c in runner.calls if len(c) > 2 and c[2] == "rev-list"]
+    assert rev_list, "the conjunction never checked for unpushed commits"
+    assert "origin/feature/integration..HEAD" in rev_list[0]
+
+
+@pytest.mark.asyncio
+async def test_reclaim_retains_lease_with_recent_owner_contact(db, tmp_path, dead_owner):
     """A REPLACEMENT owner must not be mistaken for a dead one (spec §3.2a).
 
     The recorded pid is dead because the session restarted; the agent resumed
@@ -768,7 +1017,7 @@ async def test_reclaim_retains_lease_with_recent_owner_contact(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reclaim_releases_when_owner_contact_has_aged_out(db, tmp_path):
+async def test_reclaim_releases_when_owner_contact_has_aged_out(db, tmp_path, dead_owner):
     """The complement of the test above: contact older than the threshold ages out."""
     scope, _, item = await _context(db, tmp_path / "repo")
     item.dispatch_status = "escalated"
@@ -782,7 +1031,7 @@ async def test_reclaim_releases_when_owner_contact_has_aged_out(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reclaim_never_touches_a_leased_primary_workspace(db, tmp_path):
+async def test_reclaim_never_touches_a_leased_primary_workspace(db, tmp_path, dead_owner):
     """The conjunction is defined for WORKTREE workspaces (spec §3.2).
 
     A primary checkout is a human's working tree; git status there says nothing
@@ -797,7 +1046,7 @@ async def test_reclaim_never_touches_a_leased_primary_workspace(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ready_for_review_is_not_reclaimable(db, tmp_path):
+async def test_ready_for_review_is_not_reclaimable(db, tmp_path, dead_owner):
     """M12's guard, owed from PR A §6.
 
     ready_for_review is a real dispatch_status (github_verification_service.py:102)
@@ -872,29 +1121,51 @@ Replace `reclaim_stale` (`:121-146`) with:
                 and workspace.lease_last_owner_contact_at > threshold
             ):
                 continue
-            if not await self._worktree_is_clean(workspace):
+            if not await self._worktree_is_quiescent(scope, workspace):
                 continue
             await self.release(db, workspace.leased_item_id)
             released += 1
         return released
 
-    async def _worktree_is_clean(self, workspace: GithubWorkspace) -> bool:
+    async def _worktree_is_quiescent(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> bool:
         """A veto, never a cause: it can only prevent a release.
 
-        An unreadable worktree counts as dirty — same safe direction as an
-        unknown pid.
+        TWO checks, because a clean tree is not an empty one. An agent that
+        committed its work and has not pushed leaves `status --porcelain` empty
+        (verified 2026-08-03), and the next acquire would reset --hard it away.
+        So unpushed commits veto the release too.
+
+        Every failure path returns False. An unreadable worktree counts as
+        occupied — the same safe direction as an unknown pid in
+        _owner_process_is_alive, and the same contract as the adoption check at
+        :271-274, which raises on a nonzero `status` exit rather than reading
+        the empty output as clean.
         """
         return_code, output = await self._runner(
             ["-C", workspace.path, "status", "--porcelain"]
         )
         if return_code != 0:
             return False
-        return not output.strip()
+        if output.strip():
+            return False
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        if return_code != 0:
+            return False
+        return output.strip() == "0"
 ```
 
 Add `from datetime import datetime, timedelta` and `from app.config import settings` to the module imports.
 
 Note condition 4 as implemented is "no contact, **or** contact older than the threshold" — expressed as "skip if contact is *recent*". That matches spec §3.2a exactly.
+
+Note also that `_worktree_is_quiescent` takes `scope`, not just `workspace`: `base_ref` lives on the scope (`database.py:225`, default `origin/HEAD`) and is per-scope, so it cannot be a module constant. `reclaim_stale` already has `scope` in hand.
+
+The `return output.strip() == "0"` on the last line is deliberately a positive test rather than `!= "0"` being falsy-tolerant: if `rev-list` ever succeeds with empty output, `"" == "0"` is False, so the lease is retained. Unparseable output must not read as "no work".
 
 - [ ] **Step 5: Delete the predicate and its dispatch gate**
 
@@ -1085,6 +1356,85 @@ async def test_promote_deferred_retry_waits_for_the_lease(db):
 
 Also write, in `test_github_verification_service.py` (or wherever `report_pr_opened` is tested), a test that a recoverable escalated item with `retry_requested_at` set has it **cleared** by `report_pr_opened` — otherwise a stamp left behind re-pends the item the next time it escalates, weeks later, as a re-dispatch nobody requested.
 
+- [ ] **Step 2b: The five full-flow tests from spec §5.2 — do not skip these**
+
+**Correction (2026-08-03, impl-agent review): the unit tests above are necessary but not sufficient.** They each poke one function. Spec §5.2 (`:817-847`) specifies five *flow* tests, and it names the first one "the highest-value test in this PR" — because the defect this task fixes is not visible in any single function. `reset_for_retry` looks correct in isolation; the harm emerges from the composition (re-pend → non-terminal → release refused → `acquire` early-return → **`reset_workspace` never runs** → new owner inherits a dirty tree). A suite that only unit-tests the parts would stay green through a regression that restores the whole defect.
+
+Write all five. The first, in full, because its assertions are the specification:
+
+```python
+@pytest.mark.asyncio
+async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
+    """Spec §5.2: the highest-value test in this PR.
+
+    The load-bearing assertion is that reset_workspace NEVER RAN. Everything
+    else here can be right while isolation is silently lost: acquire()'s early
+    return hands back the existing lease, so a new owner starts on the previous
+    attempt's tree with no error anywhere.
+    """
+    _, _, scope = await _team(db)
+    resets: list[str] = []
+
+    async def _spy_reset(db_, scope_, workspace_):
+        resets.append(workspace_.path)
+
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", _spy_reset)
+
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=913,
+        issue_title="retry flow",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    workspace = await github_workspace_service.acquire(db, scope, item)
+    first_token = workspace.lease_token
+    assert first_token is not None
+    assert resets == [workspace.path]          # a real acquisition DOES reset
+
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "plan_blocked"
+    await db.commit()
+
+    # Re-pend the way production does it: via the watcher, no human involved.
+    github_dispatch_service.reset_for_retry(item)
+    await db.commit()
+
+    assert item.dispatch_status == "escalated"          # still not dispatchable
+    assert item.retry_requested_at is not None
+    assert workspace.leased_item_id == item.id          # lease STILL HELD
+    assert workspace.lease_token == first_token         # and on the SAME token
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 0
+    assert resets == [workspace.path]                   # <-- NO second reset
+
+    # Now the legitimate owner releases, and only then does the retry proceed.
+    await github_workspace_service.release_by_token(
+        db, item.id, lease_token=first_token
+    )
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 1
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+
+    reacquired = await github_workspace_service.acquire(db, scope, item)
+    assert reacquired.lease_token != first_token        # a NEW attempt
+    assert len(resets) == 2                             # and it DID reset
+```
+
+`_team` provisions the scope's workspace; check the existing fixture's shape and adapt the `acquire` call if it needs a `FakeGitRunner`-backed service instance rather than the module singleton — `acquire` calls `reset_workspace`, which shells out to git, so the spy above is what keeps this a unit test.
+
+Then the remaining four from spec §5.2 (`:825-847`), one test each:
+
+1. **Via the watcher, not the operator.** Same flow, but trigger the re-pend through watcher reconcile with an advanced `github_updated_at` (`github_watcher_service.py:74-78`) instead of calling `reset_for_retry`. The point of the finding is that no human is involved, so a test that calls the function directly cannot see it. Companion case: the manual `POST .../retry` endpoint reaches the same deferred state.
+2. **`escalation_reason` survives, and recovery still works.** Escalate `plan_blocked`, lease held, request retry → assert `escalation_reason` is **unchanged**, then assert `report_pr_opened` still succeeds through `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:50-59`). Companion: a re-escalation while the stamp is set still no-ops and leaves `status_note` intact (`_apply_escalation`'s guard, `github_dispatch_service.py:774-779`). This pair pins the trap a status-only deferral walks into — which is *why* the whole reset defers rather than just the status.
+3. **Recovery clears the stamp.** Stamp set, lease held, owner reports `pr_opened` → `retry_requested_at` is NULL afterwards. Without this, a stamp left behind re-pends the item at its next unrelated escalation.
+4. **The sweep is not inside `dispatch_pending` — scheduler level.** Promote via `poll_scope`, run a **full scheduler pass**, and assert the retried item's `routing_method` is `"label"` (not `"leader_fallback"`) for an issue carrying a slot's `area_labels`. Only a scheduler-level test can see this; the unit tests above would pass with the sweep in the wrong place. This is the regression Step 6's placement exists to avoid.
+
+If any of these five cannot be written because a fixture does not reach that far, **stop and report which one** rather than substituting a unit test for it. A missing flow test here is how the defect returns.
+
 - [ ] **Step 3: Run and watch them fail**
 
 Run: `python -m pytest tests/agent_teams/test_github_dispatch_service.py -k retry -v`
@@ -1265,7 +1615,10 @@ Cover all six behaviours. Find the existing `/dispatch-status` test file first (
 5. Release while `dispatch_status == "dispatched"` → 409 naming the current status, lease retained. Repeat for `verifying` and `ready_for_review`.
 6. Release with a **dirty** tree (`FakeGitRunner().statuses[...] = " M src/foo.c\n"`) on an `escalated` item → 409, lease retained, response names the dirty paths. Pair with the clean-tree case → 200.
 7. A `failed` item **with a live pane** can release → 200. Dispatch retains the lease on a failed launch when `tmux_target` is not None (`github_dispatch_service.py:282-285`) precisely because something may be running in it, so that state must have a release path.
-8. Any **other** report status (`triaging`) stamps `lease_last_owner_contact_at` on the workspace row.
+8. Any **other** report status (`triaging`) **carrying the current token** stamps `lease_last_owner_contact_at` on the workspace row.
+9. A `triaging` report carrying a **stale** token leaves `lease_last_owner_contact_at` unchanged **and still applies its own status change** (assert `status_note` was written). Stale evidence must not extend a lease, and refusing the evidence must not fail the report.
+10. Release with a clean tree but **unpushed commits** (`runner.rev_counts[...] = "2"`) on a `merged` item → 409, lease retained, message names the base ref. This is the same veto as Task 4's backstop, reached through the agent instead of the sweep; both paths must refuse.
+11. Release when `git status` **errors** (`runner.failures["status"] = "fatal: ..."`) → 409, lease retained. The veto fails closed here exactly as it does in the backstop.
 
 - [ ] **Step 2: Run and watch them fail**
 
@@ -1283,6 +1636,8 @@ class DispatchStatusReport(BaseModel):
     reporting_slot_id: Optional[int] = None
     lease_token: Optional[str] = None
 ```
+
+It stays `Optional` at the schema level even though release requires it, because the same model serves every report status and pre-G2 callers omit it. The **endpoint** enforces presence for `workspace_released` (Step 5); the contact stamp treats absence as "no evidence to record" rather than an error (Step 6). Two different contracts on one optional field, deliberately — an acting operation must reject an unproven claim, a recording one may only decline to record.
 
 - [ ] **Step 4: Implement `release_by_token`**
 
@@ -1351,14 +1706,14 @@ In `agent_teams.py`, in `report_dispatch_status`, before the final `else`:
             )
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
         if workspace is not None:
-            dirty = await github_workspace_service.dirty_paths(workspace)
-            if dirty:
+            blocker = await github_workspace_service.release_blocker(scope, workspace)
+            if blocker is not None:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "workspace has uncommitted changes and will not be "
-                        f"released: {dirty}. Commit and push, or report the "
-                        "situation in status_note and leave the lease held."
+                        f"workspace will not be released: {blocker}. Commit and "
+                        "push, or report the situation in status_note and leave "
+                        "the lease held."
                     ),
                 )
         try:
@@ -1381,23 +1736,108 @@ _RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 
 It goes in the service, not the endpoint, because Task 8 also needs it and the API layer already imports from the service — defining it in `agent_teams.py` would force the reverse import.
 
-Add the two small helpers to `github_workspace_service.py` — `get_leased_workspace(db, item_id)` returning the row or None, and `dirty_paths(workspace)` returning the stripped `git status --porcelain` output (empty string when clean, and `""` for a `kind == "primary"` workspace, which is never leased and must not be inspected).
+Add two helpers to `github_workspace_service.py`. `get_leased_workspace(db, item_id)` returns the row or None. `release_blocker(scope, workspace)` is the **human-readable** side of the same veto Task 4 uses, so the two cannot drift apart:
+
+```python
+    async def release_blocker(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> str | None:
+        """Why this workspace must not be released, or None if it may be.
+
+        The same two-part veto as _worktree_is_quiescent (Task 4), but it names
+        the blocker so the agent's 409 can say what to fix. Both must stay in
+        agreement: protecting work from Deck's own sweep while letting an agent
+        discard it by reporting has no justification.
+
+        Fails CLOSED — an unreadable worktree blocks the release.
+        """
+        if workspace.kind == "primary":
+            return None      # never leased; must not inspect a human's tree
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        if return_code != 0:
+            return output.strip() or "workspace status could not be determined"
+        if output.strip():
+            return f"uncommitted or untracked changes:\n{output.strip()}"
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        if return_code != 0:
+            return output.strip() or "unpushed commits could not be determined"
+        if output.strip() != "0":
+            return (
+                f"{output.strip()} commit(s) not pushed to {scope.base_ref}; "
+                "the next dispatch would reset --hard them away"
+            )
+        return None
+```
+
+Note the reviewer's point applied here deliberately: the earlier draft returned a *string* of dirty paths and the endpoint tested its truthiness, so a nonzero `git` exit returned `""` → falsy → **release allowed on an unreadable worktree**. Returning `str | None` with an explicit message on every failure path removes that reading entirely. Write the test for it: `runner.failures["status"] = "fatal: ..."` on a `workspace_released` report must produce **409**, not a release.
 
 - [ ] **Step 6: Stamp owner contact on every report**
 
 Still in `report_dispatch_status`, after the branch chain and before `await db.refresh(item)`:
 
 ```python
-    # "Has the thing holding this lease spoken recently?" — the question the
+    # "Has the thing holding THIS LEASE spoken recently?" — the question the
     # backstop actually needs (§3.2a). A replacement owner that resumed the item
     # reports; a crashed one goes quiet and ages out. Independent of tmux,
     # session discovery and last_seen_at, so Finding 17's staleness cannot
     # corrupt it.
     if report.status != "workspace_released" and report.reporting_slot_id == item.owner_slot_id:
-        await github_workspace_service.touch_owner_contact(db, item.id)
+        await github_workspace_service.touch_owner_contact(
+            db, item.id, lease_token=report.lease_token
+        )
 ```
 
-`touch_owner_contact(db, item_id)` sets `lease_last_owner_contact_at = utcnow()` on the leased workspace if there is one, and commits. It must be a no-op when nothing is leased.
+**Correction (2026-08-03, impl-agent review): the stamp must be attempt-scoped, exactly like the release.** The draft stamped contact on any owner-slot report for the item. But `lease_last_owner_contact_at` is backstop **condition 4** — evidence that keeps a lease held. Item-scoped evidence on an attempt-scoped lease is Finding 18 again, and the direction is unsafe: a stale report from a *previous* attempt refreshes the *current* attempt's contact clock, so a genuinely dead owner's lease is held indefinitely and the backstop never fires. It is the same defect as `release()` keying on `leased_item_id`, arriving through the evidence rather than the action. Note the family: the token answers *which acquisition?*, and every signal feeding a lease decision has to answer that question rather than *which item?*
+
+```python
+    async def touch_owner_contact(
+        self, db: AsyncSession, item_id: int, *, lease_token: str | None = None
+    ) -> None:
+        """Stamp owner contact on the lease, if the reporter holds it.
+
+        No-op when nothing is leased. Also a no-op on a token mismatch, and
+        DELIBERATELY not an error: this is a side effect of a report whose own
+        branch already succeeded, so raising here would fail a legitimate
+        status update. Release is the operation that must reject a stale token
+        (release_by_token); recording evidence just declines to record.
+        """
+        workspace = await self.get_leased_workspace(db, item_id)
+        if workspace is None:
+            return
+        if workspace.lease_token is not None and lease_token != workspace.lease_token:
+            logger.info(
+                "ignoring owner contact for item %s: token mismatch (lease is "
+                "on a different attempt)",
+                item_id,
+            )
+            return
+        workspace.lease_last_owner_contact_at = datetime.utcnow()
+        workspace.updated_at = workspace.lease_last_owner_contact_at
+        await db.commit()
+```
+
+`github_workspace_service.py` has **no module logger** — verified 2026-08-03, unlike `github_dispatch_service.py:34`. Add the standard two lines at the top of the module:
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+```
+
+The `workspace.lease_token is not None` guard is what keeps pre-migration leases working: their token is NULL, they cannot be matched, and they are already unreclaimable by design (spec §3.2, `:526-528`), so refusing to stamp them changes nothing.
+
+This makes `lease_token` **required for the contact stamp to work at all**, so the brief must carry it for every report, not only for release — which Step 7 already requires. Two tests:
+
+- an owner report carrying the current token stamps `lease_last_owner_contact_at`;
+- an owner report carrying a **stale** token leaves it unchanged, and the report's own branch still succeeds (assert the status change it was supposed to make actually happened).
+
+The second test is the load-bearing one. Without it, a token mismatch that raised would look like correct strictness while breaking every legitimate report on a re-acquired workspace.
 
 - [ ] **Step 7: Teach the brief to name the token**
 
@@ -1456,8 +1896,13 @@ Implements spec §2.4 — read it, including the two implementation notes at the
 
 The load-bearing one is the **skew**: a live pid with an expired TTL. Fixtures hide this class of defect by construction, because every test supplies its own timestamps — so it must be built deliberately, not as a plainly-live or plainly-offline object.
 
+**Correction (2026-08-03, impl-agent review): two fixture bugs in the draft, both of which would have produced a green-looking test that proves nothing.**
+
+1. `provider="claude"` is **not** a wake provider. `TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"}` (`agent_mail_service.py:44`) and `_session_can_nudge` requires `session.provider in TMUX_WAKE_PROVIDERS` (`:598`). With `"claude"` the assertion fails on the provider check, so the test would fail for a reason unrelated to the status literal it exists to pin — and "fix" by weakening the assertion. Use `provider="claude-code"`.
+2. Liveness must be **monkeypatched**, not inferred from a chosen pid number. The draft used `pid=4194303` elsewhere as "dead" and `os.getpid()` as "alive". `os.getpid()` is genuinely fine, but a hardcoded dead pid is not: it is only dead until the host allocates it (`pid_max` is 4194304 here, so 4194303 is a legal, allocatable pid), and the test would then invert with no code change. Monkeypatch `_pid_is_running` for the dead cases.
+
 ```python
-def test_observed_session_past_ttl_with_live_pid_reads_connected():
+def test_observed_session_past_ttl_with_live_pid_reads_observed():
     """Finding 17: five live agents displayed as offline.
 
     last_seen_at is refreshed only by sync_observed_sessions, whose callers are
@@ -1470,7 +1915,7 @@ def test_observed_session_past_ttl_with_live_pid_reads_connected():
         member_id=1,
         source="observed",
         mailbox_status="observed",
-        pid=os.getpid(),
+        pid=os.getpid(),          # genuinely alive: this test process
         last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
     )
 
@@ -1484,13 +1929,16 @@ def test_revived_observed_session_is_still_nudgeable():
     (agent_mail_service.py:600). Reviving these rows as "connected" would make
     every one of them un-nudgeable — turning a display fix into a delivery
     outage, and silently defeating Task 13's ambiguity check.
+
+    provider MUST be a member of TMUX_WAKE_PROVIDERS (:44) or this test fails
+    on the provider check instead of on the status literal it exists to pin.
     """
     service = agent_mail_service
     now = datetime.utcnow()
     session = MailAgentSession(
         member_id=1,
         source="observed",
-        provider="claude",
+        provider="claude-code",       # in TMUX_WAKE_PROVIDERS; "claude" is NOT
         tmux_target="tizonia:1.0",
         mailbox_status="observed",
         pid=os.getpid(),
@@ -1498,11 +1946,45 @@ def test_revived_observed_session_is_still_nudgeable():
     )
 
     assert service._session_can_nudge(session, now) is True
+
+
+def test_observed_session_past_ttl_with_dead_pid_reads_offline(monkeypatch):
+    """Fails closed. Monkeypatched rather than using a 'probably unused' pid:
+    any specific number is allocatable, and this test would silently invert
+    the day the host assigns it."""
+    service = agent_mail_service
+    monkeypatch.setattr(service, "_pid_is_running", lambda pid: False)
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=123456,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert service._effective_status(session, now) == "offline"
 ```
 
-Then one test each for: expired + dead pid → `offline`; expired + NULL pid → `offline`; expired + unreadable `/proc` → `offline` (fail closed); and `mailbox_status == "offline"` + **live** pid + observed source → `offline` (an explicit disconnect wins). Also one within-TTL case asserting the status is returned unchanged.
+Then, following that same shape, one test each for:
 
-That last one is the trap: it is what fails if you edit the wrong branch.
+- expired + **NULL** pid → `offline`. No monkeypatch needed: `_pid_is_running` returns `False` for a falsy pid (`:604-605`).
+- expired + `mailbox_status == "offline"` + observed source with a **live** pid → `offline`. An explicit disconnect wins; this row never reaches the TTL branch because `:619-620` returns first.
+- **within** TTL → the row's `mailbox_status` returned unchanged.
+- `source == "mcp"` + expired + live pid → still `"connected"`. This pins the branch you must **not** touch; if you edit the mcp path instead, this is what fails.
+
+The within-TTL case and the mcp case are the traps: they are what fail if you edit the wrong branch, and neither is about Finding 17 at all.
+
+**On error behaviour, note what `_pid_is_running` actually does** (`:603-612`) — it is `os.kill(pid, 0)`, **not** a `/proc` read, and it is a different implementation from Task 2's `_owner_process_is_alive` on purpose:
+
+| Condition | `_pid_is_running` | Why |
+|---|---|---|
+| falsy pid | `False` | no evidence → offline |
+| `ProcessLookupError` | `False` | dead |
+| `PermissionError` | **`True`** | the process exists, owned by another user |
+| other `OSError` | `False` | fail closed |
+
+`PermissionError → True` is verified (`os.kill(1, 0)` raises it on this host). Do **not** "simplify" the two liveness helpers into one: this one fails **closed** (an honest UI), and Task 2's fails **open** (retain a resource). Same question, deliberately opposite error contracts, as spec §3.2 states.
 
 **A correction to the spec you must apply here.** §2.4's table says the revived value is `connected`, borrowing the word from the mcp branch. For an **observed** row that is wrong. Observed sessions are written with `mailbox_status = "observed"` (`:317`, `:393`), and `_session_can_nudge` tests `_effective_status(...) == "observed"` exactly, so returning `connected` would make every revived row fail that test and stop being nudgeable. Return the row's own `mailbox_status` instead — which is what the within-TTL path already does (`:632`). The table's *intent* (row 2: not `offline`) is preserved; only the literal is corrected. Verify with `grep -n "_effective_status" app/ -r` that no other caller distinguishes the two values: at the time of writing all seven either compare against `"offline"` or accept `{"connected", "observed"}` together.
 
@@ -1518,10 +2000,10 @@ In `_effective_status`, in the TTL-expiry branch (`:628-631`) **only**:
         if session.last_seen_at < now - timedelta(seconds=ttl):
             # An observed row carries a pid too. Resolving on it is what the mcp
             # branch already does; the asymmetry is why five live agents read as
-            # offline (Finding 17). Fails closed on a NULL or unreadable pid —
-            # _pid_is_running returns False for both — because here the cost of
-            # guessing "alive" is a UI that lies, and possibly a nudge into a
-            # dead pane.
+            # offline (Finding 17). Fails closed on a NULL pid or an os.kill
+            # error — _pid_is_running returns False for both — because here the
+            # cost of guessing "alive" is a UI that lies, and possibly a nudge
+            # into a dead pane.
             #
             # Returns the row's own mailbox_status, not the literal "connected":
             # observed rows carry "observed", and _session_can_nudge tests for
@@ -1536,7 +2018,7 @@ An explicit `mailbox_status == "offline"` never reaches this branch — it retur
 
 **Do not touch the first block (`:615-619`).** It gives mcp rows a pre-emptive live-pid check that overrides an explicit `mailbox_status == "offline"`. Extending it to observed rows would satisfy the table's rows 2–4 while silently inverting row 5. The only edit is inside the TTL-expiry branch.
 
-`_pid_is_running` is unchanged and stays the single implementation for both sources; it already returns `False` for `None` (`:603-605`) and for an unreadable `/proc` (`except OSError`, `:611-612`), so rows 3 and 4 need no new guard.
+`_pid_is_running` is unchanged and stays the single implementation for both sources; it already returns `False` for a falsy pid (`:603-605`) and for an `OSError` from `os.kill` (`:611-612`), so rows 3 and 4 need no new guard. It is `os.kill(pid, 0)` rather than a `/proc` read — which is why it needs no pid-reuse guard of its own here, and also why it cannot be shared with Task 2's helper, which does read `/proc` in order to compare start times.
 
 - [ ] **Step 4: Run the mail suite and the full backend suite**
 
@@ -1710,15 +2192,35 @@ Expected: FAIL — `AttributeError: ... has no attribute 'remind_held_leases'`
 
 `_RELEASABLE_STATUSES` is already at module scope in this file from Task 6.
 
-- [ ] **Step 4: Call it from `monitor_dispatched`**
+- [ ] **Step 4: Call it from the scheduler, NOT from inside `monitor_dispatched`**
 
-At the end of `monitor_dispatched`, immediately before its final `await db.commit()` (`:663`):
+**Correction (2026-08-03, impl-agent review): placing this inside `monitor_dispatched` makes it unreachable in the exact case it exists for.** `monitor_dispatched` opens with an early return:
 
 ```python
-        await self.remind_held_leases(db, scope)
+enabled = sorted([slot for slot in preset_slots if slot.enabled], key=...)
+if not enabled:
+    return                      # github_dispatch_service.py:598-599
+leader = enabled[0]
 ```
 
-`monitor_dispatched` selects `dispatch_status == "dispatched"` items only (`:614-621`), so its existing loop can never see a terminal item — the reminder is a separate pass over a disjoint set, not a branch inside that loop.
+A reminder placed at the end of that function never runs when **no slot is enabled** — and "the operator disabled the slots while a terminal item still holds a lease" is precisely a forgot-to-report hold that nothing else bounds. Worse, the function's whole body assumes a leader exists, so the reminder would inherit a precondition it does not need: reminding an owner that its lease is held has nothing to do with leader presence.
+
+Call it from the scheduler instead, as its own step beside `monitor_dispatched` (`github_dispatch_scheduler.py:147`):
+
+```python
+            await self.dispatch.monitor_dispatched(db, scope, slots)
+            await self.dispatch.remind_held_leases(db, scope)
+            await self.verification.process_scope(db, scope, client=client)
+```
+
+`remind_held_leases` therefore takes `(db, scope)` only — no `preset_slots` — which is what the Interfaces block above already specifies. It commits its own work rather than relying on `monitor_dispatched`'s final commit.
+
+Two consequences worth stating, because both are the point rather than side effects:
+
+- It runs on every scheduler pass regardless of slot state. Its own `lease_release_reminded_at` throttle is what bounds message volume; nothing else gates it.
+- It is a separate pass over a **disjoint** set. `monitor_dispatched` selects `dispatch_status == "dispatched"` items only (`:614-621`), so its loop can never see a terminal item. This is not a branch inside that loop and must not be refactored into one.
+
+Add a test that the reminder fires **with no enabled slots** — `preset_slots` empty or all disabled — since that is the regression this correction prevents and it would otherwise pass silently through any test that happens to have a leader.
 
 - [ ] **Step 5: Run everything**
 
@@ -1770,8 +2272,11 @@ Find the existing workspace-endpoint tests (`grep -rln "workspaces" backend/test
 1. `GET .../workspaces` exposes `lease_token`, `lease_last_owner_contact_at`, `lease_release_reminded_at` and a computed `lease_age_seconds` for a leased workspace, and nulls for an unleased one.
 2. Force-release with the **matching** token → 200, lease returned.
 3. Force-release with a **stale** token → 409 whose detail shows **both** tokens.
-4. Force-release with a **dirty** tree → 200 and the lease still released. This is the deliberate difference from agent-reported release: the operator endpoint exists precisely for the case where the normal path refuses, so a dirty-tree veto here would make it useless. The response must name the discarded paths.
+4. Force-release with a **dirty** tree → 200 and the lease still released, with `discarded_paths` naming the dirty files. This is the deliberate difference from agent-reported release: the operator endpoint exists precisely for the case where the normal path refuses, so a dirty-tree veto here would make it useless.
 5. Force-release on an **unleased** workspace → 409, not a 500.
+6. Force-release with **unpushed commits** → 200, released, and `discarded_paths` mentions the unpushed commits. Same asymmetry as test 4: the backstop and the agent path veto, the operator path reports and proceeds.
+7. Force-release **omitting** `expected_lease_token` → 422 from pydantic. Pins the field as required; an optional token would compare `None` against a pre-migration lease's NULL token and match.
+8. Force-release **omitting** `reason` → 422.
 
 - [ ] **Step 2: Run and watch them fail**
 
@@ -1792,7 +2297,29 @@ and populate them in `_workspace_response` (`agent_teams.py:160-175`), computing
 
 - [ ] **Step 4: Add the force-release endpoint**
 
-Model it on `reprobe_github_workspace` (`agent_teams.py:569-607`) — same 404 checks, same `_conflict` helper, same `_workspace_response` return. Take the expected token in the request body.
+Model it on `reprobe_github_workspace` (`agent_teams.py:569-607`) — same 404 checks, same `_conflict` helper.
+
+**Correction (2026-08-03, impl-agent review): the draft used `body.expected_lease_token` and a `_workspace_response` return without defining either contract.** Neither can be left to the implementer: the request model determines what the CAS guard compares, and `_workspace_response` has no field able to carry the discarded paths that the commit message and test 4 both promise. Define both explicitly.
+
+Request and response models, in `schemas.py` beside `GithubWorkspaceResponse` (`:2235-2253`):
+
+```python
+class GithubWorkspaceForceReleaseRequest(BaseModel):
+    expected_lease_token: str          # REQUIRED — the CAS guard is the point
+    reason: str                        # REQUIRED — why a human overrode the protocol
+    requested_by: Optional[str] = None # operator identity, when the caller knows it
+
+
+class GithubWorkspaceForceReleaseResponse(BaseModel):
+    workspace: GithubWorkspaceResponse
+    released_item_id: int
+    discarded_paths: Optional[str] = None   # git status --porcelain at force time
+    unpushed_commits: Optional[int] = None  # commits ahead of base_ref at force time
+```
+
+`expected_lease_token` is `str`, not `Optional[str]`: an absent token would make the CAS guard vacuous, and `None == workspace.lease_token` is *true* for a pre-migration lease — so an omitted field would silently force exactly the leases whose owner is least knowable. `reason` is required because this endpoint discards another party's work; an unexplained force is the thing the audit log exists to prevent.
+
+On identity: there is **no authentication on this router** (§3.1b records the same gap for `/dispatch-status`), so `requested_by` is a self-asserted label, not a verified principal. Log it as such and do not build any authorization on it. Do not invent a header-based or session-based identity to fill the gap — endpoint-wide auth is listed as owed below and is a larger change than this task.
 
 ```python
     if workspace.leased_item_id is None:
@@ -1800,17 +2327,33 @@ Model it on `reprobe_github_workspace` (`agent_teams.py:569-607`) — same 404 c
             "Workspace is not leased",
             block_code="workspace_not_leased",
         )
-    if workspace.lease_token != body.expected_lease_token:
+    if workspace.lease_token != request.expected_lease_token:
         raise _conflict(
-            f"Lease token mismatch: expected {body.expected_lease_token}, "
+            f"Lease token mismatch: expected {request.expected_lease_token}, "
             f"current {workspace.lease_token}. Refresh and re-check before forcing.",
             block_code="lease_token_mismatch",
         )
+    # Capture what is about to be discarded BEFORE releasing — after release the
+    # next acquire may reset the tree, and then nothing can report what was lost.
+    scope = await db.get(TeamGithubScope, workspace.scope_id)
+    blocker = await github_workspace_service.release_blocker(scope, workspace)
+    released_item_id = workspace.leased_item_id
+    logger.warning(
+        "force-release workspace %s (item %s) by %s: %s; discarding: %s",
+        workspace.id,
+        released_item_id,
+        request.requested_by or "unknown",
+        request.reason,
+        blocker or "nothing (tree was quiescent)",
+    )
+    await github_workspace_service.release(db, released_item_id)
 ```
 
 The compare-and-swap is the point (§6 mitigation 3). An operator clicks from a page rendered some time ago; between render and click the lease may have been released and re-acquired by a **new** owner. A workspace-id-only force-release would then destroy a live lease — the same stale-identity failure as §3.1a, arriving through the operator instead of the agent.
 
-Log who forced it and what was discarded, at `logger.warning`. Do **not** call `reset_workspace` here — release only. The next `acquire` resets, and doing it twice would discard the operator's chance to inspect the tree first.
+Note the ordering above is load-bearing: `release_blocker` is called *before* `release`, and the `blocker` string is what populates `discarded_paths`. Reversing those two lines yields a response that always reports nothing discarded — a report that reads as reassuring precisely when it is least true.
+
+Do **not** call `reset_workspace` here — release only. The next `acquire` resets, and doing it twice would discard the operator's chance to inspect the tree first.
 
 - [ ] **Step 5: Run the suite**
 
@@ -1926,61 +2469,865 @@ Implements spec §4.1.
 
 `AUTO_NUDGE_COOLDOWN_SECONDS = 30` over an in-memory `_last_auto_nudge_at` dict. Under per-item spawn the nudge was decorative — the prompt was passed at spawn. Under one-session-per-slot it is the **only** thing that makes the agent read the brief, so any unrelated message to that member within the prior 30s (an escalation broadcast, a blocker-merged notification) silently drops the brief's wake.
 
-- [ ] **Step 1: Write the failing test** — an unrelated message 5s before dispatch must not suppress the brief's nudge. The existing coverage (`test_send_message_auto_nudge_is_throttled`) tests the throttle as a *feature*, never as a delivery risk; keep it passing.
-- [ ] **Step 2: Run and watch it fail.**
-- [ ] **Step 3: Add a bypass parameter** to the auto-nudge path so dispatch-brief sends skip the cooldown. Do not remove or weaken the general throttle — it exists to stop nudge storms.
-- [ ] **Step 4: Run both tests, then the full suite.**
-- [ ] **Step 5: Commit.**
+**Interfaces:**
+- Produces: `auto_nudge_members(db, member_ids, *, bypass_cooldown: bool = False)`; `send_message(..., bypass_nudge_cooldown: bool = False)`; `send_direct_message(..., bypass_nudge_cooldown: bool = False)`.
+
+- [ ] **Step 1: Write the failing test**
+
+Model the fixture on `test_send_message_auto_nudge_is_throttled` (`tests/agent_mail/test_registry.py:698-740`) — it already fakes `discover_agent_sessions`, `subprocess.run` and `time.sleep`, which is everything a nudge needs. Note two things about that fixture and copy them exactly:
+
+- The recipient is the **observed** member that `sync_observed_sessions` creates, obtained with `(await svc.list_team(db))[0]` (`:726`). Do **not** reach for `get_or_create_slot_member` — no slot exists in this fixture.
+- `calls.clear()` runs after the sync, so the count starts at zero. **One nudge is two tmux calls** (`send-keys -l <prompt>`, then `send-keys Enter`), which is why the original asserts `len(tmux_calls) == 2` for two sends: the first nudged, the second was throttled.
+
+```python
+@pytest.mark.asyncio
+async def test_dispatch_brief_nudge_bypasses_the_cooldown(db, svc, tmp_path, monkeypatch):
+    """Spec §4.1. Under one-session-per-slot the nudge is the ONLY thing that
+    makes the agent read the brief, so an unrelated message moments earlier
+    must not silently consume the brief's wake.
+
+    Under per-item spawn this was decorative — the brief was the spawn prompt.
+    That is why the existing throttle test treats the cooldown purely as a
+    feature: it was written when suppressing a nudge cost nothing.
+    """
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(
+            stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1
+        )
+
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: fake
+    )
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    calls.clear()
+
+    # An unrelated message — an escalation broadcast, a blocker-merged note.
+    # This arms the 30s cooldown for this member.
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="blocker merged",
+        body_markdown="fyi",
+    )
+    assert len([c for c, _ in calls if c[0] == "tmux"]) == 2  # one nudge
+
+    # The dispatch brief, moments later, MUST still wake the pane.
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="Autonomous dispatch: issue #900",
+        body_markdown="brief",
+        bypass_nudge_cooldown=True,
+    )
+
+    assert len([c for c, _ in calls if c[0] == "tmux"]) == 4  # two nudges
+```
+
+Also add the negative, in the same file, so the bypass cannot silently become the default — an *ordinary* second send within the cooldown must still be suppressed:
+
+```python
+@pytest.mark.asyncio
+async def test_ordinary_send_still_throttled_after_a_bypassed_brief(
+    db, svc, tmp_path, monkeypatch
+):
+    """The bypass is per-call, not a mode. Sending a brief must not leave the
+    member permanently un-throttled — the brief still ARMS the window.
+    """
+    # ... identical fixture to the test above ...
+    await svc.send_direct_message(
+        db, recipient_member_id=recipient.id, subject="brief",
+        body_markdown="b", bypass_nudge_cooldown=True,
+    )
+    assert len([c for c, _ in calls if c[0] == "tmux"]) == 2
+
+    await svc.send_direct_message(
+        db, recipient_member_id=recipient.id, subject="chatter", body_markdown="c",
+    )
+    assert len([c for c, _ in calls if c[0] == "tmux"]) == 2  # unchanged
+```
+
+That second test is what pins the "records but does not read" semantics in Step 3. Without it, an implementation that skips the `self._last_auto_nudge_at[member_id] = now` write on the bypass path would pass the first test and silently disable the throttle for whatever the brief is followed by.
+
+- [ ] **Step 2: Run and watch it fail**
+
+Run: `python -m pytest tests/agent_mail/test_registry.py -k bypass -v`
+Expected: FAIL — `TypeError: send_direct_message() got an unexpected keyword argument 'bypass_nudge_cooldown'`.
+
+- [ ] **Step 3: Thread the bypass through the three layers**
+
+`AUTO_NUDGE_COOLDOWN_SECONDS = 30` (`:42`) stays exactly as it is. Add a parameter, do not weaken the constant — it exists to stop nudge storms and every other caller still wants it.
+
+In `auto_nudge_members` (`:1127`):
+
+```python
+    async def auto_nudge_members(
+        self,
+        db: AsyncSession,
+        member_ids: set[int],
+        *,
+        bypass_cooldown: bool = False,
+    ) -> list[dict[str, str | int]]:
+        ...
+        for member_id in sorted(member_ids):
+            last_nudge_at = self._last_auto_nudge_at.get(member_id)
+            if (
+                not bypass_cooldown
+                and last_nudge_at is not None
+                and last_nudge_at > cooldown_cutoff
+            ):
+                continue
+```
+
+The bypass still **records** `self._last_auto_nudge_at[member_id] = now` at `:1146` — it skips reading the cooldown, not writing it. Otherwise a brief would leave the next ordinary message un-throttled.
+
+Then pass it through `send_message` (the call at `:862`) and `send_direct_message` (`:887-909`), defaulting to `False` in both signatures. Finally, in `github_dispatch_service._send_dispatch_brief_to_slot` (`:531-545`), set `bypass_nudge_cooldown=True` on the brief's send — that call site is the only one that should use it in PR2.
+
+- [ ] **Step 4: Run both tests, then the full suite**
+
+Run: `python -m pytest tests/agent_mail/ -q && python -m pytest tests/agent_teams/ -q`
+Expected: green, including the original `test_send_message_auto_nudge_is_throttled` **unchanged**. If you had to modify that test, stop and report — it means the bypass leaked into the default path.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A backend
+git commit -m "feat(g2): dispatch briefs bypass the auto-nudge cooldown
+
+AUTO_NUDGE_COOLDOWN_SECONDS is unchanged and still applies to every other
+sender. Under per-item spawn the nudge was decorative — the brief WAS the spawn
+prompt — so a suppressed nudge cost nothing and the existing test treats the
+throttle purely as a feature. Under one-session-per-slot the nudge is the only
+thing that makes the agent read the brief, so any unrelated message within 30s
+(an escalation broadcast, a blocker-merged note) silently dropped the dispatch.
+
+The bypass skips READING the cooldown, not writing it: the brief still arms the
+window for whatever follows it."
+```
 
 ---
 
 ### Task 12: Delivery evidence and the `brief_unread` escalation
 
 **Files:**
-- Modify: `backend/app/services/github_dispatch_service.py:625-663` (the nudge/timer block), `monitor_dispatched`
+- Modify: `backend/app/services/github_dispatch_service.py:517-546` (`_send_dispatch_brief_to_slot`), `:624-663` (`monitor_dispatched`'s timer block), plus two new helpers
+- Modify: `backend/app/services/github_verification_service.py:29-37` (`_PR_OPENED_RECOVERABLE_ESCALATIONS`)
 - Test: `backend/tests/agent_teams/test_github_dispatch_service.py`
 
-Implements spec §4.1a — all three corrections. Uses Task 1's `brief_delivery_nudge_at` / `_count`.
+Implements spec §4.1a — all three corrections. Uses Task 1's `brief_delivery_nudge_at`, `brief_delivery_nudge_count`, `brief_message_id`, and `settings.github_brief_delivery_max_nudges`.
+
+**Interfaces:**
+- Consumes: Task 1's four fields; Task 6's `lease_last_owner_contact_at` stamp; Task 11's `bypass_nudge_cooldown`.
+- Produces: `GithubDispatchService._brief_delivered(self, db, item) -> bool`; `_nudge_owner_for_brief(self, db, item) -> None`; the escalation reason string `"brief_unread"`.
 
 Three rules, each with a test:
 
-1. **Delivery is proven by the receipt's `read_at` OR any owner status report.** A spawned owner gets the brief as its *prompt* and may work correctly while never opening its mailbox, so `read_at` alone yields a false `brief_unread`. A report is *stronger* evidence than a read receipt — it proves comprehension, not retrieval.
+1. **Delivery is proven by the receipt's `read_at` OR any owner status report.** A spawned owner gets the brief as its *prompt* (§4.0) and may work correctly while never opening its mailbox, so `read_at` alone yields a false `brief_unread`. A report is *stronger* evidence than a read receipt — it proves comprehension, not retrieval.
 2. **Delivery gets its own columns.** `last_nudge_at` already multiplexes the leader-ack and owner-idle timers (`:645-663`), with the ack branch `continue`-ing before the idle branch. A third tenant would make them interfere: whichever fires first resets the shared clock, and `escalate` then reports whichever branch it happened to be in.
 3. **Delivery is evaluated BEFORE ack.** `leader_ack_timeout` currently masks `brief_unread` permanently — the ack branch escalates first and `escalate` is terminal, so an undelivered brief is misdiagnosed as *the leader failing to ack*. That is the Finding 14 misattribution cost, exactly.
 
 The ack clock keeps its `dispatched_at` anchor. Gating it on delivery evidence was **declined twice**: it converts a loud, already-implemented failure into silence.
 
-- [ ] **Step 1: Write the failing tests** — the four from spec §5.2: delivery proven by report not only receipt; `brief_unread` not masked by `leader_ack_timeout` (fixture where both are overdue → reason must be `brief_unread`); delivery counters independent of the ack nudge in both directions; no receipt and no report past the bounded retries → `brief_unread`.
-- [ ] **Step 2: Run and watch them fail.**
-- [ ] **Step 3: Implement**, with `brief_unread` as a new **escalation reason** (not a new `dispatch_status`).
-- [ ] **Step 4: Run the suite.**
-- [ ] **Step 5: Commit.**
+- [ ] **Step 1: Record which message was the brief**
+
+This comes first because every test below needs it. `_send_dispatch_brief_to_slot` (`:517-546`) currently **discards** the `MailMessageResponse` and swallows every exception with `logger.exception`. Capture the id, and take Task 11's bypass at the same time:
+
+```python
+    async def _send_dispatch_brief_to_slot(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        *,
+        preset_slots: list[AgentTeamSlot],
+        owner_slot_id: int,
+        brief: str,
+    ) -> None:
+        owner_slot = next((slot for slot in preset_slots if slot.id == owner_slot_id), None)
+        if owner_slot is None:
+            return
+        try:
+            from app.services.agent_mail_service import agent_mail_service
+
+            member = await agent_mail_service.get_or_create_slot_member(db, owner_slot)
+            message = await agent_mail_service.send_direct_message(
+                db,
+                recipient_member_id=member.id,
+                subject=f"Autonomous dispatch: issue #{item.issue_number}",
+                body_markdown=brief,
+                bypass_nudge_cooldown=True,   # Task 11
+                payload={
+                    "kind": "github_dispatch_assignment",
+                    "work_item_id": item.id,
+                    "issue_number": item.issue_number,
+                    "scope_id": item.scope_id,
+                },
+            )
+            # Which message was THIS attempt's brief. MailReceipt is unique on
+            # (message_id, member_id) only, so without the id the delivery check
+            # has to guess among the member's messages — and a re-dispatched item
+            # has several. The guess fails unsafely: an older brief that WAS read
+            # proves delivery for an attempt whose brief never arrived.
+            item.brief_message_id = message.id
+            item.brief_delivery_nudge_at = None
+            item.brief_delivery_nudge_count = None
+        except Exception:
+            logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)
+```
+
+Two things about that block:
+
+- **Clearing the two counters here is the "counter clearing on fresh dispatch" requirement.** A retried item that escalated `brief_unread` last time starts at count 0, or the second attempt escalates on its first monitor pass with no nudge sent. This is the same class of bug Task 1 avoids by keeping the reminder stamp off `last_nudge_at` — a counter surviving into a new attempt. Note it must clear on the **success** path only; the `except` branch leaves `brief_message_id` NULL, which Step 3 reads as "no brief recorded" and treats as undelivered.
+- **Do not add `await db.commit()`.** `dispatch_pending` commits at the end of the item's loop iteration (`:288-290`), and on the failure paths it rolls back or escalates. Committing here would persist a `brief_message_id` for a dispatch that then failed to launch.
+
+- [ ] **Step 2: Write the failing tests**
+
+Four tests, from spec §5.2. Build them on the `_team(db)` + `GithubWorkItem(...)` + `wake_state_by_slot=` fixture shape used by every existing monitor test — `test_monitor_escalates_when_leader_offline` (`test_github_dispatch_service.py:1710-1737`) is the shortest example. Every one needs `updated_at` set past `github_owner_registration_grace_seconds` (120s) or `_within_registration_grace` (`:666`) makes the whole loop a no-op.
+
+Two facts about this file that save you a detour: `_team(db)` (`:54-98`) already creates **five unleased `GithubWorkspace` rows** for the scope, so a lease fixture just claims one; and `agent_mail_service` is **not** in its import block (`:12-26`) — add it.
+
+Add a local helper next to `_team`, since three of the four tests need a lease:
+
+```python
+async def _lease_for(db, scope, item, **overrides):
+    """Claim one of _team's workspaces for this item. Mirrors acquire()."""
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id.is_(None),
+            ).limit(1)
+        )
+    ).scalar_one()
+    workspace.leased_item_id = item.id
+    workspace.leased_at = datetime.utcnow()
+    workspace.lease_token = "t1"
+    for key, value in overrides.items():
+        setattr(workspace, key, value)
+    await db.commit()
+    return workspace
+```
+
+```python
+@pytest.mark.asyncio
+async def test_delivery_proven_by_report_not_only_receipt(db):
+    """Spec §4.1a(1). A SPAWNED owner gets the brief as its prompt and may never
+    open its mailbox. read_at NULL + a recorded report must NOT be brief_unread.
+    """
+    preset, slots, scope = await _team(db)
+    stale = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_registration_grace_seconds + 1
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=90,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatched_at=stale,
+        updated_at=stale,
+        brief_delivery_nudge_count=settings.github_brief_delivery_max_nudges,
+        brief_delivery_nudge_at=stale,  # retries exhausted, so only evidence saves it
+    )
+    db.add(item)
+    await db.commit()
+
+    # An unread brief: a MailMessage plus a MailReceipt whose read_at is NULL.
+    # send_direct_message creates the receipt (agent_mail_service.py:852).
+    member = await agent_mail_service.get_or_create_slot_member(db, slots[1])
+    message = await agent_mail_service.send_direct_message(
+        db,
+        recipient_member_id=member.id,
+        subject="brief",
+        body_markdown="b",
+        auto_nudge=False,
+    )
+    item.brief_message_id = message.id
+    # ...but the owner reported. That is stronger evidence than a read receipt.
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=datetime.utcnow())
+
+    await github_dispatch_service.monitor_dispatched(
+        db, scope, preset_slots=slots,
+        wake_state_by_slot={slots[0].id: "wakeable", slots[1].id: "wakeable"},
+    )
+    await db.refresh(item)
+    assert item.escalation_reason != "brief_unread"
+    assert item.dispatch_status == "dispatched"
+```
+
+Use `auto_nudge=False` on every fixture send. Without it `auto_nudge_members` runs `sync_observed_sessions` → `discover_agent_sessions` → a real `tmux list-panes` against **this machine**, so the test would depend on whichever panes happen to be open. It would not fail loudly either: `discover_agent_sessions` returns `[]` on a nonzero exit or a missing binary rather than raising (`agent_bridge/discovery.py:100-116`), so the test would just quietly stop testing what it claims to.
+
+Then, following that same fixture shape, one test each for:
+
+- **No receipt, no report, retries exhausted → `brief_unread`.** The complement of the above: `lease_last_owner_contact_at` NULL, `read_at` NULL, `brief_delivery_nudge_count == github_brief_delivery_max_nudges`, `brief_delivery_nudge_at` older than `github_nudge_grace_seconds`. Assert `dispatch_status == "escalated"` **and** `escalation_reason == "brief_unread"`.
+- **`brief_unread` is not masked by `leader_ack_timeout`.** Same fixture, but *also* make the ack overdue: `ack_received_at=None` and `last_nudge_at` older than `github_nudge_grace_seconds` (which is the state that escalates `leader_ack_timeout` today, `:647-650`). Both are overdue; the reason must be `brief_unread`. **This is the load-bearing test of the task** — it is the only one that fails if the delivery check is placed after the ack branch instead of before it, and misattribution is what Finding 14 cost two review rounds.
+- **The counters are independent, in both directions.** (a) An item whose brief is *undelivered but retries not yet exhausted* gets a delivery nudge: assert `brief_delivery_nudge_count == 1` and `last_nudge_at` is **still None**. (b) An item whose brief *is* delivered but whose leader is silent gets an ack nudge: assert `last_nudge_at` is set and `brief_delivery_nudge_at` is **still None**. Without (b) an implementation that writes both fields from one helper passes (a).
+- **A brief read on the first nudge does not escalate** (spec §5.2, last bullet). Same fixture with `receipt.read_at = datetime.utcnow()` → `dispatch_status` stays `dispatched`.
+
+- [ ] **Step 3: Run and watch them fail**
+
+Run: `python -m pytest tests/agent_teams/test_github_dispatch_service.py -k "delivery or brief_unread" -v`
+Expected: FAIL. The masking test fails with `assert 'leader_ack_timeout' == 'brief_unread'` — which is the defect stated as an assertion. The others fail with `escalation_reason is None`.
+
+- [ ] **Step 4: Add the delivery-evidence helper**
+
+In `github_dispatch_service.py`. It needs `MailReceipt` added to the `app.models.database` import block (`:11-19`) — `MailAgentSession` and `MailTeamMember` are already there, `MailReceipt` is not.
+
+```python
+    async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
+        """Has this attempt's brief reached the owner? (Spec §4.1a(1).)
+
+        Either signal suffices, and the report is the stronger of the two: it
+        proves comprehension, not just retrieval. The receipt alone would raise
+        brief_unread against a spawned owner that got the brief as its PROMPT
+        and never opened its mailbox (§4.0) — a false escalation against an
+        agent that is working.
+
+        Owner contact is read from the LEASE, not the item, because the
+        question is 'has the thing holding this acquisition spoken?' — see
+        Task 6. A NULL brief_message_id means no brief was recorded (the send
+        raised, or the item predates this migration), which is undelivered.
+        """
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None and workspace.lease_last_owner_contact_at is not None:
+            return True
+        if item.brief_message_id is None:
+            return False
+        member = await self._owner_member(db, item)
+        if member is None:
+            return False
+        receipt = (
+            await db.execute(
+                select(MailReceipt).where(
+                    MailReceipt.message_id == item.brief_message_id,
+                    MailReceipt.member_id == member.id,
+                )
+            )
+        ).scalar_one_or_none()
+        return receipt is not None and receipt.read_at is not None
+```
+
+Note the deliberate asymmetry with `_owner_process_is_alive` (Task 2). That one fails **open** — unknown means alive, retain the lease. This one fails **closed** — unknown means undelivered, escalate. Both are correct because the unsafe outcomes point opposite ways: wrongly reclaiming a live agent's worktree destroys work, while wrongly escalating an unread brief only summons a human. Do not "make them consistent".
+
+And the delivery nudge, which writes **only** its own fields:
+
+```python
+    async def _nudge_owner_for_brief(self, db: AsyncSession, item: GithubWorkItem) -> None:
+        """Re-wake the owner about an unread brief. Touches brief_delivery_* ONLY.
+
+        Not last_nudge_at: that column already multiplexes the leader-ack and
+        owner-idle timers (§4.1a(2)) and a third tenant makes all three
+        interfere — whichever fires first resets the shared clock and escalate
+        reports whichever branch it happened to be in.
+        """
+        item.brief_delivery_nudge_at = datetime.utcnow()
+        item.brief_delivery_nudge_count = (item.brief_delivery_nudge_count or 0) + 1
+        await self.notify_owner(
+            db,
+            item,
+            subject=f"Unread dispatch brief: issue #{item.issue_number}",
+            body_markdown=(
+                f"You were assigned issue #{item.issue_number} ({item.issue_title}) "
+                "but the brief is still unread. Call `deck_check_inbox` now and "
+                "report your status."
+            ),
+            payload={
+                "kind": "github_dispatch_brief_nudge",
+                "work_item_id": item.id,
+                "issue_number": item.issue_number,
+            },
+        )
+        await db.commit()
+```
+
+`(item.brief_delivery_nudge_count or 0) + 1` is the NULL-as-zero reading Task 1 specifies. `notify_owner` (`:787`) already resolves the owner member and no-ops when there is none, so no extra guard is needed.
+
+- [ ] **Step 5: Insert the delivery branch BEFORE the ack branch**
+
+In `monitor_dispatched`, between the `owner_wake == "offline"` check (`:634-637`) and `if not self._ack_satisfied(item):` (`:638`):
+
+```python
+            if not await self._brief_delivered(db, item):
+                anchor = item.brief_delivery_nudge_at
+                if anchor is None:
+                    await self._nudge_owner_for_brief(db, item)
+                    continue
+                if datetime.utcnow() - anchor <= timedelta(
+                    seconds=settings.github_nudge_grace_seconds
+                ):
+                    continue
+                if (item.brief_delivery_nudge_count or 0) < settings.github_brief_delivery_max_nudges:
+                    await self._nudge_owner_for_brief(db, item)
+                    continue
+                await self.escalate(db, item, "brief_unread")
+                continue
+```
+
+**Placement is the whole point of §4.1a(3), so do not move it.** Before the ack branch, an undelivered brief reports as `brief_unread`. After it, `_ack_satisfied` is False (the owner never got the brief, so the leader never acked), the ack branch escalates `leader_ack_timeout`, and `escalate` is terminal — the delivery branch is then unreachable *forever* for that item. That is a wrong diagnosis pointing at the wrong actor.
+
+It goes **after** the two `wake == "offline"` checks deliberately: an offline owner is a better diagnosis than an unread brief, and it is the older, already-tested one.
+
+Every branch `continue`s. An item whose brief is undelivered must not also be evaluated for ack or idle on the same pass — that is the multiplexing this task exists to prevent, and the existing branches use the same discipline (`:637`, `:651`).
+
+- [ ] **Step 6: Make `brief_unread` recoverable by a late PR**
+
+In `github_verification_service.py`, add `"brief_unread"` to `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`:29-37`):
+
+```python
+_PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset(
+    {
+        "plan_blocked",
+        "owner_idle_timeout",
+        "owner_offline",
+        "leader_offline",
+        "leader_ack_timeout",
+        "brief_unread",
+    }
+)
+```
+
+Its own comment states the rule this satisfies: "Escalations a late PR legitimately resolves: the agent said it was stuck, or Deck inferred it from a timer." `brief_unread` is inferred from a timer, and an owner that opens a PR has self-evidently read the brief. Omitting it would make `report_pr_opened` **raise** for exactly the item that just proved the escalation wrong.
+
+Add the test with it: `brief_unread` + a `pr_opened` report → 200, `escalation_reason` cleared, `pr_number` set.
+
+- [ ] **Step 7: Run the suite**
+
+Run: `python -m pytest tests/agent_teams/ tests/agent_mail/ -q`
+Expected: green. Watch for pre-existing monitor tests that now take the delivery branch first: any `dispatched` fixture with no receipt, no report and no `brief_message_id` is *undelivered* by the new rule, so its first monitor pass now sends a delivery nudge instead of what it asserted. If one breaks, check which behaviour it was pinning before changing it — a test asserting `leader_ack_timeout` on an item that never received a brief was asserting the misattribution, and rewriting it is correct. A test that set up genuine delivery and broke anyway is a real regression. Report either way; do not rewrite silently.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add -A backend
+git commit -m "feat(g2): delivery evidence and the brief_unread escalation
+
+Records which message was the brief (brief_message_id) because MailReceipt is
+unique on (message_id, member_id) only — without it, 'is the brief unread?'
+has to guess among the member's messages, and the guess fails unsafely: an
+older brief that WAS read would prove delivery for an attempt whose brief
+never arrived.
+
+Delivery is proven by the receipt's read_at OR any owner status report. The
+receipt alone would escalate against a spawned owner that received the brief
+as its PROMPT and never opened its mailbox — a false alarm against an agent
+that is working. The report is the stronger signal: comprehension, not
+retrieval.
+
+Dedicated columns, not last_nudge_at, which already multiplexes leader-ack and
+owner-idle. A third tenant makes all three interfere — whichever fires first
+resets the shared clock and escalate reports whichever branch it was in.
+
+Evaluated BEFORE ack, and that ordering is the fix. After it, _ack_satisfied
+is False precisely BECAUSE the brief never arrived, the ack branch escalates
+leader_ack_timeout, and escalate is terminal — so an undelivered brief was
+permanently misdiagnosed as the leader failing to ack. Finding 14's cost was
+two review rounds spent on exactly that misattribution.
+
+brief_unread joins _PR_OPENED_RECOVERABLE_ESCALATIONS: it is timer-inferred,
+and an owner that opens a PR has self-evidently read the brief."
+```
 
 ---
 
 ### Task 13: Refuse an ambiguous slot before acquiring
 
 **Files:**
-- Modify: `backend/app/services/github_dispatch_service.py:198-222` (before `acquire`)
+- Modify: `backend/app/services/agent_mail_service.py:350-398` (`sync_observed_sessions` gains `strict`), plus a new `nudgeable_sessions_for_slot`
+- Modify: `backend/app/services/github_dispatch_service.py:215-221` (the gate Task 4 emptied, before `acquire` at `:222`)
+- Modify: `frontend/src/features/agent-teams/AutonomyPanel.tsx:85-96` (`pendingReasonLabel`)
 - Test: `backend/tests/agent_teams/test_github_dispatch_service.py`
 
 Implements spec §4.2.
 
-`_nudge_session_for_member` orders by `last_seen_at desc` and takes the first nudgeable session (`:1081-1085`). Slot 6 currently carries three sessions under one `member_id`, all stamped within microseconds by `sync_observed_sessions` one line earlier — so which pane receives the prompt is a coin flip today.
+**Interfaces:**
+- Consumes: `_session_can_nudge` (`agent_mail_service.py:595`).
+- Produces: `agent_mail_service.sync_observed_sessions(db, *, strict: bool = False) -> None`; `agent_mail_service.nudgeable_sessions_for_slot(db, slot_id) -> list[MailAgentSession]`; the `pending_reason` string `"queued_ambiguous_sessions"`.
 
-- [ ] **Step 1: Write the failing tests** — both from spec §5.2:
-  - A second pane present **in discovery but not in the DB** must still block dispatch. This proves the check re-synced rather than trusting stale rows.
-  - Discovery returning nothing for a slot mail believes is populated → held, not dispatched.
-- [ ] **Step 2: Run and watch them fail.**
-- [ ] **Step 3: Implement.** Count the owner slot's *nudgeable* sessions (`_session_can_nudge`, `agent_mail_service.py:595`). More than one → do not dispatch; set `pending_reason = "queued_ambiguous_sessions"` and a `status_note` naming the competing tmux targets.
+`_nudge_session_for_member` orders by `last_seen_at desc` and takes the first nudgeable session (`:1067-1086`). Slot 6 currently carries three sessions under one `member_id`, all stamped within microseconds by `sync_observed_sessions` one line earlier — so which pane receives the prompt is a coin flip today.
 
-  Two constraints:
-  - It runs **before** `acquire`, so an ambiguous slot never leases a workspace it cannot be briefed about.
-  - It **calls `sync_observed_sessions` itself, immediately before counting, and fails closed.** `dispatch_pending` never calls it — so the check would otherwise count rows last refreshed whenever a human opened the Agent Mail page, while the live nudge goes through `auto_nudge_members`, which *does* sync first (`:1131`). The stale check would pass and the delivery would coin-flip: Finding 17 rebuilt. And because `sync_observed_sessions` swallows discovery failures with an early return (`:354-356`), "the sync did not raise" is not evidence that discovery worked — zero observed sessions for a slot mail believes is populated means **hold**, not dispatch.
+**This gate replaces the one Task 4 deleted, at the same place in `dispatch_pending`.** That is a convenience, not a coincidence: both answer "is this slot fit to be dispatched to?" immediately before `acquire`. But they are opposite predicates and must not be confused — Task 4 removed `slot_has_live_owner_session` because *a live session is now the normal state*; this one blocks on **two or more** live sessions. If you find yourself writing `if any(...)`, stop: that is Finding 19 restored.
 
-  This is the concrete instance of the memory rule: for any predicate gating a destructive or irreversible action, at least one writer of its input must run on the same schedule as the consumer. Here the consumer is dispatch, so dispatch does the writing.
-- [ ] **Step 4: Run the suite.**
-- [ ] **Step 5: Commit.**
+- [ ] **Step 1: Give `sync_observed_sessions` a strict mode**
+
+The existing signature swallows discovery failures with an early return (`:352-356`), so a caller cannot tell "discovery worked and found nothing" from "discovery blew up". Add the distinction without changing any existing caller's behaviour:
+
+```python
+    async def sync_observed_sessions(
+        self, db: AsyncSession, *, strict: bool = False
+    ) -> None:
+        """Upsert Agent Bridge tmux discoveries as observed sessions.
+
+        strict=True re-raises a discovery failure instead of returning. Callers
+        that gate a decision on the result need to know the difference between
+        'no sessions' and 'could not look'; the default stays lenient because
+        every other caller is a best-effort refresh (auto_nudge_members:1131,
+        the Agent Mail page) where a warning is the right outcome.
+        """
+        try:
+            discovered = discover_agent_sessions()
+        except Exception as exc:
+            logger.warning("agent bridge discovery failed: %s", exc)
+            if strict:
+                raise
+            return
+```
+
+The rest of the method is unchanged. Note what `strict` does **not** buy you: `discover_agent_sessions` itself returns `[]` for a missing tmux binary, a nonzero `list-panes` exit, or a timeout (`agent_bridge/discovery.py:100-116`) — it does not raise. So an empty result is still ambiguous by construction, and Step 3 has to handle it separately. `strict` closes the narrower hole of an unexpected exception mid-sync.
+
+- [ ] **Step 2: Add the counting helper**
+
+Also in `agent_mail_service.py`, beside `_nudge_session_for_member` (`:1067`). It exists so the check and the live nudge share one definition of "nudgeable":
+
+```python
+    async def nudgeable_sessions_for_slot(
+        self, db: AsyncSession, slot_id: int
+    ) -> list[MailAgentSession]:
+        """Every session that _nudge_session_for_member would be willing to pick.
+
+        Deliberately the same filter and predicate as _nudge_session_for_member
+        (:1073-1086) — that method takes the FIRST of these, so anything it
+        would choose among is what 'ambiguous' has to mean. Two definitions
+        would let the check pass while the nudge still coin-flips.
+        """
+        now = datetime.utcnow()
+        sessions = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.team_slot_id == slot_id,
+                    MailAgentSession.source == "observed",
+                    MailAgentSession.provider.in_(sorted(TMUX_WAKE_PROVIDERS)),
+                    MailAgentSession.tmux_target.is_not(None),
+                )
+            )
+        ).scalars().all()
+        return [s for s in sessions if self._session_can_nudge(s, now)]
+```
+
+**Keyed on `team_slot_id`, deliberately, and this is not the same set of rows `_nudge_session_for_member` sees.** That method keys on `member_id` (`:1074`). The two agree only while a slot has exactly one member — and nothing enforces that: `MailTeamMember.team_slot_id` has **no unique constraint** (`database.py:350-352`), and the soak log records duplicate members on one slot as a recurring, confirmed defect (Finding 10, `2026-07-06-tizonia-roadmap-v1-soak-run-log.md:166-169`).
+
+So there are in fact **two** coin flips on the delivery path, not one:
+
+1. `_slot_member` (`github_dispatch_service.py:970-978`) picks the slot's member by `ORDER BY updated_at DESC LIMIT 1` — an arbitrary choice among duplicates.
+2. `_nudge_session_for_member` then picks that member's first nudgeable session — the flip §4.2 names.
+
+`team_slot_id` is the superset that spans both: it counts every nudgeable pane on the slot regardless of which member owns it. Keying on `member_id` instead would let a slot with two members holding one pane each read as **unambiguous twice over**, dispatch, and then coin-flip at step 1 — the precise failure §4.2 exists to prevent, reintroduced by a narrower key. Fail-closed requires the superset.
+
+`sync_observed_sessions` sets `session.team_slot_id` from the resolved member on every sync (`:391`), so the column is as fresh as the sync Step 5 forces. Do not "align" this helper with `_nudge_session_for_member` for symmetry; the asymmetry is the point. (Converging a slot to one member is out of scope for G2 — it needs a migration plus a uniqueness constraint. This gate makes the duplicate *visible* rather than silent, which is what §4.2 asks for.)
+
+- [ ] **Step 3: Write the failing tests**
+
+Before the tests themselves, one fixture is **mandatory**, not optional — read this even if you skim the rest.
+
+**Step 5 makes every `dispatch_pending` call in this file shell out to the real `tmux`.** Two consequences, both of which will otherwise produce failures that look unrelated to G2:
+
+1. **The suite becomes host-dependent.** `discover_agent_sessions` runs `tmux list-panes -a` (`discovery.py:102-107`). On a developer laptop with no tmux it returns `[]`; on *this* machine there are live agent panes right now, so it returns real rows and `_member_for_observed_session` inserts real repo members into the in-memory test DB. Same code, different results, depending on who runs it.
+2. **The sync deletes seeded sessions.** `_remove_stale_observed_sessions` (`:530-548`) selects **every** row with `source == "observed"` — not scoped to the slot, the preset, or the scope — and deletes any whose `session_key` is absent from *this* discovery pass. So any test that seeds an observed session and then calls `dispatch_pending` has that session deleted mid-test unless discovery happens to return the same `pane_id`.
+
+Add an autouse fixture so discovery is explicit in every test rather than inherited from the host:
+
+```python
+@pytest.fixture(autouse=True)
+def no_discovered_panes(monkeypatch):
+    """Dispatch now syncs tmux discovery (Task 13 Step 5), so without this the
+    suite reads the developer's real tmux server: [] on a laptop with no tmux,
+    live agent panes on the orchestration host. Tests that want panes override
+    this with their own monkeypatch.setattr on the same target.
+    """
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: []
+    )
+```
+
+With discovery pinned to `[]`, a test that seeds sessions and expects them to *survive* a dispatch must also return them from discovery — which is exactly what `_seed_observed_panes` plus a matching `_pane` list does below. That coupling is real behaviour, not a test artifact: a pane tmux cannot see is, correctly, not a pane you can nudge.
+
+Now the tests. Both from spec §5.2, plus the load-bearing negative. Three fixture facts, all verified, that will otherwise cost you an afternoon:
+
+**(a) Patch discovery at `app.services.agent_mail_service.discover_agent_sessions`.** The name is imported *into* that module (`:33`), so patching the definition site (`agent_bridge.discovery`) would not take. Every existing test does it this way (`tests/agent_mail/test_registry.py:721`).
+
+**(b) A discovered pane only binds to a *slot* member if a matching observed session already exists.** `sync_observed_sessions` looks up by `session_key = f"tmux:{pane_id}"` (`:365`) and only reuses the slot binding when `_member_for_existing_observed_session` (`:474-508`) accepts the row — which requires the stored session to have `source == "observed"`, a non-NULL `team_slot_id`, the same `provider`, the same `pane_id` and `tmux_target`, a `cwd` with the same `repo_id`, a slot whose `provider` matches, and a member whose `team_slot_id` is that slot. Fail any one and `_member_for_observed_session` falls through to `_get_or_create_repo_member`, producing a **repo** member with `team_slot_id = NULL` — and `nudgeable_sessions_for_slot` then counts zero, so the test silently asserts nothing.
+
+**(c) The member must not have the same row id as the slot.** The test asserts a count for `owner.id`, so if the seeded member happened to get that same integer, an implementation that wrongly keyed on `member_id` would pass anyway and the test would prove nothing about the key — which is the whole point of Step 2. `_create_registered_slot_member` (`:122-152`) already solves this: it inserts two throwaway "offset" members first and ends with `assert member.id != slot.id`. Reuse it; do **not** substitute `agent_mail_service.get_or_create_slot_member` (used at `:244`) here, which offers no such guarantee.
+
+So seed first, then discover the same panes. Note `_create_live_slot_launch_session` (`:155-195`) is *nearly* the helper you want but sets `session_key=f"tmux:{target}"` and leaves `pane_id` NULL, so sync would not match it. Add a purpose-built one that takes **all** the slot's panes at once — one member, N sessions, because `_create_registered_slot_member` builds `identity_key=f"slot:test:{slot.id}"` and calling it twice for one slot would violate that column's unique constraint (`database.py:341`):
+
+```python
+async def _seed_observed_panes(db, preset, slot, panes):
+    """One slot member with N observed sessions, each shaped so a later
+    sync_observed_sessions() with the same pane RE-BINDS it to this member
+    rather than creating a repo member (_member_for_existing_observed_session).
+
+    panes: list of (pane_id, tmux_target).
+    """
+    member = await _create_registered_slot_member(db, slot)   # guarantees member.id != slot.id
+    for pane_id, target in panes:
+        db.add(
+            MailAgentSession(
+                member_id=member.id,
+                provider=slot.provider,          # must equal the discovered provider
+                source="observed",
+                session_key=f"tmux:{pane_id}",   # sync keys on pane_id, not target
+                pane_id=pane_id,
+                cwd=slot.repo_path,
+                tmux_target=target,
+                team_preset_id=preset.id,
+                team_slot_id=slot.id,
+                mailbox_status="observed",
+                last_seen_at=datetime.utcnow(),
+            )
+        )
+    await db.commit()
+    return member
+
+
+def _pane(*, pane_id, target, cwd):
+    """The discovery dict shape. Keys copied from tests/agent_mail/test_registry.py:702-713."""
+    return {
+        "provider": "codex-cli",   # _team's slots use this, and it is in TMUX_WAKE_PROVIDERS
+        "provider_display_name": "Codex",
+        "tmux_target": target,
+        "session_name": target.split(":")[0],
+        "window_name": "main",
+        "pane_id": pane_id,
+        "cwd": cwd,
+        "pid": "4242",
+        "status": "active",
+    }
+
+
+async def _launcher_that_must_not_run(*_args, **_kwargs):
+    raise AssertionError("dispatch launched despite an ambiguous slot")
+```
+
+```python
+@pytest.mark.asyncio
+async def test_ambiguous_slot_blocks_and_leases_nothing(db, monkeypatch):
+    """Spec §4.2. Two nudgeable panes on the owner slot → held, and CRUCIALLY
+    no workspace leased: an ambiguous slot must never hold a lease it cannot be
+    briefed about.
+    """
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _seed_observed_panes(db, preset, owner, [("%1", "w:0.1"), ("%2", "w:0.2")])
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [
+            _pane(pane_id="%1", target="w:0.1", cwd=owner.repo_path),
+            _pane(pane_id="%2", target="w:0.2", cwd=owner.repo_path),
+        ],
+    )
+    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 2
+
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=91,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=_launcher_that_must_not_run,
+        issue_labels_by_number={91: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.owner_slot_id == owner.id
+    assert item.pending_reason == "queued_ambiguous_sessions"
+    assert "w:0.1" in item.status_note and "w:0.2" in item.status_note
+    leased = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalars().all()
+    assert leased == []        # the load-bearing half
+```
+
+The `assert ... == 2` before dispatching is not redundant: it separates "the gate works" from "the fixture built what I think it built". Given (b) above, a fixture that silently produced repo members would otherwise make the *whole* test vacuous while still passing for the wrong reason — the item would be held, but by `queued_no_workspace` or nothing at all.
+
+`_launcher_that_must_not_run` raising is the other half. Asserting the absence of a launch from the item's fields alone would pass against an implementation that launched and then reset them.
+
+Note `_item` (`:108-119`) looks like the right fixture helper and is **not** — it returns a `(item, labels)` tuple and has no call sites anywhere in the suite. Do not use it; build the item inline as `test_dispatch_pending_launches_and_marks_dispatched` (`:651-689`) does.
+
+Then, following the same shape, one test each for:
+
+- **The check re-synced rather than trusting stale rows.** Seed the DB with **one** session for the owner slot, then have discovery return **two**. Dispatch must still block. This is the Finding 17 case: an implementation that counts DB rows without syncing first sees one, proceeds, and hands the brief to `auto_nudge_members`, which *does* sync (`:1131`) and then coin-flips between the two panes it finds. Nothing detects it.
+- **Discovery returning nothing for a populated slot holds.** Seed one session, then have discovery return `[]`. Assert `pending_reason == "queued_ambiguous_sessions"` and no lease. This is the fail-closed half; see Step 4 for why the pre-sync count has to be captured before the sync runs.
+- **One nudgeable pane dispatches normally.** The regression guard. Without it, an off-by-one (`> 0` instead of `> 1`) blocks *every* dispatch and every other test in the file that expects a successful dispatch starts failing for a reason that looks unrelated.
+- **An empty slot with no prior sessions still dispatches** — discovery `[]`, DB `[]`. This is Task 10 Step 2's spawn-fallback path, and it must not be caught by the fail-closed rule. It is the case that makes "populated" in the bullet above load-bearing rather than decorative.
+
+- [ ] **Step 4: Run and watch them fail**
+
+Run: `python -m pytest tests/agent_teams/test_github_dispatch_service.py -k ambiguous -v`
+Expected: FAIL — the item reaches `dispatched` and `_launcher_that_must_not_run` raises `AssertionError`.
+
+- [ ] **Step 5: Implement the gate**
+
+In `dispatch_pending`, in the slot Task 4 emptied — after the `slot_is_busy` block (ending `:214`) and **before** `acquire` (`:222`):
+
+```python
+            ambiguity_note = await self._session_ambiguity_note(db, owner_slot_id)
+            if ambiguity_note is not None:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_ambiguous_sessions"
+                item.status_note = ambiguity_note
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
+```
+
+And the helper, on `GithubDispatchService`:
+
+```python
+    async def _session_ambiguity_note(
+        self, db: AsyncSession, owner_slot_id: int
+    ) -> str | None:
+        """Why this slot cannot be safely briefed, or None if it can.
+
+        Counts what _nudge_session_for_member would choose among. Two or more
+        candidates means the brief goes to an arbitrary pane (§4.2) — silently,
+        which is why blocking is strictly more visible even though it stalls the
+        queue.
+
+        Runs BEFORE acquire so an ambiguous slot never holds a lease it cannot
+        be briefed about, and re-syncs first: dispatch_pending never calls
+        sync_observed_sessions, so counting stored rows would count whatever a
+        human's last visit to the Agent Mail page left behind, while the live
+        nudge syncs and then picks from the fresh set. That skew IS Finding 17.
+        """
+        member = await self._slot_member(db, owner_slot_id)
+        if member is None:
+            # No mail identity yet: nothing to be ambiguous between, and the
+            # spawn path will create one. Not a fail-closed case.
+            return None
+
+        # Captured BEFORE the sync, which deletes rows discovery no longer sees
+        # (_remove_stale_observed_sessions, :530-548). After it, a discovery
+        # failure and a genuinely emptied slot look identical.
+        known_before = len(
+            await agent_mail_service.nudgeable_sessions_for_slot(db, owner_slot_id)
+        )
+        try:
+            await agent_mail_service.sync_observed_sessions(db, strict=True)
+        except Exception:
+            logger.exception(
+                "session discovery failed while checking slot %s for ambiguity",
+                owner_slot_id,
+            )
+            return (
+                "Session discovery failed, so the owning pane could not be "
+                "confirmed. Holding rather than briefing an unknown session."
+            )
+
+        candidates = await agent_mail_service.nudgeable_sessions_for_slot(
+            db, owner_slot_id
+        )
+        if len(candidates) > 1:
+            targets = ", ".join(sorted(str(s.tmux_target) for s in candidates))
+            return (
+                f"{len(candidates)} nudgeable sessions on this slot ({targets}). "
+                "The dispatch brief would reach an arbitrary one. Converge the "
+                "slot to a single session, then this item dispatches itself."
+            )
+        if not candidates and known_before:
+            return (
+                f"Discovery found no sessions for this slot, but {known_before} "
+                "was expected. Treating zero as unverified rather than empty."
+            )
+        return None
+```
+
+Three things not to change:
+
+- **`len(candidates) > 1`, not `>= 1`.** One live session is the *normal* state under one-session-per-slot; that is the entire premise of G2. `>= 1` blocks every dispatch forever.
+- **`known_before` is captured before the sync.** `sync_observed_sessions` deletes observed rows discovery no longer returns (`_remove_stale_observed_sessions`, `:530-548`), so reading the count afterwards makes a discovery failure indistinguishable from a slot whose panes genuinely closed. Ordering is the whole mechanism of the fail-closed rule.
+- **`not candidates and not known_before` returns None.** An empty slot dispatches and spawns (Task 10 Step 2). Fail-closed applies to *lost* evidence, not absent evidence — otherwise a fresh team could never be dispatched to at all.
+
+`agent_mail_service` is already imported at module scope (`github_dispatch_service.py:21`), so no local import is needed; `slot_has_live_owner_session` reached into `agent_mail_service._effective_status` the same way before Task 4 deleted it.
+
+- [ ] **Step 6: Label the new pending reason in the UI**
+
+`pendingReasonLabel` (`AutonomyPanel.tsx:85-96`) returns `null` for an unrecognised reason, and `null` renders nothing — so without this the operator sees an item stuck at `pending` with no reason at all, which is precisely the visibility the §4.2 decision was chosen for. Add beside the other branches:
+
+```tsx
+  if (item.pending_reason === 'queued_ambiguous_sessions') {
+    return `queued · ${ownerName ?? 'owner'} has multiple sessions`
+  }
+```
+
+The competing targets are already visible: `status_note` renders at `:357-358`. Note this is the *only* frontend change in either PR — the workspace-lease UI stays out of scope (see "Owed alongside").
+
+- [ ] **Step 7: Run the suite**
+
+Run: `python -m pytest tests/agent_teams/ tests/agent_mail/ -q`
+Expected: green. Three things to watch:
+
+- **The `no_discovered_panes` autouse fixture from Step 3 must be in place first.** Without it, every `dispatch_pending` test in the file reads the host's real tmux server and the results differ between machines. If you skipped it because the suite happened to pass, it passed by luck about which panes were open.
+- **A test that seeds an observed session and then dispatches will lose that session** to `_remove_stale_observed_sessions` unless discovery returns the same `pane_id`. Task 4 already rewrites or deletes the three tests in this file that seed one (`:1205`, `:1256`, `:1300` via `_create_live_slot_launch_session`), so if you have done PR1 there should be none left — but check `tests/agent_teams/test_agent_team_service.py:849-940`, which seeds four observed sessions. Those tests do not call `dispatch_pending`, so they should be unaffected; confirm that rather than assuming it.
+- `tests/agent_mail/` must stay green with `strict` defaulting to `False`. If any existing test changed behaviour, the default leaked.
+
+If a test fails for a reason this list does not explain, that is a signal about the gate, not a chore. Report it.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add -A backend frontend
+git commit -m "feat(g2): refuse to dispatch to a slot with ambiguous sessions
+
+_nudge_session_for_member takes the FIRST nudgeable session ordered by
+last_seen_at desc, and sync_observed_sessions stamps every pane within
+microseconds — so with more than one session on a slot, which pane gets the
+brief is a coin flip. Slot 6 carries three today.
+
+Dispatch now counts nudgeable sessions before acquire and holds the item with
+pending_reason=queued_ambiguous_sessions, naming the competing targets. Chosen
+over persisting the briefed session on the lease, which would re-introduce the
+per-item session identity Finding 18 withdrew. Refusing to guess stalls a
+queue; guessing delivers a brief to the wrong pane undetectably.
+
+The check syncs discovery ITSELF, immediately before counting. dispatch_pending
+never called sync_observed_sessions, so a stored count reflects whenever a
+human last opened the Agent Mail page — while the live nudge syncs first and
+picks from the fresh set. The stale check would pass and the delivery would
+still coin-flip: Finding 17 rebuilt inside its own fix.
+
+And it fails closed on lost evidence, not on absent evidence. The pre-sync
+count is captured BEFORE the sync, because the sync deletes rows discovery no
+longer sees — after it, a discovery failure and a genuinely emptied slot are
+indistinguishable. A slot that never had sessions still dispatches and spawns.
+
+sync_observed_sessions gains strict=True for callers that gate a decision on
+the result; every existing caller is a best-effort refresh and keeps the
+lenient default."
+```
 
 ---
 
