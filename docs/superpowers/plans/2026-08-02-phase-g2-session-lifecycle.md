@@ -105,7 +105,7 @@ Tasks 8 and 9 are §6's mitigations. They are **not optional trimming**: without
 
 ---
 
-### Task 1: Schema — nine nullable columns and one setting
+### Task 1: Schema — nine nullable columns and two settings
 
 **Files:**
 - Modify: `backend/app/models/database.py:285-311` (`GithubWorkspace`), `:240-282` (`GithubWorkItem`)
