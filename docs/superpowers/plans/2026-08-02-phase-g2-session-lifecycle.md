@@ -16,15 +16,30 @@
 
 These apply to **every** task. They are not negotiable and several are safety rules earned from live incidents.
 
-**Working environment**
+**Working environment — you are on the SAME machine as the live soak**
+
+This is the single most important section. Everything below is reachable from your shell; none of it is on another host.
+
 - Work **only** in `/home/juan/work/repos/juanrubio/claude-deck-g1`.
-- **Never** touch `/home/juan/work/repos/juanrubio/claude-deck` — it holds the live soak DB with all 28 work items of evidence.
-- **Never** touch `/home/juan/work/repos/tizonia/` — five live agent sessions hold it as cwd.
-- Do **not** run `git worktree prune`.
+- **Never** touch `/home/juan/work/repos/juanrubio/claude-deck`. It holds `backend/claude_registry.db` — 1.1 MB, 28 work items, the evidence that made Findings 17/18/19 provable. It cannot be regenerated.
+- **Never** touch `/home/juan/work/repos/tizonia/`. Five tmux sessions (`tizonia-openmax-il-{7845,afde,b19f,fd9c,fe2f}`) hold it as cwd right now, and workspace 1 is that checkout registered as `primary`.
+- **`claude-deck-g1` is a git worktree of the live checkout, not a clone.** `cat .git` there reads `gitdir: .../claude-deck/.git/worktrees/claude-deck-g1`. They share one object store, one ref namespace, one stash, one index lock. Consequences you must respect:
+  - Do **not** run `git worktree prune`, `git gc`, `git stash`, or any `git checkout`/`switch` of a branch already checked out in the other worktree.
+  - Do **not** `git branch -f`, `git reset --hard`, or delete refs the other worktree may be on (`feature/autonomous-github-dispatch` is checked out live).
+  - `git worktree list` will show `/tmp/pr303-verify` and `/tmp/pr305-review` as detached-HEAD worktrees. Leave them alone; they are the orchestrator's, pending cleanup.
+- A backend process is running (one `uvicorn`). Do not restart, stop, or reload it. Note `database_url` defaults to `sqlite+aiosqlite:///./claude_registry.db` — **relative to the process CWD**, so anything you run from the live checkout's `backend/` directory touches the live DB. Run tests from `claude-deck-g1/backend` only.
+- Autonomy is currently **OFF** (`agent_team_presets.autonomy_enabled = 0` for both presets, verified 2026-08-03). Leave it at 0.
 
 **Git**
 - Branch from and target `feature/autonomous-github-dispatch`. **One PR per phase** (PR1, then PR2).
 - Never merge, self-merge, or push to `master`.
+- **Starting state:** `claude-deck-g1` is currently on `feature/autonomous-github-dispatch-workspaces`, which is already merged (PR #305) and 10 commits behind the integration branch. Your first action is:
+  ```bash
+  cd /home/juan/work/repos/juanrubio/claude-deck-g1
+  git fetch origin
+  git checkout -b feature/autonomous-github-dispatch-phase-g2-release origin/feature/autonomous-github-dispatch
+  ```
+  Use `origin/feature/autonomous-github-dispatch` as the base, **not** the local branch of that name — the local one is checked out in the live worktree and a shared-worktree checkout of it would fail. PR2 branches separately, from the integration branch again after PR1 merges.
 
 **Forbidden operations** (all of these have caused incidents)
 - Do **not** add any new `dispatch_status` value. This design needs none — see spec §3.1 and §3.1a-bis.
@@ -41,8 +56,10 @@ These apply to **every** task. They are not negotiable and several are safety ru
 - New columns: `Mapped[X | None] = mapped_column(..., nullable=True)`.
 
 **Testing**
-- Baseline is **239 passed** in `backend/tests/agent_teams/` (verified 2026-08-02). Run with:
-  `cd backend && source .venv/bin/activate && python -m pytest tests/agent_teams/ -q`
+- Baseline is **239 passed** in `backend/tests/agent_teams/` — verified 2026-08-03 *inside `claude-deck-g1` itself*, so it is your starting number, not a figure from another checkout. Run with:
+  `cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && python -m pytest tests/agent_teams/ -q`
+- **Use `venv`, not `.venv`.** Both directories exist in `claude-deck-g1/backend`; `.venv` has no pytest installed and will fail with `No module named pytest`. Do not try to fix `.venv` — just use `venv`.
+- Always `cd` to the **g1** backend before running pytest. `database_url` is relative to CWD, so running from the live checkout's `backend/` would point the suite at the live soak DB.
 - Every task ends green. If a test fails for a reason your task did not cause, **report it, do not rewrite it.**
 - Known pre-existing failure **outside** this directory: `tests/test_multi_provider_smoke.py:54` (stale monkeypatch). Ignore it; an issue is owed separately.
 
@@ -113,8 +130,14 @@ Add to `backend/tests/agent_teams/test_github_workspace_service.py`:
 async def test_lease_columns_default_to_null(db, tmp_path):
     """A lease predating G2 must read as 'no information', never as a false negative.
 
-    Item 23's live lease is in exactly this state. Spec §3.2: NULL pid makes
-    backstop condition 3 unsatisfiable, so pre-existing leases are retained.
+    Spec §3.2: a NULL pid makes backstop condition 3 unsatisfiable, so any
+    lease that predates this migration is retained rather than reclaimed.
+
+    Verified against the live DB 2026-08-03: both workspaces are currently
+    UNLEASED (leased_item_id IS NULL), so no real row exercises this on the
+    first migration. The test therefore constructs the state, and the guarantee
+    still has to hold — the next acquire() after deployment writes a lease whose
+    pid capture may fail, landing in exactly this shape.
     """
     scope, _, item = await _context(db, tmp_path / "repo")
     workspace = GithubWorkspace(
@@ -137,7 +160,7 @@ async def test_lease_columns_default_to_null(db, tmp_path):
 
 - [ ] **Step 3: Run it and watch it fail**
 
-Run: `cd backend && source .venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py::test_lease_columns_default_to_null -v`
+Run: `cd backend && source venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py::test_lease_columns_default_to_null -v`
 Expected: FAIL — `AttributeError: 'GithubWorkspace' object has no attribute 'lease_token'`
 
 - [ ] **Step 4: Add the ORM columns**
@@ -213,7 +236,7 @@ A settings field, not a module constant — matching `github_leader_ack_timeout_
 
 - [ ] **Step 7: Run the new test and the full suite**
 
-Run: `cd backend && source .venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py::test_lease_columns_default_to_null -v`
+Run: `cd backend && source venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py::test_lease_columns_default_to_null -v`
 Expected: PASS
 
 Run: `python -m pytest tests/agent_teams/ -q`
@@ -375,7 +398,7 @@ Add `import os` to the test file's imports if absent.
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `cd backend && source .venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py -k "proc_start or owner_process_alive" -v`
+Run: `cd backend && source venv/bin/activate && python -m pytest tests/agent_teams/test_github_workspace_service.py -k "proc_start or owner_process_alive" -v`
 Expected: FAIL — `AttributeError: ... has no attribute '_parse_proc_start'`
 
 - [ ] **Step 3: Implement**
@@ -1604,7 +1627,7 @@ Then, following that same fixture shape, one test each for:
 
 - [ ] **Step 2: Run and watch them fail**
 
-Run: `cd backend && source .venv/bin/activate && python -m pytest tests/agent_teams/test_github_dispatch_service.py -k remind -v`
+Run: `cd backend && source venv/bin/activate && python -m pytest tests/agent_teams/test_github_dispatch_service.py -k remind -v`
 Expected: FAIL — `AttributeError: ... has no attribute 'remind_held_leases'`
 
 - [ ] **Step 3: Implement**
