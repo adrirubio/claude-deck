@@ -104,6 +104,29 @@ def _set_identity(runner: FakeGitRunner, path: Path, common_dir: Path, *, linked
 
 
 @pytest.mark.asyncio
+async def test_lease_columns_default_to_null(db, tmp_path):
+    """A lease predating G2 must read as no information."""
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert workspace.lease_token is None
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+    assert workspace.lease_last_owner_contact_at is None
+    assert workspace.lease_release_reminded_at is None
+    assert item.retry_requested_at is None
+    assert item.brief_delivery_nudge_at is None
+    assert item.brief_delivery_nudge_count is None
+    assert item.brief_message_id is None
+
+
+@pytest.mark.asyncio
 async def test_acquire_leases_oldest_available_workspace(db, tmp_path):
     repo_path = tmp_path / "repo"
     scope, _, item = await _context(db, repo_path)
