@@ -2655,6 +2655,23 @@ Implements spec §4.0 and §2.2.
 
 It still needs strengthening, because passing-either-way is exactly the property that makes a test unable to detect the flag being flipped back. Add to it, do not rewrite it: assert the launch request carried `reuse_existing=True`, that a `MailReceipt` exists for the owner member (the brief *reached* the standing session), and that exactly one session exists for the slot afterwards. `launches` already captures the request object, so the first assertion is one line.
 
+**Step 1a: the two fixture adaptations this step requires, and why neither is optional.**
+
+**Added 2026-08-04, after the implementer discovered both and I verified them by removing each in turn and measuring.** The step above says "assert a `MailReceipt` exists" as if the existing fixture supports it. It does not. Two changes are needed, and one of them is a **live-host safety issue**, not a flakiness issue.
+
+**(a) The synthetic session must be created against the canonical slot member.** `_create_live_slot_launch_session` used the local `_create_registered_slot_member` helper, which mints a `slot:test:<id>` member. Production's brief send resolves its recipient through `agent_mail_service.get_or_create_slot_member` (`github_dispatch_service.py:604`), which produces a *different* member row — so the receipt lands on a member the test never looks at. Measured with the old helper: `assert len(receipts) == 1` fails `0 == 1`. Use `get_or_create_slot_member` in the fixture. Leave `_create_registered_slot_member` in place — eight other tests still call it for the *leader*, where the canonical identity is not what is being asserted.
+
+**(b) `sync_observed_sessions` and `_send_tmux_inbox_check` must be patched out, because unpatched they reach the real host.** This is the important one. `auto_nudge_members` calls `await self.sync_observed_sessions(db)` unconditionally (`agent_mail_service.py:1136`), which calls `discover_agent_sessions()` — and that shells out to `tmux list-panes -a` on the **actual machine** (`agent_bridge/discovery.py:102`). Nothing in `tests/agent_teams/conftest.py` fakes it; the only autouse fixture there rewrites `HOME`.
+
+Two distinct consequences, both real on this host:
+
+1. Real discovery finds none of the test's synthetic panes, so the sync deletes the fixture's session and the slot-session assertion fails `0 == 1`. Measured.
+2. Worse: `_send_tmux_inbox_check` runs `tmux send-keys -t <target> -l <prompt>` followed by `Enter` (`:1097-1107`). Against real discovered targets, **a test run types into live agent panes.** Five tizonia sessions are running on this host. A test suite must never be able to do that.
+
+Patch both on the `agent_mail_service` singleton with `monkeypatch.setattr`, as narrowly as the test needs. Do not "fix" this by weakening `auto_nudge_members` to skip the sync — the sync is correct in production, and Task 13 depends on it.
+
+This is a general hazard, not a Task 10 quirk: **any** `agent_teams` test that reaches the nudge path has it. `sync_observed_sessions` has three callers in `agent_mail_service` (`:1136`, `:1168`, `:1195`), so there is more than one route in. Task 11's tests avoid it only because `tests/agent_mail/test_registry.py:700` already fakes `discover_agent_sessions` and `subprocess.run` — which is exactly why the plan tells you to model that fixture. If you touch the nudge path from `tests/agent_teams/`, patch it there too, and say so in the PR body.
+
 - [ ] **Step 1b: The unlisted test the flag flip breaks**
 
 **Added 2026-08-04.** Flipping the flag breaks exactly one test in the suite, and this task did not name it. Measured on the merged tree — `429 passed, 1 failed`, this one:
@@ -2701,7 +2718,11 @@ One word changes. The override stays: it is *ignored* on the reuse branch (which
 
 - [ ] **Step 5: Run the suite, then commit**
 
-Run `python -m pytest tests/agent_teams/ tests/agent_mail/ -q`. **Expected: `432 passed`** — the merged tree's 430, plus Step 1b's rewritten test still counting as one, plus Step 1's and Step 2's two new tests. Measured baseline: the merged integration branch is `430 passed`, and flipping the flag alone gives `429 passed, 1 failed`. If anything other than Step 1b's test is red, stop and report.
+Run `python -m pytest tests/agent_teams/ tests/agent_mail/ -q`. **Expected: `431 passed`.**
+
+**Corrected 2026-08-04 — this step said 432, which was wrong.** The arithmetic is 430 + **one** new test, not two. Only Step 2 adds a test function. Step 1 *strengthens* `test_dispatch_proceeds_with_only_standing_session` in place and Step 1b *renames* one, and neither changes the collected count — a rename is not an addition. Measured on the implementer's tree: `431 passed`, 89 test functions in the file against 88 at baseline.
+
+For reference, the other two measured points: the merged integration branch is `430 passed`, and flipping the flag alone gives `429 passed, 1 failed`. If anything other than Step 1b's test is red before you implement, stop and report.
 
 ```bash
 git add -A backend
