@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pathlib
 from datetime import datetime
 
 from sqlalchemy import select
@@ -57,6 +58,31 @@ class GithubWorkspaceService:
             await process.wait()
             return 124, f"git {' '.join(args)} timed out after {GIT_TIMEOUT_SECONDS}s"
         return process.returncode, stdout.decode("utf-8", "replace")
+
+    def _parse_proc_start(self, raw: str) -> str | None:
+        """Return field 22 (starttime) from a /proc/<pid>/stat line."""
+        try:
+            return raw[raw.rindex(")") + 2:].split()[19]
+        except (ValueError, IndexError):
+            return None
+
+    def _read_proc_start(self, pid: int) -> str | None:
+        """Read a process start time while preserving process-gone errors."""
+        return self._parse_proc_start(pathlib.Path(f"/proc/{pid}/stat").read_text())
+
+    def _owner_process_is_alive(self, workspace: GithubWorkspace) -> bool:
+        """Return whether the process briefed with this lease is still running."""
+        if workspace.leased_owner_pid is None:
+            return True
+        try:
+            current_start = self._read_proc_start(workspace.leased_owner_pid)
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        except OSError:
+            return True
+        if current_start is None or workspace.leased_owner_proc_start is None:
+            return True
+        return current_start == workspace.leased_owner_proc_start
 
     async def acquire(
         self,

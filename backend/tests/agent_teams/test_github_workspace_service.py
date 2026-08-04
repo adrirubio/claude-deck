@@ -1,4 +1,5 @@
 """Workspace lease, provisioning, adoption, and reset tests."""
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -124,6 +125,136 @@ async def test_lease_columns_default_to_null(db, tmp_path):
     assert item.brief_delivery_nudge_at is None
     assert item.brief_delivery_nudge_count is None
     assert item.brief_message_id is None
+
+
+def test_read_proc_start_handles_comm_containing_spaces_and_parens():
+    """Field 2 of /proc/<pid>/stat is parenthesized and may contain spaces or parens.
+
+    A naive split() puts starttime at the wrong index. Spec §3.2 pins the
+    rindex(")") recipe; this fixture is the case that breaks the naive version.
+
+    Correction (2026-08-03): an earlier draft used range(100, 118) filler and
+    landed the sentinel at index 25, so the test failed on its own arithmetic
+    before reaching any production code. The field list is now built explicitly
+    and its length asserted, because the bug was a hand-count and a hand-count
+    is exactly what must not be trusted twice.
+    """
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    # Everything after comm and before starttime: state + the six fixed numeric
+    # fields (ppid pgrp session tty_nr tpgid flags), then filler. starttime is
+    # field 22 overall = index 19 counting from state, so exactly 19 values
+    # precede it.
+    before_starttime = ["S", "1", "12345", "12345", "0", "-1", "4194560"] + [
+        str(n) for n in range(100, 112)
+    ]
+    assert len(before_starttime) == 19  # guards the fixture, not the code
+    raw = (
+        "12345 (weird (proc) name) "
+        + " ".join(before_starttime)
+        + " 987654321 "
+        + " ".join(str(n) for n in range(200, 210))
+    )
+
+    assert raw[raw.rindex(")") + 2:].split()[19] == "987654321"
+    # The fixture must also DISCRIMINATE: every naive parse has to miss. If any
+    # of these ever equals the sentinel, the fixture stopped testing the defect.
+    assert raw.split()[19] != "987654321"
+    assert raw.split()[21] != "987654321"
+    assert raw[raw.index(")") + 2:].split()[19] != "987654321"
+
+    assert service._parse_proc_start(raw) == "987654321"
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_true_when_pid_is_null(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path=str(tmp_path / "ws"), leased_item_id=item.id
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert service._owner_process_is_alive(workspace) is True
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_false_for_dead_pid(db, tmp_path, monkeypatch):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=123456,
+        leased_owner_proc_start="123",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    def _dead(_pid):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(service, "_read_proc_start", _dead)
+
+    assert service._owner_process_is_alive(workspace) is False
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_false_when_proc_start_differs(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=os.getpid(),
+        leased_owner_proc_start="999999999",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert service._owner_process_is_alive(workspace) is False
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_true_for_this_process(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=os.getpid(),
+        leased_owner_proc_start=service._read_proc_start(os.getpid()),
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert service._owner_process_is_alive(workspace) is True
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_true_when_proc_unreadable(db, tmp_path, monkeypatch):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=os.getpid(),
+        leased_owner_proc_start="123",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    def _boom(_pid):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(service, "_read_proc_start", _boom)
+
+    assert service._owner_process_is_alive(workspace) is True
 
 
 @pytest.mark.asyncio
