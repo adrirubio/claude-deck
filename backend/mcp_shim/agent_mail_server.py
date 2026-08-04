@@ -605,14 +605,15 @@ def deck_report_dispatch_status(
     pr_number: Optional[int] = None,
     reassign_to_slot_id: Optional[int] = None,
     note: Optional[str] = None,
+    lease_token: Optional[str] = None,
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
     status is one of: triaging, ack_received, revision_requested, in_progress,
     pr_opened, handoff_initiated (with reassign_to_slot_id), handoff_accepted,
-    blocked. Report ack_received right after the team leader acknowledges your
-    plan. Called by the owner slot the brain dispatched the issue to. Include
-    work_item_id from your bootstrap prompt.
+    blocked, workspace_released. Report ack_received right after the team leader
+    acknowledges your plan. Called by the owner slot the brain dispatched the
+    issue to. Include work_item_id and lease_token from your bootstrap prompt.
     """
     identity = _ensure_registered()
     member = identity.get("data", {}).get("member", {}) if identity.get("ok") else {}
@@ -623,6 +624,7 @@ def deck_report_dispatch_status(
         "reassign_to_slot_id": reassign_to_slot_id,
         "note": note,
         "reporting_slot_id": member.get("team_slot_id"),
+        "lease_token": lease_token,
     }
     return _dispatch_request("POST", "/dispatch-status", json=payload)
 

@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     github_owner_idle_timeout_seconds: int = 900
     github_nudge_grace_seconds: int = 180
     github_min_available_memory_mb: int = 3000
+    github_stale_lease_backstop_seconds: int = 21600
+    github_brief_delivery_max_nudges: int = 2
 
     # Server settings
     host: str = "0.0.0.0"

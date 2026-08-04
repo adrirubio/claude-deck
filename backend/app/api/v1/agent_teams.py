@@ -1,6 +1,7 @@
 """Agent Team Preset endpoints."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from string import Formatter
 
@@ -31,6 +32,8 @@ from app.models.schemas import (
     GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
     GithubWorkspaceCreate,
+    GithubWorkspaceForceReleaseRequest,
+    GithubWorkspaceForceReleaseResponse,
     GithubWorkspaceListResponse,
     GithubWorkspaceResponse,
     TeamGithubScopeCreate,
@@ -39,9 +42,13 @@ from app.models.schemas import (
     TeamGithubScopeUpdate,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
-from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_dispatch_service import (
+    _RELEASABLE_STATUSES,
+    github_dispatch_service,
+)
 from app.services.github_workspace_service import (
     GithubWorkspaceError,
+    GithubWorkspaceLeaseTokenMismatch,
     GithubWorkspaceResetError,
     github_workspace_service,
 )
@@ -50,6 +57,8 @@ from app.services.agent_team_service import PlanConflictError, agent_team_servic
 from app.services.providers.base import ProviderLaunchError
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 _WORKSPACE_CONFLICT_CODES = {
     "workspace_path_registered",
@@ -158,6 +167,11 @@ def _workspace_lease_state(workspace: GithubWorkspace) -> str:
 
 
 def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
+    lease_age_seconds = None
+    if workspace.leased_item_id is not None and workspace.leased_at is not None:
+        lease_age_seconds = max(
+            0, int((datetime.utcnow() - workspace.leased_at).total_seconds())
+        )
     return GithubWorkspaceResponse(
         id=workspace.id,
         scope_id=workspace.scope_id,
@@ -168,6 +182,10 @@ def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
         leased_item_id=workspace.leased_item_id,
         leased_at=workspace.leased_at,
         released_at=workspace.released_at,
+        lease_token=workspace.lease_token,
+        lease_last_owner_contact_at=workspace.lease_last_owner_contact_at,
+        lease_release_reminded_at=workspace.lease_release_reminded_at,
+        lease_age_seconds=lease_age_seconds,
         provision_error=workspace.provision_error,
         enabled=workspace.enabled,
         created_at=workspace.created_at,
@@ -201,6 +219,7 @@ def _work_item_response(
         pr_number=item.pr_number,
         retry_count=item.retry_count,
         last_verified_sha=item.last_verified_sha,
+        retry_requested_at=item.retry_requested_at,
         escalation_reason=item.escalation_reason,
         status_note=item.status_note,
         auto_merged_at=item.auto_merged_at,
@@ -311,8 +330,51 @@ async def report_dispatch_status(
             item.pr_number = report.pr_number
         item.updated_at = now
         await db.commit()
+    elif report.status == "workspace_released":
+        if report.reporting_slot_id != item.owner_slot_id:
+            raise HTTPException(
+                status_code=409,
+                detail="only the owner slot may release its workspace",
+            )
+        if report.lease_token is None:
+            raise HTTPException(status_code=400, detail="lease_token required")
+        if item.dispatch_status not in _RELEASABLE_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"workspace cannot be released while the item is "
+                    f"{item.dispatch_status}; release is legal only from "
+                    f"{', '.join(_RELEASABLE_STATUSES)}"
+                ),
+            )
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None:
+            blocker = await github_workspace_service.release_blocker(scope, workspace)
+            if blocker is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"workspace will not be released: {blocker}. Commit and "
+                        "push, or report the situation in status_note and leave "
+                        "the lease held."
+                    ),
+                )
+        try:
+            await github_workspace_service.release_by_token(
+                db, item.id, lease_token=report.lease_token
+            )
+        except GithubWorkspaceLeaseTokenMismatch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
+
+    if (
+        report.status != "workspace_released"
+        and report.reporting_slot_id == item.owner_slot_id
+    ):
+        await github_workspace_service.touch_owner_contact(
+            db, item.id, lease_token=report.lease_token
+        )
 
     await db.refresh(item)
     return {
@@ -607,6 +669,61 @@ async def reprobe_github_workspace(
     return _workspace_response(workspace)
 
 
+@router.post(
+    "/github-scopes/{scope_id}/workspaces/{workspace_id}/force-release",
+    response_model=GithubWorkspaceForceReleaseResponse,
+)
+async def force_release_github_workspace(
+    scope_id: int,
+    workspace_id: int,
+    request: GithubWorkspaceForceReleaseRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    workspace = await db.get(GithubWorkspace, workspace_id)
+    if workspace is None or workspace.scope_id != scope_id:
+        raise HTTPException(status_code=404, detail="GitHub workspace not found")
+    if workspace.leased_item_id is None:
+        raise _conflict(
+            "Workspace is not leased",
+            block_code="workspace_not_leased",
+        )
+    if workspace.lease_token != request.expected_lease_token:
+        raise _conflict(
+            f"Lease token mismatch: expected {request.expected_lease_token}, "
+            f"current {workspace.lease_token}. Refresh and re-check before forcing.",
+            block_code="lease_token_mismatch",
+        )
+
+    # Capture both risk signals and the item identity before release clears the
+    # lease. The operator override reports potential loss but deliberately does
+    # not gate on it.
+    discarded_paths, unpushed_commits = await github_workspace_service.pending_work(
+        scope, workspace
+    )
+    released_item_id = workspace.leased_item_id
+    logger.warning(
+        "force-release workspace %s (item %s) by %s: %s; discarding: %s dirty "
+        "path(s), %s unpushed commit(s)",
+        workspace.id,
+        released_item_id,
+        request.requested_by or "unknown",
+        request.reason,
+        len((discarded_paths or "").splitlines()),
+        unpushed_commits if unpushed_commits is not None else "unknown",
+    )
+    await github_workspace_service.release(db, released_item_id)
+    await db.refresh(workspace)
+    return GithubWorkspaceForceReleaseResponse(
+        workspace=_workspace_response(workspace),
+        released_item_id=released_item_id,
+        discarded_paths=discarded_paths,
+        unpushed_commits=unpushed_commits,
+    )
+
+
 @router.get(
     "/presets/{preset_id}/github-work-items",
     response_model=GithubWorkItemListResponse,
@@ -663,7 +780,7 @@ async def retry_github_work_item(
                 "it. Resolve or close the PR first."
             ),
         )
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
     if request is not None and request.reason:
         item.pending_reason = f"retry requested: {request.reason}"
     await db.commit()

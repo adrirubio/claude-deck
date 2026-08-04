@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -9,11 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
-    AgentTeamLaunchItem,
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
-    MailAgentSession,
     MailTeamMember,
     TeamGithubScope,
 )
@@ -24,6 +23,9 @@ from app.services.github_workspace_service import github_workspace_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
+# These states are terminal for the owner. Failed is included because a failed
+# launch may still have created a live pane that retained the workspace lease.
+_RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 _LAUNCH_FAILED_STATUSES = {
     "failed",
     "blocked",
@@ -35,7 +37,29 @@ logger = logging.getLogger(__name__)
 
 
 class GithubDispatchService:
-    def reset_for_retry(self, item: GithubWorkItem) -> None:
+    async def reset_for_retry(self, db: AsyncSession, item: GithubWorkItem) -> None:
+        """Request re-dispatch, deferring while the item still holds a lease.
+
+        The deferred path must preserve the escalation reason because PR recovery
+        and escalation idempotence both depend on it while the item remains
+        escalated.
+        """
+        held = (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.leased_item_id == item.id
+                )
+            )
+        ).scalar_one_or_none()
+        now = datetime.utcnow()
+        if held is not None:
+            item.retry_requested_at = now
+            item.status_note = (
+                "Re-dispatch requested; waiting for the current owner to release "
+                f"workspace {held.path}."
+            )
+            item.updated_at = now
+            return
         item.dispatch_status = "pending"
         item.escalation_reason = None
         item.pending_reason = None
@@ -46,7 +70,34 @@ class GithubDispatchService:
         item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
-        item.updated_at = datetime.utcnow()
+        item.retry_requested_at = None
+        item.updated_at = now
+
+    async def promote_deferred_retries(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> int:
+        """Complete deferred retries whose workspace lease has been released."""
+        candidates = (
+            await db.execute(
+                select(GithubWorkItem)
+                .outerjoin(
+                    GithubWorkspace,
+                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
+                )
+                .where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status.in_(("escalated", "failed")),
+                    GithubWorkItem.retry_requested_at.is_not(None),
+                    GithubWorkspace.id.is_(None),
+                )
+                .order_by(GithubWorkItem.id)
+            )
+        ).scalars().all()
+        for item in candidates:
+            await self.reset_for_retry(db, item)
+        if candidates:
+            await db.commit()
+        return len(candidates)
 
     async def route_item(
         self,
@@ -111,32 +162,6 @@ class GithubDispatchService:
             ).scalar_one()
         )
 
-    async def slot_has_live_owner_session(self, db: AsyncSession, slot_id: int) -> bool:
-        sessions = (
-            await db.execute(
-                select(MailAgentSession)
-                .join(
-                    AgentTeamLaunchItem,
-                    (AgentTeamLaunchItem.tmux_target == MailAgentSession.tmux_target)
-                    & (AgentTeamLaunchItem.slot_id == MailAgentSession.team_slot_id),
-                )
-                .join(
-                    GithubWorkItem,
-                    GithubWorkItem.launch_id == AgentTeamLaunchItem.launch_id,
-                )
-                .where(
-                    MailAgentSession.team_slot_id == slot_id,
-                    MailAgentSession.tmux_target.is_not(None),
-                )
-                .distinct()
-            )
-        ).scalars().all()
-        now = datetime.utcnow()
-        return any(
-            agent_mail_service._effective_status(session, now) != "offline"
-            for session in sessions
-        )
-
     def _available_memory_mb(self) -> int | None:
         try:
             with open("/proc/meminfo", encoding="utf-8") as meminfo:
@@ -151,6 +176,33 @@ class GithubDispatchService:
         except (OSError, ValueError):
             return None
         return None
+
+    def _resolve_pane_pid(self, tmux_target: str | None) -> int | None:
+        """Resolve a tmux target to its pane pid on a best-effort basis."""
+        if not tmux_target:
+            return None
+        try:
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", tmux_target, "#{pane_pid}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            logger.warning("could not resolve pane pid for %s", tmux_target)
+            return None
+        if result.returncode != 0:
+            return None
+        raw = result.stdout.strip()
+        if not raw.isdigit():
+            logger.warning(
+                "tmux returned no pane pid for %s (stdout=%r) — the lease will "
+                "not be auto-reclaimable",
+                tmux_target,
+                raw,
+            )
+            return None
+        return int(raw)
 
     async def dispatch_pending(
         self,
@@ -212,13 +264,6 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
-            if await self.slot_has_live_owner_session(db, owner_slot_id):
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
-                item.pending_reason = "queued_owner_session_live"
-                item.updated_at = datetime.utcnow()
-                await db.commit()
-                continue
             workspace = await github_workspace_service.acquire(db, scope, item)
             if workspace is None:
                 item.owner_slot_id = owner_slot_id
@@ -264,6 +309,7 @@ class GithubDispatchService:
                 item.routing_method = method
                 item.pending_reason = None
                 await self.escalate(db, item, "plan_blocked")
+                await github_workspace_service.release(db, item.id)
                 await db.commit()
                 continue
             except Exception:
@@ -286,6 +332,25 @@ class GithubDispatchService:
             else:
                 item.dispatch_status = "dispatched"
                 item.dispatched_at = datetime.utcnow()
+                pane_pid = getattr(launch_item, "pane_pid", None) or self._resolve_pane_pid(
+                    tmux_target
+                )
+                if pane_pid is not None:
+                    try:
+                        proc_start = github_workspace_service._read_proc_start(pane_pid)
+                    except OSError:
+                        proc_start = None
+                    if proc_start is not None:
+                        workspace.leased_owner_pid = pane_pid
+                        workspace.leased_owner_proc_start = proc_start
+                        workspace.updated_at = datetime.utcnow()
+                    else:
+                        logger.warning(
+                            "captured pane pid %s for item %s but could not read "
+                            "its start time; lease will not be auto-reclaimable",
+                            pane_pid,
+                            item.id,
+                        )
                 slots_dispatched_this_batch.add(owner_slot_id)
                 scope_dispatched_this_batch += 1
             item.pending_reason = None
@@ -369,9 +434,16 @@ class GithubDispatchService:
                 body,
                 "",
                 "Required status reporting:",
-                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"triaging\", note=\"...\")`.",
-                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"pr_opened\", pr_number=<PR number>)`.",
-                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"blocked\", note=\"...\")`.",
+                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
+                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"pr_opened\", lease_token=\"{workspace.lease_token}\", "
+                "pr_number=<PR number>)`.",
+                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"blocked\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
+                f"- Once the item reaches a terminal state, commit and push all work, then call "
+                f"`deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"workspace_released\", lease_token=\"{workspace.lease_token}\")`.",
             ]
         )
         if item.issue_type == "design":
@@ -662,6 +734,77 @@ class GithubDispatchService:
             ):
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
+
+    async def remind_held_leases(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> int:
+        """Remind owners of terminal items that still hold a workspace lease.
+
+        This never escalates: the work is already terminal for the owner, and
+        the reminder exists only to bound a forgotten release. Its clock lives
+        on the workspace so it cannot interfere with acknowledgment timers.
+        """
+        grace = timedelta(seconds=settings.github_nudge_grace_seconds)
+        now = datetime.utcnow()
+        held = (
+            await db.execute(
+                select(GithubWorkspace, GithubWorkItem)
+                .join(
+                    GithubWorkItem,
+                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
+                )
+                .where(
+                    GithubWorkspace.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+                )
+                .order_by(GithubWorkspace.id)
+            )
+        ).all()
+        reminded = 0
+        for workspace, item in held:
+            if (
+                workspace.lease_release_reminded_at is not None
+                and now - workspace.lease_release_reminded_at < grace
+            ):
+                continue
+            if item.retry_requested_at is not None:
+                urgency = (
+                    "\n\n**A re-dispatch of this issue is queued behind this "
+                    "release.** It cannot start until you release the workspace."
+                )
+            else:
+                urgency = ""
+            await self.notify_owner(
+                db,
+                item,
+                subject=f"Release needed: issue #{item.issue_number}",
+                body_markdown=(
+                    f"Issue #{item.issue_number} ({item.issue_title}) is "
+                    f"`{item.dispatch_status}` but still holds workspace "
+                    f"`{workspace.path}`. Commit and push anything you want to "
+                    "keep, then release it:\n\n"
+                    "```\n"
+                    "deck_report_dispatch_status(\n"
+                    f"    work_item_id={item.id},\n"
+                    '    status="workspace_released",\n'
+                    f'    lease_token="{workspace.lease_token}",\n'
+                    ")\n"
+                    "```"
+                    f"{urgency}"
+                ),
+                payload={
+                    "kind": "github_lease_release_reminder",
+                    "work_item_id": item.id,
+                    "issue_number": item.issue_number,
+                    "workspace_path": workspace.path,
+                },
+            )
+            workspace.lease_release_reminded_at = now
+            workspace.updated_at = now
+            reminded += 1
+        if reminded:
+            await db.commit()
+        return reminded
 
     def _within_registration_grace(self, item: GithubWorkItem) -> bool:
         grace_started_at = item.dispatched_at or item.updated_at or item.created_at

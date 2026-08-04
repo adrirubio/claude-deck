@@ -8,7 +8,7 @@ import pytest_asyncio
 
 from app.database import get_db
 from app.main import app
-from app.models.database import AgentTeamPreset, GithubWorkItem, TeamGithubScope
+from app.models.database import AgentTeamPreset, GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 
@@ -457,3 +457,29 @@ async def test_retry_allowed_when_no_pr(client, db):
     assert response.status_code == 200
     await db.refresh(item)
     assert item.dispatch_status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_retry_endpoint_defers_while_workspace_is_leased(client, db):
+    item = await _create_retry_work_item(db, pr_number=None)
+    workspace = GithubWorkspace(
+        scope_id=item.scope_id,
+        path="/tmp/snazzyemail-retry",
+        leased_item_id=item.id,
+        lease_token="api-token",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        json={"reason": "try again"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
+    assert body["retry_requested_at"] is not None
+    assert workspace.leased_item_id == item.id

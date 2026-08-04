@@ -430,6 +430,30 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_received_at DATETIME"))
     if work_item_columns and "last_nudge_at" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN last_nudge_at DATETIME"))
+    if work_item_columns and "retry_requested_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN retry_requested_at DATETIME"))
+    if work_item_columns and "brief_delivery_nudge_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_at DATETIME"))
+    if work_item_columns and "brief_delivery_nudge_count" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_count INTEGER"))
+    if work_item_columns and "brief_message_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_message_id INTEGER"))
+
+    workspace_columns = await _sqlite_columns(conn, "github_workspaces")
+    if workspace_columns and "lease_token" not in workspace_columns:
+        await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN lease_token VARCHAR"))
+    if workspace_columns and "leased_owner_pid" not in workspace_columns:
+        await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN leased_owner_pid INTEGER"))
+    if workspace_columns and "leased_owner_proc_start" not in workspace_columns:
+        await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN leased_owner_proc_start VARCHAR"))
+    if workspace_columns and "lease_last_owner_contact_at" not in workspace_columns:
+        await conn.execute(
+            text("ALTER TABLE github_workspaces ADD COLUMN lease_last_owner_contact_at DATETIME")
+        )
+    if workspace_columns and "lease_release_reminded_at" not in workspace_columns:
+        await conn.execute(
+            text("ALTER TABLE github_workspaces ADD COLUMN lease_release_reminded_at DATETIME")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}

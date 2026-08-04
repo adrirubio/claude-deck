@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-from datetime import datetime
+import pathlib
+import secrets
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.agent_bridge.discovery import discover_agent_sessions
 
@@ -23,6 +27,8 @@ _GIT_ENV = {
 
 _RECLAIMABLE_STATUSES = ("escalated", "failed", "merged", "completed")
 
+logger = logging.getLogger(__name__)
+
 
 class GithubWorkspaceError(RuntimeError):
     def __init__(self, message: str, block_code: str = "workspace_not_a_worktree"):
@@ -34,6 +40,11 @@ class GithubWorkspaceResetError(GithubWorkspaceError):
     def __init__(self, message: str, *, transient: bool):
         super().__init__(message, "workspace_reset_failed")
         self.transient = transient
+
+
+class GithubWorkspaceLeaseTokenMismatch(GithubWorkspaceError):
+    def __init__(self, message: str):
+        super().__init__(message, "lease_token_mismatch")
 
 
 class GithubWorkspaceService:
@@ -57,6 +68,31 @@ class GithubWorkspaceService:
             await process.wait()
             return 124, f"git {' '.join(args)} timed out after {GIT_TIMEOUT_SECONDS}s"
         return process.returncode, stdout.decode("utf-8", "replace")
+
+    def _parse_proc_start(self, raw: str) -> str | None:
+        """Return field 22 (starttime) from a /proc/<pid>/stat line."""
+        try:
+            return raw[raw.rindex(")") + 2:].split()[19]
+        except (ValueError, IndexError):
+            return None
+
+    def _read_proc_start(self, pid: int) -> str | None:
+        """Read a process start time while preserving process-gone errors."""
+        return self._parse_proc_start(pathlib.Path(f"/proc/{pid}/stat").read_text())
+
+    def _owner_process_is_alive(self, workspace: GithubWorkspace) -> bool:
+        """Return whether the process briefed with this lease is still running."""
+        if workspace.leased_owner_pid is None:
+            return True
+        try:
+            current_start = self._read_proc_start(workspace.leased_owner_pid)
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+        except OSError:
+            return True
+        if current_start is None or workspace.leased_owner_proc_start is None:
+            return True
+        return current_start == workspace.leased_owner_proc_start
 
     async def acquire(
         self,
@@ -91,6 +127,11 @@ class GithubWorkspaceService:
         workspace.leased_item_id = item.id
         workspace.leased_at = now
         workspace.released_at = None
+        workspace.lease_token = secrets.token_hex(8)
+        workspace.leased_owner_pid = None
+        workspace.leased_owner_proc_start = None
+        workspace.lease_last_owner_contact_at = None
+        workspace.lease_release_reminded_at = None
         workspace.updated_at = now
         await db.commit()
 
@@ -115,12 +156,126 @@ class GithubWorkspaceService:
         now = datetime.utcnow()
         workspace.leased_item_id = None
         workspace.released_at = now
+        workspace.lease_token = None
+        workspace.leased_owner_pid = None
+        workspace.leased_owner_proc_start = None
+        workspace.lease_last_owner_contact_at = None
+        workspace.lease_release_reminded_at = None
         workspace.updated_at = now
         await db.commit()
 
-    async def reclaim_stale(self, db: AsyncSession, scope: TeamGithubScope) -> int:
-        from app.services.github_dispatch_service import github_dispatch_service
+    async def get_leased_workspace(
+        self, db: AsyncSession, item_id: int
+    ) -> GithubWorkspace | None:
+        return (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.leased_item_id == item_id
+                )
+            )
+        ).scalar_one_or_none()
 
+    async def release_by_token(
+        self, db: AsyncSession, item_id: int, *, lease_token: str
+    ) -> None:
+        """Release only the workspace acquisition named by the token.
+
+        Item identity alone cannot distinguish a stale report from an earlier
+        dispatch attempt. Requiring the acquisition token prevents that report
+        from releasing a replacement owner's live lease.
+        """
+        workspace = await self.get_leased_workspace(db, item_id)
+        if workspace is None:
+            return
+        if workspace.lease_token != lease_token:
+            raise GithubWorkspaceLeaseTokenMismatch(
+                f"lease_token does not match the current lease for item {item_id}"
+            )
+        await self.release(db, item_id)
+
+    async def release_blocker(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> str | None:
+        """Return why a workspace must not be released, failing closed."""
+        if workspace.kind == "primary":
+            return None
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        if return_code != 0:
+            return output.strip() or "workspace status could not be determined"
+        if output.strip():
+            return f"uncommitted or untracked changes:\n{output.strip()}"
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        if return_code != 0:
+            return output.strip() or "unpushed commits could not be determined"
+        if output.strip() != "0":
+            return (
+                f"{output.strip()} commit(s) not pushed to {scope.base_ref}; "
+                "the next dispatch would reset --hard them away"
+            )
+        return None
+
+    async def pending_work(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> tuple[str | None, int | None]:
+        """Return pending paths and commits for reporting, never as a gate.
+
+        Unlike release_blocker, observation failures return unknown values and
+        do not veto an operator-authorized force release.
+        """
+        if workspace.kind == "primary":
+            return None, None
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        paths = output.rstrip("\r\n") or None if return_code == 0 else None
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        try:
+            commits = int(output.strip()) if return_code == 0 else None
+        except ValueError:
+            commits = None
+        return paths, commits
+
+    async def touch_owner_contact(
+        self,
+        db: AsyncSession,
+        item_id: int,
+        *,
+        lease_token: str | None = None,
+    ) -> None:
+        """Stamp contact evidence only on the matching workspace acquisition.
+
+        A stale token is a deliberate no-op because contact recording is only a
+        side effect of a status report whose primary state change already
+        succeeded.
+        """
+        workspace = await self.get_leased_workspace(db, item_id)
+        if workspace is None:
+            return
+        if workspace.lease_token is not None and lease_token != workspace.lease_token:
+            logger.info(
+                "ignoring owner contact for item %s: token mismatch (lease is on "
+                "a different attempt)",
+                item_id,
+            )
+            return
+        workspace.lease_last_owner_contact_at = datetime.utcnow()
+        workspace.updated_at = workspace.lease_last_owner_contact_at
+        await db.commit()
+
+    async def reclaim_stale(self, db: AsyncSession, scope: TeamGithubScope) -> int:
+        threshold = datetime.utcnow() - timedelta(
+            seconds=settings.github_stale_lease_backstop_seconds
+        )
         leased = (
             await db.execute(
                 select(GithubWorkspace, GithubWorkItem)
@@ -134,16 +289,38 @@ class GithubWorkspaceService:
         ).all()
         released = 0
         for workspace, item in leased:
+            if workspace.kind == "primary":
+                continue
+            if workspace.leased_at is None or workspace.leased_at > threshold:
+                continue
+            if self._owner_process_is_alive(workspace):
+                continue
             if (
-                item.owner_slot_id is not None
-                and await github_dispatch_service.slot_has_live_owner_session(
-                    db, item.owner_slot_id
-                )
+                workspace.lease_last_owner_contact_at is not None
+                and workspace.lease_last_owner_contact_at > threshold
             ):
+                continue
+            if not await self._worktree_is_quiescent(scope, workspace):
                 continue
             await self.release(db, workspace.leased_item_id)
             released += 1
         return released
+
+    async def _worktree_is_quiescent(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> bool:
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        if return_code != 0 or output.strip():
+            return False
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        if return_code != 0:
+            return False
+        return output.strip() == "0"
 
     async def reset_workspace(
         self,

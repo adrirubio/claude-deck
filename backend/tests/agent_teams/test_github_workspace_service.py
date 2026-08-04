@@ -1,5 +1,6 @@
 """Workspace lease, provisioning, adoption, and reset tests."""
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,6 @@ from app.models.database import (
     GithubWorkspace,
     TeamGithubScope,
 )
-from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_workspace_service import (
     GIT_TIMEOUT_SECONDS,
     GithubWorkspaceError,
@@ -40,12 +40,16 @@ class FakeGitRunner:
         self.calls: list[list[str]] = []
         self.identities: dict[str, tuple[str, str, str] | None] = {}
         self.statuses: dict[str, str] = {}
+        self.rev_counts: dict[str, str] = {}
         self.failures: dict[str, str] = {}
 
     async def __call__(self, args: list[str]) -> tuple[int, str]:
         self.calls.append(args)
         path = args[1] if len(args) > 1 and args[0] == "-C" else ""
         command = args[2] if len(args) > 2 else ""
+        failure = self.failures.get(command)
+        if failure is not None:
+            return 1, failure
         if command == "rev-parse":
             identity = self.identities.get(path)
             if identity is None:
@@ -53,9 +57,8 @@ class FakeGitRunner:
             return 0, "\n".join(identity) + "\n"
         if command == "status":
             return 0, self.statuses.get(path, "")
-        failure = self.failures.get(command)
-        if failure is not None:
-            return 1, failure
+        if command == "rev-list":
+            return 0, self.rev_counts.get(path, "0") + "\n"
         return 0, ""
 
 
@@ -104,6 +107,159 @@ def _set_identity(runner: FakeGitRunner, path: Path, common_dir: Path, *, linked
 
 
 @pytest.mark.asyncio
+async def test_lease_columns_default_to_null(db, tmp_path):
+    """A lease predating G2 must read as no information."""
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert workspace.lease_token is None
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+    assert workspace.lease_last_owner_contact_at is None
+    assert workspace.lease_release_reminded_at is None
+    assert item.retry_requested_at is None
+    assert item.brief_delivery_nudge_at is None
+    assert item.brief_delivery_nudge_count is None
+    assert item.brief_message_id is None
+
+
+def test_read_proc_start_handles_comm_containing_spaces_and_parens():
+    """Field 2 of /proc/<pid>/stat is parenthesized and may contain spaces or parens.
+
+    A naive split() puts starttime at the wrong index. Spec §3.2 pins the
+    rindex(")") recipe; this fixture is the case that breaks the naive version.
+
+    Correction (2026-08-03): an earlier draft used range(100, 118) filler and
+    landed the sentinel at index 25, so the test failed on its own arithmetic
+    before reaching any production code. The field list is now built explicitly
+    and its length asserted, because the bug was a hand-count and a hand-count
+    is exactly what must not be trusted twice.
+    """
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    # Everything after comm and before starttime: state + the six fixed numeric
+    # fields (ppid pgrp session tty_nr tpgid flags), then filler. starttime is
+    # field 22 overall = index 19 counting from state, so exactly 19 values
+    # precede it.
+    before_starttime = ["S", "1", "12345", "12345", "0", "-1", "4194560"] + [
+        str(n) for n in range(100, 112)
+    ]
+    assert len(before_starttime) == 19  # guards the fixture, not the code
+    raw = (
+        "12345 (weird (proc) name) "
+        + " ".join(before_starttime)
+        + " 987654321 "
+        + " ".join(str(n) for n in range(200, 210))
+    )
+
+    assert raw[raw.rindex(")") + 2:].split()[19] == "987654321"
+    # The fixture must also DISCRIMINATE: every naive parse has to miss. If any
+    # of these ever equals the sentinel, the fixture stopped testing the defect.
+    assert raw.split()[19] != "987654321"
+    assert raw.split()[21] != "987654321"
+    assert raw[raw.index(")") + 2:].split()[19] != "987654321"
+
+    assert service._parse_proc_start(raw) == "987654321"
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_true_when_pid_is_null(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path=str(tmp_path / "ws"), leased_item_id=item.id
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert service._owner_process_is_alive(workspace) is True
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_false_for_dead_pid(db, tmp_path, monkeypatch):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=123456,
+        leased_owner_proc_start="123",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    def _dead(_pid):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(service, "_read_proc_start", _dead)
+
+    assert service._owner_process_is_alive(workspace) is False
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_false_when_proc_start_differs(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=os.getpid(),
+        leased_owner_proc_start="999999999",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert service._owner_process_is_alive(workspace) is False
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_true_for_this_process(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=os.getpid(),
+        leased_owner_proc_start=service._read_proc_start(os.getpid()),
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert service._owner_process_is_alive(workspace) is True
+
+
+@pytest.mark.asyncio
+async def test_owner_process_alive_is_true_when_proc_unreadable(db, tmp_path, monkeypatch):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        leased_owner_pid=os.getpid(),
+        leased_owner_proc_start="123",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    def _boom(_pid):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(service, "_read_proc_start", _boom)
+
+    assert service._owner_process_is_alive(workspace) is True
+
+
+@pytest.mark.asyncio
 async def test_acquire_leases_oldest_available_workspace(db, tmp_path):
     repo_path = tmp_path / "repo"
     scope, _, item = await _context(db, repo_path)
@@ -119,6 +275,40 @@ async def test_acquire_leases_oldest_available_workspace(db, tmp_path):
     assert acquired.id == first.id
     assert acquired.leased_item_id == item.id
     assert acquired.leased_at is not None
+
+
+@pytest.mark.asyncio
+async def test_acquire_mints_a_fresh_token_each_acquisition(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add(workspace)
+    await db.commit()
+
+    first = await service.acquire(db, scope, item)
+    first_token = first.lease_token
+    await service.release(db, item.id)
+    second = await service.acquire(db, scope, item)
+
+    assert first_token is not None
+    assert second.lease_token is not None
+    assert second.lease_token != first_token
+
+
+@pytest.mark.asyncio
+async def test_acquire_returning_held_lease_does_not_remint(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add(workspace)
+    await db.commit()
+
+    first = await service.acquire(db, scope, item)
+    token = first.lease_token
+    again = await service.acquire(db, scope, item)
+
+    assert again.id == first.id
+    assert again.lease_token == token
 
 
 @pytest.mark.asyncio
@@ -206,57 +396,188 @@ async def test_release_is_idempotent(db, tmp_path):
     assert workspace.released_at is not None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["escalated", "failed", "merged", "completed"])
-async def test_reclaim_releases_non_working_item_without_live_owner(
-    db, tmp_path, monkeypatch, status
-):
-    scope, _, item = await _context(db, tmp_path / "repo")
-    item.dispatch_status = status
-    workspace = GithubWorkspace(
+@pytest.fixture
+def dead_owner(monkeypatch):
+    def _dead(self, pid):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(GithubWorkspaceService, "_read_proc_start", _dead)
+
+
+def _stale_lease(scope, tmp_path, item, **overrides):
+    fields = dict(
         scope_id=scope.id,
         path=str(tmp_path / "ws"),
         leased_item_id=item.id,
+        leased_at=datetime.utcnow() - timedelta(seconds=25000),
+        lease_token="t1",
+        leased_owner_pid=123456,
+        leased_owner_proc_start="123",
+        lease_last_owner_contact_at=None,
     )
-    db.add(workspace)
+    fields.update(overrides)
+    return GithubWorkspace(**fields)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["escalated", "failed", "merged", "completed"])
+async def test_reclaim_releases_dead_silent_clean_lease(db, tmp_path, dead_owner, status):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = status
+    db.add(_stale_lease(scope, tmp_path, item))
     await db.commit()
-    monkeypatch.setattr(
-        github_dispatch_service,
-        "slot_has_live_owner_session",
-        lambda *_args, **_kwargs: _async_value(False),
-    )
 
     count = await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope)
 
     assert count == 1
-    assert workspace.leased_item_id is None
 
 
 @pytest.mark.asyncio
-async def test_reclaim_retains_non_working_item_with_live_owner(db, tmp_path, monkeypatch):
+async def test_reclaim_retains_lease_with_live_owner_process(db, tmp_path):
     scope, _, item = await _context(db, tmp_path / "repo")
     item.dispatch_status = "escalated"
-    workspace = GithubWorkspace(
-        scope_id=scope.id,
-        path=str(tmp_path / "ws"),
-        leased_item_id=item.id,
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    db.add(
+        _stale_lease(
+            scope,
+            tmp_path,
+            item,
+            leased_owner_pid=os.getpid(),
+            leased_owner_proc_start=service._read_proc_start(os.getpid()),
+        )
     )
-    db.add(workspace)
     await db.commit()
-    monkeypatch.setattr(
-        github_dispatch_service,
-        "slot_has_live_owner_session",
-        lambda *_args, **_kwargs: _async_value(True),
+
+    assert await service.reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_retains_lease_within_threshold(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    db.add(
+        _stale_lease(
+            scope,
+            tmp_path,
+            item,
+            leased_at=datetime.utcnow() - timedelta(seconds=60),
+        )
     )
+    await db.commit()
 
-    count = await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope)
-
-    assert count == 0
-    assert workspace.leased_item_id == item.id
+    assert await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope) == 0
 
 
-async def _async_value(value):
-    return value
+@pytest.mark.asyncio
+async def test_reclaim_retains_lease_with_dirty_tree(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    runner.statuses[str(tmp_path / "ws")] = " M src/foo.c\n"
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_retains_lease_with_unpushed_commits(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    runner.statuses[str(tmp_path / "ws")] = ""
+    runner.rev_counts[str(tmp_path / "ws")] = "3"
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_command", ["status", "rev-list"])
+async def test_reclaim_retains_lease_when_quiescence_cannot_be_determined(
+    db, tmp_path, dead_owner, failing_command
+):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    runner.failures[failing_command] = "fatal: not a git repository"
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_checks_unpushed_commits_against_the_scope_base_ref(
+    db, tmp_path, dead_owner
+):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    scope.base_ref = "origin/feature/integration"
+    item.dispatch_status = "escalated"
+    runner = FakeGitRunner()
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    await GithubWorkspaceService(runner=runner).reclaim_stale(db, scope)
+
+    rev_list = [call for call in runner.calls if len(call) > 2 and call[2] == "rev-list"]
+    assert rev_list
+    assert "origin/feature/integration..HEAD" in rev_list[0]
+
+
+@pytest.mark.asyncio
+async def test_reclaim_retains_lease_with_recent_owner_contact(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    db.add(
+        _stale_lease(
+            scope,
+            tmp_path,
+            item,
+            lease_last_owner_contact_at=datetime.utcnow() - timedelta(seconds=60),
+        )
+    )
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_releases_when_owner_contact_has_aged_out(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    db.add(
+        _stale_lease(
+            scope,
+            tmp_path,
+            item,
+            lease_last_owner_contact_at=datetime.utcnow() - timedelta(seconds=25000),
+        )
+    )
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope) == 1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_never_touches_a_leased_primary_workspace(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "escalated"
+    db.add(_stale_lease(scope, tmp_path, item, kind="primary"))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_ready_for_review_is_not_reclaimable(db, tmp_path, dead_owner):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "ready_for_review"
+    db.add(_stale_lease(scope, tmp_path, item))
+    await db.commit()
+
+    assert await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope) == 0
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 """HTTP contract tests for GitHub workspace operations."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -56,6 +56,7 @@ class ApiGitRunner:
         self.repo_path = repo_path
         self.calls: list[list[str]] = []
         self.status_output = ""
+        self.rev_count = "0"
         self.worktree_add_error: str | None = None
 
     async def __call__(self, args: list[str]):
@@ -69,6 +70,8 @@ class ApiGitRunner:
             return 0, f"{git_dir}\n{common}\n{path}\n"
         if command == "status":
             return 0, self.status_output
+        if command == "rev-list":
+            return 0, f"{self.rev_count}\n"
         if command == "worktree" and self.worktree_add_error:
             return 128, self.worktree_add_error
         return 0, ""
@@ -79,6 +82,29 @@ def no_live_sessions(monkeypatch):
     monkeypatch.setattr(
         "app.services.github_workspace_service.discover_agent_sessions", lambda: []
     )
+
+
+async def _leased_workspace(db, scope, path: Path, *, token="lease-current"):
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=1,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(path),
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow() - timedelta(seconds=90),
+        lease_token=token,
+    )
+    db.add(workspace)
+    await db.commit()
+    return item, workspace
 
 
 @pytest.mark.asyncio
@@ -93,6 +119,9 @@ async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     )
     db.add(item)
     await db.flush()
+    leased_at = datetime.utcnow() - timedelta(seconds=90)
+    owner_contact = datetime.utcnow() - timedelta(seconds=20)
+    reminded_at = datetime.utcnow() - timedelta(seconds=10)
     db.add_all(
         [
             GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "available")),
@@ -100,6 +129,10 @@ async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
                 scope_id=scope.id,
                 path=str(tmp_path / "leased"),
                 leased_item_id=item.id,
+                leased_at=leased_at,
+                lease_token="lease-visible",
+                lease_last_owner_contact_at=owner_contact,
+                lease_release_reminded_at=reminded_at,
             ),
             GithubWorkspace(
                 scope_id=scope.id,
@@ -120,14 +153,166 @@ async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     )
 
     assert response.status_code == 200
-    assert [row["lease_state"] for row in response.json()["workspaces"]] == [
+    rows = response.json()["workspaces"]
+    assert [row["lease_state"] for row in rows] == [
         "available",
         "leased",
         "disabled",
         "disabled_for_dispatch",
     ]
+    assert rows[0]["lease_token"] is None
+    assert rows[0]["lease_last_owner_contact_at"] is None
+    assert rows[0]["lease_release_reminded_at"] is None
+    assert rows[0]["lease_age_seconds"] is None
+    assert rows[1]["lease_token"] == "lease-visible"
+    assert rows[1]["lease_last_owner_contact_at"] is not None
+    assert rows[1]["lease_release_reminded_at"] is not None
+    assert 89 <= rows[1]["lease_age_seconds"] < 120
     missing = await client.get("/api/v1/agent-teams/github-scopes/999999/workspaces")
     assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_force_release_with_matching_token(client, db, tmp_path, monkeypatch):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    item, workspace = await _leased_workspace(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", ApiGitRunner(repo_path))
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "expected_lease_token": "lease-current",
+            "reason": "owner is unavailable",
+            "requested_by": "operator",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["released_item_id"] == item.id
+    assert body["workspace"]["leased_item_id"] is None
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_force_release_rejects_stale_token(client, db, tmp_path, monkeypatch):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    item, workspace = await _leased_workspace(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", ApiGitRunner(repo_path))
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "expected_lease_token": "lease-stale",
+            "reason": "owner is unavailable",
+        },
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "lease-stale" in detail["message"]
+    assert "lease-current" in detail["message"]
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_force_release_reports_dirty_paths_and_proceeds(
+    client, db, tmp_path, monkeypatch
+):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    _, workspace = await _leased_workspace(db, scope, tmp_path / "ws")
+    runner = ApiGitRunner(repo_path)
+    runner.status_output = " M src/foo.c\n?? scratch.txt\n"
+    monkeypatch.setattr(github_workspace_service, "_runner", runner)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "expected_lease_token": "lease-current",
+            "reason": "discard abandoned changes",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["discarded_paths"] == " M src/foo.c\n?? scratch.txt"
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_force_release_rejects_unleased_workspace(client, db, tmp_path):
+    _, scope = await _scope(db, tmp_path / "repo")
+    workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add(workspace)
+    await db.commit()
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "expected_lease_token": "lease-current",
+            "reason": "nothing owns it",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "workspace_not_leased"
+
+
+@pytest.mark.asyncio
+async def test_force_release_reports_clean_unpushed_commits(
+    client, db, tmp_path, monkeypatch
+):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    _, workspace = await _leased_workspace(db, scope, tmp_path / "ws")
+    runner = ApiGitRunner(repo_path)
+    runner.rev_count = "3"
+    monkeypatch.setattr(github_workspace_service, "_runner", runner)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "expected_lease_token": "lease-current",
+            "reason": "discard abandoned commits",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["discarded_paths"] is None
+    assert response.json()["unpushed_commits"] == 3
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"reason": "missing token"},
+        {"expected_lease_token": "lease-current"},
+    ],
+)
+async def test_force_release_requires_token_and_reason(client, db, tmp_path, body):
+    _, scope = await _scope(db, tmp_path / "repo")
+    _, workspace = await _leased_workspace(db, scope, tmp_path / "ws")
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json=body,
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

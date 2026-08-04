@@ -2242,10 +2242,27 @@ class GithubWorkspaceResponse(BaseModel):
     leased_item_id: Optional[int] = None
     leased_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
+    lease_token: Optional[str] = None
+    lease_last_owner_contact_at: Optional[datetime] = None
+    lease_release_reminded_at: Optional[datetime] = None
+    lease_age_seconds: Optional[int] = None
     provision_error: Optional[str] = None
     enabled: bool
     created_at: datetime
     updated_at: datetime
+
+
+class GithubWorkspaceForceReleaseRequest(BaseModel):
+    expected_lease_token: str
+    reason: str
+    requested_by: Optional[str] = None
+
+
+class GithubWorkspaceForceReleaseResponse(BaseModel):
+    workspace: GithubWorkspaceResponse
+    released_item_id: int
+    discarded_paths: Optional[str] = None
+    unpushed_commits: Optional[int] = None
 
 
 class GithubWorkspaceListResponse(BaseModel):
@@ -2273,6 +2290,7 @@ class GithubWorkItemResponse(BaseModel):
     pr_number: Optional[int] = None
     retry_count: int
     last_verified_sha: Optional[str] = None
+    retry_requested_at: Optional[datetime] = None
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None
@@ -2331,6 +2349,7 @@ class DispatchStatusReport(BaseModel):
     reassign_to_slot_id: Optional[int] = None
     note: Optional[str] = None
     reporting_slot_id: Optional[int] = None
+    lease_token: Optional[str] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):
@@ -2342,6 +2361,7 @@ class AgentTeamLaunchResultItem(BaseModel):
     repo_path: str
     session_name: Optional[str] = None
     tmux_target: Optional[str] = None
+    pane_pid: Optional[int] = None
     agent_mail_member_id: Optional[int] = None
     message: Optional[str] = None
     block_code: Optional[str] = None

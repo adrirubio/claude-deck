@@ -566,6 +566,7 @@ class AgentTeamService:
                 repo_path=slot.repo_path,
                 session_name=plan_item.matching_session.get("session_name") if plan_item.matching_session else None,
                 tmux_target=plan_item.matching_session.get("tmux_target") if plan_item.matching_session else None,
+                pane_pid=plan_item.matching_session.get("pid") if plan_item.matching_session else None,
                 agent_mail_member_id=agent_mail_member_id,
                 message="A matching wakeable tmux session was reused",
                 warnings=plan_item.warnings,
@@ -633,6 +634,7 @@ class AgentTeamService:
                 repo_path=repo_path_override or slot.repo_path,
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
+                pane_pid=spawned.get("pid"),
                 message="Session spawned; waiting for Agent Mail registration",
                 warnings=plan_item.warnings,
             )

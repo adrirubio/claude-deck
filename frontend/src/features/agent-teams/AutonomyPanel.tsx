@@ -89,9 +89,6 @@ function pendingReasonLabel(item: GithubWorkItem, ownerName?: string) {
   if (item.pending_reason === 'queued_repo_cap') return 'queued · repo cap reached'
   if (item.pending_reason === 'queued_no_workspace') return 'queued · no free workspace'
   if (item.pending_reason === 'queued_low_memory') return 'queued · low memory'
-  if (item.pending_reason === 'queued_owner_session_live') {
-    return `queued · ${ownerName ?? 'owner'} session still live`
-  }
   return null
 }
 

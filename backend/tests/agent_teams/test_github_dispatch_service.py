@@ -99,6 +99,45 @@ async def _team(db):
     return preset, [architect, backend], scope
 
 
+async def _leased_item_for_reminder(
+    db,
+    scope,
+    *,
+    issue_number: int,
+    dispatch_status: str,
+    owner_slot_id: int | None = None,
+    retry_requested_at: datetime | None = None,
+    reminded_at: datetime | None = None,
+):
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=issue_number,
+        issue_title=f"Issue {issue_number}",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status=dispatch_status,
+        owner_slot_id=owner_slot_id,
+        retry_requested_at=retry_requested_at,
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id.is_(None),
+            )
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    workspace.lease_token = f"tok-{issue_number}"
+    workspace.lease_release_reminded_at = reminded_at
+    await db.commit()
+    return item, workspace
+
+
 class _LabelsClient:
     def __init__(self, labels):
         self._labels = labels
@@ -357,24 +396,31 @@ def test_ack_lifecycle_settings_present():
     assert settings.github_nudge_grace_seconds > 0
 
 
-def test_reset_for_retry_clears_ack_received_at():
+@pytest.mark.asyncio
+async def test_reset_for_retry_clears_ack_received_at(db):
+    _, _, scope = await _team(db)
     item = GithubWorkItem(
-        scope_id=1,
+        scope_id=scope.id,
         issue_number=819,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
         issue_type="code",
         dispatch_status="escalated",
         escalation_reason="plan_blocked",
         ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
         dispatched_at=datetime(2026, 7, 24, 17, 12, 0),
     )
+    db.add(item)
+    await db.commit()
 
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
 
     assert item.ack_received_at is None
 
 
 @pytest.mark.asyncio
-async def test_reset_for_retry_does_not_release_workspace(db):
+async def test_reset_for_retry_defers_while_a_lease_is_held(db):
     _, _, scope = await _team(db)
     item = GithubWorkItem(
         scope_id=scope.id,
@@ -383,6 +429,7 @@ async def test_reset_for_retry_does_not_release_workspace(db):
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="escalated",
+        escalation_reason="plan_blocked",
     )
     db.add(item)
     await db.flush()
@@ -396,11 +443,175 @@ async def test_reset_for_retry_does_not_release_workspace(db):
     workspace.leased_item_id = item.id
     await db.commit()
 
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
     await db.commit()
 
-    assert item.dispatch_status == "pending"
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
     assert workspace.leased_item_id == item.id
+    assert item.escalation_reason == "plan_blocked"
+
+
+@pytest.mark.asyncio
+async def test_reset_for_retry_without_a_lease_is_unchanged(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=910,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        ack_received_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.reset_for_retry(db, item)
+
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+    assert item.escalation_reason is None
+    assert item.ack_received_at is None
+
+
+@pytest.mark.asyncio
+async def test_promote_deferred_retry_after_release(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=911,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        retry_requested_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    promoted = await github_dispatch_service.promote_deferred_retries(db, scope)
+
+    assert promoted == 1
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_promote_deferred_retry_waits_for_the_lease(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=912,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        retry_requested_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(GithubWorkspace.scope_id == scope.id)
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    await db.commit()
+
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 0
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
+    _, _, scope = await _team(db)
+    resets: list[str] = []
+
+    async def spy_reset(db_, scope_, workspace_):
+        resets.append(workspace_.path)
+
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", spy_reset)
+
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=913,
+        issue_title="retry flow",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    workspace = await github_workspace_service.acquire(db, scope, item)
+    first_token = workspace.lease_token
+    assert first_token is not None
+    assert resets == [workspace.path]
+
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "plan_blocked"
+    await db.commit()
+
+    await github_dispatch_service.reset_for_retry(db, item)
+    await db.commit()
+
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == first_token
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 0
+    assert resets == [workspace.path]
+
+    await github_workspace_service.release(db, item.id)
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 1
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+
+    reacquired = await github_workspace_service.acquire(db, scope, item)
+    assert reacquired.lease_token != first_token
+    assert len(resets) == 2
+
+
+@pytest.mark.asyncio
+async def test_deferred_retry_preserves_escalation_context_on_reescalation(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=914,
+        issue_title="retry context",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        status_note="original context",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(GithubWorkspace.scope_id == scope.id)
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    await db.commit()
+
+    await github_dispatch_service.reset_for_retry(db, item)
+    deferred_note = item.status_note
+    changed = github_dispatch_service._apply_escalation(
+        item, "owner_offline", "replacement note"
+    )
+
+    assert item.escalation_reason == "plan_blocked"
+    assert changed is False
+    assert item.status_note == deferred_note
 
 
 def test_ack_not_satisfied_by_ack_older_than_current_dispatch():
@@ -691,6 +902,181 @@ async def test_dispatch_pending_launches_and_marks_dispatched(db):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_captures_pane_pid_from_launch_result(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=201,
+        issue_title="Capture pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:1.0"
+        pane_pid = 4242
+
+    class _Result:
+        launch_id = 201
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", lambda _pid: "9001")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={201: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert item.dispatch_status == "dispatched"
+    assert workspace.leased_owner_pid == 4242
+    assert workspace.leased_owner_proc_start == "9001"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolves_pane_pid_from_tmux_target(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=202,
+        issue_title="Resolve pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:2.0"
+        pane_pid = None
+
+    class _Result:
+        launch_id = 202
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr(github_dispatch_service, "_resolve_pane_pid", lambda _target: 5252)
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", lambda _pid: "9002")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={202: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert workspace.leased_owner_pid == 5252
+    assert workspace.leased_owner_proc_start == "9002"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_without_resolvable_pane_pid_still_dispatches(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=203,
+        issue_title="Missing pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:3.0"
+        pane_pid = None
+
+    class _Result:
+        launch_id = 203
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr(github_dispatch_service, "_resolve_pane_pid", lambda _target: None)
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={203: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert item.dispatch_status == "dispatched"
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_pid_pair_null_when_proc_start_is_unreadable(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=204,
+        issue_title="Unreadable pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:4.0"
+        pane_pid = 6262
+
+    class _Result:
+        launch_id = 204
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    def unreadable(_pid):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", unreadable)
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={204: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert item.dispatch_status == "dispatched"
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")
@@ -763,6 +1149,42 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     assert f"to_member_id={leader_member.id}" in message.body_markdown
     assert f"slot_id={architect.id}" not in message.body_markdown
     assert "wait for acknowledgment before starting implementation" in message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_every_report_instruction_carries_the_lease_token(db):
+    _, slots, scope = await _team(db)
+    workspace = (
+        await db.execute(select(GithubWorkspace).order_by(GithubWorkspace.id))
+    ).scalars().first()
+    workspace.lease_token = "tok-brief"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=94,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item,
+        scope,
+        workspace,
+        owner_slot_id=slots[1].id,
+        preset_slots=slots,
+    )
+
+    call_lines = [
+        line
+        for line in brief.splitlines()
+        if "deck_report_dispatch_status(work_item_id=" in line
+    ]
+    assert len(call_lines) >= 4
+    for line in call_lines:
+        assert 'lease_token="tok-brief"' in line, f"missing token: {line}"
 
 
 @pytest.mark.asyncio
@@ -1202,57 +1624,6 @@ async def test_dispatch_pending_queues_when_slot_busy(db):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_queues_when_slot_has_live_owner_session(db):
-    preset, slots, scope = await _team(db)
-    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
-    owner_launch, _ = await _create_live_slot_launch_session(
-        db,
-        preset,
-        backend,
-        target="owner:0.0",
-    )
-    db.add(
-        GithubWorkItem(
-            scope_id=scope.id,
-            issue_number=40,
-            issue_title="completed owner work",
-            issue_url="u",
-            github_updated_at=datetime.utcnow(),
-            dispatch_status="merged",
-            owner_slot_id=backend.id,
-            launch_id=owner_launch.id,
-        )
-    )
-    item = GithubWorkItem(
-        scope_id=scope.id,
-        issue_number=41,
-        issue_title="next work",
-        issue_url="u",
-        github_updated_at=datetime.utcnow(),
-        dispatch_status="pending",
-    )
-    db.add(item)
-    await db.commit()
-
-    async def fake_launcher(db_, preset_id, request):
-        raise AssertionError("should not launch while an owner session is live")
-
-    await github_dispatch_service.dispatch_pending(
-        db,
-        scope,
-        slots,
-        launcher=fake_launcher,
-        issue_labels_by_number={41: ["area:backend"]},
-    )
-
-    await db.refresh(item)
-    assert item.dispatch_status == "pending"
-    assert item.owner_slot_id == backend.id
-    assert item.routing_method == "label"
-    assert item.pending_reason == "queued_owner_session_live"
-
-
-@pytest.mark.asyncio
 async def test_dispatch_proceeds_with_only_standing_session(db):
     preset, slots, scope = await _team(db)
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
@@ -1293,74 +1664,6 @@ async def test_dispatch_proceeds_with_only_standing_session(db):
     assert len(launches) == 1
     assert item.dispatch_status == "dispatched"
     assert item.owner_slot_id == backend.id
-    assert item.pending_reason is None
-
-
-@pytest.mark.asyncio
-async def test_queued_owner_session_dispatches_after_session_goes_offline(db):
-    preset, slots, scope = await _team(db)
-    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
-    owner_launch, owner_session = await _create_live_slot_launch_session(
-        db,
-        preset,
-        backend,
-        target="finished-owner:0.0",
-    )
-    db.add(
-        GithubWorkItem(
-            scope_id=scope.id,
-            issue_number=43,
-            issue_title="finished work",
-            issue_url="u",
-            github_updated_at=datetime.utcnow(),
-            dispatch_status="merged",
-            owner_slot_id=backend.id,
-            launch_id=owner_launch.id,
-        )
-    )
-    item = GithubWorkItem(
-        scope_id=scope.id,
-        issue_number=44,
-        issue_title="queued work",
-        issue_url="u",
-        github_updated_at=datetime.utcnow(),
-        dispatch_status="pending",
-    )
-    db.add(item)
-    await db.commit()
-    launches = []
-
-    class _Result:
-        launch_id = 105
-
-    async def fake_launcher(db_, preset_id, request):
-        launches.append(request)
-        return _Result()
-
-    await github_dispatch_service.dispatch_pending(
-        db,
-        scope,
-        slots,
-        launcher=fake_launcher,
-        issue_labels_by_number={44: ["area:backend"]},
-    )
-    await db.refresh(item)
-    assert item.pending_reason == "queued_owner_session_live"
-    assert launches == []
-
-    owner_session.mailbox_status = "offline"
-    await db.commit()
-    await github_dispatch_service.dispatch_pending(
-        db,
-        scope,
-        slots,
-        launcher=fake_launcher,
-        issue_labels_by_number={44: ["area:backend"]},
-    )
-
-    await db.refresh(item)
-    assert len(launches) == 1
-    assert item.dispatch_status == "dispatched"
     assert item.pending_reason is None
 
 
@@ -1705,6 +2008,147 @@ async def test_two_phase_handoff(db):
     assert item.handoff_state == "accepted"
     assert item.handoff_target_slot_id is None
     assert item.routing_method == "reassigned"
+
+
+@pytest.mark.asyncio
+async def test_terminal_item_holding_a_lease_is_reminded(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    _, workspace = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=920,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+    )
+
+    reminded = await github_dispatch_service.remind_held_leases(db, scope)
+
+    assert reminded == 1
+    assert workspace.lease_release_reminded_at is not None
+
+
+@pytest.mark.asyncio
+async def test_lease_release_reminder_quotes_token(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=921,
+        dispatch_status="completed",
+        owner_slot_id=slots[1].id,
+    )
+
+    await github_dispatch_service.remind_held_leases(db, scope)
+
+    message = (await db.execute(select(MailMessage))).scalars().one()
+    assert 'lease_token="tok-921"' in message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_lease_release_reminders_are_throttled(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    now = datetime.utcnow()
+    _, recent = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=922,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+        reminded_at=now,
+    )
+    _, expired = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=923,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+        reminded_at=now
+        - timedelta(seconds=settings.github_nudge_grace_seconds + 60),
+    )
+    old_expired_stamp = expired.lease_release_reminded_at
+
+    reminded = await github_dispatch_service.remind_held_leases(db, scope)
+
+    assert reminded == 1
+    assert recent.lease_release_reminded_at == now
+    assert expired.lease_release_reminded_at > old_expired_stamp
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_changes_release_reminder_wording(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=924,
+        dispatch_status="escalated",
+        owner_slot_id=slots[1].id,
+        retry_requested_at=datetime.utcnow(),
+    )
+
+    await github_dispatch_service.remind_held_leases(db, scope)
+
+    message = (await db.execute(select(MailMessage))).scalars().one()
+    assert "re-dispatch of this issue is queued behind this release" in message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_non_terminal_item_holding_a_lease_is_not_reminded(db):
+    _, slots, scope = await _team(db)
+    await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=925,
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_unleased_terminal_item_is_not_reminded(db):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=926,
+        issue_title="done",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_lease_release_reminders_never_escalate(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    item, workspace = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=927,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+    )
+
+    for _ in range(3):
+        workspace.lease_release_reminded_at = datetime.utcnow() - timedelta(
+            seconds=settings.github_nudge_grace_seconds + 60
+        )
+        await db.commit()
+        assert await github_dispatch_service.remind_held_leases(db, scope) == 1
+
+    assert item.dispatch_status == "merged"
+    assert item.escalation_reason is None
 
 
 @pytest.mark.asyncio
@@ -2372,7 +2816,7 @@ async def test_tmux_target_vetoes_release_for_failure_status(db):
 
 
 @pytest.mark.asyncio
-async def test_value_error_retains_lease_until_reclaim_sweep(db):
+async def test_value_error_releases_lease_immediately(db):
     _, slots, scope = await _team(db)
     item = GithubWorkItem(
         scope_id=scope.id,
@@ -2396,17 +2840,15 @@ async def test_value_error_retains_lease_until_reclaim_sweep(db):
         issue_labels_by_number={954: ["area:backend"]},
     )
 
-    workspace = (
+    workspaces = (
         await db.execute(
-            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id)
         )
-    ).scalar_one()
+    ).scalars().all()
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "plan_blocked"
-    assert workspace.leased_item_id == item.id
-
-    assert await github_workspace_service.reclaim_stale(db, scope) == 1
-    assert workspace.leased_item_id is None
+    assert all(workspace.leased_item_id != item.id for workspace in workspaces)
+    assert await github_workspace_service.reclaim_stale(db, scope) == 0
 
 
 @pytest.mark.asyncio

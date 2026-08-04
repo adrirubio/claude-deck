@@ -19,6 +19,7 @@ from app.services.agent_mail_service import (
     HEARTBEAT_TTL_SECONDS,
     INBOX_CHECK_PROMPT,
     MCP_HEARTBEAT_TTL_SECONDS,
+    OBSERVED_TTL_SECONDS,
     TMUX_ENTER_DELAY_SECONDS,
     AgentMailService,
 )
@@ -815,6 +816,100 @@ async def test_stale_connected_session_reports_offline(db, svc, tmp_path):
     await db.commit()
     members = await svc.list_team(db)
     assert members[0].status == "offline"
+
+
+def test_observed_session_past_ttl_with_live_pid_reads_observed(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "observed"
+
+
+def test_revived_observed_session_is_still_nudgeable(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        provider="claude-code",
+        tmux_target="tizonia:1.0",
+        mailbox_status="observed",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._session_can_nudge(session, now) is True
+
+
+def test_observed_session_past_ttl_with_dead_pid_reads_offline(svc, monkeypatch):
+    monkeypatch.setattr(svc, "_pid_is_running", lambda pid: False)
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=123456,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "offline"
+
+
+def test_observed_session_past_ttl_without_pid_reads_offline(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=None,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "offline"
+
+
+def test_explicitly_offline_observed_session_stays_offline_with_live_pid(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="offline",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "offline"
+
+
+def test_observed_session_within_ttl_keeps_mailbox_status(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=None,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS - 60),
+    )
+
+    assert svc._effective_status(session, now) == "observed"
+
+
+def test_mcp_session_past_ttl_with_live_pid_stays_connected(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="mcp",
+        mailbox_status="connected",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "connected"
 
 
 @pytest.mark.asyncio

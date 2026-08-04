@@ -626,6 +626,11 @@ class AgentMailService:
         else:
             ttl = HEARTBEAT_TTL_SECONDS
         if session.last_seen_at < now - timedelta(seconds=ttl):
+            # Observed rows carry a pid too. Return their own status so a live
+            # observed pane remains nudgeable; explicit offline returned above.
+            if session.source == "observed" and session.pid:
+                if self._pid_is_running(session.pid):
+                    return session.mailbox_status
             if session.source == "mcp" and session.pid:
                 return "connected"
             return "offline"
