@@ -265,6 +265,15 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            ambiguity_note = await self._session_ambiguity_note(db, owner_slot_id)
+            if ambiguity_note is not None:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_ambiguous_sessions"
+                item.status_note = ambiguity_note
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
             workspace = await github_workspace_service.acquire(db, scope, item)
             if workspace is None:
                 item.owner_slot_id = owner_slot_id
@@ -621,6 +630,44 @@ class GithubDispatchService:
             item.brief_delivery_nudge_count = None
         except Exception:
             logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)
+
+    async def _session_ambiguity_note(
+        self, db: AsyncSession, owner_slot_id: int
+    ) -> str | None:
+        """Return why a slot cannot be safely briefed, if ambiguous."""
+        member = await self._slot_member(db, owner_slot_id)
+        if member is None:
+            return None
+        known_before = len(
+            await agent_mail_service.nudgeable_sessions_for_slot(db, owner_slot_id)
+        )
+        try:
+            await agent_mail_service.sync_observed_sessions(db, strict=True)
+        except Exception:
+            logger.exception(
+                "session discovery failed while checking slot %s for ambiguity",
+                owner_slot_id,
+            )
+            return (
+                "Session discovery failed, so the owning pane could not be "
+                "confirmed. Holding rather than briefing an unknown session."
+            )
+        candidates = await agent_mail_service.nudgeable_sessions_for_slot(
+            db, owner_slot_id
+        )
+        if len(candidates) > 1:
+            targets = ", ".join(sorted(str(session.tmux_target) for session in candidates))
+            return (
+                f"{len(candidates)} nudgeable sessions on this slot ({targets}). "
+                "The dispatch brief would reach an arbitrary one. Converge the "
+                "slot to a single session, then this item dispatches itself."
+            )
+        if not candidates and known_before:
+            return (
+                f"Discovery found no sessions for this slot, but {known_before} "
+                "was expected. Treating zero as unverified rather than empty."
+            )
+        return None
 
     async def record_approval_round(
         self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope

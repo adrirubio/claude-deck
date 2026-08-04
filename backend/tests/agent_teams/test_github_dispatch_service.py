@@ -54,6 +54,14 @@ def host_has_enough_memory(monkeypatch):
     monkeypatch.setattr(github_workspace_service, "reset_workspace", reset_succeeds)
 
 
+@pytest.fixture(autouse=True)
+def no_discovered_panes(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [],
+    )
+
+
 async def _team(db):
     preset = AgentTeamPreset(name="T", description="", created_by="t")
     db.add(preset)
@@ -266,6 +274,46 @@ async def _create_live_slot_launch_session(
     db.add(session)
     await db.commit()
     return launch, session
+
+
+async def _seed_observed_panes(db, preset, slot, panes):
+    member = await _create_registered_slot_member(db, slot)
+    for pane_id, target in panes:
+        db.add(
+            MailAgentSession(
+                member_id=member.id,
+                provider=slot.provider,
+                source="observed",
+                session_key=f"tmux:{pane_id}",
+                pane_id=pane_id,
+                cwd=slot.repo_path,
+                tmux_target=target,
+                team_preset_id=preset.id,
+                team_slot_id=slot.id,
+                mailbox_status="observed",
+                last_seen_at=datetime.utcnow(),
+            )
+        )
+    await db.commit()
+    return member
+
+
+def _pane(*, pane_id, target, cwd):
+    return {
+        "provider": "codex-cli",
+        "provider_display_name": "Codex",
+        "tmux_target": target,
+        "session_name": target.split(":")[0],
+        "window_name": "main",
+        "pane_id": pane_id,
+        "cwd": cwd,
+        "pid": "4242",
+        "status": "active",
+    }
+
+
+async def _launcher_that_must_not_run(*_args, **_kwargs):
+    raise AssertionError("dispatch launched despite an ambiguous slot")
 
 
 def test_leader_unblock_instructions_text():
@@ -1665,7 +1713,7 @@ async def test_dispatch_pending_queues_when_slot_busy(db):
 
 @pytest.mark.asyncio
 async def test_dispatch_proceeds_with_only_standing_session(db, monkeypatch):
-    async def keep_synthetic_session(_db):
+    async def keep_synthetic_session(_db, *, strict=False):
         return None
 
     monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", keep_synthetic_session)
@@ -1766,6 +1814,225 @@ async def test_dispatch_without_wakeable_session_keeps_issue_brief_for_spawn(db)
     prompt = launches[0].slot_prompt_overrides[backend.id]
     assert "Issue: #43 — spawn fallback" in prompt
     assert "Workspace: /tmp/r-ws-1" in prompt
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_slot_blocks_and_leases_nothing(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _seed_observed_panes(
+        db,
+        preset,
+        owner,
+        [("%1", "w:0.1"), ("%2", "w:0.2")],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [
+            _pane(pane_id="%1", target="w:0.1", cwd=owner.repo_path),
+            _pane(pane_id="%2", target="w:0.2", cwd=owner.repo_path),
+        ],
+    )
+    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 2
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=950,
+        issue_title="ambiguous",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=_launcher_that_must_not_run,
+        issue_labels_by_number={950: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+    assert item.owner_slot_id == owner.id
+    assert item.pending_reason == "queued_ambiguous_sessions"
+    assert "w:0.1" in item.status_note and "w:0.2" in item.status_note
+    leased = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalars().all()
+    assert leased == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_check_resyncs_before_counting(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    member = await _seed_observed_panes(db, preset, owner, [("%1", "w:0.1")])
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            provider=owner.provider,
+            source="hook",
+            session_key="hook:owner",
+            cwd=owner.repo_path,
+            pid=4242,
+            team_preset_id=preset.id,
+            team_slot_id=owner.id,
+            mailbox_status="connected",
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 1
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [
+            _pane(pane_id="%1", target="w:0.1", cwd=owner.repo_path),
+            _pane(pane_id="%2", target="w:0.2", cwd=owner.repo_path),
+        ],
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=951,
+        issue_title="fresh ambiguity",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=_launcher_that_must_not_run,
+        issue_labels_by_number={951: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.pending_reason == "queued_ambiguous_sessions"
+    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_check_holds_when_discovery_loses_known_session(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _seed_observed_panes(db, preset, owner, [("%1", "w:0.1")])
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [],
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=952,
+        issue_title="lost pane",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=_launcher_that_must_not_run,
+        issue_labels_by_number={952: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.pending_reason == "queued_ambiguous_sessions"
+    leased = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalars().all()
+    assert leased == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_check_allows_one_nudgeable_pane(db, monkeypatch):
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _seed_observed_panes(db, preset, owner, [("%1", "w:0.1")])
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [_pane(pane_id="%1", target="w:0.1", cwd=owner.repo_path)],
+    )
+    monkeypatch.setattr(
+        agent_mail_service,
+        "_send_tmux_inbox_check",
+        lambda session: {"target": session.tmux_target, "prompt": "check inbox"},
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=953,
+        issue_title="one pane",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _Result:
+        launch_id = 953
+
+    async def successful_launcher(*_args, **_kwargs):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=successful_launcher,
+        issue_labels_by_number={953: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_check_allows_empty_slot_to_spawn(db):
+    _, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=954,
+        issue_title="empty slot",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _Result:
+        launch_id = 954
+
+    async def successful_launcher(*_args, **_kwargs):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=successful_launcher,
+        issue_labels_by_number={954: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.owner_slot_id == owner.id
+    assert item.dispatch_status == "dispatched"
+    assert item.pending_reason is None
 
 
 @pytest.mark.asyncio

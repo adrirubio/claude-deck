@@ -347,12 +347,16 @@ class AgentMailService:
         session.mailbox_status = "connected"
         await db.commit()
 
-    async def sync_observed_sessions(self, db: AsyncSession) -> None:
+    async def sync_observed_sessions(
+        self, db: AsyncSession, *, strict: bool = False
+    ) -> None:
         """Upsert Agent Bridge tmux discoveries as observed sessions."""
         try:
             discovered = discover_agent_sessions()
         except Exception as exc:
             logger.warning("agent bridge discovery failed: %s", exc)
+            if strict:
+                raise
             return
         active_observed_keys: set[str] = set()
         affected_member_ids: set[int] = set()
@@ -1096,6 +1100,23 @@ class AgentMailService:
             (candidate for candidate in result.scalars().all() if self._session_can_nudge(candidate, now)),
             None,
         )
+
+    async def nudgeable_sessions_for_slot(
+        self, db: AsyncSession, slot_id: int
+    ) -> list[MailAgentSession]:
+        """Return every observed session that can be nudged for a slot."""
+        now = datetime.utcnow()
+        sessions = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.team_slot_id == slot_id,
+                    MailAgentSession.source == "observed",
+                    MailAgentSession.provider.in_(sorted(TMUX_WAKE_PROVIDERS)),
+                    MailAgentSession.tmux_target.is_not(None),
+                )
+            )
+        ).scalars().all()
+        return [session for session in sessions if self._session_can_nudge(session, now)]
 
     def _send_tmux_inbox_check(self, session: MailAgentSession) -> dict[str, str]:
         if not session.tmux_target:
