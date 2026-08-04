@@ -807,6 +807,7 @@ class AgentMailService:
         request: MailMessageCreate,
         *,
         auto_nudge: bool = True,
+        bypass_nudge_cooldown: bool = False,
         sender_actor_id: Optional[int] = None,
     ) -> MailMessageResponse:
         if request.kind not in MAIL_MESSAGE_KINDS:
@@ -864,7 +865,11 @@ class AgentMailService:
         await db.commit()
         await db.refresh(message)
         if auto_nudge:
-            await self.auto_nudge_members(db, recipients)
+            await self.auto_nudge_members(
+                db,
+                recipients,
+                bypass_cooldown=bypass_nudge_cooldown,
+            )
         return await self._message_response(db, message, for_member_id=None)
 
     async def send_broadcast(
@@ -898,6 +903,7 @@ class AgentMailService:
         body_markdown: str,
         payload: dict | None = None,
         auto_nudge: bool = True,
+        bypass_nudge_cooldown: bool = False,
         sender_actor_id: int | None = None,
     ) -> MailMessageResponse:
         return await self.send_message(
@@ -910,6 +916,7 @@ class AgentMailService:
                 payload=payload,
             ),
             auto_nudge=auto_nudge,
+            bypass_nudge_cooldown=bypass_nudge_cooldown,
             sender_actor_id=sender_actor_id,
         )
 
@@ -1129,7 +1136,13 @@ class AgentMailService:
             return {"method": "tmux", **result}
         return None
 
-    async def auto_nudge_members(self, db: AsyncSession, member_ids: set[int]) -> list[dict[str, str | int]]:
+    async def auto_nudge_members(
+        self,
+        db: AsyncSession,
+        member_ids: set[int],
+        *,
+        bypass_cooldown: bool = False,
+    ) -> list[dict[str, str | int]]:
         """Best-effort delivery wakeup for visible tmux-observed recipients."""
         if not member_ids:
             return []
@@ -1139,7 +1152,11 @@ class AgentMailService:
         cooldown_cutoff = now - timedelta(seconds=AUTO_NUDGE_COOLDOWN_SECONDS)
         for member_id in sorted(member_ids):
             last_nudge_at = self._last_auto_nudge_at.get(member_id)
-            if last_nudge_at is not None and last_nudge_at > cooldown_cutoff:
+            if (
+                not bypass_cooldown
+                and last_nudge_at is not None
+                and last_nudge_at > cooldown_cutoff
+            ):
                 continue
             try:
                 result = await self._wake_member(db, member_id, now)

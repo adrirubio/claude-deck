@@ -613,6 +613,7 @@ class GithubDispatchService:
                     "issue_number": item.issue_number,
                     "scope_id": item.scope_id,
                 },
+                bypass_nudge_cooldown=True,
             )
         except Exception:
             logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)

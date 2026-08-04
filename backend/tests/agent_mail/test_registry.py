@@ -742,6 +742,105 @@ async def test_send_message_auto_nudge_is_throttled(db, svc, tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_dispatch_brief_nudge_bypasses_the_cooldown(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
+
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    calls.clear()
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="blocker merged",
+        body_markdown="fyi",
+    )
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="Autonomous dispatch: issue #900",
+        body_markdown="brief",
+        bypass_nudge_cooldown=True,
+    )
+
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_ordinary_send_still_throttled_after_a_bypassed_brief(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
+
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    calls.clear()
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="brief",
+        body_markdown="b",
+        bypass_nudge_cooldown=True,
+    )
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="chatter",
+        body_markdown="c",
+    )
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_sync_observed_removes_stale_observed_only_members(db, svc, tmp_path):
     cwd = tmp_path / "obs"
     cwd.mkdir()
