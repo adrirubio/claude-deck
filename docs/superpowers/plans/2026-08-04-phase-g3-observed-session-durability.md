@@ -4,7 +4,7 @@
 
 **Goal:** Stop `sync_observed_sessions` from destroying the evidence that the dispatch ambiguity gate depends on, so the gate cannot be talked into dispatching a second owner onto an occupied slot.
 
-**Architecture:** Three tasks in one PR, all in the session-registry layer. Task 1 makes the observed-row retention rule pid-aware, so a pane that is demonstrably alive is not deleted merely because one discovery pass failed to see it. Task 2 makes a pane's own tmux environment the authority on which slot it belongs to, so a row that *is* rebuilt comes back slot-bound instead of orphaned. Task 3 removes the `strict=True` flag that PR #310 added, because the failure it guards cannot occur.
+**Architecture:** Three tasks in one PR, all in the session-registry layer. Task 1 makes the observed-row retention rule pid-aware, so a pane that is demonstrably alive is not deleted merely because one discovery pass failed to see it. Task 2 makes a pane's own tmux environment the authority on which slot it belongs to, so a row that *is* rebuilt comes back slot-bound instead of orphaned. Task 3 keeps the `strict=True` flag that PR #310 added — the failure it guards is reachable — and closes the one escape route that is a parsing bug rather than a genuine inability to observe.
 
 **Tech Stack:** FastAPI, async SQLAlchemy 2.0 (`Mapped`/`mapped_column`), aiosqlite, pytest + pytest-asyncio. No frontend change. No schema change, no migration.
 
@@ -77,6 +77,24 @@ So every live pane matches only via `has_binary_descendant` (`providers/base.py:
 
 There are **eight** callers of `sync_observed_sessions` (`api/v1/agent_mail.py:37`, three inside the service, `external_agent_mail_service.py:138`, `agent_team_service.py:205` and `:427`, and the dispatch gate). Seven are lenient best-effort refreshes. Any one of them, including a background UI poll, can erase the dispatch gate's evidence. That is why the fix belongs in the shared retention rule and not at one call site.
 
+### And `[]` is not the only failure mode — some failures raise
+
+This matters enough to state separately, because an earlier draft of this plan got it wrong and told you to delete `strict=True` on the strength of the three `return []` paths above.
+
+**The `try` in `discover_agent_sessions` closes at `:116`.** `get_providers()` (`:100`) is above it, and the whole per-pane match loop (`:118-141`) is below it. So the three `return []` paths describe what happens to `subprocess.run` for `list-panes` — and nothing else. Measured by injecting each exception at that call:
+
+```
+  CAUGHT  -> returns []    FileNotFoundError (tmux absent)
+  CAUGHT  -> returns []    TimeoutExpired
+  ESCAPES -> OSError: [Errno 12] Cannot allocate memory
+  ESCAPES -> PermissionError: [Errno 13] Permission denied
+  ESCAPES -> SubprocessError: boom
+```
+
+`OSError(ENOMEM)` is what a failed `fork` raises — **the same memory pressure that makes evidence loss frequent in the first place.** So the two failure modes are not alternatives; they are two faces of one cause, and a host under load can produce either. There is a second, unrelated escape as well: `argv0_name(" ")` raises `IndexError`, because `if not command` rejects `""` but not `" "`, and that call sits inside the loop below the `try`.
+
+`strict=True` therefore guards a **reachable** failure, and Task 3 hardens it rather than removing it.
+
 ---
 
 ## Global Constraints
@@ -120,13 +138,16 @@ These apply to **every** task. Several are safety rules earned from live inciden
 - Always `cd` to the **g1** backend before pytest — `database_url` is CWD-relative.
 - **Measured baselines at PR #310's tip.** These are measurements, not predictions:
 
-  | Command | Baseline |
-  |---|---|
-  | `python -m pytest tests/agent_teams/test_github_dispatch_service.py tests/agent_mail/test_registry.py tests/test_agent_bridge_discovery.py -q` | **147 passed** |
-  | `python -m pytest tests/agent_teams/ tests/agent_mail/ -q` | **444 passed** |
-  | `python -m pytest tests/ -q` | **610 passed, 1 failed** |
+  | Command | Baseline | After the whole PR |
+  |---|---|---|
+  | `python -m pytest tests/agent_teams/test_github_dispatch_service.py tests/agent_mail/test_registry.py tests/test_agent_bridge_discovery.py -q` | **147 passed** | **157 passed** |
+  | `python -m pytest tests/test_providers.py -q` | **9 passed** | **11 passed** |
+  | `python -m pytest tests/agent_teams/ tests/agent_mail/ -q` | **444 passed** | **454 passed** |
+  | `python -m pytest tests/ -q` | **610 passed, 1 failed** | **622 passed, 1 failed** |
 
-  The scoped-suite command in the middle column is the one to use per task; it is the tightest set covering all three files this PR touches.
+  Both columns are measurements. The right-hand one was produced by applying this plan's own code — all three production edits and all twelve tests, exactly as written below — and running each command. It is not arithmetic on the left-hand column.
+
+  The scoped-suite command in the first row is the one to use per task; it is the tightest set covering the three files Tasks 1 and 2 touch. Task 3 also touches `tests/test_providers.py`, which that set does **not** include, so Task 3 runs both.
 - Known pre-existing failure: `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` (stale monkeypatch, `:54`). **Report it, do not fix it** — an issue is owed separately.
 - Every task ends green. If a test fails for a reason your task did not cause, **report it, do not rewrite it.**
 
@@ -136,14 +157,17 @@ These apply to **every** task. Several are safety rules earned from live inciden
 
 ## File Structure
 
-No new files, no schema change. Two backend modules and two test files.
+No new files, no schema change. Two backend modules and three test files.
 
 | File | Responsibility here | Tasks |
 |---|---|---|
-| `backend/app/services/agent_mail_service.py` | Owns the session registry: which observed rows are retained, and which member (hence slot) each pane binds to | 1, 2, 3 |
-| `backend/app/services/github_dispatch_service.py` | Drops the now-inert `strict=True` argument | 3 |
+| `backend/app/services/agent_mail_service.py` | Owns the session registry: which observed rows are retained, and which member (hence slot) each pane binds to | 1, 2 |
+| `backend/app/services/providers/base.py` | Names the binary behind a pane command; must not raise on a blank one | 3 |
 | `backend/tests/agent_mail/test_registry.py` | Retention and binding tests — this is where `sync_observed_sessions` is already tested | 1, 2 |
-| `backend/tests/agent_teams/test_github_dispatch_service.py` | The end-to-end poll-1-then-poll-2 regression, and the `strict` removal | 1, 3 |
+| `backend/tests/agent_teams/test_github_dispatch_service.py` | The end-to-end poll-1-then-poll-2 regression, and the strict-path hold | 1, 3 |
+| `backend/tests/test_providers.py` | `argv0_name` and blank-pane discovery coverage — this file already tests `is_process_match` | 3 |
+
+`backend/app/services/github_dispatch_service.py` appears in **no** task's edit list. Task 3 touches it only to prove a test bites, and reverts. If it shows up in `git status` when you commit, something went wrong.
 
 `agent_mail_service.py` is large and this PR adds one method and two guards to it. Do **not** split it — it is the live soak's session registry and a reorganisation would make the diff unreviewable.
 
@@ -251,18 +275,69 @@ async def test_sync_observed_still_deletes_row_whose_pid_is_dead(db, svc, tmp_pa
         await svc.sync_observed_sessions(db)
 
     assert await svc.nudgeable_sessions_for_slot(db, slot.id) == []
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_deletes_row_whose_pid_is_gone(db, svc, tmp_path):
+    """A NON-NULL pid that is not running must still be deleted.
+
+    This is the test that pins the rule to _pid_is_running rather than to
+    "has a pid at all". See the note below on why the pid=None test alone is
+    not sufficient.
+    """
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    member = await svc.get_or_create_slot_member(db, slot)
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            team_preset_id=slot.preset_id,
+            team_slot_id=slot.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%3",
+            pane_id="%3",
+            tmux_target="obs:0.2",
+            cwd=str(cwd),
+            pid=999999,
+            mailbox_status="observed",
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    with patch(
+        "app.services.agent_mail_service.discover_agent_sessions", return_value=[]
+    ), patch.object(type(svc), "_pid_is_running", return_value=False):
+        await svc.sync_observed_sessions(db)
+
+    assert await svc.nudgeable_sessions_for_slot(db, slot.id) == []
 ```
 
-`pid=None` is the honest way to express "dead" without inventing a pid number that might exist on the machine. `_pid_is_running` returns `False` for a falsy pid (`:608-609`), which is exactly the "no liveness evidence" case.
+**Why three tests and not two.** `pid=None` expresses "dead" without inventing a pid that might exist on the machine, and `_pid_is_running` does return `False` for a falsy pid (`:608-609`). But the alive/`None` pair is **not sufficient to pin the rule**, and this was caught in review rather than by me:
+
+An implementation that never calls `_pid_is_running` at all —
+
+```python
+            if session.pid is not None:      # WRONG: retains dead pids too
+                continue
+```
+
+— passes both of them. The alive row has a non-null pid so it is kept; the `None` row has no pid so it is deleted. **Measured, not argued:** that mutant was applied to the real service and both tests passed (`2 passed`). The third test kills it (`1 failed` against the mutant, `3 passed` against the correct implementation), because it supplies a non-null pid *and* forces `_pid_is_running` to `False`, so only an implementation that actually consults liveness can satisfy it.
+
+`patch.object(type(svc), ...)` patches the class, not the instance, because `svc` is a shared service object and the call is `self._pid_is_running(...)`. Do not patch the module-level name — there isn't one; it is a method.
+
+Do **not** use a real dead pid instead of mocking. Any number you pick might be alive on this host, and 999999 exceeds the default `pid_max` on many systems but not all — the mock is what makes this deterministic.
 
 - [ ] **Step 2: Run the tests to verify the first one fails**
 
 ```bash
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate
-python -m pytest tests/agent_mail/test_registry.py -q -k "pid_is_alive or pid_is_dead"
+python -m pytest tests/agent_mail/test_registry.py -q -k "pid_is_alive or pid_is_dead or pid_is_gone"
 ```
 
-Expected: `test_sync_observed_keeps_row_whose_pid_is_alive` **FAILS** with `assert 0 == 1` — the row was deleted. `test_sync_observed_still_deletes_row_whose_pid_is_dead` **PASSES** already; it is the guard that stops Step 3 from over-correcting into "never delete anything."
+Expected, measured: **`1 failed, 2 passed`**. The failure is `test_sync_observed_keeps_row_whose_pid_is_alive` with `assert 0 == 1` — the row was deleted. The other two **PASS** already: they are the guards that stop Step 3 from over-correcting into "never delete anything," and both must still pass afterwards.
 
 - [ ] **Step 3: Make retention pid-aware**
 
@@ -302,18 +377,20 @@ In `_remove_stale_observed_sessions`, add one guard:
             await self._remove_empty_observed_member(db, member_id)
 ```
 
-- [ ] **Step 4: Run the tests to verify both pass**
+- [ ] **Step 4: Run the tests to verify all three pass**
 
 ```bash
-python -m pytest tests/agent_mail/test_registry.py -q -k "pid_is_alive or pid_is_dead"
+python -m pytest tests/agent_mail/test_registry.py -q -k "pid_is_alive or pid_is_dead or pid_is_gone"
 ```
-Expected: `2 passed`.
+Expected: `3 passed`.
 
 - [ ] **Step 5: Add the end-to-end regression that Finding 20 actually described**
 
 The unit tests above prove the retention rule. This one proves the *gate* no longer flips between polls, which is the defect that would have dispatched a second owner. Add to `backend/tests/agent_teams/test_github_dispatch_service.py`, reusing that file's `_team` helper (`:65`) and `_seed_observed_panes` (`:279`) — read both before writing, and do not add a second copy of either.
 
 The file has an autouse fixture (added by PR #310, `no_discovered_panes`) that patches `app.services.agent_mail_service.discover_agent_sessions` to `lambda: []`. This test needs to drive that patch itself, so override it locally with `monkeypatch` inside the test — `monkeypatch` applied in the test body wins over the autouse fixture's earlier `setattr`.
+
+**Add `import os` to the top of this file first.** Unlike `test_registry.py`, `test_github_dispatch_service.py` does **not** import `os`; its imports start at `:2` with `from datetime import datetime, timedelta`. Without it this test fails with `NameError: name 'os' is not defined` at the `pid=os.getpid()` line — measured, so do not skip it. Put `import os` above the `from datetime` line, keeping stdlib imports alphabetical as the file already does.
 
 ```python
 @pytest.mark.asyncio
@@ -368,14 +445,14 @@ Note what the assertion says and does not say. It does **not** assert the gate h
 ```bash
 python -m pytest tests/agent_teams/test_github_dispatch_service.py -q -k "discovery_blips"
 ```
-Expected: `1 passed`.
+Expected: `1 passed`. Before Step 3's guard exists this same test fails with `assert 0 == 1` — measured — so if it passes on a tree where you have not yet made retention pid-aware, the test is not exercising what it claims.
 
 - [ ] **Step 7: Run the scoped suites**
 
 ```bash
 python -m pytest tests/agent_teams/test_github_dispatch_service.py tests/agent_mail/test_registry.py tests/test_agent_bridge_discovery.py -q
 ```
-Expected: **150 passed** — the measured 147 baseline plus this task's 3 new tests (2 in `test_registry.py`, 1 in `test_github_dispatch_service.py`).
+Expected: **151 passed** — the measured 147 baseline plus this task's 4 new tests (3 in `test_registry.py`, 1 in `test_github_dispatch_service.py`).
 
 Count the test *functions you added* and check the arithmetic yourself. Do not infer the total from a `-k` selection: `-k` matches substrings and will happily include pre-existing tests, which is how an earlier task in this series reported 7 new tests when it had written 6.
 
@@ -548,17 +625,93 @@ async def test_sync_observed_ignores_env_slot_that_no_longer_exists(db, svc, tmp
         )
     ).scalar_one()
     assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_with_a_different_provider(db, svc, tmp_path):
+    """A pane advertising a slot whose provider disagrees is rejected."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    assert slot.provider == "codex-cli"
+    fake = [
+        {
+            "provider": "claude-code",
+            "provider_display_name": "Claude Code",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_whose_preset_disagrees(db, svc, tmp_path):
+    """A reused slot id with a contradictory preset id must not bind.
+
+    agent_team_slots.id is a rowid alias (no AUTOINCREMENT), so SQLite reuses
+    freed ids. A pane whose env names a deleted slot can otherwise bind to
+    whatever replacement slot inherited that id.
+    """
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id + 500,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
 ```
 
 `_slot` builds the slot with `provider="codex-cli"` and `repo_id` derived from the cwd you pass, which is why the panes above use `codex-cli` and the matching cwd. Check `_slot`'s body before relying on that — it is at `:44` and it returns `(preset, slot)`.
 
+The provider test asserts `slot.provider == "codex-cli"` before doing anything else. That is deliberate: if `_slot`'s default provider ever changes, the test would otherwise still "pass" while no longer exercising a mismatch — the same silent-no-op trap PR2's Task 13 note warned about.
+
+The preset test uses `preset.id + 500` rather than a literal, so it stays a genuine mismatch regardless of what ids the fixtures allocate.
+
 - [ ] **Step 2: Run the tests to verify the first fails**
 
 ```bash
-python -m pytest tests/agent_mail/test_registry.py -q -k "tmux_environment or another_repo or no_longer_exists"
+python -m pytest tests/agent_mail/test_registry.py -q -k "tmux_environment or another_repo or no_longer_exists or different_provider or preset_disagrees"
 ```
 
-Expected: `test_sync_observed_binds_slot_from_tmux_environment` **FAILS** with `assert None == 1`. The other two **PASS** already — they are the guards that stop Step 3 from trusting the env unconditionally.
+Expected, measured: **`1 failed, 4 passed`**. The one failure is `test_sync_observed_binds_slot_from_tmux_environment` with `assert None == 1`. The other four **PASS** already — they are the guards that stop Step 3 from trusting the env unconditionally, and each one must keep passing afterwards.
+
+That four-pass-before is worth pausing on, because it is the fixture trap in this task. Those tests pass now for the *right* reason — with no resolver, nothing binds the slot, so a rejection is indistinguishable from "the feature does not exist yet." They only become meaningful once Step 3 lands. If any of the four turns red after Step 3, the resolver is trusting the env where it should not.
 
 - [ ] **Step 3: Add the resolver and put it in the chain**
 
@@ -585,6 +738,9 @@ Insert this method immediately **above** `async def _member_for_observed_session
         slot = await db.get(AgentTeamSlot, slot_id)
         if slot is None or slot.provider != str(info.get("provider") or "unknown"):
             return None
+        preset_id = info.get("team_preset_id")
+        if isinstance(preset_id, int) and preset_id != slot.preset_id:
+            return None
         cwd = str(info.get("cwd") or "")
         if not cwd:
             return None
@@ -597,6 +753,16 @@ Insert this method immediately **above** `async def _member_for_observed_session
 ```
 
 `isinstance(slot_id, int)` rather than a truthiness check: `_clean_int` (`discovery.py:34-40`) returns `None` for unparseable values, and `router.py:76-78` guards the same field the same way. `bool` is an `int` subclass in Python but no code path can put a bool there.
+
+**The preset check exists because SQLite reuses primary keys, and it closes a real misbinding.** This was raised in review and I confirmed it by measurement rather than accepting or dismissing it:
+
+`agent_team_slots` is declared `id INTEGER NOT NULL, PRIMARY KEY (id)` with **no `AUTOINCREMENT`**, which makes `id` a rowid alias. SQLite then reuses the largest freed rowid. Measured: create slots 1 and 2, delete slot 2, create a new slot → it gets **id 2**.
+
+So a pane whose tmux environment still advertises a deleted slot's id can bind to whatever *replacement* slot inherited that id. Provider and repo do not catch it, because a replacement slot in the same repo with the same provider is the normal case — that is precisely what "replacement" means. Probed end to end: pane advertises `slot=2, preset=1`; slot 2 is now a different slot in preset 2; without this check the row binds to it (`MISBOUND to the replacement slot`), and with it the pane falls back correctly.
+
+`isinstance(preset_id, int) and ...` — not a bare inequality. A pane launched before `CLAUDE_DECK_TEAM_PRESET_ID` was exported, or whose env only carries the slot id, has `team_preset_id` absent or `None`; that must stay bindable on the slot id alone. Only a *present and contradictory* preset id is disqualifying. Do not tighten this into `preset_id != slot.preset_id`, which would reject every pane that advertises no preset.
+
+This does not make env binding safe against **all** id reuse — a replacement slot in the *same* preset still shares both ids and remains indistinguishable. That residual case is out of scope and recorded in the Deferred section; the durable fix is `AUTOINCREMENT` (or a spawn-time UUID), which is a schema change and belongs in its own PR.
 
 Then insert it into the resolution chain in `sync_observed_sessions` (`:374-376`):
 
@@ -613,16 +779,16 @@ Order matters, in both directions. It goes **after** `_member_for_existing_obser
 - [ ] **Step 4: Run the tests to verify all three pass**
 
 ```bash
-python -m pytest tests/agent_mail/test_registry.py -q -k "tmux_environment or another_repo or no_longer_exists"
+python -m pytest tests/agent_mail/test_registry.py -q -k "tmux_environment or another_repo or no_longer_exists or different_provider or preset_disagrees"
 ```
-Expected: `3 passed`.
+Expected: `5 passed`.
 
 - [ ] **Step 5: Run the scoped suites**
 
 ```bash
 python -m pytest tests/agent_teams/test_github_dispatch_service.py tests/agent_mail/test_registry.py tests/test_agent_bridge_discovery.py -q
 ```
-Expected: **153 passed** — 150 after Task 1, plus this task's 3.
+Expected: **156 passed** — 151 after Task 1, plus this task's 5.
 
 Pay attention to `test_registry.py`'s existing observed-sync tests. Several seed a slot and a registered row and assert the observed row binds to the **slot** member (`:376-400` and the group from `:440` to `:600`). Those pass because their fake panes carry no `team_slot_id` key, so `_member_for_advertised_slot` returns `None` at its first guard and the existing pid path still runs. If any of them fails, **stop and report** — it means the ordering above is wrong, not that the test is.
 
@@ -635,139 +801,244 @@ git commit -m "fix(g3): observed rows recover their slot from the tmux environme
 
 ---
 
-### Task 3: Remove `strict=True`, which guards a failure that cannot happen
+### Task 3: Keep `strict=True`, close the escape it cannot survive, and finally test it
 
 **Files:**
-- Modify: `backend/app/services/agent_mail_service.py:350-360` (drop the `strict` parameter and its branch)
-- Modify: `backend/app/services/github_dispatch_service.py:634-660` (`_session_ambiguity_note` — drop the `try`/`except` and the strict call)
-- Test: `backend/tests/agent_teams/test_github_dispatch_service.py:1716` (one stub signature)
+- Modify: `backend/app/services/providers/base.py:59-63` (`argv0_name` — three lines)
+- Test: `backend/tests/test_providers.py` (two new tests)
+- Test: `backend/tests/agent_teams/test_github_dispatch_service.py` (one new test, near `:1960`)
 
 **Interfaces:**
-- Consumes: nothing new.
-- Produces: `sync_observed_sessions(db) -> None` — back to its pre-PR-#310 signature. `_session_ambiguity_note(db, owner_slot_id) -> str | None` keeps its signature; only its body shrinks.
+- Consumes: `sync_observed_sessions(db, *, strict: bool = False) -> None` — **unchanged**, both the parameter and the gate's `strict=True` call site stay exactly as PR #310 shipped them.
+- Produces: `argv0_name(command: str) -> str` — same signature, same return type. It stops raising `IndexError` on whitespace-only input and returns `""`, which every caller already handles because `""` was already a possible return.
 
-PR #310 added `strict=True` so the gate could tell "discovery worked and found nothing" from "discovery blew up." The flag works exactly as written. The problem is that the underlying call does not raise for any realistic failure, so the distinction it draws is one the data cannot express.
+**Read this before you start: an earlier draft of this task was wrong, and the correction is the task.**
 
-`discover_agent_sessions` (`agent_bridge/discovery.py:98-116`):
+The draft told you to delete `strict=True` on the grounds that `discover_agent_sessions` "cannot raise for any realistic failure." That claim came from reading the three `return []` paths at `:108-116` and generalising. It is false, and the review that caught it was right.
 
-```python
-        if result.returncode != 0:
-            logger.debug("tmux list-panes failed: %s", result.stderr.strip())
-            return []
-    except FileNotFoundError:
-        logger.debug("tmux not found")
-        return []
-    except subprocess.TimeoutExpired:
-        logger.warning("tmux list-panes timed out")
-        return []
+The `try` closes at `:116`. `get_providers()` at `:100` sits above it; the entire per-pane match loop at `:118-141` sits below it. Measured by injecting exceptions at the `subprocess.run` call:
+
+```
+  CAUGHT  -> returns []    FileNotFoundError (tmux absent)
+  CAUGHT  -> returns []    TimeoutExpired
+  ESCAPES -> OSError: [Errno 12] Cannot allocate memory
+  ESCAPES -> PermissionError: [Errno 13] Permission denied
+  ESCAPES -> SubprocessError: boom
 ```
 
-tmux missing, tmux erroring, tmux hanging — all three return `[]`. Those are the realistic failures. `strict=True` only fires if discovery raises something else entirely, and `[]` flows through as *data* indistinguishable from an empty slot. Verified against the real function, not a mock.
+`OSError(ENOMEM)` is what a failed `fork` raises. That is **the same host memory pressure that makes evidence loss frequent** — the two failure modes share one cause. And `strict=True` demonstrably does the right thing with it. Measured end to end against the real gate:
 
-That is why Tasks 1 and 2 fix the consequence instead. The honest options for `strict` are to make it real — which means changing `discover_agent_sessions`'s contract, and the Global Constraints explain why that is a separate, much larger change — or to remove it. Leaving it is the one option to reject: a flag whose name promises a guarantee it does not provide will be trusted by the next reader.
+```
+  seeded nudgeable = 1
+  strict=True  -> HOLD: Session discovery failed, so the owning pane could not be co…
+  rows after   = 1
+  strict REMOVED, cold start -> NONE -> DISPATCHES on unknown state
+```
 
-**Removing it is safe only because Tasks 1 and 2 landed first.** Do not reorder. With the strict branch gone and retention still pid-blind, a discovery failure would silently delete the row and the gate would have neither the exception nor the evidence.
+Two things to read off that. First, `strict=True` produces its fail-closed note and the row survives — because the exception aborts the pass before `_remove_stale_observed_sessions` runs at all. Second, the cold-start case is why removal is not merely redundant but harmful: with no observed row, `known_before` is `0`, so the `not candidates and known_before` guard cannot fire, and there is nothing else left to hold on. Tasks 1 and 2 do **not** cover this. Task 1 protects a row that exists; here there is no row.
 
-- [ ] **Step 1: Find everything that mentions `strict`**
+So this task does the opposite of the draft:
+
+1. **Keep** `strict=True` and the `try`/`except` in `_session_ambiguity_note`. Change neither.
+2. **Fix** the one escape that is a plain bug rather than a signal: `argv0_name(" ")` raises `IndexError`.
+3. **Add** the regression test for the strict path whose absence was already flagged as a finding in this plan.
+
+**Why fix `argv0_name` but keep `strict`?** They are different kinds of failure and deserve different treatment. `ENOMEM` is real information — the host genuinely cannot look right now, and holding is correct. A whitespace-only pane command is not information; it is a parsing gap, and letting it fail the whole discovery pass means one idle pane can block dispatch for every slot on the host. Fail closed on *inability to observe*; do not fail closed on *a pane you merely cannot name*.
+
+- [ ] **Step 1: Confirm the bug before fixing it**
 
 ```bash
-grep -rn "strict" tests/agent_teams/test_github_dispatch_service.py app/services/agent_mail_service.py app/services/github_dispatch_service.py
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend
+python -c "from app.services.providers.base import argv0_name; print(repr(argv0_name(' ')))"
 ```
 
-Expected: exactly one test-side hit, and it is **not** a test of the strict path. It is a stub whose signature has to tolerate the keyword (`:1716`, inside `test_dispatch_proceeds_with_only_standing_session` which begins at `:1715`):
+Expected: `IndexError: list index out of range`. If it prints `''` instead, the function has already been fixed upstream — **stop and report**, because then this task's premise has moved and Step 4's test would pass without proving anything.
+
+- [ ] **Step 2: Write the failing tests**
+
+Add to `backend/tests/test_providers.py`, immediately above `test_opencode_home_respects_xdg_config_home`. That file already tests `is_process_match` and already patches `app.services.providers.base.subprocess.run` (`:98`, `:111`, `:124`), so it is the right home. It imports `SimpleNamespace` and `patch` at module level (`:2-3`); the second test re-imports them locally anyway, matching the file's own per-test import idiom.
 
 ```python
-    async def keep_synthetic_session(_db, *, strict=False):
-        return None
+def test_argv0_name_tolerates_blank_commands():
+    from app.services.providers.base import argv0_name
+
+    # A whitespace-only pane command used to raise IndexError out of
+    # discover_agent_sessions, which runs the match loop outside its try.
+    assert argv0_name(" ") == ""
+    assert argv0_name("\t") == ""
+    assert argv0_name("") == ""
+    assert argv0_name("  codex  ") == "codex"
+
+
+def test_discovery_survives_a_blank_pane_command():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.services.agent_bridge.discovery import discover_agent_sessions
+
+    tmux_output = "\n".join([
+        "blank:0.0|blank|main|%1|/repo/a|111| ",
+        "codexproj:0.0|codexproj|main|%2|/repo/b|222|codex",
+    ])
+
+    def fake_run(args, **_kwargs):
+        if args[:2] == ["tmux", "list-panes"]:
+            return SimpleNamespace(returncode=0, stdout=tmux_output, stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    with patch("app.services.agent_bridge.discovery.subprocess.run", side_effect=fake_run):
+        sessions = discover_agent_sessions()
+
+    assert [session["pane_id"] for session in sessions] == ["%2"]
 ```
 
-**No test asserts the strict behaviour, which is itself the finding.** The flag was added with a fail-closed message and no test proving the message can be produced — because with the real `discover_agent_sessions` it cannot be. So this task deletes **no** tests; it updates that one stub to:
+**The blank command must not be on the last row.** `discover_agent_sessions` does `result.stdout.strip().splitlines()`, so a trailing `" "` on the final row gets stripped away and the row never reaches `argv0_name` — the test then passes against the unfixed code and proves nothing. I hit exactly that while measuring. The `codex` row must come second.
 
-```python
-    async def keep_synthetic_session(_db):
-        return None
+The `fake_run` fallback returns `returncode=1` rather than raising, because a matched pane triggers a `tmux show-environment` call; a non-zero return makes `_team_context_for_session` yield `{}` without an exception.
+
+- [ ] **Step 3: Run them and watch them fail**
+
+```bash
+python -m pytest tests/test_providers.py -q -k "argv0 or blank_pane"
 ```
 
-If you find a test that genuinely asserts the gate holds when discovery raises, **stop and report** — that contradicts the measurement this task rests on, and the task should not proceed on a stale premise.
+Expected: **2 failed**, both with `IndexError: list index out of range` at `app/services/providers/base.py:63`. If either fails with an assertion mismatch instead of `IndexError`, the test is not reaching the code path — fix the test before touching the implementation.
 
-- [ ] **Step 2: Simplify the gate**
+- [ ] **Step 4: Fix `argv0_name`**
 
-In `github_dispatch_service.py`, replace the guarded call:
+In `backend/app/services/providers/base.py`, replace:
 
 ```python
-        try:
-            await agent_mail_service.sync_observed_sessions(db, strict=True)
-        except Exception:
-            logger.exception(
-                "session discovery failed while checking slot %s", owner_slot_id
-            )
-            return (
-                "Session discovery failed, so the owning pane could not be "
-                "confirmed. Holding rather than briefing an unknown session."
-            )
+def argv0_name(command: str) -> str:
+    """Return the executable basename from a command or argv0 string."""
+    if not command:
+        return ""
+    return Path(command.strip().split()[0]).name.lower()
 ```
 
-with the plain call:
+with:
 
 ```python
-        # No strict mode: discover_agent_sessions returns [] for tmux-missing,
-        # non-zero exit and timeout, so a failure cannot be distinguished here.
-        # Retention is pid-aware instead (_remove_stale_observed_sessions), so a
-        # failed pass no longer deletes the evidence this gate reads.
+def argv0_name(command: str) -> str:
+    """Return the executable basename from a command or argv0 string."""
+    parts = command.split() if command else []
+    if not parts:
+        return ""
+    return Path(parts[0]).name.lower()
+```
+
+`str.split()` with no argument already discards leading and trailing whitespace, so the explicit `.strip()` was redundant even before it was unsafe. Guarding on `parts` rather than on `command` covers `""`, `" "`, `"\t"` and `"\n"` with one predicate.
+
+Then re-run Step 3's command. Expected: **2 passed**.
+
+- [ ] **Step 5: Write the strict-path regression test**
+
+This is the test whose absence this plan already called a finding: `strict=True` shipped with a fail-closed message and **no test proving the message can be produced.**
+
+Add to `backend/tests/agent_teams/test_github_dispatch_service.py`, immediately above `test_ambiguous_check_allows_one_nudgeable_pane` (`:1960`). It joins the three existing `test_ambiguous_check_*` tests and reuses their fixtures and helpers exactly — `_team`, `_seed_observed_panes`, `_launcher_that_must_not_run`, and the autouse `no_discovered_panes` fixture at `:57-62`.
+
+```python
+@pytest.mark.asyncio
+async def test_ambiguous_check_holds_when_discovery_raises(db, monkeypatch):
+    """strict=True must convert a discovery exception into a hold, not a dispatch.
+
+    discover_agent_sessions() swallows tmux-missing, non-zero exit and timeout,
+    but get_providers() and the process-match loop run OUTSIDE its try, so an
+    OSError from a failed fork under memory pressure escapes. This is the only
+    test that proves the fail-closed message can actually be produced.
+    """
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _seed_observed_panes(db, preset, owner, [("%1", "w:0.1")])
+
+    def raises_like_a_failed_fork():
+        raise OSError(12, "Cannot allocate memory")
+
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        raises_like_a_failed_fork,
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=954,
+        issue_title="discovery exploded",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=_launcher_that_must_not_run,
+        issue_labels_by_number={954: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.pending_reason == "queued_ambiguous_sessions"
+    # The row must survive: retention is pid-aware, and the exception means the
+    # pass never reached _remove_stale_observed_sessions at all.
+    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 1
+```
+
+Three details that are load-bearing:
+
+**Patch the name the service resolves, not the source module.** `agent_mail_service.py` does `from ... import discover_agent_sessions`, so it holds its own reference. `monkeypatch.setattr("app.services.agent_bridge.discovery.subprocess.run", ...)` does **not** work here — the autouse `no_discovered_panes` fixture has already replaced the whole function on the service, so your patch at the subprocess layer never runs. I made this mistake while measuring and got a green test that was actually re-proving Finding 20's poll-1 hold instead. The three existing `test_ambiguous_check_*` tests all patch `app.services.agent_mail_service.discover_agent_sessions`; follow them.
+
+**The replacement takes no arguments.** `sync_observed_sessions` calls `discover_agent_sessions()` bare. A `lambda: ...` cannot raise, hence the named `def`.
+
+**Assert the row survived, not just the hold.** Without the second assertion the test would still pass if a future change deleted the row and held for some unrelated reason. `nudgeable_sessions_for_slot` is the same predicate the gate itself counts.
+
+- [ ] **Step 6: Verify the test detects `strict` being removed**
+
+A regression test that passes with and without the thing it guards is decoration. Prove this one bites, by temporarily replacing the guarded call in `_session_ambiguity_note` (`github_dispatch_service.py:644-654`) with the plain call:
+
+```python
         await agent_mail_service.sync_observed_sessions(db)
 ```
 
-The `except` block spans four lines and its `return (` is followed by a bracketed multi-line string. **Delete the whole `try`/`except` as one unit** — dedenting the call while leaving the `return (...)` behind produces an `IndentationError` that fails collection for a dozen unrelated test files with no mention of this file. If you see `IndentationError: unexpected indent` after this step, that is what happened.
-
-Leave the rest of `_session_ambiguity_note` alone — the `len(candidates) > 1` branch and the `not candidates and known_before` branch both stay. The second is now unreachable via a discovery blip, but it still fires if a row is deleted for a reason this PR does not cover, and fail-closed is the right default there. Do **not** "simplify" it away.
-
-- [ ] **Step 3: Drop the parameter**
-
-In `agent_mail_service.py`:
-
-```python
-    async def sync_observed_sessions(self, db: AsyncSession) -> None:
-        """Upsert Agent Bridge tmux discoveries as observed sessions."""
-        try:
-            discovered = discover_agent_sessions()
-        except Exception as exc:
-            logger.warning("agent bridge discovery failed: %s", exc)
-            return
-```
-
-Then confirm no caller still passes it:
-
 ```bash
-grep -rn "sync_observed_sessions" app/ tests/ | grep strict
+python -m pytest tests/agent_teams/test_github_dispatch_service.py -q -k discovery_raises
 ```
-Expected: no output.
 
-- [ ] **Step 4: Run the scoped suites**
+Expected: **1 failed**, with `agent bridge discovery failed: [Errno 12] Cannot allocate memory` logged at `agent_mail_service.py:357` — the lenient path swallowing the exception, exactly as it should when `strict` is absent.
+
+Then **restore the `try`/`except` verbatim** and re-run. Expected: **1 passed**, and `git diff app/services/github_dispatch_service.py` must be **empty** — this task changes that file not at all. Reverse the edit by exact string; do not `git checkout --` it.
+
+- [ ] **Step 7: Run the scoped suites**
+
+The scoped set does not include `test_providers.py`, so run both:
 
 ```bash
 python -m pytest tests/agent_teams/test_github_dispatch_service.py tests/agent_mail/test_registry.py tests/test_agent_bridge_discovery.py -q
+python -m pytest tests/test_providers.py -q
 ```
 
-Expected: **153 passed** — unchanged from Task 2. This task removes no tests and adds none; it deletes a parameter and a dead branch. If the number moves at all, something else changed and you should find out what before continuing.
+Expected: **157 passed** for the first (156 after Task 2, plus this task's one dispatch test) and **11 passed** for the second (the file's 9, plus this task's 2).
 
-- [ ] **Step 5: Run the full backend suite**
+- [ ] **Step 8: Run the full backend suite**
 
 ```bash
 python -m pytest tests/ -q
 ```
 
-Expected: **616 passed, 1 failed.** That is the 610 baseline plus this PR's 6 new tests, and it is a **measured** figure — the full plan (both production edits and all six tests exactly as written above) was run before this plan was handed over. The one failure must be `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` and nothing else. Any other failure: **stop and report.**
+Expected: **622 passed, 1 failed.** That is the 610 baseline plus this PR's 12 new tests, and it is a **measured** figure — the whole plan, all three production edits and all twelve tests exactly as written, was applied and run before this plan was handed over. The one failure must be `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` and nothing else. Any other failure: **stop and report.**
 
-Each production edit was also measured alone, with no test changes, at **610 passed, 1 failed** — so neither introduces a regression by itself. If your number differs, the difference is yours to explain before opening the PR.
+The three production edits were also measured **together with no test changes at all**: `610 passed, 1 failed` — identical to the baseline. So none of them breaks an existing test on its own, and any full-suite failure you see beyond the known one comes from a test, not from the production code.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add backend/app/services/agent_mail_service.py backend/app/services/github_dispatch_service.py backend/tests/agent_teams/test_github_dispatch_service.py
-git commit -m "refactor(g3): drop strict discovery mode, which guarded an unreachable failure"
+git add backend/app/services/providers/base.py backend/tests/test_providers.py backend/tests/agent_teams/test_github_dispatch_service.py
+git commit -m "fix(g3): a blank pane command must not abort session discovery"
 ```
 
-- [ ] **Step 7: Open the PR**
+Note what is **not** in that `git add`: `github_dispatch_service.py` and `agent_mail_service.py`. If either shows up in `git status` at this point, Step 6's revert was incomplete.
+
+- [ ] **Step 10: Open the PR**
 
 ```bash
 git push -u origin feature/autonomous-github-dispatch-phase-g3
@@ -776,19 +1047,22 @@ gh pr create --base feature/autonomous-github-dispatch \
   --body "..."
 ```
 
-In the body, report: the measured scoped count and full-suite count, the number of tests added and removed, and the pre-existing failure. Leave the PR open and unmerged.
+In the body, report: the measured scoped counts and full-suite count, the number of tests added, that `strict=True` was **retained** and why, and the pre-existing failure. Leave the PR open and unmerged.
 
 ---
 
 ## Self-review notes
 
-**Spec coverage.** There is no spec document for this PR; the requirement is Finding 20 as recorded in the PR #310 review, plus the two adjacent defects the investigation surfaced. All three are covered: the poll-2 dispatch (Task 1), the orphaned rebind (Task 2), the inert flag (Task 3).
+**Spec coverage.** There is no spec document for this PR; the requirement is Finding 20 as recorded in the PR #310 review, plus the adjacent defects the investigation surfaced. All are covered: the poll-2 dispatch (Task 1), the orphaned rebind (Task 2), the untested and escapable fail-closed guard (Task 3).
+
+**Revision history of this plan, because one task reversed.** Task 3 originally said "remove `strict=True`, which guards a failure that cannot happen." An implementation review rejected the plan on that basis and was correct. `OSError(ENOMEM)` from a failed `fork` escapes `discover_agent_sessions` — `get_providers()` and the match loop are outside its `try` — and with `strict` removed, the cold-start case dispatches onto unknown state with nothing left to hold on. Task 3 now retains the flag. The same review also found Task 1's dead-pid test used `pid=None` (a mutant retaining every non-null pid passed both planned tests) and Task 2's advertised-slot validation untested for provider and unvalidated for preset. All three were reproduced by measurement before being accepted; all three are fixed above.
 
 **What this PR does not fix, deliberately.**
 
-1. **`discover_agent_sessions` still cannot report failure.** Fifty-odd test sites and six callers depend on the current contract. It is the right fix eventually and it is its own change.
-2. **`_member_for_existing_observed_session`'s dependence on `team_slot_id` is unchanged.** Task 2 routes around it rather than relaxing it, because its strictness is load-bearing for the non-deleted case.
-3. **The multiple-sessions-per-slot condition still exists.** Live slot 6 carries three observed rows. The gate correctly refuses to dispatch there; nothing here reduces three to one. That is a team-hygiene matter, not a dispatch-correctness one.
-4. **`is_process_match`'s load sensitivity is unchanged.** Task 1 makes the *consequence* of a false negative survivable. A `pgrep` that times out under load still reports the pane as a non-agent for that pass, which still means the pane is absent from `nudgeable_sessions_for_slot`'s input for that pass — the row simply is not destroyed. Worth its own investigation.
+1. **`discover_agent_sessions` still cannot report failure explicitly.** It still mixes `return []` for three failures with propagation for the rest. 27 patch statements and six callers depend on the current contract, so replacing it with an explicit success/failure result is a much larger change of its own. Task 3 makes the mixed contract *safe* at the one call site where it decides a dispatch; it does not make it *clean*.
+2. **Slot-id reuse within the same preset.** `agent_team_slots.id` is a bare `INTEGER PRIMARY KEY` — a rowid alias with no `AUTOINCREMENT` — and SQLite reuses freed ids. Measured: delete slot id 2, insert, and the new slot gets id 2. Task 2's provider, repo and preset guards catch a stale tmux env pointing at a replacement in a *different* preset or repo, but a replacement slot in the **same** preset shares both advertised ids and stays indistinguishable. The durable fix is `AUTOINCREMENT` on that table, or a spawn-time UUID exported alongside the ids — a schema change, hence its own PR.
+3. **`_member_for_existing_observed_session`'s dependence on `team_slot_id` is unchanged.** Task 2 routes around it rather than relaxing it, because its strictness is load-bearing for the non-deleted case.
+4. **The multiple-sessions-per-slot condition still exists.** Live slot 6 carries three observed rows. The gate correctly refuses to dispatch there; nothing here reduces three to one. That is a team-hygiene matter, not a dispatch-correctness one.
+5. **`is_process_match`'s load sensitivity is unchanged.** Task 1 makes the *consequence* of a false negative survivable. A `pgrep` that times out under load still reports the pane as a non-agent for that pass, which still means the pane is absent from `nudgeable_sessions_for_slot`'s input for that pass — the row simply is not destroyed. Worth its own investigation.
 
 **Type consistency.** `_member_for_advertised_slot` returns `MailTeamMember | None`, matching `_member_for_existing_observed_session`, and is called in the same `if member is None:` chain style. `_pid_is_running` takes `Optional[int]` and `MailAgentSession.pid` is `Mapped[int | None]`, so the Task 1 call site needs no guard.
