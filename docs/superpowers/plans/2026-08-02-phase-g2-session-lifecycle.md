@@ -2640,22 +2640,50 @@ Read spec §4 in full first. The ordering is not cosmetic: flipping `reuse_exist
 ### Task 10: Keep `slot_prompt_overrides`, flip `reuse_existing`
 
 **Files:**
-- Modify: `backend/app/services/github_dispatch_service.py:251-261`
-- Test: `backend/tests/agent_teams/test_github_dispatch_service.py:1256`
+- Modify: `backend/app/services/github_dispatch_service.py:299-305` (the `AgentTeamLaunchRequest` block)
+- Test: `backend/tests/agent_teams/test_github_dispatch_service.py:1627`, `:1280`
 
 Implements spec §4.0 and §2.2.
 
-**The correction that makes this task subtle:** `reuse_existing=True` does not mean "a session will be reused" — it means "reuse one **if a match exists**". With no wakeable session, `plan_launch` still yields `action=spawn`, and `_execute_plan_item` computes `bootstrap_prompt = prompt_override or await self._bootstrap_prompt(...)` (`agent_team_service.py:606-608`). Dropping the override would start a spawned agent with the generic team prompt: no issue number, no worktree path, no reporting instructions, no lease token. All six live slots have `bootstrap_prompt = NULL`, so this is the live behaviour, not a hypothetical.
+**Line anchors re-verified against the post-PR1 tree (2026-08-04).** PR1 added ~700 lines to `test_github_dispatch_service.py`, so every line number in Tasks 10–13 moved. The two that matter here: the launch request is now at `:299-305`, not `:251-261`, and `test_dispatch_proceeds_with_only_standing_session` is at `:1627`, not `:1256`.
 
-- [ ] **Step 1: Rewrite the test that encodes Finding 13**
+**The correction that makes this task subtle:** `reuse_existing=True` does not mean "a session will be reused" — it means "reuse one **if a match exists**". With no wakeable session, `plan_launch` still yields `action=spawn`, and `_execute_plan_item` computes `bootstrap_prompt = prompt_override or await self._bootstrap_prompt(...)` (`agent_team_service.py:607-609`). Dropping the override would start a spawned agent with the generic team prompt: no issue number, no worktree path, no reporting instructions, no lease token. All six live slots have `bootstrap_prompt = NULL`, so this is the live behaviour, not a hypothetical.
 
-`test_dispatch_proceeds_with_only_standing_session` (`:1256`) asserts a second session **is spawned** when a standing one exists — it encodes the bug as the requirement. Rewrite it to assert the brief *reached* the standing session: a `MailReceipt` exists for the owner member, the launch request carried `reuse_existing=True`, and exactly one session exists for the slot afterwards.
+- [ ] **Step 1: Strengthen the standing-session test (its premise has already changed)**
+
+**Amended 2026-08-04.** This step used to read "rewrite the test that encodes Finding 13", on the basis that `test_dispatch_proceeds_with_only_standing_session` asserts a second session **is spawned**. That is no longer true: commit `afdb665` ("never spawn a duplicate owner session for a slot") already rewrote it, and it now asserts only `len(launches) == 1`, `dispatch_status == "dispatched"`, `owner_slot_id`, and `pending_reason is None`. **Measured: it passes unchanged with the flag flipped.** Do not go looking for a spawn assertion to delete — there isn't one.
+
+It still needs strengthening, because passing-either-way is exactly the property that makes a test unable to detect the flag being flipped back. Add to it, do not rewrite it: assert the launch request carried `reuse_existing=True`, that a `MailReceipt` exists for the owner member (the brief *reached* the standing session), and that exactly one session exists for the slot afterwards. `launches` already captures the request object, so the first assertion is one line.
+
+- [ ] **Step 1b: The unlisted test the flag flip breaks**
+
+**Added 2026-08-04.** Flipping the flag breaks exactly one test in the suite, and this task did not name it. Measured on the merged tree — `429 passed, 1 failed`, this one:
+
+```
+tests/agent_teams/test_github_dispatch_service.py::test_dispatch_pending_disables_reuse_for_repo_override
+>       assert launched["reuse_existing"] is False
+E       assert True is False
+```
+
+**This one you may rewrite** — the authorization is here, in the plan, so it is no longer an unlisted test. Its name and its assertion both encode the pre-§4.0 behaviour as the requirement. Rename it `test_dispatch_pending_reuses_and_still_passes_the_repo_override` and flip the assertion to `is True`; keep the `launched["override"] == "/tmp/r-ws-1"` assertion exactly as it is, because that is the half of this test that stays true and still matters.
+
+Be clear about what that override assertion does *not* prove, so you don't strengthen it into a false claim: on the reuse branch `_execute_plan_item` ignores `repo_path_override` entirely and reports `slot.repo_path` (`agent_team_service.py:554-575`). The request carries the override; the reused session's cwd does not follow it. That is spec §2.3, "isolation is behavioral under this model" — accepted explicitly by the user on 2026-08-02, verified on the live host where all five panes report the primary checkout while their agents work inside the issue worktree. Worktree isolation is delivered by the brief's instructions. Do **not** try to fix it here, and do not add an assertion claiming the reused session's cwd changed.
 
 - [ ] **Step 2: Add the spawn-fallback test**
 
 Dispatch to a slot with **no** wakeable session must still spawn with `slot_prompt_overrides` containing the issue number and the leased worktree path. This is the regression §4.0 caught in review, and §7 step 4 walks straight into the path it guards.
 
-- [ ] **Step 3: Run and watch them fail**
+- [ ] **Step 3: Run and watch them fail — but know which ones, and why**
+
+**Amended 2026-08-04, because "watch them fail" is wrong for one of these three.** Expect:
+
+| Test | Before the flip | Why |
+|---|---|---|
+| Step 1's `reuse_existing=True` assertion | **FAILS** (`assert False is True`) | the flag is still `False` |
+| Step 1's `MailReceipt` assertion | **PASSES already** | the brief is sent as mail on both paths today — that is the §4.0 premise, not a regression |
+| Step 2's spawn-fallback | **PASSES already** | no wakeable session ⇒ `action=spawn` either way; it is a *guard* against Step 4 dropping the override, not a red test |
+
+Only the first is red-then-green. The other two are guards written before the change that could break them, which is the point of writing them now — but if you sit waiting for them to fail you will conclude the fixtures are broken and stop. They are not.
 
 - [ ] **Step 4: Flip the flag, keep the override**
 
@@ -2673,6 +2701,8 @@ One word changes. The override stays: it is *ignored* on the reuse branch (which
 
 - [ ] **Step 5: Run the suite, then commit**
 
+Run `python -m pytest tests/agent_teams/ tests/agent_mail/ -q`. **Expected: `432 passed`** — the merged tree's 430, plus Step 1b's rewritten test still counting as one, plus Step 1's and Step 2's two new tests. Measured baseline: the merged integration branch is `430 passed`, and flipping the flag alone gives `429 passed, 1 failed`. If anything other than Step 1b's test is red, stop and report.
+
 ```bash
 git add -A backend
 git commit -m "feat(g2): dispatch reuses the slot's standing session
@@ -2688,8 +2718,15 @@ prompt. All six live slots have bootstrap_prompt=NULL, so dropping the override
 would have shipped a spawned agent with no issue number, no worktree path and
 no lease token.
 
-Rewrites the canary that asserted a second session is spawned — it encoded
-Finding 13 as the requirement."
+Rewrites test_dispatch_pending_disables_reuse_for_repo_override, whose name and
+assertion both encoded the pre-4.0 behaviour as the requirement. Its override
+assertion is kept: the request still carries repo_path_override. What that does
+NOT prove is that the reused session moved — _execute_plan_item ignores the
+override on the reuse branch. Isolation is behavioral here, delivered by the
+brief's instructions. Spec 2.3, accepted 2026-08-02.
+
+The earlier canary that asserted a second session is spawned was already
+rewritten upstream by afdb665; nothing left to undo there."
 ```
 
 ---
@@ -2697,10 +2734,12 @@ Finding 13 as the requirement."
 ### Task 11: A non-throttled wake for dispatch briefs
 
 **Files:**
-- Modify: `backend/app/services/agent_mail_service.py:42, 1127-1146`
-- Test: `backend/tests/agent_mail/`
+- Modify: `backend/app/services/agent_mail_service.py:42, 1132` (`auto_nudge_members`), `:804` (`send_message`), `:892` (`send_direct_message`)
+- Test: `backend/tests/agent_mail/test_registry.py:700` (fixture to model on)
 
 Implements spec §4.1.
+
+**Anchors re-verified 2026-08-04 on the merged tree.** `auto_nudge_members` is at `:1132`, `send_message` at `:804`, `send_direct_message` at `:892`, `_nudge_session_for_member` at `:1072`, and `test_send_message_auto_nudge_is_throttled` at `:700`. PR1 shifted these; the constant at `:42` did not move.
 
 `AUTO_NUDGE_COOLDOWN_SECONDS = 30` over an in-memory `_last_auto_nudge_at` dict. Under per-item spawn the nudge was decorative — the prompt was passed at spawn. Under one-session-per-slot it is the **only** thing that makes the agent read the brief, so any unrelated message to that member within the prior 30s (an escalation broadcast, a blocker-merged notification) silently drops the brief's wake.
 
@@ -2865,11 +2904,13 @@ window for whatever follows it."
 ### Task 12: Delivery evidence and the `brief_unread` escalation
 
 **Files:**
-- Modify: `backend/app/services/github_dispatch_service.py:517-546` (`_send_dispatch_brief_to_slot`), `:624-663` (`monitor_dispatched`'s timer block), plus two new helpers
+- Modify: `backend/app/services/github_dispatch_service.py:589-618` (`_send_dispatch_brief_to_slot`), `:660-736` (`monitor_dispatched`), plus two new helpers
 - Modify: `backend/app/services/github_verification_service.py:29-37` (`_PR_OPENED_RECOVERABLE_ESCALATIONS`)
 - Test: `backend/tests/agent_teams/test_github_dispatch_service.py`
 
 Implements spec §4.1a — all three corrections. Uses Task 1's `brief_delivery_nudge_at`, `brief_delivery_nudge_count`, `brief_message_id`, and `settings.github_brief_delivery_max_nudges`.
+
+**Anchors re-verified 2026-08-04 on the merged tree.** `_send_dispatch_brief_to_slot` is at `:589`, not `:517`; `monitor_dispatched` at `:660`, with the ack branch at `:711-721` and the idle branch at `:722-736`. `_PR_OPENED_RECOVERABLE_ESCALATIONS` did **not** move — still `github_verification_service.py:29-37`, five reasons. All four of Task 1's prerequisites are confirmed present: `brief_delivery_nudge_at`, `brief_delivery_nudge_count`, `brief_message_id` (`models/database.py:275-277`), `settings.github_brief_delivery_max_nudges = 2` (`config.py:49`), plus `MailReceipt.read_at` (`models/database.py:454`) — so rule 1 has something to read.
 
 **Interfaces:**
 - Consumes: Task 1's four fields; Task 6's `lease_last_owner_contact_at` stamp; Task 11's `bypass_nudge_cooldown`.
@@ -3192,12 +3233,14 @@ and an owner that opens a PR has self-evidently read the brief."
 ### Task 13: Refuse an ambiguous slot before acquiring
 
 **Files:**
-- Modify: `backend/app/services/agent_mail_service.py:350-398` (`sync_observed_sessions` gains `strict`), plus a new `nudgeable_sessions_for_slot`
-- Modify: `backend/app/services/github_dispatch_service.py:215-221` (the gate Task 4 emptied, before `acquire` at `:222`)
-- Modify: `frontend/src/features/agent-teams/AutonomyPanel.tsx:85-96` (`pendingReasonLabel`)
+- Modify: `backend/app/services/agent_mail_service.py:350` (`sync_observed_sessions` gains `strict`), plus a new `nudgeable_sessions_for_slot`
+- Modify: `backend/app/services/github_dispatch_service.py:253-258` (the gate Task 4 emptied — immediately after `route_item`/`slot_is_busy`, before `acquire`)
+- Modify: `frontend/src/features/agent-teams/AutonomyPanel.tsx` (`pendingReasonLabel`)
 - Test: `backend/tests/agent_teams/test_github_dispatch_service.py`
 
 Implements spec §4.2.
+
+**Anchors re-verified 2026-08-04 on the merged tree.** `sync_observed_sessions` is still at `:350` and `_session_can_nudge` still at `:595`; `_nudge_session_for_member` moved to `:1072-1089`. In `AutonomyPanel.tsx`, PR1 Task 4 Step 5 deleted the `queued_owner_session_live` branch from `pendingReasonLabel`, so the line range shifted — locate it by name, and note you are adding a branch back to the same map PR1 just removed one from. Those are not the same reason and must not be conflated.
 
 **Interfaces:**
 - Consumes: `_session_can_nudge` (`agent_mail_service.py:595`).
