@@ -350,6 +350,25 @@ async def test_pr_opened_accepted_from_recoverable_escalation(db):
 
 
 @pytest.mark.asyncio
+async def test_pr_opened_accepted_from_brief_unread_escalation(db):
+    scope = await _scope(db)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="escalated",
+        escalation_reason="brief_unread",
+        issue_type="code",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 867)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert item.pr_number == 867
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
 async def test_pr_opened_recovery_clears_deferred_retry_stamp(db):
     scope = await _scope(db)
     item = await _item(

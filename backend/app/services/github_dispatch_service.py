@@ -13,6 +13,7 @@ from app.models.database import (
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
+    MailReceipt,
     MailTeamMember,
     TeamGithubScope,
 )
@@ -264,6 +265,15 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            ambiguity_note = await self._session_ambiguity_note(db, owner_slot_id)
+            if ambiguity_note is not None:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = "queued_ambiguous_sessions"
+                item.status_note = ambiguity_note
+                item.updated_at = datetime.utcnow()
+                await db.commit()
+                continue
             workspace = await github_workspace_service.acquire(db, scope, item)
             if workspace is None:
                 item.owner_slot_id = owner_slot_id
@@ -298,7 +308,7 @@ class GithubDispatchService:
                     scope.preset_id,
                     AgentTeamLaunchRequest(
                         slot_ids=[owner_slot_id],
-                        reuse_existing=False,
+                        reuse_existing=True,
                         skip_plan_confirmation=True,
                         repo_path_override=workspace.path,
                         slot_prompt_overrides={owner_slot_id: brief},
@@ -602,7 +612,7 @@ class GithubDispatchService:
             from app.services.agent_mail_service import agent_mail_service
 
             member = await agent_mail_service.get_or_create_slot_member(db, owner_slot)
-            await agent_mail_service.send_direct_message(
+            message = await agent_mail_service.send_direct_message(
                 db,
                 recipient_member_id=member.id,
                 subject=f"Autonomous dispatch: issue #{item.issue_number}",
@@ -613,9 +623,51 @@ class GithubDispatchService:
                     "issue_number": item.issue_number,
                     "scope_id": item.scope_id,
                 },
+                bypass_nudge_cooldown=True,
             )
+            item.brief_message_id = message.id
+            item.brief_delivery_nudge_at = None
+            item.brief_delivery_nudge_count = None
         except Exception:
             logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)
+
+    async def _session_ambiguity_note(
+        self, db: AsyncSession, owner_slot_id: int
+    ) -> str | None:
+        """Return why a slot cannot be safely briefed, if ambiguous."""
+        member = await self._slot_member(db, owner_slot_id)
+        if member is None:
+            return None
+        known_before = len(
+            await agent_mail_service.nudgeable_sessions_for_slot(db, owner_slot_id)
+        )
+        try:
+            await agent_mail_service.sync_observed_sessions(db, strict=True)
+        except Exception:
+            logger.exception(
+                "session discovery failed while checking slot %s for ambiguity",
+                owner_slot_id,
+            )
+            return (
+                "Session discovery failed, so the owning pane could not be "
+                "confirmed. Holding rather than briefing an unknown session."
+            )
+        candidates = await agent_mail_service.nudgeable_sessions_for_slot(
+            db, owner_slot_id
+        )
+        if len(candidates) > 1:
+            targets = ", ".join(sorted(str(session.tmux_target) for session in candidates))
+            return (
+                f"{len(candidates)} nudgeable sessions on this slot ({targets}). "
+                "The dispatch brief would reach an arbitrary one. Converge the "
+                "slot to a single session, then this item dispatches itself."
+            )
+        if not candidates and known_before:
+            return (
+                f"Discovery found no sessions for this slot, but {known_before} "
+                "was expected. Treating zero as unverified rather than empty."
+            )
+        return None
 
     async def record_approval_round(
         self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope
@@ -707,6 +759,22 @@ class GithubDispatchService:
             if owner_wake == "offline":
                 await self.escalate(db, item, "owner_offline")
                 continue
+            if not await self._brief_delivered(db, item):
+                anchor = item.brief_delivery_nudge_at
+                if anchor is None:
+                    await self._nudge_owner_for_brief(db, item)
+                    continue
+                if datetime.utcnow() - anchor <= timedelta(
+                    seconds=settings.github_nudge_grace_seconds
+                ):
+                    continue
+                if (
+                    item.brief_delivery_nudge_count or 0
+                ) < settings.github_brief_delivery_max_nudges:
+                    await self._nudge_owner_for_brief(db, item)
+                    continue
+                await self.escalate(db, item, "brief_unread")
+                continue
             if not self._ack_satisfied(item):
                 anchor = item.dispatched_at or item.updated_at or item.created_at
                 overdue = datetime.utcnow() - anchor > timedelta(
@@ -734,6 +802,26 @@ class GithubDispatchService:
             ):
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
+
+    async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
+        """Return whether this attempt's brief reached its owner."""
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None and workspace.lease_last_owner_contact_at is not None:
+            return True
+        if item.brief_message_id is None:
+            return False
+        member = await self._owner_member(db, item)
+        if member is None:
+            return False
+        receipt = (
+            await db.execute(
+                select(MailReceipt).where(
+                    MailReceipt.message_id == item.brief_message_id,
+                    MailReceipt.member_id == member.id,
+                )
+            )
+        ).scalar_one_or_none()
+        return receipt is not None and receipt.read_at is not None
 
     async def remind_held_leases(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -852,6 +940,29 @@ class GithubDispatchService:
                     "issue_number": item.issue_number,
                 },
             )
+        await db.commit()
+
+    async def _nudge_owner_for_brief(
+        self, db: AsyncSession, item: GithubWorkItem
+    ) -> None:
+        """Re-wake the owner without changing ack or idle timers."""
+        item.brief_delivery_nudge_at = datetime.utcnow()
+        item.brief_delivery_nudge_count = (item.brief_delivery_nudge_count or 0) + 1
+        await self.notify_owner(
+            db,
+            item,
+            subject=f"Unread dispatch brief: issue #{item.issue_number}",
+            body_markdown=(
+                f"You were assigned issue #{item.issue_number} ({item.issue_title}) "
+                "but the brief is still unread. Call `deck_check_inbox` now and "
+                "report your status."
+            ),
+            payload={
+                "kind": "github_dispatch_brief_nudge",
+                "work_item_id": item.id,
+                "issue_number": item.issue_number,
+            },
+        )
         await db.commit()
 
     async def _nudge_owner_for_progress(
