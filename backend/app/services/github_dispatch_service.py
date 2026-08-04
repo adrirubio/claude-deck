@@ -34,7 +34,29 @@ logger = logging.getLogger(__name__)
 
 
 class GithubDispatchService:
-    def reset_for_retry(self, item: GithubWorkItem) -> None:
+    async def reset_for_retry(self, db: AsyncSession, item: GithubWorkItem) -> None:
+        """Request re-dispatch, deferring while the item still holds a lease.
+
+        The deferred path must preserve the escalation reason because PR recovery
+        and escalation idempotence both depend on it while the item remains
+        escalated.
+        """
+        held = (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.leased_item_id == item.id
+                )
+            )
+        ).scalar_one_or_none()
+        now = datetime.utcnow()
+        if held is not None:
+            item.retry_requested_at = now
+            item.status_note = (
+                "Re-dispatch requested; waiting for the current owner to release "
+                f"workspace {held.path}."
+            )
+            item.updated_at = now
+            return
         item.dispatch_status = "pending"
         item.escalation_reason = None
         item.pending_reason = None
@@ -45,7 +67,34 @@ class GithubDispatchService:
         item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
-        item.updated_at = datetime.utcnow()
+        item.retry_requested_at = None
+        item.updated_at = now
+
+    async def promote_deferred_retries(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> int:
+        """Complete deferred retries whose workspace lease has been released."""
+        candidates = (
+            await db.execute(
+                select(GithubWorkItem)
+                .outerjoin(
+                    GithubWorkspace,
+                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
+                )
+                .where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status.in_(("escalated", "failed")),
+                    GithubWorkItem.retry_requested_at.is_not(None),
+                    GithubWorkspace.id.is_(None),
+                )
+                .order_by(GithubWorkItem.id)
+            )
+        ).scalars().all()
+        for item in candidates:
+            await self.reset_for_retry(db, item)
+        if candidates:
+            await db.commit()
+        return len(candidates)
 
     async def route_item(
         self,

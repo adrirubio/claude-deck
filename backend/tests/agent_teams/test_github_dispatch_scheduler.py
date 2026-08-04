@@ -5,12 +5,22 @@ from datetime import datetime
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
 from app.database import Base
-from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubWorkItem, TeamGithubScope
+from app.models.database import (
+    AgentTeamPreset,
+    AgentTeamSlot,
+    GithubWorkItem,
+    GithubWorkspace,
+    TeamGithubScope,
+)
+from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_dispatch_scheduler import GithubDispatchScheduler
+from app.services.github_watcher_service import github_watcher_service
+from app.services.github_workspace_service import github_workspace_service
 
 
 @pytest_asyncio.fixture
@@ -77,9 +87,31 @@ class _FakeVerification:
         self.calls.append(scope.id)
 
 
+class _RoutingDispatch:
+    async def dispatch_pending(self, *args, **kwargs):
+        await github_dispatch_service.dispatch_pending(*args, **kwargs)
+
+    async def monitor_dispatched(self, db, scope, slots):
+        return None
+
+
 class _FakeClient:
     async def get_issues_by_number(self, owner, repo, numbers):
         return {number: {"labels": [{"name": "area:backend"}]} for number in numbers}
+
+
+class _RetryFlowClient:
+    def __init__(self, issue):
+        self.issue = issue
+
+    async def list_issues_with_label(self, owner, repo, label):
+        return [self.issue]
+
+    async def get_open_issues_by_number(self, owner, repo, numbers):
+        return {number: self.issue for number in numbers if number == self.issue["number"]}
+
+    async def get_issues_by_number(self, owner, repo, numbers):
+        return {number: self.issue for number in numbers if number == self.issue["number"]}
 
 
 class _FakeJob:
@@ -142,6 +174,68 @@ async def test_run_repo_once_only_processes_enabled_autonomy_scopes(db):
     assert [call[0] for call in dispatch.dispatch_calls] == [active.id]
     assert dispatch.monitor_calls == [active.id]
     assert verification.calls == [active.id]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_promotes_retry_before_fetching_labels_and_routes_by_label(
+    db, monkeypatch
+):
+    async def reset_succeeds(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", reset_succeeds)
+    monkeypatch.setattr(
+        github_dispatch_service, "_available_memory_mb", lambda: 999_999
+    )
+    scope = await _scope(db, autonomy=True, enabled=True)
+    slot = (
+        await db.execute(select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id))
+    ).scalar_one()
+    slot.area_labels = ["area:backend"]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=77,
+        issue_title="retry routing",
+        issue_url="https://github.com/o/r/issues/77",
+        github_updated_at=datetime(2026, 7, 4),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        retry_requested_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.flush()
+    db.add(GithubWorkspace(scope_id=scope.id, path="/tmp/r-retry-workspace"))
+    await db.commit()
+    issue = {
+        "number": 77,
+        "title": "retry routing",
+        "html_url": "https://github.com/o/r/issues/77",
+        "updated_at": "2026-07-04T00:00:00Z",
+        "state": "open",
+        "labels": [{"name": "claude-deck-ready"}, {"name": "area:backend"}],
+    }
+    client = _RetryFlowClient(issue)
+
+    class _Result:
+        launch_id = 77
+        items = []
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=github_watcher_service,
+        dispatch=_RoutingDispatch(),
+        verification=_FakeVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=client, launcher=fake_launcher)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.routing_method == "label"
+    assert item.owner_slot_id == slot.id
 
 
 @pytest.mark.asyncio

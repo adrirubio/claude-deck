@@ -250,6 +250,41 @@ async def test_escalated_item_recovers_on_updated_timestamp(db):
 
 
 @pytest.mark.asyncio
+async def test_watcher_update_defers_retry_while_workspace_is_leased(db):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=6,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 1),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/r-ws-retry",
+        leased_item_id=item.id,
+        lease_token="watcher-token",
+    )
+    db.add(workspace)
+    await db.commit()
+    client = _FakeClient(
+        labeled=[_issue(6, ["claude-deck-ready"], updated="2026-07-04T00:00:00Z")]
+    )
+
+    await github_watcher_service.poll_scope(db, scope, client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "plan_blocked"
+    assert item.retry_requested_at is not None
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
 async def test_active_item_escalates_when_label_removed(db):
     scope = await _make_scope(db)
     item = GithubWorkItem(

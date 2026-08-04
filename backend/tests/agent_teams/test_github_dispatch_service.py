@@ -357,24 +357,31 @@ def test_ack_lifecycle_settings_present():
     assert settings.github_nudge_grace_seconds > 0
 
 
-def test_reset_for_retry_clears_ack_received_at():
+@pytest.mark.asyncio
+async def test_reset_for_retry_clears_ack_received_at(db):
+    _, _, scope = await _team(db)
     item = GithubWorkItem(
-        scope_id=1,
+        scope_id=scope.id,
         issue_number=819,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
         issue_type="code",
         dispatch_status="escalated",
         escalation_reason="plan_blocked",
         ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
         dispatched_at=datetime(2026, 7, 24, 17, 12, 0),
     )
+    db.add(item)
+    await db.commit()
 
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
 
     assert item.ack_received_at is None
 
 
 @pytest.mark.asyncio
-async def test_reset_for_retry_does_not_release_workspace(db):
+async def test_reset_for_retry_defers_while_a_lease_is_held(db):
     _, _, scope = await _team(db)
     item = GithubWorkItem(
         scope_id=scope.id,
@@ -383,6 +390,7 @@ async def test_reset_for_retry_does_not_release_workspace(db):
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="escalated",
+        escalation_reason="plan_blocked",
     )
     db.add(item)
     await db.flush()
@@ -396,11 +404,175 @@ async def test_reset_for_retry_does_not_release_workspace(db):
     workspace.leased_item_id = item.id
     await db.commit()
 
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
     await db.commit()
 
-    assert item.dispatch_status == "pending"
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
     assert workspace.leased_item_id == item.id
+    assert item.escalation_reason == "plan_blocked"
+
+
+@pytest.mark.asyncio
+async def test_reset_for_retry_without_a_lease_is_unchanged(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=910,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        ack_received_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.reset_for_retry(db, item)
+
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+    assert item.escalation_reason is None
+    assert item.ack_received_at is None
+
+
+@pytest.mark.asyncio
+async def test_promote_deferred_retry_after_release(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=911,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        retry_requested_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    promoted = await github_dispatch_service.promote_deferred_retries(db, scope)
+
+    assert promoted == 1
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_promote_deferred_retry_waits_for_the_lease(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=912,
+        issue_title="retry",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        retry_requested_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(GithubWorkspace.scope_id == scope.id)
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    await db.commit()
+
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 0
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
+    _, _, scope = await _team(db)
+    resets: list[str] = []
+
+    async def spy_reset(db_, scope_, workspace_):
+        resets.append(workspace_.path)
+
+    monkeypatch.setattr(github_workspace_service, "reset_workspace", spy_reset)
+
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=913,
+        issue_title="retry flow",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    workspace = await github_workspace_service.acquire(db, scope, item)
+    first_token = workspace.lease_token
+    assert first_token is not None
+    assert resets == [workspace.path]
+
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "plan_blocked"
+    await db.commit()
+
+    await github_dispatch_service.reset_for_retry(db, item)
+    await db.commit()
+
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == first_token
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 0
+    assert resets == [workspace.path]
+
+    await github_workspace_service.release(db, item.id)
+    assert await github_dispatch_service.promote_deferred_retries(db, scope) == 1
+    assert item.dispatch_status == "pending"
+    assert item.retry_requested_at is None
+
+    reacquired = await github_workspace_service.acquire(db, scope, item)
+    assert reacquired.lease_token != first_token
+    assert len(resets) == 2
+
+
+@pytest.mark.asyncio
+async def test_deferred_retry_preserves_escalation_context_on_reescalation(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=914,
+        issue_title="retry context",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        status_note="original context",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(GithubWorkspace.scope_id == scope.id)
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    await db.commit()
+
+    await github_dispatch_service.reset_for_retry(db, item)
+    deferred_note = item.status_note
+    changed = github_dispatch_service._apply_escalation(
+        item, "owner_offline", "replacement note"
+    )
+
+    assert item.escalation_reason == "plan_blocked"
+    assert changed is False
+    assert item.status_note == deferred_note
 
 
 def test_ack_not_satisfied_by_ack_older_than_current_dispatch():

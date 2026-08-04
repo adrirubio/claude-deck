@@ -201,6 +201,7 @@ def _work_item_response(
         pr_number=item.pr_number,
         retry_count=item.retry_count,
         last_verified_sha=item.last_verified_sha,
+        retry_requested_at=item.retry_requested_at,
         escalation_reason=item.escalation_reason,
         status_note=item.status_note,
         auto_merged_at=item.auto_merged_at,
@@ -663,7 +664,7 @@ async def retry_github_work_item(
                 "it. Resolve or close the PR first."
             ),
         )
-    github_dispatch_service.reset_for_retry(item)
+    await github_dispatch_service.reset_for_retry(db, item)
     if request is not None and request.reason:
         item.pending_reason = f"retry requested: {request.reason}"
     await db.commit()

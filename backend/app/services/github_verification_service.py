@@ -59,6 +59,7 @@ class GithubVerificationService:
             )
         if recoverable:
             item.escalation_reason = None
+            item.retry_requested_at = None
         item.pr_number = pr_number
         item.last_verified_sha = None
         if item.issue_type == "design":

@@ -41,6 +41,7 @@ class GithubWatcherService:
             client,
             open_labeled_numbers=frozenset(issue["number"] for issue in labeled),
         )
+        await github_dispatch_service.promote_deferred_retries(db, scope)
         scope.last_polled_at = datetime.utcnow()
         await db.commit()
 
@@ -75,7 +76,7 @@ class GithubWatcherService:
             existing.dispatch_status in _RECOVERABLE_STATUSES
             and github_updated_at > existing.github_updated_at
         ):
-            github_dispatch_service.reset_for_retry(existing)
+            await github_dispatch_service.reset_for_retry(db, existing)
         if existing.dispatch_status == "pending":
             existing.issue_type = issue_type
         existing.github_updated_at = github_updated_at
