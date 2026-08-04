@@ -1214,12 +1214,62 @@ Grep for both names across `backend/` afterwards to catch any remaining referenc
 
 Frontend may reference the pending reason string for display; if so, remove that branch too.
 
-- [ ] **Step 6: Run everything**
+- [ ] **Step 6: Release the lease on the `ValueError` launch path**
+
+**Added 2026-08-04, from the impl agent's Task 4 stop report.** This step did not exist in the original plan; the reviewer found the gap and the diagnosis was correct.
+
+`test_value_error_retains_lease_until_reclaim_sweep` (`test_github_dispatch_service.py:2431`) asserts `reclaim_stale(...) == 1` on a lease seconds old, and now gets `0`. It is not in the rewrite list, and stopping on it was right.
+
+**Do not rewrite the test to expect `0`.** That is the obvious fix and it pins a permanent leak. On this path `launcher` raised *before returning*, so no pane was ever spawned, so `leased_owner_pid` is `None` forever — and Task 2 deliberately maps `None → alive`. Condition 3 can therefore **never** become true for this workspace. Waiting 6h does not help; nothing ever releases it. Pinning `== 0` as correct is Finding 19 arriving by a second route: a lease no backstop can reach.
+
+Fix it at the source instead. `dispatch_pending` already has this exact precedent at `:277` — it releases when `tmux_target is None`, i.e. when nothing was spawned. The `ValueError` branch is the same situation known with more certainty, so it should do the same thing:
+
+```python
+            except ValueError:
+                item.owner_slot_id = owner_slot_id
+                item.routing_method = method
+                item.pending_reason = None
+                await self.escalate(db, item, "plan_blocked")
+                # launcher raised before returning, so no pane exists and no pid
+                # was ever captured. leased_owner_pid stays NULL, which
+                # _owner_process_is_alive treats as alive (Task 2), so the
+                # backstop could never reclaim this lease at any age. Release it
+                # here, where "nothing was spawned" is known rather than inferred
+                # — the same reasoning as the tmux_target is None branch below.
+                await github_workspace_service.release(db, item.id)
+                await db.commit()
+                continue
+```
+
+Then the legacy test needs an edit, not a rewrite. Note the query has to change too: it currently fetches the workspace *by* `leased_item_id == item.id`, which is now NULL, so `scalar_one()` raises `NoResultFound` before any assertion runs. Verified by running it — this exact trap cost the orchestrator a cycle.
+
+```python
+    workspaces = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.scope_id == scope.id)
+        )
+    ).scalars().all()
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "plan_blocked"
+    # Changed 2026-08-04: the lease is released on the failure path itself, not
+    # left for a sweep that could never reach it (no pid was ever captured, so
+    # _owner_process_is_alive returns True forever).
+    assert all(w.leased_item_id != item.id for w in workspaces)
+    assert await github_workspace_service.reclaim_stale(db, scope) == 0
+```
+
+Rename it to `test_value_error_releases_lease_immediately`.
+
+**Expected result: `260 passed`.** The orchestrator applied exactly this change to your working tree, ran the suite, got 260 green, and then reverted it — so the number is measured, not predicted. If you land on a different count, stop and report.
+
+**Leave `test_unexpected_launch_exception_retains_lease_and_escalates` (`:2469`) exactly as it is, still asserting the lease is retained.** The two paths look symmetric and are not. `ValueError` means the launch was refused before starting (`agent_team_service.py:495`, "Launch plan is blocked"). A bare `Exception` means the outcome is *unknown* — a pane may exist and may be working, which is why that branch re-raises rather than continuing. Retaining there is fail-safe and correct. If you find yourself making these two consistent, stop: the asymmetry is the point.
+
+- [ ] **Step 7: Run everything**
 
 Run: `python -m pytest tests/agent_teams/ -q`
 Expected: green. Count changes — you deleted 1 test and the parametrized rewrite adds cases.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add -A backend frontend
@@ -1238,6 +1288,14 @@ makes the safe error (retain) dominate.
 Condition 4 (owner contact) is what distinguishes a REPLACEMENT owner from a
 dead one without asking 'is the slot alive?' — which would rebuild Finding 19
 inside its own fix.
+
+Also releases the lease on the ValueError launch path. launcher raises before
+returning there, so no pid is ever captured, and a NULL pid reads as alive —
+the backstop could never reclaim that lease at any age. Releasing where
+'nothing was spawned' is known, rather than leaving it to a sweep that cannot
+reach it, is the same reasoning as the existing tmux_target is None branch.
+The bare-Exception path deliberately still retains: unknown outcome, possible
+live pane.
 
 Also adds M12's owed guard test: ready_for_review is not reclaimable."
 ```
