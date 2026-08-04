@@ -5,11 +5,12 @@ import asyncio
 import os
 import pathlib
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.agent_bridge.discovery import discover_agent_sessions
 
@@ -156,8 +157,9 @@ class GithubWorkspaceService:
         await db.commit()
 
     async def reclaim_stale(self, db: AsyncSession, scope: TeamGithubScope) -> int:
-        from app.services.github_dispatch_service import github_dispatch_service
-
+        threshold = datetime.utcnow() - timedelta(
+            seconds=settings.github_stale_lease_backstop_seconds
+        )
         leased = (
             await db.execute(
                 select(GithubWorkspace, GithubWorkItem)
@@ -171,16 +173,38 @@ class GithubWorkspaceService:
         ).all()
         released = 0
         for workspace, item in leased:
+            if workspace.kind == "primary":
+                continue
+            if workspace.leased_at is None or workspace.leased_at > threshold:
+                continue
+            if self._owner_process_is_alive(workspace):
+                continue
             if (
-                item.owner_slot_id is not None
-                and await github_dispatch_service.slot_has_live_owner_session(
-                    db, item.owner_slot_id
-                )
+                workspace.lease_last_owner_contact_at is not None
+                and workspace.lease_last_owner_contact_at > threshold
             ):
+                continue
+            if not await self._worktree_is_quiescent(scope, workspace):
                 continue
             await self.release(db, workspace.leased_item_id)
             released += 1
         return released
+
+    async def _worktree_is_quiescent(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> bool:
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        if return_code != 0 or output.strip():
+            return False
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        if return_code != 0:
+            return False
+        return output.strip() == "0"
 
     async def reset_workspace(
         self,

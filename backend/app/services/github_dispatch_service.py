@@ -10,11 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
-    AgentTeamLaunchItem,
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
-    MailAgentSession,
     MailTeamMember,
     TeamGithubScope,
 )
@@ -110,32 +108,6 @@ class GithubDispatchService:
                     )
                 )
             ).scalar_one()
-        )
-
-    async def slot_has_live_owner_session(self, db: AsyncSession, slot_id: int) -> bool:
-        sessions = (
-            await db.execute(
-                select(MailAgentSession)
-                .join(
-                    AgentTeamLaunchItem,
-                    (AgentTeamLaunchItem.tmux_target == MailAgentSession.tmux_target)
-                    & (AgentTeamLaunchItem.slot_id == MailAgentSession.team_slot_id),
-                )
-                .join(
-                    GithubWorkItem,
-                    GithubWorkItem.launch_id == AgentTeamLaunchItem.launch_id,
-                )
-                .where(
-                    MailAgentSession.team_slot_id == slot_id,
-                    MailAgentSession.tmux_target.is_not(None),
-                )
-                .distinct()
-            )
-        ).scalars().all()
-        now = datetime.utcnow()
-        return any(
-            agent_mail_service._effective_status(session, now) != "offline"
-            for session in sessions
         )
 
     def _available_memory_mb(self) -> int | None:
@@ -240,13 +212,6 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
-            if await self.slot_has_live_owner_session(db, owner_slot_id):
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
-                item.pending_reason = "queued_owner_session_live"
-                item.updated_at = datetime.utcnow()
-                await db.commit()
-                continue
             workspace = await github_workspace_service.acquire(db, scope, item)
             if workspace is None:
                 item.owner_slot_id = owner_slot_id
@@ -292,6 +257,7 @@ class GithubDispatchService:
                 item.routing_method = method
                 item.pending_reason = None
                 await self.escalate(db, item, "plan_blocked")
+                await github_workspace_service.release(db, item.id)
                 await db.commit()
                 continue
             except Exception:
