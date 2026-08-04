@@ -94,7 +94,7 @@ These apply to **every** task. Several are safety rules earned from live inciden
 
 **Git**
 - Branch from and target `feature/autonomous-github-dispatch`.
-- **PR #310 must be merged before you start.** This plan's line numbers and baselines are all measured at its tip (`806ec3b`). Start with:
+- **PR #310 is merged.** It landed as merge commit `2801556` on 2026-08-04, so this prerequisite is already satisfied — you do not need to wait for anything. This plan's line numbers and baselines were all measured at PR #310's tip (`806ec3b`), and `git diff 806ec3b 2801556 -- backend/ frontend/` is **empty**: the merge changed no code, only added this plan document. So every line number and every count below still holds exactly as written at the branch tip you will branch from. Start with:
   ```bash
   cd /home/juan/work/repos/juanrubio/claude-deck-g1
   git fetch origin
@@ -640,7 +640,7 @@ git commit -m "fix(g3): observed rows recover their slot from the tmux environme
 **Files:**
 - Modify: `backend/app/services/agent_mail_service.py:350-360` (drop the `strict` parameter and its branch)
 - Modify: `backend/app/services/github_dispatch_service.py:634-660` (`_session_ambiguity_note` — drop the `try`/`except` and the strict call)
-- Test: `backend/tests/agent_teams/test_github_dispatch_service.py:1717` (one stub signature)
+- Test: `backend/tests/agent_teams/test_github_dispatch_service.py:1716` (one stub signature)
 
 **Interfaces:**
 - Consumes: nothing new.
@@ -674,7 +674,7 @@ That is why Tasks 1 and 2 fix the consequence instead. The honest options for `s
 grep -rn "strict" tests/agent_teams/test_github_dispatch_service.py app/services/agent_mail_service.py app/services/github_dispatch_service.py
 ```
 
-Expected: exactly one test-side hit, and it is **not** a test of the strict path. It is a stub whose signature has to tolerate the keyword (`:1717`, inside `test_dispatch_proceeds_with_only_standing_session`):
+Expected: exactly one test-side hit, and it is **not** a test of the strict path. It is a stub whose signature has to tolerate the keyword (`:1716`, inside `test_dispatch_proceeds_with_only_standing_session` which begins at `:1715`):
 
 ```python
     async def keep_synthetic_session(_db, *, strict=False):
