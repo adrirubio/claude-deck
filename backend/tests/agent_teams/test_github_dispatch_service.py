@@ -691,6 +691,181 @@ async def test_dispatch_pending_launches_and_marks_dispatched(db):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_captures_pane_pid_from_launch_result(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=201,
+        issue_title="Capture pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:1.0"
+        pane_pid = 4242
+
+    class _Result:
+        launch_id = 201
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", lambda _pid: "9001")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={201: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert item.dispatch_status == "dispatched"
+    assert workspace.leased_owner_pid == 4242
+    assert workspace.leased_owner_proc_start == "9001"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolves_pane_pid_from_tmux_target(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=202,
+        issue_title="Resolve pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:2.0"
+        pane_pid = None
+
+    class _Result:
+        launch_id = 202
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr(github_dispatch_service, "_resolve_pane_pid", lambda _target: 5252)
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", lambda _pid: "9002")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={202: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert workspace.leased_owner_pid == 5252
+    assert workspace.leased_owner_proc_start == "9002"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_without_resolvable_pane_pid_still_dispatches(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=203,
+        issue_title="Missing pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:3.0"
+        pane_pid = None
+
+    class _Result:
+        launch_id = 203
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr(github_dispatch_service, "_resolve_pane_pid", lambda _target: None)
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={203: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert item.dispatch_status == "dispatched"
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_pid_pair_null_when_proc_start_is_unreadable(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=204,
+        issue_title="Unreadable pid",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.commit()
+
+    class _LaunchItem:
+        status = "pending_registration"
+        tmux_target = "deck:4.0"
+        pane_pid = 6262
+
+    class _Result:
+        launch_id = 204
+        items = [_LaunchItem()]
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    def unreadable(_pid):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(github_workspace_service, "_read_proc_start", unreadable)
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={204: ["area:backend"]},
+    )
+
+    workspace = (
+        await db.execute(select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id))
+    ).scalar_one()
+    assert item.dispatch_status == "dispatched"
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")

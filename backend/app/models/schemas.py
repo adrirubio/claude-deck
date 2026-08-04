@@ -2342,6 +2342,7 @@ class AgentTeamLaunchResultItem(BaseModel):
     repo_path: str
     session_name: Optional[str] = None
     tmux_target: Optional[str] = None
+    pane_pid: Optional[int] = None
     agent_mail_member_id: Optional[int] = None
     message: Optional[str] = None
     block_code: Optional[str] = None

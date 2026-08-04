@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import pathlib
+import secrets
 from datetime import datetime
 
 from sqlalchemy import select
@@ -117,6 +118,11 @@ class GithubWorkspaceService:
         workspace.leased_item_id = item.id
         workspace.leased_at = now
         workspace.released_at = None
+        workspace.lease_token = secrets.token_hex(8)
+        workspace.leased_owner_pid = None
+        workspace.leased_owner_proc_start = None
+        workspace.lease_last_owner_contact_at = None
+        workspace.lease_release_reminded_at = None
         workspace.updated_at = now
         await db.commit()
 
@@ -141,6 +147,11 @@ class GithubWorkspaceService:
         now = datetime.utcnow()
         workspace.leased_item_id = None
         workspace.released_at = now
+        workspace.lease_token = None
+        workspace.leased_owner_pid = None
+        workspace.leased_owner_proc_start = None
+        workspace.lease_last_owner_contact_at = None
+        workspace.lease_release_reminded_at = None
         workspace.updated_at = now
         await db.commit()
 

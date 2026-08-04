@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -152,6 +153,33 @@ class GithubDispatchService:
             return None
         return None
 
+    def _resolve_pane_pid(self, tmux_target: str | None) -> int | None:
+        """Resolve a tmux target to its pane pid on a best-effort basis."""
+        if not tmux_target:
+            return None
+        try:
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "-t", tmux_target, "#{pane_pid}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            logger.warning("could not resolve pane pid for %s", tmux_target)
+            return None
+        if result.returncode != 0:
+            return None
+        raw = result.stdout.strip()
+        if not raw.isdigit():
+            logger.warning(
+                "tmux returned no pane pid for %s (stdout=%r) — the lease will "
+                "not be auto-reclaimable",
+                tmux_target,
+                raw,
+            )
+            return None
+        return int(raw)
+
     async def dispatch_pending(
         self,
         db: AsyncSession,
@@ -286,6 +314,25 @@ class GithubDispatchService:
             else:
                 item.dispatch_status = "dispatched"
                 item.dispatched_at = datetime.utcnow()
+                pane_pid = getattr(launch_item, "pane_pid", None) or self._resolve_pane_pid(
+                    tmux_target
+                )
+                if pane_pid is not None:
+                    try:
+                        proc_start = github_workspace_service._read_proc_start(pane_pid)
+                    except OSError:
+                        proc_start = None
+                    if proc_start is not None:
+                        workspace.leased_owner_pid = pane_pid
+                        workspace.leased_owner_proc_start = proc_start
+                        workspace.updated_at = datetime.utcnow()
+                    else:
+                        logger.warning(
+                            "captured pane pid %s for item %s but could not read "
+                            "its start time; lease will not be auto-reclaimable",
+                            pane_pid,
+                            item.id,
+                        )
                 slots_dispatched_this_batch.add(owner_slot_id)
                 scope_dispatched_this_batch += 1
             item.pending_reason = None

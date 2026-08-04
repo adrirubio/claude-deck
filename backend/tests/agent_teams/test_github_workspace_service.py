@@ -276,6 +276,40 @@ async def test_acquire_leases_oldest_available_workspace(db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_acquire_mints_a_fresh_token_each_acquisition(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add(workspace)
+    await db.commit()
+
+    first = await service.acquire(db, scope, item)
+    first_token = first.lease_token
+    await service.release(db, item.id)
+    second = await service.acquire(db, scope, item)
+
+    assert first_token is not None
+    assert second.lease_token is not None
+    assert second.lease_token != first_token
+
+
+@pytest.mark.asyncio
+async def test_acquire_returning_held_lease_does_not_remint(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add(workspace)
+    await db.commit()
+
+    first = await service.acquire(db, scope, item)
+    token = first.lease_token
+    again = await service.acquire(db, scope, item)
+
+    assert again.id == first.id
+    assert again.lease_token == token
+
+
+@pytest.mark.asyncio
 async def test_acquire_returns_none_when_every_workspace_is_leased(db, tmp_path):
     scope, _, item = await _context(db, tmp_path / "repo")
     other = GithubWorkItem(
