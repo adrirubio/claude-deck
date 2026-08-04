@@ -23,6 +23,9 @@ from app.services.github_workspace_service import github_workspace_service
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
+# These states are terminal for the owner. Failed is included because a failed
+# launch may still have created a live pane that retained the workspace lease.
+_RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 _LAUNCH_FAILED_STATUSES = {
     "failed",
     "blocked",
@@ -431,9 +434,16 @@ class GithubDispatchService:
                 body,
                 "",
                 "Required status reporting:",
-                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"triaging\", note=\"...\")`.",
-                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"pr_opened\", pr_number=<PR number>)`.",
-                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, status=\"blocked\", note=\"...\")`.",
+                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
+                f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"pr_opened\", lease_token=\"{workspace.lease_token}\", "
+                "pr_number=<PR number>)`.",
+                f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"blocked\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
+                f"- Once the item reaches a terminal state, commit and push all work, then call "
+                f"`deck_report_dispatch_status(work_item_id={item.id}, "
+                f"status=\"workspace_released\", lease_token=\"{workspace.lease_token}\")`.",
             ]
         )
         if item.issue_type == "design":

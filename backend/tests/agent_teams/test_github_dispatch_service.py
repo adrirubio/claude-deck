@@ -1113,6 +1113,42 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
 
 
 @pytest.mark.asyncio
+async def test_every_report_instruction_carries_the_lease_token(db):
+    _, slots, scope = await _team(db)
+    workspace = (
+        await db.execute(select(GithubWorkspace).order_by(GithubWorkspace.id))
+    ).scalars().first()
+    workspace.lease_token = "tok-brief"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=94,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add(item)
+    await db.commit()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item,
+        scope,
+        workspace,
+        owner_slot_id=slots[1].id,
+        preset_slots=slots,
+    )
+
+    call_lines = [
+        line
+        for line in brief.splitlines()
+        if "deck_report_dispatch_status(work_item_id=" in line
+    ]
+    assert len(call_lines) >= 4
+    for line in call_lines:
+        assert 'lease_token="tok-brief"' in line, f"missing token: {line}"
+
+
+@pytest.mark.asyncio
 async def test_design_dispatch_brief_uses_design_pipeline_language(db):
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")

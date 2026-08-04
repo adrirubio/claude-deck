@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import pathlib
 import secrets
@@ -26,6 +27,8 @@ _GIT_ENV = {
 
 _RECLAIMABLE_STATUSES = ("escalated", "failed", "merged", "completed")
 
+logger = logging.getLogger(__name__)
+
 
 class GithubWorkspaceError(RuntimeError):
     def __init__(self, message: str, block_code: str = "workspace_not_a_worktree"):
@@ -37,6 +40,11 @@ class GithubWorkspaceResetError(GithubWorkspaceError):
     def __init__(self, message: str, *, transient: bool):
         super().__init__(message, "workspace_reset_failed")
         self.transient = transient
+
+
+class GithubWorkspaceLeaseTokenMismatch(GithubWorkspaceError):
+    def __init__(self, message: str):
+        super().__init__(message, "lease_token_mismatch")
 
 
 class GithubWorkspaceService:
@@ -154,6 +162,89 @@ class GithubWorkspaceService:
         workspace.lease_last_owner_contact_at = None
         workspace.lease_release_reminded_at = None
         workspace.updated_at = now
+        await db.commit()
+
+    async def get_leased_workspace(
+        self, db: AsyncSession, item_id: int
+    ) -> GithubWorkspace | None:
+        return (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.leased_item_id == item_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def release_by_token(
+        self, db: AsyncSession, item_id: int, *, lease_token: str
+    ) -> None:
+        """Release only the workspace acquisition named by the token.
+
+        Item identity alone cannot distinguish a stale report from an earlier
+        dispatch attempt. Requiring the acquisition token prevents that report
+        from releasing a replacement owner's live lease.
+        """
+        workspace = await self.get_leased_workspace(db, item_id)
+        if workspace is None:
+            return
+        if workspace.lease_token != lease_token:
+            raise GithubWorkspaceLeaseTokenMismatch(
+                f"lease_token does not match the current lease for item {item_id}"
+            )
+        await self.release(db, item_id)
+
+    async def release_blocker(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> str | None:
+        """Return why a workspace must not be released, failing closed."""
+        if workspace.kind == "primary":
+            return None
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        if return_code != 0:
+            return output.strip() or "workspace status could not be determined"
+        if output.strip():
+            return f"uncommitted or untracked changes:\n{output.strip()}"
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        if return_code != 0:
+            return output.strip() or "unpushed commits could not be determined"
+        if output.strip() != "0":
+            return (
+                f"{output.strip()} commit(s) not pushed to {scope.base_ref}; "
+                "the next dispatch would reset --hard them away"
+            )
+        return None
+
+    async def touch_owner_contact(
+        self,
+        db: AsyncSession,
+        item_id: int,
+        *,
+        lease_token: str | None = None,
+    ) -> None:
+        """Stamp contact evidence only on the matching workspace acquisition.
+
+        A stale token is a deliberate no-op because contact recording is only a
+        side effect of a status report whose primary state change already
+        succeeded.
+        """
+        workspace = await self.get_leased_workspace(db, item_id)
+        if workspace is None:
+            return
+        if workspace.lease_token is not None and lease_token != workspace.lease_token:
+            logger.info(
+                "ignoring owner contact for item %s: token mismatch (lease is on "
+                "a different attempt)",
+                item_id,
+            )
+            return
+        workspace.lease_last_owner_contact_at = datetime.utcnow()
+        workspace.updated_at = workspace.lease_last_owner_contact_at
         await db.commit()
 
     async def reclaim_stale(self, db: AsyncSession, scope: TeamGithubScope) -> int:

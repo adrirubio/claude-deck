@@ -2332,6 +2332,7 @@ class DispatchStatusReport(BaseModel):
     reassign_to_slot_id: Optional[int] = None
     note: Optional[str] = None
     reporting_slot_id: Optional[int] = None
+    lease_token: Optional[str] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):

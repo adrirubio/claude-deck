@@ -39,9 +39,13 @@ from app.models.schemas import (
     TeamGithubScopeUpdate,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
-from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_dispatch_service import (
+    _RELEASABLE_STATUSES,
+    github_dispatch_service,
+)
 from app.services.github_workspace_service import (
     GithubWorkspaceError,
+    GithubWorkspaceLeaseTokenMismatch,
     GithubWorkspaceResetError,
     github_workspace_service,
 )
@@ -312,8 +316,51 @@ async def report_dispatch_status(
             item.pr_number = report.pr_number
         item.updated_at = now
         await db.commit()
+    elif report.status == "workspace_released":
+        if report.reporting_slot_id != item.owner_slot_id:
+            raise HTTPException(
+                status_code=409,
+                detail="only the owner slot may release its workspace",
+            )
+        if report.lease_token is None:
+            raise HTTPException(status_code=400, detail="lease_token required")
+        if item.dispatch_status not in _RELEASABLE_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"workspace cannot be released while the item is "
+                    f"{item.dispatch_status}; release is legal only from "
+                    f"{', '.join(_RELEASABLE_STATUSES)}"
+                ),
+            )
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None:
+            blocker = await github_workspace_service.release_blocker(scope, workspace)
+            if blocker is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"workspace will not be released: {blocker}. Commit and "
+                        "push, or report the situation in status_note and leave "
+                        "the lease held."
+                    ),
+                )
+        try:
+            await github_workspace_service.release_by_token(
+                db, item.id, lease_token=report.lease_token
+            )
+        except GithubWorkspaceLeaseTokenMismatch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     else:
         raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
+
+    if (
+        report.status != "workspace_released"
+        and report.reporting_slot_id == item.owner_slot_id
+    ):
+        await github_workspace_service.touch_owner_contact(
+            db, item.id, lease_token=report.lease_token
+        )
 
     await db.refresh(item)
     return {
