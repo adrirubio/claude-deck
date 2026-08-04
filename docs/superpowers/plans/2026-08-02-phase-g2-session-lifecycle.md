@@ -1508,9 +1508,16 @@ async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
     assert resets == [workspace.path]                   # <-- NO second reset
 
     # Now the legitimate owner releases, and only then does the retry proceed.
-    await github_workspace_service.release_by_token(
-        db, item.id, lease_token=first_token
-    )
+    #
+    # Correction (2026-08-04, from the impl agent's Task 5 stop report): an
+    # earlier draft called release_by_token here, which Task 6 introduces — so
+    # Task 5 could not finish green in the prescribed order. Use the existing
+    # primitive. This test's subject is retry ORDERING (held lease defers,
+    # released lease promotes, reacquisition mints a new token); token-CAS
+    # correctness is Task 6's subject and Task 6 tests it, including the
+    # stale-token rejection. release() NULLs lease_token, so the
+    # `reacquired.lease_token != first_token` assertion below still holds.
+    await github_workspace_service.release(db, item.id)
     assert await github_dispatch_service.promote_deferred_retries(db, scope) == 1
     assert item.dispatch_status == "pending"
     assert item.retry_requested_at is None
