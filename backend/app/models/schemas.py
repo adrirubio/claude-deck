@@ -2242,10 +2242,27 @@ class GithubWorkspaceResponse(BaseModel):
     leased_item_id: Optional[int] = None
     leased_at: Optional[datetime] = None
     released_at: Optional[datetime] = None
+    lease_token: Optional[str] = None
+    lease_last_owner_contact_at: Optional[datetime] = None
+    lease_release_reminded_at: Optional[datetime] = None
+    lease_age_seconds: Optional[int] = None
     provision_error: Optional[str] = None
     enabled: bool
     created_at: datetime
     updated_at: datetime
+
+
+class GithubWorkspaceForceReleaseRequest(BaseModel):
+    expected_lease_token: str
+    reason: str
+    requested_by: Optional[str] = None
+
+
+class GithubWorkspaceForceReleaseResponse(BaseModel):
+    workspace: GithubWorkspaceResponse
+    released_item_id: int
+    discarded_paths: Optional[str] = None
+    unpushed_commits: Optional[int] = None
 
 
 class GithubWorkspaceListResponse(BaseModel):

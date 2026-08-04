@@ -1,6 +1,7 @@
 """Agent Team Preset endpoints."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from string import Formatter
 
@@ -31,6 +32,8 @@ from app.models.schemas import (
     GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
     GithubWorkspaceCreate,
+    GithubWorkspaceForceReleaseRequest,
+    GithubWorkspaceForceReleaseResponse,
     GithubWorkspaceListResponse,
     GithubWorkspaceResponse,
     TeamGithubScopeCreate,
@@ -54,6 +57,8 @@ from app.services.agent_team_service import PlanConflictError, agent_team_servic
 from app.services.providers.base import ProviderLaunchError
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 _WORKSPACE_CONFLICT_CODES = {
     "workspace_path_registered",
@@ -162,6 +167,11 @@ def _workspace_lease_state(workspace: GithubWorkspace) -> str:
 
 
 def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
+    lease_age_seconds = None
+    if workspace.leased_item_id is not None and workspace.leased_at is not None:
+        lease_age_seconds = max(
+            0, int((datetime.utcnow() - workspace.leased_at).total_seconds())
+        )
     return GithubWorkspaceResponse(
         id=workspace.id,
         scope_id=workspace.scope_id,
@@ -172,6 +182,10 @@ def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
         leased_item_id=workspace.leased_item_id,
         leased_at=workspace.leased_at,
         released_at=workspace.released_at,
+        lease_token=workspace.lease_token,
+        lease_last_owner_contact_at=workspace.lease_last_owner_contact_at,
+        lease_release_reminded_at=workspace.lease_release_reminded_at,
+        lease_age_seconds=lease_age_seconds,
         provision_error=workspace.provision_error,
         enabled=workspace.enabled,
         created_at=workspace.created_at,
@@ -653,6 +667,61 @@ async def reprobe_github_workspace(
     await db.commit()
     await db.refresh(workspace)
     return _workspace_response(workspace)
+
+
+@router.post(
+    "/github-scopes/{scope_id}/workspaces/{workspace_id}/force-release",
+    response_model=GithubWorkspaceForceReleaseResponse,
+)
+async def force_release_github_workspace(
+    scope_id: int,
+    workspace_id: int,
+    request: GithubWorkspaceForceReleaseRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    workspace = await db.get(GithubWorkspace, workspace_id)
+    if workspace is None or workspace.scope_id != scope_id:
+        raise HTTPException(status_code=404, detail="GitHub workspace not found")
+    if workspace.leased_item_id is None:
+        raise _conflict(
+            "Workspace is not leased",
+            block_code="workspace_not_leased",
+        )
+    if workspace.lease_token != request.expected_lease_token:
+        raise _conflict(
+            f"Lease token mismatch: expected {request.expected_lease_token}, "
+            f"current {workspace.lease_token}. Refresh and re-check before forcing.",
+            block_code="lease_token_mismatch",
+        )
+
+    # Capture both risk signals and the item identity before release clears the
+    # lease. The operator override reports potential loss but deliberately does
+    # not gate on it.
+    discarded_paths, unpushed_commits = await github_workspace_service.pending_work(
+        scope, workspace
+    )
+    released_item_id = workspace.leased_item_id
+    logger.warning(
+        "force-release workspace %s (item %s) by %s: %s; discarding: %s dirty "
+        "path(s), %s unpushed commit(s)",
+        workspace.id,
+        released_item_id,
+        request.requested_by or "unknown",
+        request.reason,
+        len((discarded_paths or "").splitlines()),
+        unpushed_commits if unpushed_commits is not None else "unknown",
+    )
+    await github_workspace_service.release(db, released_item_id)
+    await db.refresh(workspace)
+    return GithubWorkspaceForceReleaseResponse(
+        workspace=_workspace_response(workspace),
+        released_item_id=released_item_id,
+        discarded_paths=discarded_paths,
+        unpushed_commits=unpushed_commits,
+    )
 
 
 @router.get(

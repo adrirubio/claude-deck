@@ -220,6 +220,31 @@ class GithubWorkspaceService:
             )
         return None
 
+    async def pending_work(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> tuple[str | None, int | None]:
+        """Return pending paths and commits for reporting, never as a gate.
+
+        Unlike release_blocker, observation failures return unknown values and
+        do not veto an operator-authorized force release.
+        """
+        if workspace.kind == "primary":
+            return None, None
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "status", "--porcelain"]
+        )
+        paths = output.rstrip("\r\n") or None if return_code == 0 else None
+
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
+        )
+        try:
+            commits = int(output.strip()) if return_code == 0 else None
+        except ValueError:
+            commits = None
+        return paths, commits
+
     async def touch_owner_contact(
         self,
         db: AsyncSession,
