@@ -19,9 +19,11 @@ from app.models.database import (
     GithubWorkspace,
     MailAgentSession,
     MailMessage,
+    MailReceipt,
     MailTeamMember,
     TeamGithubScope,
 )
+from app.services.agent_mail_service import agent_mail_service
 from app.services.github_dispatch_service import GithubDispatchService, github_dispatch_service
 from app.services.github_workspace_service import github_workspace_service
 
@@ -216,7 +218,7 @@ async def _create_live_slot_launch_session(
             tmux_target=target,
         )
     )
-    member = await _create_registered_slot_member(db, slot)
+    member = await agent_mail_service.get_or_create_slot_member(db, slot)
     session = MailAgentSession(
         member_id=member.id,
         provider=slot.provider,
@@ -1277,7 +1279,7 @@ async def test_dispatch_brief_uses_discovery_when_leader_member_missing(db):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_pending_disables_reuse_for_repo_override(db):
+async def test_dispatch_pending_reuses_and_still_passes_the_repo_override(db):
     preset, slots, scope = await _team(db)
     item = GithubWorkItem(
         scope_id=scope.id,
@@ -1309,7 +1311,7 @@ async def test_dispatch_pending_disables_reuse_for_repo_override(db):
         issue_labels_by_number={23: []},
     )
 
-    assert launched["reuse_existing"] is False
+    assert launched["reuse_existing"] is True
     assert launched["override"] == "/tmp/r-ws-1"
 
 
@@ -1624,10 +1626,19 @@ async def test_dispatch_pending_queues_when_slot_busy(db):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_proceeds_with_only_standing_session(db):
+async def test_dispatch_proceeds_with_only_standing_session(db, monkeypatch):
+    async def keep_synthetic_session(_db):
+        return None
+
+    monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", keep_synthetic_session)
+    monkeypatch.setattr(
+        agent_mail_service,
+        "_send_tmux_inbox_check",
+        lambda session: {"target": session.tmux_target, "prompt": "check inbox"},
+    )
     preset, slots, scope = await _team(db)
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
-    await _create_live_slot_launch_session(
+    _, standing_session = await _create_live_slot_launch_session(
         db,
         preset,
         backend,
@@ -1662,9 +1673,61 @@ async def test_dispatch_proceeds_with_only_standing_session(db):
 
     await db.refresh(item)
     assert len(launches) == 1
+    assert launches[0].reuse_existing is True
     assert item.dispatch_status == "dispatched"
     assert item.owner_slot_id == backend.id
     assert item.pending_reason is None
+    receipts = (
+        await db.execute(
+            select(MailReceipt).where(
+                MailReceipt.member_id == standing_session.member_id
+            )
+        )
+    ).scalars().all()
+    assert len(receipts) == 1
+    sessions = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.team_slot_id == backend.id)
+        )
+    ).scalars().all()
+    assert len(sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_without_wakeable_session_keeps_issue_brief_for_spawn(db):
+    _, slots, scope = await _team(db)
+    backend = next(slot for slot in slots if slot.display_name == "Backend SME")
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=43,
+        issue_title="spawn fallback",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    launches = []
+
+    class _Result:
+        launch_id = 105
+
+    async def fake_launcher(db_, preset_id, request):
+        launches.append(request)
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={43: ["area:backend"]},
+    )
+
+    assert len(launches) == 1
+    prompt = launches[0].slot_prompt_overrides[backend.id]
+    assert "Issue: #43 — spawn fallback" in prompt
+    assert "Workspace: /tmp/r-ws-1" in prompt
 
 
 @pytest.mark.asyncio

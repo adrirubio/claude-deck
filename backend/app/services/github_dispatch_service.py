@@ -298,7 +298,7 @@ class GithubDispatchService:
                     scope.preset_id,
                     AgentTeamLaunchRequest(
                         slot_ids=[owner_slot_id],
-                        reuse_existing=False,
+                        reuse_existing=True,
                         skip_plan_confirmation=True,
                         repo_path_override=workspace.path,
                         slot_prompt_overrides={owner_slot_id: brief},
