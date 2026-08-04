@@ -106,7 +106,7 @@ These apply to **every** task. Several are safety rules earned from live inciden
 
 **Forbidden operations**
 - Do **not** add any new `dispatch_status` value. This plan needs none.
-- Do **not** change the signature of `discover_agent_sessions`. **Roughly fifty test sites patch it as `lambda: []`** (across `test_registry.py`, `test_agent_team_service.py`, `test_github_workspace_service.py`, `test_external_api.py`, and more) and six non-mail callers call it. Making failure explicit *there* is a much larger, separate change. This plan deliberately fixes the consequence instead.
+- Do **not** change the signature of `discover_agent_sessions`. Measured: **27 patch/`setattr` statements across 10 test files** (`test_registry.py`, `test_agent_team_service.py`, `test_github_workspace_service.py`, `test_github_workspace_api.py`, `test_agent_team_api.py`, `test_external_api.py`, `test_github_dispatch_service.py`, `test_agent_bridge_discovery.py`, `test_agent_bridge_attachments.py`, `test_multi_provider_smoke.py`), and **6 call sites in `app/`** — `api/v1/agent_bridge/router.py:123`, `github_workspace_service.py:457`, `agent_mail_service.py:355`, `agent_team_service.py:1139`, `cc_bridge/discovery.py:35`, `agent_bridge/attachments.py:170`. Only the third is the mail path. Making failure explicit *there* is a much larger, separate change. This plan deliberately fixes the consequence instead.
 - Do **not** add keys to the dict `discover_agent_sessions` returns. `tests/test_agent_bridge_discovery.py:76-94` asserts the returned dict by **exact equality**; a new key fails it. Task 2 consumes a key that already exists.
 - Do **not** spawn or kill agent sessions. Do not hand-edit DB rows. Do not restart the backend. Do not retry work item 23 or any other escalated item.
 
@@ -172,7 +172,7 @@ The current rule deletes on a single signal — "discovery did not return this k
             await db.delete(session)
 ```
 
-`_effective_status` (`:618-641`) already refuses to call an observed row offline when its pid is running — that is Finding 17's rule, and it is why the five live observed rows are 579,148s past `OBSERVED_TTL_SECONDS` and still nudgeable. **Retention did not get the same treatment.** So a row can be simultaneously "too alive to mark offline" and "stale enough to delete." Task 1 closes that gap.
+`_effective_status` (`:618-641`) already refuses to call an observed row offline when its pid is running — that is Finding 17's rule, and it is why the five live observed rows are **over a week** past `OBSERVED_TTL_SECONDS` (300s) and still nudgeable. (Measured at 616,682s on 2026-08-04; the figure grows with wall-clock, so do not treat it as a fixture value — the point is the ratio, roughly 2000× the TTL.) **Retention did not get the same treatment.** So a row can be simultaneously "too alive to mark offline" and "stale enough to delete." Task 1 closes that gap.
 
 Note the asymmetry this deliberately creates, and do not "make it consistent": a row whose pid is dead is still deleted immediately, as today. Retention becomes *pid-aware*, not *pid-only*.
 
