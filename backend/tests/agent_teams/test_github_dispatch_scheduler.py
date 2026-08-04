@@ -71,12 +71,16 @@ class _FakeDispatch:
     def __init__(self):
         self.dispatch_calls = []
         self.monitor_calls = []
+        self.remind_calls = []
 
     async def dispatch_pending(self, db, scope, slots, **kwargs):
         self.dispatch_calls.append((scope.id, [slot.id for slot in slots]))
 
     async def monitor_dispatched(self, db, scope, slots):
         self.monitor_calls.append(scope.id)
+
+    async def remind_held_leases(self, db, scope):
+        self.remind_calls.append(scope.id)
 
 
 class _FakeVerification:
@@ -93,6 +97,9 @@ class _RoutingDispatch:
 
     async def monitor_dispatched(self, db, scope, slots):
         return None
+
+    async def remind_held_leases(self, db, scope):
+        return await github_dispatch_service.remind_held_leases(db, scope)
 
 
 class _FakeClient:
@@ -173,7 +180,32 @@ async def test_run_repo_once_only_processes_enabled_autonomy_scopes(db):
     assert watcher.calls == [active.id]
     assert [call[0] for call in dispatch.dispatch_calls] == [active.id]
     assert dispatch.monitor_calls == [active.id]
+    assert dispatch.remind_calls == [active.id]
     assert verification.calls == [active.id]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_checks_held_leases_with_no_enabled_slots(db):
+    scope = await _scope(db, autonomy=True, enabled=True)
+    slot = (
+        await db.execute(
+            select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id)
+        )
+    ).scalar_one()
+    slot.enabled = False
+    await db.commit()
+    dispatch = _FakeDispatch()
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=_FakeWatcher(),
+        dispatch=dispatch,
+        verification=_FakeVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+
+    assert dispatch.monitor_calls == [scope.id]
+    assert dispatch.remind_calls == [scope.id]
 
 
 @pytest.mark.asyncio

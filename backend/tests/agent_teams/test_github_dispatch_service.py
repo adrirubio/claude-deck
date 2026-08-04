@@ -99,6 +99,45 @@ async def _team(db):
     return preset, [architect, backend], scope
 
 
+async def _leased_item_for_reminder(
+    db,
+    scope,
+    *,
+    issue_number: int,
+    dispatch_status: str,
+    owner_slot_id: int | None = None,
+    retry_requested_at: datetime | None = None,
+    reminded_at: datetime | None = None,
+):
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=issue_number,
+        issue_title=f"Issue {issue_number}",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status=dispatch_status,
+        owner_slot_id=owner_slot_id,
+        retry_requested_at=retry_requested_at,
+    )
+    db.add(item)
+    await db.flush()
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id.is_(None),
+            )
+            .order_by(GithubWorkspace.id)
+        )
+    ).scalars().first()
+    workspace.leased_item_id = item.id
+    workspace.lease_token = f"tok-{issue_number}"
+    workspace.lease_release_reminded_at = reminded_at
+    await db.commit()
+    return item, workspace
+
+
 class _LabelsClient:
     def __init__(self, labels):
         self._labels = labels
@@ -1969,6 +2008,147 @@ async def test_two_phase_handoff(db):
     assert item.handoff_state == "accepted"
     assert item.handoff_target_slot_id is None
     assert item.routing_method == "reassigned"
+
+
+@pytest.mark.asyncio
+async def test_terminal_item_holding_a_lease_is_reminded(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    _, workspace = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=920,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+    )
+
+    reminded = await github_dispatch_service.remind_held_leases(db, scope)
+
+    assert reminded == 1
+    assert workspace.lease_release_reminded_at is not None
+
+
+@pytest.mark.asyncio
+async def test_lease_release_reminder_quotes_token(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=921,
+        dispatch_status="completed",
+        owner_slot_id=slots[1].id,
+    )
+
+    await github_dispatch_service.remind_held_leases(db, scope)
+
+    message = (await db.execute(select(MailMessage))).scalars().one()
+    assert 'lease_token="tok-921"' in message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_lease_release_reminders_are_throttled(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    now = datetime.utcnow()
+    _, recent = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=922,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+        reminded_at=now,
+    )
+    _, expired = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=923,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+        reminded_at=now
+        - timedelta(seconds=settings.github_nudge_grace_seconds + 60),
+    )
+    old_expired_stamp = expired.lease_release_reminded_at
+
+    reminded = await github_dispatch_service.remind_held_leases(db, scope)
+
+    assert reminded == 1
+    assert recent.lease_release_reminded_at == now
+    assert expired.lease_release_reminded_at > old_expired_stamp
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_changes_release_reminder_wording(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=924,
+        dispatch_status="escalated",
+        owner_slot_id=slots[1].id,
+        retry_requested_at=datetime.utcnow(),
+    )
+
+    await github_dispatch_service.remind_held_leases(db, scope)
+
+    message = (await db.execute(select(MailMessage))).scalars().one()
+    assert "re-dispatch of this issue is queued behind this release" in message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_non_terminal_item_holding_a_lease_is_not_reminded(db):
+    _, slots, scope = await _team(db)
+    await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=925,
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+    )
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_unleased_terminal_item_is_not_reminded(db):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=926,
+        issue_title="done",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+    )
+    db.add(item)
+    await db.commit()
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_lease_release_reminders_never_escalate(db):
+    _, slots, scope = await _team(db)
+    await _create_registered_slot_member(db, slots[1])
+    item, workspace = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=927,
+        dispatch_status="merged",
+        owner_slot_id=slots[1].id,
+    )
+
+    for _ in range(3):
+        workspace.lease_release_reminded_at = datetime.utcnow() - timedelta(
+            seconds=settings.github_nudge_grace_seconds + 60
+        )
+        await db.commit()
+        assert await github_dispatch_service.remind_held_leases(db, scope) == 1
+
+    assert item.dispatch_status == "merged"
+    assert item.escalation_reason is None
 
 
 @pytest.mark.asyncio

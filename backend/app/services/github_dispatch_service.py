@@ -735,6 +735,77 @@ class GithubDispatchService:
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
 
+    async def remind_held_leases(
+        self, db: AsyncSession, scope: TeamGithubScope
+    ) -> int:
+        """Remind owners of terminal items that still hold a workspace lease.
+
+        This never escalates: the work is already terminal for the owner, and
+        the reminder exists only to bound a forgotten release. Its clock lives
+        on the workspace so it cannot interfere with acknowledgment timers.
+        """
+        grace = timedelta(seconds=settings.github_nudge_grace_seconds)
+        now = datetime.utcnow()
+        held = (
+            await db.execute(
+                select(GithubWorkspace, GithubWorkItem)
+                .join(
+                    GithubWorkItem,
+                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
+                )
+                .where(
+                    GithubWorkspace.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+                )
+                .order_by(GithubWorkspace.id)
+            )
+        ).all()
+        reminded = 0
+        for workspace, item in held:
+            if (
+                workspace.lease_release_reminded_at is not None
+                and now - workspace.lease_release_reminded_at < grace
+            ):
+                continue
+            if item.retry_requested_at is not None:
+                urgency = (
+                    "\n\n**A re-dispatch of this issue is queued behind this "
+                    "release.** It cannot start until you release the workspace."
+                )
+            else:
+                urgency = ""
+            await self.notify_owner(
+                db,
+                item,
+                subject=f"Release needed: issue #{item.issue_number}",
+                body_markdown=(
+                    f"Issue #{item.issue_number} ({item.issue_title}) is "
+                    f"`{item.dispatch_status}` but still holds workspace "
+                    f"`{workspace.path}`. Commit and push anything you want to "
+                    "keep, then release it:\n\n"
+                    "```\n"
+                    "deck_report_dispatch_status(\n"
+                    f"    work_item_id={item.id},\n"
+                    '    status="workspace_released",\n'
+                    f'    lease_token="{workspace.lease_token}",\n'
+                    ")\n"
+                    "```"
+                    f"{urgency}"
+                ),
+                payload={
+                    "kind": "github_lease_release_reminder",
+                    "work_item_id": item.id,
+                    "issue_number": item.issue_number,
+                    "workspace_path": workspace.path,
+                },
+            )
+            workspace.lease_release_reminded_at = now
+            workspace.updated_at = now
+            reminded += 1
+        if reminded:
+            await db.commit()
+        return reminded
+
     def _within_registration_grace(self, item: GithubWorkItem) -> bool:
         grace_started_at = item.dispatched_at or item.updated_at or item.created_at
         grace_age = datetime.utcnow() - grace_started_at

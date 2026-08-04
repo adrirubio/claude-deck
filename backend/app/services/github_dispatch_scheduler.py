@@ -145,6 +145,7 @@ class GithubDispatchScheduler:
                 issue_details_by_number=issues_by_number,
             )
             await self.dispatch.monitor_dispatched(db, scope, slots)
+            await self.dispatch.remind_held_leases(db, scope)
             await self.verification.process_scope(db, scope, client=client)
 
     async def _pending_issues_by_number(
