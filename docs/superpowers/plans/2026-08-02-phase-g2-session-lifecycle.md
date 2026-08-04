@@ -3212,10 +3212,47 @@ Its own comment states the rule this satisfies: "Escalations a late PR legitimat
 
 Add the test with it: `brief_unread` + a `pr_opened` report → 200, `escalation_reason` cleared, `pr_number` set.
 
+- [ ] **Step 6a: Six existing monitor tests need delivery evidence — authorized, by name**
+
+Step 5's placement is correct and it changes the meaning of six fixtures. They are pre-authorized; no assertion in them changes.
+
+Anchors below are in `test_github_dispatch_service.py` **as it stands after this task's Steps 1–6**, not at Task 11's commit — Step 2 adds ~300 lines above them. Find them by name.
+
+| Test | Anchor | Asserts |
+|---|---|---|
+| `test_monitor_nudges_leader_on_ack_timeout` | `:2668` | `last_nudge_at is not None` |
+| `test_retried_item_still_nudged_when_leader_never_acks_again` | `:2700` | `last_nudge_at is not None` |
+| `test_monitor_escalates_leader_ack_after_nudge_grace` | `:2740` | `leader_ack_timeout` |
+| `test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity` | `:2840` | `last_nudge_at is not None` |
+| `test_monitor_nudges_idle_owner_after_ack` | `:2872` | `last_nudge_at is not None` |
+| `test_monitor_escalates_idle_owner_after_nudge_grace` | `:2935` | `owner_idle_timeout` |
+
+Each builds a `dispatched` item with no `brief_message_id`, no receipt and no lease, so under the new rule it is *undelivered* and the delivery branch intercepts on the first pass. Measured without the fix: `93 passed, 6 failed`, first failure `assert item.last_nudge_at is not None` → `assert None is not None`. That is the new branch working, not a regression.
+
+Add one line to each, immediately before its `monitor_dispatched` call, reusing the `_lease_for` helper this task's Step 2 already defines (`:104`) — do not write a second one:
+
+```python
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
+```
+
+Use the fixture's own stale anchor (`old`, or `dispatched_at` in the retried-item test) — **not** `datetime.utcnow()`. `_brief_delivered` tests `lease_last_owner_contact_at is not None` and never reads recency, so both forms pass; the stale one keeps each fixture internally coherent. An owner that reported `in_progress` once stamps contact and refreshes `updated_at` in the same handler (`api/v1/agent_teams.py:326-332`), then goes silent — that is precisely the idle-owner state those two tests describe. A fresh stamp beside a stale `updated_at` is reachable too (every owner report except `workspace_released` calls `touch_owner_contact`, and only `in_progress` touches `updated_at`), but it describes a *different* item than the one the fixture is naming. Measured: **99 passed** with either form.
+
+Contact evidence sitting beside an unsatisfied leader ack is not a contradiction. The ack is the *leader's* action; the owner works independently of it. An owner that is demonstrably in touch while the leader has not acked is exactly the state §4.1a(3) exists to keep distinguishable — before this task it was misreported as `leader_ack_timeout`.
+
+Why this is not the Task 4 trap (an unlisted failure whose "fix" hides a real defect), verified by mutation rather than argument:
+
+- Moving the delivery block **after** the ack branch, with the six fixtures fixed, breaks three of the new Task 12 tests. Rule 3 is genuinely discriminated; the fixtures do not neuter it.
+- Disabling the ack branch entirely, with the six fixtures fixed, still fails all four ack tests. Their subjects survive the change.
+- `test_monitor_escalates_idle_owner_after_nudge_grace` does **not** detect a disabled idle *nudge* — but that insensitivity is **pre-existing**, proven by mutating the pre-Task-12 code. Do not fix it here; note it in the PR body.
+
+No deployed item can be trapped by the new branch: `brief_message_id` does not exist in the live schema yet, and there are currently zero items in a `dispatched` state.
+
 - [ ] **Step 7: Run the suite**
 
 Run: `python -m pytest tests/agent_teams/ tests/agent_mail/ -q`
-Expected: green. Watch for pre-existing monitor tests that now take the delivery branch first: any `dispatched` fixture with no receipt, no report and no `brief_message_id` is *undelivered* by the new rule, so its first monitor pass now sends a delivery nudge instead of what it asserted. If one breaks, check which behaviour it was pinning before changing it — a test asserting `leader_ack_timeout` on an item that never received a brief was asserting the misattribution, and rewriting it is correct. A test that set up genuine delivery and broke anyway is a real regression. Report either way; do not rewrite silently.
+Expected: green — **`439 passed`**. Measured, not derived: `433 passed` on Task 11's commit (`c372aef`), plus Task 12's **six** new test functions — five in `test_github_dispatch_service.py` (94 → 99 collected) and one in `test_github_verification_service.py` (29 → 30, Step 6's recovery test). Fixing the six existing fixtures adds no collected count. If you run a `-k` selection over the new tests and see seven, one of them is pre-existing and matched your filter — check names against `c372aef` before treating the total as wrong.
+
+The six above are the *only* pre-authorized fixture changes in this task. If a seventh test breaks, check which behaviour it was pinning before touching it — a test asserting `leader_ack_timeout` on an item that never received a brief was asserting the misattribution, and rewriting it is correct; a test that set up genuine delivery and broke anyway is a real regression. **Stop and report either way; do not rewrite silently.**
 
 - [ ] **Step 8: Commit**
 
