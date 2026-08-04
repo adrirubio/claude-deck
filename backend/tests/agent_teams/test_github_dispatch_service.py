@@ -101,6 +101,38 @@ async def _team(db):
     return preset, [architect, backend], scope
 
 
+async def _lease_for(db, scope, item, **overrides):
+    workspace = (
+        await db.execute(
+            select(GithubWorkspace)
+            .where(
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id.is_(None),
+            )
+            .limit(1)
+        )
+    ).scalar_one()
+    workspace.leased_item_id = item.id
+    workspace.leased_at = datetime.utcnow()
+    workspace.lease_token = "t1"
+    for key, value in overrides.items():
+        setattr(workspace, key, value)
+    await db.commit()
+    return workspace
+
+
+def _isolate_agent_mail_nudges(monkeypatch):
+    async def keep_synthetic_sessions(_db):
+        return None
+
+    monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", keep_synthetic_sessions)
+    monkeypatch.setattr(
+        agent_mail_service,
+        "_send_tmux_inbox_check",
+        lambda session: {"target": session.tmux_target, "prompt": "check inbox"},
+    )
+
+
 async def _leased_item_for_reminder(
     db,
     scope,
@@ -1079,7 +1111,8 @@ async def test_dispatch_keeps_pid_pair_null_when_proc_start_is_unreadable(db, mo
 
 
 @pytest.mark.asyncio
-async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
+async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
@@ -1091,6 +1124,8 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
         issue_url="https://github.com/o/r/issues/833",
         github_updated_at=datetime.utcnow(),
         dispatch_status="pending",
+        brief_delivery_nudge_at=datetime.utcnow(),
+        brief_delivery_nudge_count=2,
     )
     db.add(item)
     await db.commit()
@@ -1151,6 +1186,9 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db):
     assert f"to_member_id={leader_member.id}" in message.body_markdown
     assert f"slot_id={architect.id}" not in message.body_markdown
     assert "wait for acknowledgment before starting implementation" in message.body_markdown
+    assert item.brief_message_id == message.id
+    assert item.brief_delivery_nudge_at is None
+    assert item.brief_delivery_nudge_count is None
 
 
 @pytest.mark.asyncio
@@ -2215,6 +2253,268 @@ async def test_repeated_lease_release_reminders_never_escalate(db):
 
 
 @pytest.mark.asyncio
+async def test_delivery_proven_by_report_not_only_receipt(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
+    preset, slots, scope = await _team(db)
+    stale = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_registration_grace_seconds + 1
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=90,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatched_at=stale,
+        updated_at=datetime.utcnow(),
+        ack_received_at=datetime.utcnow(),
+        brief_delivery_nudge_count=settings.github_brief_delivery_max_nudges,
+        brief_delivery_nudge_at=stale,
+    )
+    db.add(item)
+    await db.commit()
+    member = await agent_mail_service.get_or_create_slot_member(db, slots[1])
+    message = await agent_mail_service.send_direct_message(
+        db,
+        recipient_member_id=member.id,
+        subject="brief",
+        body_markdown="b",
+        auto_nudge=False,
+    )
+    item.brief_message_id = message.id
+    await _lease_for(
+        db,
+        scope,
+        item,
+        lease_last_owner_contact_at=datetime.utcnow(),
+    )
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={slots[0].id: "wakeable", slots[1].id: "wakeable"},
+    )
+
+    await db.refresh(item)
+    assert item.escalation_reason != "brief_unread"
+    assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_brief_unread_escalates_after_delivery_retries_exhausted(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
+    preset, slots, scope = await _team(db)
+    stale = datetime.utcnow() - timedelta(
+        seconds=max(
+            settings.github_owner_registration_grace_seconds,
+            settings.github_nudge_grace_seconds,
+        )
+        + 1
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=91,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatched_at=stale,
+        updated_at=stale,
+        brief_delivery_nudge_count=settings.github_brief_delivery_max_nudges,
+        brief_delivery_nudge_at=stale,
+    )
+    db.add(item)
+    await db.commit()
+    await _lease_for(db, scope, item)
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={slots[0].id: "wakeable", slots[1].id: "wakeable"},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "brief_unread"
+
+
+@pytest.mark.asyncio
+async def test_brief_unread_is_not_masked_by_leader_ack_timeout(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
+    preset, slots, scope = await _team(db)
+    stale = datetime.utcnow() - timedelta(
+        seconds=max(
+            settings.github_owner_registration_grace_seconds,
+            settings.github_leader_ack_timeout_seconds,
+            settings.github_nudge_grace_seconds,
+        )
+        + 1
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=92,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatched_at=stale,
+        updated_at=stale,
+        ack_received_at=None,
+        last_nudge_at=stale,
+        brief_delivery_nudge_count=settings.github_brief_delivery_max_nudges,
+        brief_delivery_nudge_at=stale,
+    )
+    db.add(item)
+    await db.commit()
+    await _lease_for(db, scope, item)
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={slots[0].id: "wakeable", slots[1].id: "wakeable"},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "brief_unread"
+
+
+@pytest.mark.asyncio
+async def test_delivery_and_ack_nudge_counters_are_independent(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
+    preset, slots, scope = await _team(db)
+    leader, owner = slots
+    await agent_mail_service.get_or_create_slot_member(db, leader)
+    owner_member = await agent_mail_service.get_or_create_slot_member(db, owner)
+    stale = datetime.utcnow() - timedelta(
+        seconds=max(
+            settings.github_owner_registration_grace_seconds,
+            settings.github_leader_ack_timeout_seconds,
+        )
+        + 1
+    )
+    unread_item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=93,
+        issue_title="unread",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=owner.id,
+        dispatched_at=stale,
+        updated_at=stale,
+    )
+    delivered_item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=94,
+        issue_title="delivered",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=owner.id,
+        dispatched_at=stale,
+        updated_at=stale,
+    )
+    db.add_all([unread_item, delivered_item])
+    await db.commit()
+    unread_message = await agent_mail_service.send_direct_message(
+        db,
+        recipient_member_id=owner_member.id,
+        subject="brief",
+        body_markdown="b",
+        auto_nudge=False,
+    )
+    unread_item.brief_message_id = unread_message.id
+    await _lease_for(db, scope, unread_item)
+    await _lease_for(
+        db,
+        scope,
+        delivered_item,
+        lease_last_owner_contact_at=datetime.utcnow(),
+    )
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={leader.id: "wakeable", owner.id: "wakeable"},
+    )
+
+    await db.refresh(unread_item)
+    await db.refresh(delivered_item)
+    assert unread_item.brief_delivery_nudge_count == 1
+    assert unread_item.last_nudge_at is None
+    assert delivered_item.last_nudge_at is not None
+    assert delivered_item.brief_delivery_nudge_at is None
+
+
+@pytest.mark.asyncio
+async def test_brief_read_after_first_nudge_does_not_escalate(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
+    preset, slots, scope = await _team(db)
+    stale = datetime.utcnow() - timedelta(
+        seconds=max(
+            settings.github_owner_registration_grace_seconds,
+            settings.github_nudge_grace_seconds,
+        )
+        + 1
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=95,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatched_at=stale,
+        updated_at=datetime.utcnow(),
+        ack_received_at=datetime.utcnow(),
+        brief_delivery_nudge_count=settings.github_brief_delivery_max_nudges,
+        brief_delivery_nudge_at=stale,
+    )
+    db.add(item)
+    await db.commit()
+    member = await agent_mail_service.get_or_create_slot_member(db, slots[1])
+    message = await agent_mail_service.send_direct_message(
+        db,
+        recipient_member_id=member.id,
+        subject="brief",
+        body_markdown="b",
+        auto_nudge=False,
+    )
+    item.brief_message_id = message.id
+    receipt = (
+        await db.execute(
+            select(MailReceipt).where(
+                MailReceipt.message_id == message.id,
+                MailReceipt.member_id == member.id,
+            )
+        )
+    ).scalar_one()
+    receipt.read_at = datetime.utcnow()
+    await _lease_for(db, scope, item)
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={slots[0].id: "wakeable", slots[1].id: "wakeable"},
+    )
+
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
 async def test_monitor_escalates_when_leader_offline(db):
     preset, slots, scope = await _team(db)
     architect = slots[0]
@@ -2386,6 +2686,7 @@ async def test_monitor_nudges_leader_on_ack_timeout(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -2419,6 +2720,7 @@ async def test_retried_item_still_nudged_when_leader_never_acks_again(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=dispatched_at)
 
     await github_dispatch_service.monitor_dispatched(
         db,
@@ -2460,6 +2762,7 @@ async def test_monitor_escalates_leader_ack_after_nudge_grace(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -2558,6 +2861,7 @@ async def test_monitor_ack_timeout_uses_dispatched_at_not_recent_activity(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -2589,6 +2893,7 @@ async def test_monitor_nudges_idle_owner_after_ack(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}
@@ -2654,6 +2959,7 @@ async def test_monitor_escalates_idle_owner_after_nudge_grace(db):
     )
     db.add(item)
     await db.commit()
+    await _lease_for(db, scope, item, lease_last_owner_contact_at=old)
 
     await github_dispatch_service.monitor_dispatched(
         db, scope, preset_slots=slots, wake_state_by_slot={architect.id: "wakeable", backend.id: "wakeable"}

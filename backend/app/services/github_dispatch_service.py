@@ -13,6 +13,7 @@ from app.models.database import (
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
+    MailReceipt,
     MailTeamMember,
     TeamGithubScope,
 )
@@ -602,7 +603,7 @@ class GithubDispatchService:
             from app.services.agent_mail_service import agent_mail_service
 
             member = await agent_mail_service.get_or_create_slot_member(db, owner_slot)
-            await agent_mail_service.send_direct_message(
+            message = await agent_mail_service.send_direct_message(
                 db,
                 recipient_member_id=member.id,
                 subject=f"Autonomous dispatch: issue #{item.issue_number}",
@@ -615,6 +616,9 @@ class GithubDispatchService:
                 },
                 bypass_nudge_cooldown=True,
             )
+            item.brief_message_id = message.id
+            item.brief_delivery_nudge_at = None
+            item.brief_delivery_nudge_count = None
         except Exception:
             logger.exception("Failed to send autonomous dispatch brief for item %s", item.id)
 
@@ -708,6 +712,22 @@ class GithubDispatchService:
             if owner_wake == "offline":
                 await self.escalate(db, item, "owner_offline")
                 continue
+            if not await self._brief_delivered(db, item):
+                anchor = item.brief_delivery_nudge_at
+                if anchor is None:
+                    await self._nudge_owner_for_brief(db, item)
+                    continue
+                if datetime.utcnow() - anchor <= timedelta(
+                    seconds=settings.github_nudge_grace_seconds
+                ):
+                    continue
+                if (
+                    item.brief_delivery_nudge_count or 0
+                ) < settings.github_brief_delivery_max_nudges:
+                    await self._nudge_owner_for_brief(db, item)
+                    continue
+                await self.escalate(db, item, "brief_unread")
+                continue
             if not self._ack_satisfied(item):
                 anchor = item.dispatched_at or item.updated_at or item.created_at
                 overdue = datetime.utcnow() - anchor > timedelta(
@@ -735,6 +755,26 @@ class GithubDispatchService:
             ):
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
+
+    async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
+        """Return whether this attempt's brief reached its owner."""
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None and workspace.lease_last_owner_contact_at is not None:
+            return True
+        if item.brief_message_id is None:
+            return False
+        member = await self._owner_member(db, item)
+        if member is None:
+            return False
+        receipt = (
+            await db.execute(
+                select(MailReceipt).where(
+                    MailReceipt.message_id == item.brief_message_id,
+                    MailReceipt.member_id == member.id,
+                )
+            )
+        ).scalar_one_or_none()
+        return receipt is not None and receipt.read_at is not None
 
     async def remind_held_leases(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -853,6 +893,29 @@ class GithubDispatchService:
                     "issue_number": item.issue_number,
                 },
             )
+        await db.commit()
+
+    async def _nudge_owner_for_brief(
+        self, db: AsyncSession, item: GithubWorkItem
+    ) -> None:
+        """Re-wake the owner without changing ack or idle timers."""
+        item.brief_delivery_nudge_at = datetime.utcnow()
+        item.brief_delivery_nudge_count = (item.brief_delivery_nudge_count or 0) + 1
+        await self.notify_owner(
+            db,
+            item,
+            subject=f"Unread dispatch brief: issue #{item.issue_number}",
+            body_markdown=(
+                f"You were assigned issue #{item.issue_number} ({item.issue_title}) "
+                "but the brief is still unread. Call `deck_check_inbox` now and "
+                "report your status."
+            ),
+            payload={
+                "kind": "github_dispatch_brief_nudge",
+                "work_item_id": item.id,
+                "issue_number": item.issue_number,
+            },
+        )
         await db.commit()
 
     async def _nudge_owner_for_progress(

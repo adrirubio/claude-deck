@@ -33,6 +33,7 @@ _PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset(
         "owner_offline",
         "leader_offline",
         "leader_ack_timeout",
+        "brief_unread",
     }
 )
 
