@@ -373,6 +373,8 @@ class AgentMailService:
             session = result.scalar_one_or_none()
             member = await self._member_for_existing_observed_session(db, session, info)
             if member is None:
+                member = await self._member_for_advertised_slot(db, info)
+            if member is None:
                 member = await self._member_for_observed_session(db, info)
             if session is None:
                 session = MailAgentSession(
@@ -400,6 +402,31 @@ class AgentMailService:
         for member_id in affected_member_ids:
             await self._remove_empty_observed_member(db, member_id)
         await db.commit()
+
+    async def _member_for_advertised_slot(
+        self,
+        db: AsyncSession,
+        info: dict,
+    ) -> MailTeamMember | None:
+        """Bind a pane to the slot its own tmux environment advertises."""
+        slot_id = info.get("team_slot_id")
+        if not isinstance(slot_id, int):
+            return None
+        slot = await db.get(AgentTeamSlot, slot_id)
+        if slot is None or slot.provider != str(info.get("provider") or "unknown"):
+            return None
+        preset_id = info.get("team_preset_id")
+        if isinstance(preset_id, int) and preset_id != slot.preset_id:
+            return None
+        cwd = str(info.get("cwd") or "")
+        if not cwd:
+            return None
+        try:
+            if derive_repo_identity(cwd)["repo_id"] != slot.repo_id:
+                return None
+        except Exception:
+            return None
+        return await self.get_or_create_slot_member(db, slot)
 
     async def _member_for_observed_session(
         self,

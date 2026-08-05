@@ -473,6 +473,173 @@ async def test_sync_observed_deletes_row_whose_pid_is_gone(db, svc, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sync_observed_binds_slot_from_tmux_environment(db, svc, tmp_path):
+    """A rebuilt row recovers its slot from the pane's own tmux env."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id == slot.id
+    assert session.team_preset_id == preset.id
+    member = await db.get(MailTeamMember, session.member_id)
+    assert member.participant_kind == "team_slot"
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_from_another_repo(db, svc, tmp_path):
+    """An advertised slot whose repo does not match the pane's cwd is rejected."""
+    slot_cwd = tmp_path / "slotrepo"
+    slot_cwd.mkdir()
+    pane_cwd = tmp_path / "elsewhere"
+    pane_cwd.mkdir()
+    preset, slot = await _slot(db, str(slot_cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(pane_cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+    member = await db.get(MailTeamMember, session.member_id)
+    assert member.participant_kind == "repo"
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_that_no_longer_exists(db, svc, tmp_path):
+    """A stale tmux env naming a deleted slot falls back, it does not crash."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": 999,
+            "team_slot_id": 999,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_with_a_different_provider(db, svc, tmp_path):
+    """A pane advertising a slot whose provider disagrees is rejected."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    assert slot.provider == "codex-cli"
+    fake = [
+        {
+            "provider": "claude-code",
+            "provider_display_name": "Claude Code",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_whose_preset_disagrees(db, svc, tmp_path):
+    """A reused slot id with a contradictory preset id must not bind."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id + 500,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
 async def test_observed_session_attaches_to_matching_team_slot_participant(db, svc, tmp_path):
     cwd = tmp_path / "obs"
     cwd.mkdir()
