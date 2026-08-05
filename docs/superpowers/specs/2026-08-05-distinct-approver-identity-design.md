@@ -1,7 +1,7 @@
 # Distinct Approver Identity — Design (Findings #1 and #6)
 
 **Date:** 2026-08-05
-**Status:** Design, revision 4 — revised after a third implementer review of `1ab5fb4` found eight further blockers, all confirmed against source, live data, or measurement
+**Status:** Design, revision 5 — revised after a fourth implementer review of `732e48d` found eight further blockers, all confirmed against source, live data, or measurement. **Not yet approved for implementation planning.**
 **Closes:** Finding #1 (Leader self-ack), Finding #6 (agent commit identity collides with human reviewer identity)
 **Both are Window 2 gates** — `merge_policy=auto` must not be enabled until PR0 and PR1 land.
 
@@ -42,11 +42,30 @@ Revision 3 also answers a question no review raised: applying §5.4's recipe to 
 | 5 | grace mode is safe because the gate refuses while it is off | approver columns are still **written** while enforcement is off, so flipping the flag on retroactively legitimizes forged evidence | evidence carries an **enforcement epoch**; `record_ack_received` refuses entirely while enforcement is off (§3.4a) |
 | 6 | UI provisions one `deck-ui` actor | `token_hash` is a single column and `create_actor` overwrites it, so two tabs invalidate each other in a loop. The URL was also wrong: the real prefix is `/api/v1/external/agent-mail` | per-tab random `actor_key`, correct prefix (§3.6) |
 | 7 | point `gh` at the same credential helper | **measured false.** `gh api` and `gh pr create` never invoked the helper (0 log lines) and demanded `gh auth login`/`GH_TOKEN`. `gh auth git-credential` is the *reverse* direction. So no pane can open a bot-authored PR at all | **Deck creates the PR** through the App API; the agent only pushes the branch (§5.5) |
-| 8 | helper returns `501` and git falls back | **measured false.** The empty-reset wipes the ambient helper, so a silent helper yields `could not read Username`. Also: refusing a primary workspace without releasing it leaves `acquire` returning it forever (`:103-109`) | configure **no** Deck helper when App auth is unavailable; refuse-and-release primary (§5.5, §5.7) |
+| 8 | helper returns `501` and git falls back | **measured false.** The empty-reset wipes the ambient helper, so a silent helper yields `could not read Username`. Also: refusing a primary workspace without releasing it leaves `acquire` returning it forever (`:103-109`) | configure **no** Deck helper when App auth is unavailable (§5.5); refuse-and-release primary — *superseded by revision 5 row 1, which does not lease the primary at all* (§5.7) |
 
 Revision 4 also answers a question no review raised, found while tracing every writer of `pr_number` for blocker 7: the `/dispatch-status` route's `in_progress` branch writes `item.pr_number` directly, bypassing `report_pr_opened` and therefore every verification check — and because `_ack_satisfied` short-circuits on a non-NULL `pr_number`, one such report also silences the leader-ack gate. Now refused (§5.6). This is blocker 1's shape one branch over: the named path was hardened while an unnamed side door wrote the same column unchecked.
 
 **One retraction.** Revision 3 claimed "no pane ever holds a token." That overstates it: git receives the helper's plaintext password, and an agent can run `git credential fill` to print it. The defensible guarantee — and what §8 now says — is that the credential is short-lived, repository-scoped, not persisted, and not inherited in the pane environment. Absence is not achievable while the agent runs git itself.
+
+**What revision 5 changed.** The fourth review found eight blockers in revision 4. All eight confirmed; **none refuted**. One of them falsified a claim revision 4 had invented to justify a decision, and the corrected measurement changed the fix rather than only the test.
+
+| # | Revision 4 said | Measured reality | Now |
+|---|---|---|---|
+| 1 | refuse a primary workspace, release the lease, let the next attempt find a worktree | `release` sets `leased_item_id = None`, so the primary re-matches `acquire`'s filter and `order_by(id)` returns it again — forever. Revision 4's own test 28c **could not pass against revision 4's design** | `acquire(..., allow_primary=False)` **excludes** `kind == "primary"` from the scan; nothing is leased and nothing needs releasing (§5.7) |
+| 2 | a rejection increments `approval_round_count`; approval evidence is not revisited | `record_approval_round` is 4 lines that identify nothing and clear nothing, and revision 4's own one-request-per-item `409` **blocks** the documented recovery: the owner cannot open a round-2 request | decisions are **round-scoped**: `approval_round` on the request and the decision, `ack_approval_round` on the item, and `revision_requested` increments the round *and* clears all five ack columns (§4.3a.1) |
+| 3 | no binding row ⇒ `bind_pending`, retried "every 60s" | a hand-started pane has no binding row and never will, so **every mail tool fails for its whole life** (`_guard` re-registers before each one). And the failing heartbeat backs off to `HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0`, not 60 | "no row **and** no claimed team context" ⇒ mint **unbound**; `bind_pending` is reserved for a pane claiming a Deck launch; the retry interval is stated as **300s** with `_guard` as the fast path (§3.3a) |
+| 4 | table row 4 refuses a tokenless re-registration; the next paragraph re-mints when the pane binding matches | the same request, two opposite answers. And the case the paragraph existed to rescue **cannot occur**: `session_key` is minted per process (`agent_mail_server.py:26`), so a restarted shim is a *first* registration | the rescue rule is **withdrawn**; row 4 stands unqualified, and the reasoning is pinned by tests 14b/14c (§3.4) |
+| 5 | deriving `reporting_slot_id` from a token fixes dispatch-status trust | authentication is not authorization: **1 of 9** branches compares the reporter to the item. A Specialist could withdraw another slot's approval, accept a foreign handoff, or plant a `pr_number` | an explicit owner/leader/target **matrix** for every branch, plus the current lease token on the two GitHub-writing branches (§3.5a) |
+| 6 | "on the `pr_opened` path App auth is by definition unconfigured, so `github_app_bot_login` is empty" | **outright false, and in the direction that disables a check.** The setting is global; App auth is per repository. The combination declared impossible is the normal case for any uninstalled repo | a persisted per-repo `github_auth_mode` (`unknown`/`app`/`ambient`), and **transient** lookup failures refuse instead of silently selecting the ambient credential (§5.6a) |
+| 7 | `pr_ready` is idempotent because `item.pr_number` is checked first | `pr_number` is a **cache** of a GitHub fact. A crash between `create_pull` and the commit leaves a live PR Deck has no record of; the retry then creates again and hits an unhandled `422` | reconcile by **head/base** before creating *and* after a timeout or `422`; adopt a single match through §5.6's checks; per-item lock (§5.5.4). `GithubClient` has no by-head method today — that is why revision 4's "reconcile" had nothing to reconcile with |
+| 8 | create the PR as a draft, with the agent owning the title | a **draft PR cannot be approved**, and `mark_pull_ready_for_review`'s only caller is `_promote_verified_item` — which design items never reach (`_process_review_item` returns early). So a design PR would be announced "ready for human review" and stay a permanent draft. The report also carries only `head_ref`, so Deck could not apply a title it was never sent | `draft = item.issue_type != "design"`, and Deck composes the title and body from the item row (§5.5.5) |
+
+Revision 5 also answers a question no review raised, found while writing §5.5.5's field table: `scope.base_ref` holds a git **refspec** — `origin/master` live, `origin/HEAD` by default — and `POST /pulls` takes a **branch name**. Sent unchanged, `create_pull` would be rejected and §5.5.4's `base` filter would match nothing, which is the same silent-no-match failure §5.5.4 exists to prevent. Now normalized in one helper (§5.5.5), with tests 46 and 49b.
+
+**A second retraction, and the lesson behind it.** Revision 4 rejected the scan-exclusion fix for blocker 1 by asserting that narrowing `acquire`'s filter "would change behavior for callers that are not doing identity work, because `acquire` is also how Deck leases a primary checkout for observation purposes." Measured: `acquire` has **exactly one** non-test caller, `github_dispatch_service.py:277`, the dispatch path. There is no observation caller. The sentence was invented to justify a choice already made, and it is retracted in §5.7.
+
+That is now twice in this spec that the alternative dismissed in a "deliberately not chosen" note turned out to be the right answer, both times dismissed on an unverified claim about callers. A rejected alternative needs a measurement, or it is just a confident sentence — and a confident sentence is what a reviewer has no way to check.
 
 ---
 
@@ -188,21 +207,28 @@ Three PRs. Each is independently reviewable and leaves the system in a coherent 
 
 ```
 PR0  Agent Mail capability tokens               (auth; no dispatch logic)
-     registration returns a token bound to the caller's tmux pane;
-     identity-bearing writes require it and derive the actor
-     server-side. Ships disabled; the operator enables it.
+     registration returns a token bound to the caller's tmux pane, or
+     an unbound one for a pane Deck did not launch; identity-bearing
+     writes require it and derive the actor server-side; every
+     /dispatch-status branch gets an authority rule. Ships disabled;
+     the operator enables it.
 
 PR1  Approval attribution + a real gate         (pure code, testable offline)
      1. link ack requests to work items with a per-dispatch nonce
      2. an explicit leader decision, recorded as a column, not prose
      3. record who approved; require the designated leader; reject replay
-     4. make auto-merge require a valid distinct approval
-     5. surface the new fields in the work-item response
+     4. scope decisions to an approval round, so a rejection withdraws
+        the previous round's approval by construction
+     5. make auto-merge require a valid distinct approval
+     6. surface the new fields in the work-item response
 
 PR2  Distinct commit/PR identity                (needs a GitHub App)
-     one bot as PR author because DECK opens the PR through the App API;
-     per-slot commit identity via per-worktree git config; push credentials
-     minted at use time by a credential-helper callback, scoped to one repo;
+     one bot as PR author because DECK opens the PR through the App API,
+     composing the title, body and draft flag itself and reconciling by
+     head/base so a crash cannot open a second one; per-slot commit
+     identity via per-worktree git config; push credentials minted at use
+     time by a credential-helper callback, scoped to one repo; a persisted
+     per-repo auth mode that fails closed on an unresolved lookup;
      every writer of pr_number verified, including the in_progress side door
 ```
 
@@ -213,6 +239,8 @@ PR2  Distinct commit/PR identity                (needs a GitHub App)
 **Why PR2 is last.** Its failure mode is a *deadlocked* merge, not a *bad* merge. If PR2 slips, autonomy is strictly safer than today rather than blocked on provisioning.
 
 **PR2 grew a responsibility in revision 4.** Deck now opens the PR itself (§5.5.2), because `gh` in a pane provably cannot do it with App credentials. That moves one action from the agent to Deck, which is a larger change than revision 3 described — but it also *removes* §5.6's whole reason for existing on that path, since Deck no longer has an agent-supplied `pr_number` to distrust. Net, PR2 is a little bigger and materially simpler to reason about.
+
+**And revision 5 makes that responsibility carry a cost revision 4 did not price.** Once Deck performs the `POST /pulls`, Deck owns its idempotency, and GitHub offers no idempotency key for pull creation. §5.5.4 pays that cost with a reconcile-by-head step and one new read method; §5.6a pays a second one, because Deck must now know per repository whether it *can* act as the App before it writes any credential config. Both are consequences of moving the action, not separate features — worth naming here so a reviewer sizing PR2 sees the whole of what §5.5.2 bought.
 
 ---
 
@@ -318,7 +346,8 @@ Reuse writes a binding too, so spawn and reuse are identical for binding purpose
 2. Walk to the owning tmux pane pid. If no ancestor is a pane, this is not a tmux-hosted agent: mint a token with **no slot binding** (`team_slot_id` stays `NULL`). Such a session can send mail as a repo member; it can never be an approver.
 3. Look up `agent_pane_bindings` by `(pane_pid, live proc_start)`.
    - **Exactly one row** ⇒ that row's `slot_id` is the slot.
-   - **No row** ⇒ `bind_pending`, a **retryable** refusal (`409`, not `403`): Deck may not have committed the binding yet, or this pane was never launched by Deck. The shim retries on its next heartbeat, which it already performs every 60s. A `403` here would permanently strand a correctly-launched agent that merely registered early.
+   - **No row, and the request claims no team context** ⇒ mint unbound, as rung 2. A tmux pane Deck never launched is an ordinary repo member, not a broken team agent (§3.3a).
+   - **No row, but the request claims team context** ⇒ `bind_pending`, a **retryable** refusal (`409`, not `403`): Deck may not have committed the binding yet. A `403` here would permanently strand a correctly-launched agent that merely registered early. On retry timing, see §3.3a.
    - **Row exists but its `slot_id` is NULL** (slot deleted) ⇒ mint unbound, as rung 2.
 4. A `team_slot_id` in the body that disagrees with the derived slot is a `403` — derive, do not compare (§3.6).
 5. Record `bound_pane_pid` and `bound_pane_proc_start` on the session.
@@ -328,6 +357,47 @@ Reuse writes a binding too, so spawn and reuse are identical for binding purpose
 **Residual risk, stated plainly.** All panes run as one user with no `hidepid`, so any pane can read `/proc/<other>/environ` and `/proc/<other>/stat` — measured: 123 environment entries readable from another pane, including `CLAUDE_DECK_TEAM_SLOT_ID`. A pane that wanted to impersonate another slot could therefore *read* the target's secrets. It still cannot **use** them for registration, because binding is derived from its own connection, not from anything it can present. What it cannot do is make the kernel say its socket belongs to a different process.
 
 This is the honest limit: pane binding defeats *claiming* another slot, not *co-resident compromise*. Defeating co-residency needs OS isolation (separate users, `hidepid=2`) and is out of scope. §8 records it as accepted.
+
+### 3.3a `bind_pending` is for Deck's own launches, and it retries slower than revision 4 said
+
+Revision 4's rung 3 returned `bind_pending` for **every** pane with no binding row. The fourth review is right that this strands panes that are not doing anything wrong, and the retry figure it quotes was also wrong. Both confirmed.
+
+**The population revision 4 stranded.** Most tmux panes on this host were never launched by Deck. A developer opens a pane, starts `codex` or `claude` by hand in a repo, and the shim registers — that is how the `repo member` participant kind exists at all (`_get_or_create_repo_member`, `agent_mail_service.py:142`). Such a pane has no `agent_pane_bindings` row and never will, because nothing will ever write one for it. Under revision 4 it receives `409 bind_pending` on registration, and `_guard` (`agent_mail_server.py:201-203`) calls `_ensure_registered` **before every tool**, so *every* mail tool fails for the lifetime of that pane. Revision 4 turned a working feature into a permanent failure for the common case, in the name of a refusal that can never resolve.
+
+**The discriminator already exists in the request body.** The shim sends `team_preset_id` / `team_slot_id` only when `CLAUDE_DECK_TEAM_PRESET_ID` / `_SLOT_ID` are in the pane's environment (`agent_mail_server.py:148-153`, and the same pair in `agent_mail_hook.py:72-73` and the installed JS at `agent_mail_install_service.py:587-588`). Measured: the only writer of those variables is `_execute_plan_item`'s spawn env (`agent_team_service.py:620-625`). So a body claiming team context is a pane asserting *"Deck launched me into a team slot"*, and a body claiming none is a pane asserting nothing.
+
+That claim is not trusted for **identity** — §3.3's rule stands, the slot is derived and a disagreeing claim is a `403`. It is used only to choose between two *refusal* policies, which is a strictly weaker use. Getting it wrong in the attacker's favour buys nothing: claiming team context you don't have yields `bind_pending`, i.e. no token at all, which is worse for the caller than the unbound token they would otherwise get. There is no version of this lie that gains a slot binding.
+
+So rung 3 splits:
+
+| Binding row | Body claims team context | Result |
+|---|---|---|
+| exists, `slot_id` set | either way | bound to that slot (derived; a disagreeing claim is `403`) |
+| exists, `slot_id` NULL | either way | unbound token |
+| none | **no** | unbound token — an ordinary repo member |
+| none | **yes** | `409 bind_pending`, retryable |
+
+An unbound session can send mail and be a repo member. It can never be an approver, because §4.3's evidence requires `ack_approver_member_id` to resolve to the leader's **slot** member. Minting unbound is therefore not a weakening of the gate; it is the pre-PR0 behaviour, preserved for panes the gate was never about.
+
+**The retry interval is 300 seconds on the failing path, not 60.** Revision 4 wrote that the shim "retries on its next heartbeat, which it already performs every 60s." Measured — `_heartbeat_once` (`agent_mail_server.py:164-168`):
+
+```python
+def _heartbeat_once() -> float:
+    result = _ensure_registered()
+    if result["ok"]:
+        return HEARTBEAT_INTERVAL_SECONDS            # 60.0  (:18)
+    return HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS    # 300.0 (:19)
+```
+
+The interval it returns is the *sleep before the next attempt* (`_heartbeat_loop`, `:171-173`). A refused registration is not `ok`, so the heartbeat backs off to **300s** — the very case where 60s was claimed. Revision 4 quoted the success interval to describe the failure path.
+
+Three consequences, all of which PR0 must state rather than discover:
+
+1. **`bind_pending` resolves within 300s, not 60s, via the heartbeat.** That is the honest worst case for a legitimately-launched agent that registers before its binding commits.
+2. **In practice it resolves much faster, because `_guard` also re-registers.** Every mail tool call runs `_ensure_registered` first (`:201-203`), so an agent that does anything at all retries immediately. The 300s figure bounds an *idle* agent.
+3. **The binding write is what makes this rare.** §3.3 commits the row at spawn (`agent_team_service.py:569`, `:637`) precisely so the window is the round trip, not the launch loop. `bind_pending` is the safety net for that window, not the normal path.
+
+PR0 does not change either heartbeat constant. Shortening the failure backoff would be a plausible-looking fix that trades a 5-minute worst case in a rare window for a tighter poll against an unreachable backend, which is what that constant exists to avoid.
 
 ### 3.4 Minting: stable for the session
 
@@ -339,16 +409,41 @@ The fix is that the backend does not need to return it. **The shim already has s
 
 | Case | Backend | Shim |
 |---|---|---|
-| first registration (no `capability_token_hash`) | mint, store hash, **return plaintext once** | store plaintext in `_state["capability_token"]` |
-| re-registration, token presented and valid, binding unchanged | return **no** token field; touch `last_seen_at` | keep the cached token |
-| re-registration, binding changed (`pane_pid`/`proc_start` differs) | mint a **new** token, replace the hash, return plaintext | overwrite the cached token |
-| re-registration, no token presented but a hash exists | refuse `token_required_for_rebind` (`409`, retryable) | re-register from a clean `_state` — see below |
+| first registration (row has no `capability_token_hash`) | mint, store hash, **return plaintext once** | store plaintext in `_state["capability_token"]` |
+| re-registration, token presented and valid | return **no** token field; touch `last_seen_at` | keep the cached token |
+| re-registration, token presented but invalid | `401`, mint nothing | clear `_state` and fail the tool call |
+| re-registration, no token presented but a hash exists | refuse `token_required_for_rebind` (`409`) | cannot occur — see below |
 
-So the token travels exactly once per binding, and re-registration **authenticates** with the token it already holds rather than asking for a replacement. `_state` is process memory in the shim, which dies with the pane — the same lifetime as the binding it proves.
+So the token travels **exactly once per session row**, and re-registration *authenticates* with the token it already holds rather than asking for a replacement.
 
-**The one hole this leaves, closed deliberately.** A shim that restarts *within the same pane* (crash, MCP reconnect) loses `_state` but the pane's `(pid, proc_start)` is unchanged, so the backend sees a hash it cannot match against a caller with no token. Refusing forever would strand it; minting freely would let any pane-resident process demand a fresh token by simply not presenting one. The rule: **re-mint only when the peer-derived pane binding matches the stored binding**, which is precisely the check that makes the request trustworthy in the first place. A caller that cannot present the pane is refused; a caller that provably *is* the bound pane gets a new token and the old hash is replaced. Co-resident compromise is still out of scope (§3.3, §6) — this does not widen it, because a co-resident process could already read the pane's memory.
+**Revision 4 contradicted itself here, and the fourth review is right.** Row 4 of the table refused a tokenless caller whose row has a hash; the paragraph that followed said re-mint whenever "the peer-derived pane binding matches the stored binding." Those are the same request with opposite answers — a restarted shim presents no token, has a hash on file, and matches the binding. An implementer would have had to pick one, and nothing in the spec said which.
 
-This removes the need for a grace window or current-plus-previous hashes. There is no rotation to be caught mid-flight.
+**The measurement that dissolves it.** The paragraph existed to rescue a shim that restarts inside a live pane. That case cannot reach row 4, because the session key is per **process**:
+
+```python
+# agent_mail_server.py:24-29 — evaluated once, at module import
+_state: dict[str, Any] = {
+    "member_id": None,
+    "session_key": f"mcp:{uuid.uuid4().hex[:12]}",
+    ...
+}
+```
+
+A stdio MCP server is spawned by its client, so "crash" and "MCP reconnect" both mean a new process, hence a fresh `session_key`. The backend looks the session up by `session_key` (`agent_mail_service.py:176-178`), finds nothing, and creates a new row — which is a **first** registration, row 1, and it mints. The restarted shim is never a rebind.
+
+So the rescue rule is **withdrawn**, and row 4 stands unqualified. What actually reaches row 4 is a caller presenting *someone else's* `session_key` with no token — and that key is readable by every agent from the unauthenticated `GET /agent-mail/team` (§3.2). Refusing is the only correct answer. Revision 4's rule would have handed a fresh token to any co-resident caller that replayed a known session key from the bound pane; deleting it narrows the surface rather than widening it.
+
+Two consequences to state rather than leave for an implementer to notice:
+
+- **A dead shim's row keeps its hash forever, and PR0 deliberately leaves it there.** Measured: the only session-deleting code in the service is `_remove_stale_observed_sessions`, and it selects `source == "observed"` (`agent_mail_service.py:565-568`, delete at `:576`). **No path ever deletes an `mcp` session row** — which is precisely why 150 of them exist with 7 connected. So a dead shim's `capability_token_hash` persists indefinitely. That is safe, because nobody holds the plaintext: it lived only in the dead process's memory and the backend discarded it at mint time. The hash is an unusable artifact, not a live credential.
+
+  The tempting cleanup — null the hash when a session goes offline, so the row looks tidy — is a **hole**, and PR0 must not do it. A hashless row with a known `session_key` is a *first* registration (row 1), so any co-resident caller replaying that key would be minted a fresh token. Keeping the hash is what makes row 4's refusal permanent for that row. Stale-looking state is the safe state here; §8 records it as accepted rather than fixed.
+- **One pane can therefore own several session rows over its life.** Already true today, and it does not weaken the gate, because approval evidence resolves to a **member**, not a session (§4.3). Deck's roster already tolerates this.
+- **`agent_pane_bindings` is different and does get pruned**, on `(pid, proc_start)` liveness (§3.3), because a stale binding row *would* mislead a live registration into a slot claim. Two tables, two retention rules, for a stated reason.
+
+There is no "binding changed" case to handle. The peer pid is the shim's own pid, so a changed pane binding under a *stable* `session_key` would require the shim to be reparented while running — at which point it no longer walks up to any pane and rung 2 mints unbound. Adding a rebind path for it would be a rule with no reachable trigger, which is how revision 4 got here.
+
+This also removes any need for a grace window or current-plus-previous hashes. There is no rotation to be caught mid-flight.
 
 **Deployment.** A pre-upgrade shim cannot self-heal: its loaded code has no idea the header exists, so it will never send one, no matter how many times it heartbeats. Revision 2's claim that this "self-heals without operator action" was wrong. PR0 therefore requires a **grace mode**:
 
@@ -428,6 +523,67 @@ So `curl "/agent/inbox?member_id=16&mark_read=true"` forges the leader's livenes
 
 **Derive, do not compare.** The server sets `sender_member_id` from the token's session. A caller-supplied `sender_member_id` that disagrees is a `403`, not a silent overwrite: silent overwriting would mask a misconfigured shim as success. A caller-supplied value that *agrees* is accepted, which keeps the shim's current payload shape valid.
 
+### 3.5a Authentication is not authorization: who may report what
+
+§3.5 makes `reporting_slot_id` **derived** rather than claimed. The fourth review is right that this answers "who is calling" and leaves "may they do this" unanswered, and the gap is measurable: of the nine branches in `report_dispatch_status`, exactly **one** compares the reporter to the item.
+
+```python
+# agent_teams.py:333-338 — the only authorization check in the whole endpoint
+elif report.status == "workspace_released":
+    if report.reporting_slot_id != item.owner_slot_id:
+        raise HTTPException(status_code=409, detail="only the owner slot may release its workspace")
+```
+
+Every other branch reads `report.work_item_id` and acts. Deriving the slot from a token turns "any process with curl" into "any *registered agent*," which is a real narrowing and still not authorization — the population that matters here is other agents on the same team, and they are all registered. A Specialist can currently mark another slot's item `blocked`, accept a handoff aimed elsewhere (guarded only by `handoff_target_slot_id`, which is the one other comparison in the service), or report `pr_opened` on an item it has nothing to do with.
+
+**The matrix.** Roles are: **owner** = `item.owner_slot_id`; **leader** = `_leader_slot(preset_slots)` (`github_dispatch_service.py:534-539`); **target** = `item.handoff_target_slot_id`. A row's authority is checked *after* the token resolves the caller's slot and *before* any state change.
+
+| Branch | Who may report it | Lease token | Refusal |
+|---|---|---|---|
+| `triaging` | owner | not required | `403 not_item_owner` |
+| `in_progress` | owner | not required | `403 not_item_owner` |
+| `blocked` | owner | not required | `403 not_item_owner` |
+| `handoff_initiated` | owner **or** leader | not required | `403 not_owner_or_leader` |
+| `handoff_accepted` | **target** only | not required | `403 not_handoff_target` (in addition to the existing `409` when `handoff_target_slot_id` disagrees) |
+| `revision_requested` | **leader** only | not required | `403 not_leader` |
+| `ack_received` | owner | not required | `403 not_item_owner` |
+| `pr_opened` | owner | **required** | `403 not_item_owner`; `409` on token mismatch |
+| `workspace_released` | owner (already enforced) | **required** (already enforced) | unchanged |
+| unknown status | — | — | `400` (unchanged) |
+
+Four points where the shape of that table is a decision rather than a transcription:
+
+**1. `revision_requested` is the leader's, and it is the one branch where the current code is actively dangerous.** It calls `record_approval_round` (`:301-302`), which under §4.3a.1 increments the round and **clears the ack columns**. Left unauthorized, any agent can withdraw an approval it does not own — or, more usefully to a blocked agent, spam the round counter to `max_approval_rounds` and force an escalation. It is also the semantic opposite of the others: a rejection is an *approver's* act, so the owner must not be able to report it. That the owner cannot self-reject is the same distinctness principle §4.5 enforces for approval, applied to the other direction.
+
+**2. `handoff_accepted` belongs to the target, not the owner.** The existing `ValueError` in `accept_handoff` (`:697-702`) compares the accepting slot against `handoff_target_slot_id` and does discriminate correctly — this row mostly makes an existing implicit rule explicit and gives it a `403` instead of a `409`. Keep both checks: the `403` says "you are not the target," the `409` says "there is no handoff to accept," and collapsing them loses the distinction an agent needs to act on.
+
+**3. The lease token is required exactly where the branch causes a GitHub write, and `pr_opened` is the only new one.** Measured: `report_pr_opened` (`github_verification_service.py:44-86`) makes no GitHub call itself, but it sets `item.pr_number`, which is what admits the item to `process_scope`'s query (`:95-110`) and from there to `_verify_item` and `_promote_verified_item` — the merge. So `pr_opened` is the entry point to the write path even though it writes nothing itself. Requiring the current lease token means a stale attempt cannot inject a PR number into a re-dispatched item, which is precisely the class of bug the lease token was introduced for in G2.
+
+  `in_progress` is **not** on the required list, because §5.6 removes its `pr_number` write entirely. If a future change restores that write, this row must change with it — noted here because the two facts are only safe together.
+
+**4. Everything else takes no token deliberately.** Requiring a lease token on `triaging` or `blocked` would break the one path that most needs to work: an agent reporting that it is stuck. `blocked` escalates to a human, and a gate that can refuse an escalation because a lease rotated is a gate that hides failures. Authority without a token is the right trade for reports that only ever *reduce* Deck's confidence.
+
+**Where the check lives.** In `report_dispatch_status`, as a small resolver called once before the branch chain — not inside each service function. The services are also called from the monitor loop and from operator paths that have no reporting slot, and pushing agent authorization into them would either block those callers or grow an `if caller_is_agent` parameter through five signatures. The endpoint is the trust boundary; the check belongs at the boundary.
+
+**What this does not fix.** `touch_owner_contact` runs in the endpoint tail for any report whose `reporting_slot_id` equals the owner's (`agent_teams.py:371-377`). With derived slots that is now honest, so no change is needed — but note it stamps contact evidence as a *side effect* of an authorized report, and its docstring already accepts a stale token as a no-op (`github_workspace_service.py:255-259`). That is consistent with point 4: contact evidence is not a gate input for merging, only for nudge timing ([[ack-is-liveness-not-approval]]).
+
+**Tests** (offline, in §3.7's file since they are token-dependent):
+
+7b. Each branch in the matrix, reported by a non-authorized slot ⇒ the stated `403`, and the item's columns are **unchanged**. Assert the state, not just the status code — a route that mutates then refuses returns the same code.
+7c. `revision_requested` from the **owner** ⇒ `403 not_leader`, and `approval_round_count` is unchanged. This is the withdrawal-spam test; it must fail against revision 4, which had no authorization here at all.
+7d. `revision_requested` from the **leader** ⇒ `200`, round incremented, ack columns cleared (§4.3a.1).
+7e. `handoff_accepted` from a slot that is neither target nor owner ⇒ `403 not_handoff_target`; from the target ⇒ `200`. Both against an item whose `handoff_target_slot_id` is set, so the existing `409` path is not what produces the refusal.
+7f. `pr_opened` from the owner with a **stale** lease token ⇒ `409`, and `item.pr_number` stays `NULL`. Then the same call with the current token ⇒ `200`. The `NULL` assertion is the point: if `pr_number` is set before the token check, the item enters `process_scope` and the refusal is cosmetic.
+7g. `blocked` from the owner with **no** lease token ⇒ `200` and the escalation is recorded. Written to fail against an implementation that requires the token everywhere "for consistency."
+
+| Mutant | Test that must fail |
+|---|---|
+| authorization checked after the state change | **7b, 7f** |
+| `revision_requested` allowed to the owner | **7c** |
+| `handoff_accepted` authorized to the owner instead of the target | 7e |
+| lease token required on every branch | **7g** |
+| lease token dropped from `pr_opened` | 7f |
+
 ### 3.6 The operator path stays open
 
 The Agent Mail UI writes as an operator-chosen member (`ThreadDialog.tsx:159` sends `sender_member_id: senderId`) and holds no session token. Two write paths therefore need a non-session identity: the UI's reply/compose, and its ack.
@@ -471,13 +627,18 @@ Binding (§3.3), with the peer-pid resolver injected so tests do not need real s
 8. **The §1.6 forgery.** Registration from a pane bound to slot 6 (Specialist) that claims `team_slot_id: 4` (Leader) ⇒ `403`, and no token is minted. This is the blocker-1 test; it must fail if binding falls back to the body.
 9. A peer pid that resolves to no tmux pane ⇒ token minted with `team_slot_id = NULL`, and that session's `answer` is rejected as approval evidence by PR1 (`not_leader`).
 10. A peer pid that cannot be derived at all ⇒ `bind_unverifiable`, refuse. Fail closed on inability to observe.
-11. A pane pid matching a launch item for slot 6 ⇒ session bound to slot 6 even when the body sends no `team_slot_id`.
-12. Pane pid reuse: same `bound_pane_pid`, different `bound_pane_proc_start` ⇒ treated as a new process, token rotated, old token `401`.
+11. A pane pid matching an **`agent_pane_bindings` row** for slot 6 ⇒ session bound to slot 6 even when the body sends no `team_slot_id`. The row is the anchor, not a launch item: §3.3 rejected `agent_team_launch_items` on three counts, and revision 4's test still named them, so this test would have driven an implementer straight back into the race it exists to avoid.
+12. Pane pid reuse: a binding row whose `pane_proc_start` differs from the live `/proc/<pid>/stat` value ⇒ that row is stale and does not bind. With no other row and no claimed team context, the token is minted unbound (§3.3a); with claimed team context, `bind_pending`.
+12b. **The unbound path is not a refusal.** A pane with no binding row and a body claiming no team context ⇒ `200`, a token is minted, `team_slot_id` is `NULL`, and a `POST /messages` with it succeeds. This is the blocker-3 test: it must fail against revision 4, which returned `409 bind_pending` here and made every mail tool in a hand-started pane fail forever.
+12c. Same pane, but the body claims `team_preset_id`/`team_slot_id` ⇒ `409 bind_pending`, no token minted. Asserting 12b alone would pass against an implementation that never refuses at all.
 
 Stability (§3.4):
 
-13. Two consecutive registrations from the same live pane return the **same** token, and the first token still authenticates after the second call. This is the blocker-2 test.
+13. **Re-registration authenticates; it does not re-issue.** Register once and keep the plaintext. Register again from the same live pane *presenting that token*: the response contains **no** token field, `capability_token_hash` on the row is byte-identical to before, and the original token still authenticates a subsequent `POST /messages`. Revision 4's version of this test demanded the *same token be returned* — which §3.4 itself proves impossible, since only the hash is stored. A test asserting an impossibility fails no matter how correct the implementation is; it is worse than no test, because the implementer's only way to pass it is to store recoverable plaintext.
 14. Interleaved order — build a header, re-register, then use the header — succeeds. Written to fail against revision 2's rotate-always design.
+14b. **Row 4 of the table, which is the one an attacker reaches.** Register once (row now has a hash), then register again with the **same `session_key`** and **no** token header ⇒ `409 token_required_for_rebind`, the stored hash is unchanged, and the first token still works. Mutate the implementation to re-mint when the pane binding matches — revision 4's withdrawn rescue rule — and this test must go red.
+14c. **A restarted shim is a new session, not a rebind.** Register with `session_key = "mcp:aaa"`, then register from the *same* pane with `session_key = "mcp:bbb"` and no token ⇒ `200` and a freshly minted token, because that is row 1. This pins the reasoning that let 14b be unconditional: the per-process `session_key` (`agent_mail_server.py:26`) means the restart case never reaches row 4. If someone later makes `session_key` stable across restarts, this test and 14b conflict — and that conflict is the correct alarm, because the rescue rule would then be needed again.
+14d. **An offline session keeps its hash.** Register, then age the row into `offline` (`last_seen_at` beyond `MCP_HEARTBEAT_TTL_SECONDS`, `agent_mail_service.py:39`), then register tokenless with that same `session_key` ⇒ still `409 token_required_for_rebind`, and `capability_token_hash` is unchanged. 14b cannot catch the tidy-up-on-offline mutant because its session is live; this one is the offline case, so the two together cover both sides of the retention rule.
 
 Grace mode (§3.4):
 
@@ -500,6 +661,10 @@ Inbox (§3.5):
 | `bind_unverifiable` treated as "no binding" instead of a refusal | 10 |
 | token rotated on every registration (revision 2's design) | **13, 14** |
 | `proc_start` ignored, pid compared alone | 12 |
+| missing binding row always ⇒ `bind_pending` (revision 4's design) | **12b** |
+| missing binding row never refuses, even on a claimed team launch | 12c |
+| re-mint when the pane binding matches, without a token (revision 4's withdrawn rule) | **14b** |
+| the hash is nulled when a session goes offline ("cleanup") | **14d** — and *not* 14b, whose session is live, so the mutant never fires there |
 | inbox route authenticates but still honours the query `member_id` | 19 |
 | inbox mutations applied before the auth check | **18** |
 | token compared with `==` instead of `hmac.compare_digest` | — (not observable by test; enforce in review) |
@@ -523,7 +688,7 @@ If PR0's cost proves larger than this in practice, the fallback is to weaken the
 
 ### 4.1 Schema
 
-`github_work_items` gains four nullable columns, following `app/database.py:421-440` exactly:
+`github_work_items` gains five nullable columns, following `app/database.py:421-440` exactly:
 
 ```python
 if work_item_columns and "ack_approver_member_id" not in work_item_columns:
@@ -534,14 +699,27 @@ if work_item_columns and "dispatch_nonce" not in work_item_columns:
     await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_nonce TEXT"))
 ```
 
-…plus the fourth rung §3.4a requires, which belongs here with the others rather than in the PR0 chapter that motivates it:
+…plus two more rungs: the epoch §3.4a requires, and the round §4.3a.1 requires. Both belong here with the others rather than in the chapters that motivate them:
 
 ```python
 if work_item_columns and "ack_enforcement_epoch" not in work_item_columns:
     await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_enforcement_epoch INTEGER"))
+if work_item_columns and "ack_approval_round" not in work_item_columns:
+    await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approval_round INTEGER"))
 ```
 
-All four nullable, so existing rows migrate silently — and a pre-upgrade row with `dispatch_nonce = NULL` cannot be acked until re-dispatched, which §4.3 rule 3 makes explicit and correct.
+All five nullable, so existing rows migrate silently — and a pre-upgrade row with `dispatch_nonce = NULL` cannot be acked until re-dispatched, which §4.3 rule 3 makes explicit and correct.
+
+`ack_approval_round` records which round's approval is on file. It is **not** redundant with `approval_round_count`: the counter says which round the item is *in*, and this column says which round the evidence *came from*. The gate compares them (§4.5), which is what makes a stale approval visible instead of merely absent — the same reasoning that made `ack_enforcement_epoch` a column rather than an inference.
+
+`mail_messages` gains `decision` (§4.3a) and `approval_round` on the same ladder:
+
+```python
+if message_columns and "approval_round" not in message_columns:
+    await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN approval_round INTEGER"))
+```
+
+A column rather than a payload key, because the gate filters on it and `payload` is JSON that SQLite cannot index usefully here. The `context_request`'s round also goes in its `payload` — that is what the shim sends and what §4.3 rule 3 matches — but the *decision* row carries it as a column, so an operator reading a thread can see which round each decision belongs to.
 
 ### 4.2 The dispatch nonce
 
@@ -552,12 +730,13 @@ Minted where `dispatched_at` is set (`github_dispatch_service.py:344`), so one n
 | Event | Site | Action |
 |---|---|---|
 | dispatch | `:344` | mint a fresh nonce |
-| retry | `reset_for_retry:64-71` | clear nonce + the three new ack columns alongside the existing `ack_received_at = None` |
-| handoff accepted | `accept_handoff:705` | clear **all four** ack fields + `last_nudge_at`; **keep the nonce** — see below |
+| retry | `reset_for_retry:64-71` | clear nonce + the four new ack columns alongside the existing `ack_received_at = None` |
+| handoff accepted | `accept_handoff:705` | clear **all five** ack fields + `last_nudge_at`; **keep the nonce** — see below |
+| revision requested | `record_approval_round:672-679` | increment the round, then clear **all five** ack fields + `last_nudge_at`; **keep the nonce** (§4.3a.1) |
 
 The nonce is a *correlation* value, not a secret — PR0 provides the authentication. It exists so that evidence from attempt N cannot satisfy attempt N+1, which no amount of authentication would prevent on its own.
 
-**Handoff clears four fields, not two.** Revision 2 said "both ack columns," meaning the two new ones. That was an off-by-one with a consequence. `ack_received_at` already exists and `_ack_satisfied` reads it (`:905-911`):
+**Handoff clears five fields, not two.** Revision 2 said "both ack columns," meaning the two new ones. That was an off-by-one with a consequence. `ack_received_at` already exists and `_ack_satisfied` reads it (`:905-911`):
 
 ```python
 if item.ack_received_at is None:
@@ -577,6 +756,7 @@ So `accept_handoff` clears:
 | `ack_approver_member_id` | the previous owner's approver did not approve this owner |
 | `ack_evidence_message_id` | ditto — and PR1's gate reads it |
 | `ack_enforcement_epoch` | it describes the cleared evidence, not the item; leaving `1` behind would let a later grace-mode write inherit an "enforced" stamp |
+| `ack_approval_round` | same reason: it describes evidence that no longer exists. Leaving a round number behind would make §4.5's `ack_approval_round == approval_round_count` comparison pass on cleared evidence the first time the counter happens to agree |
 | `last_nudge_at` | `record_ack_received:685` nulls it on ack; leaving a stale value shifts the new owner's first nudge by up to one full grace period, or skips it (`:785` tests `is None`) |
 
 `dispatched_at` is deliberately **not** reset: it anchors the ack deadline, and re-anchoring it on handoff would silently extend the timeout every time an item changes hands. The new owner inherits the original deadline, which is the existing behavior for every other field and is #280's territory, not this spec's.
@@ -593,11 +773,12 @@ class AckEvidence:
     """Why an ack was accepted or refused. `reason` is operator-facing."""
     ok: bool
     reason: str                       # one of: "ok", "self_ack", "not_designated_approver",
-                                      #         "no_linkage", "stale_nonce", "no_leader", "no_owner",
-                                      #         "no_decision", "rejected", "tokens_not_enforced",
-                                      #         "evidence_predates_enforcement"
+                                      #         "no_linkage", "stale_nonce", "stale_round",
+                                      #         "no_leader", "no_owner", "no_decision", "rejected",
+                                      #         "tokens_not_enforced", "evidence_predates_enforcement"
     approver_member_id: int | None = None
     evidence_message_id: int | None = None
+    approval_round: int | None = None   # the round this evidence belongs to (§4.3a.1)
 ```
 
 A `MailMessage | None` return cannot carry the distinct refusal reasons the tests below require — revision 1 asked for reasons it had no way to express. This type is the fix.
@@ -606,9 +787,9 @@ A `MailMessage | None` return cannot carry the distinct refusal reasons the test
 
 1. Resolve the **designated leader member**: `_leader_slot(preset_slots)` → `_slot_member(db, leader.id)`. This is the *only* acceptable approver. Not "any member," not "any slot member" — the specific member bound to the leader slot. Live data justifies the strictness: 12 of 19 members have no slot at all. If either the leader slot or its member cannot be resolved, refuse `no_leader` — fail closed, never treat an unresolvable approver as satisfied.
 2. Resolve the owner member via the existing `_owner_member(db, item)`. If the owner **is** the designated leader, refuse with `self_ack` immediately — this is Finding #1's exact shape and needs no evidence lookup to reject. If the owner member cannot be resolved, refuse `no_owner`.
-3. Find `context_request` rows whose payload `work_item_id` equals `item.id`, sent by the owner member and addressed to the leader member. If **no** row matches the work item at all ⇒ refuse `no_linkage`. If a row matches the work item but **none** matches `item.dispatch_nonce` ⇒ refuse `stale_nonce`. Evaluate in that order, so the two reasons stay distinguishable: `no_linkage` means "they never asked," `stale_nonce` means "they are replaying an older attempt's approval." A NULL `item.dispatch_nonce` (a pre-upgrade row) can never match, so it refuses `stale_nonce` — correct, and §4.1 already states such items must be re-dispatched.
+3. Find `context_request` rows whose payload `work_item_id` equals `item.id`, sent by the owner member and addressed to the leader member. If **no** row matches the work item at all ⇒ refuse `no_linkage`. If a row matches the work item but **none** matches `item.dispatch_nonce` ⇒ refuse `stale_nonce`. If a row matches the nonce but **none** carries `approval_round == item.approval_round_count` ⇒ refuse `stale_round` (§4.3a.1) — the owner is replaying an approval from before a revision was requested. Evaluate in that order, so the three reasons stay distinguishable: `no_linkage` means "they never asked," `stale_nonce` means "they are replaying an older *attempt*," `stale_round` means "they are replaying an older *round* of this attempt." A NULL `item.dispatch_nonce` (a pre-upgrade row) can never match, so it refuses `stale_nonce` — correct, and §4.1 already states such items must be re-dispatched. A NULL payload `approval_round` likewise never matches, refusing `no_linkage` per §4.3a.1.
 4. Among the matching threads, require an `answer` row whose `thread_root_id` is that `context_request`, whose `sender_member_id == leader_member.id`, **and whose `decision` column is `'approved'`** (§4.3a). Found ⇒ accept, recording `approver_member_id` and `evidence_message_id` (the **answer** row's id, not the request's — the answer is the approval). If more than one qualifies, take the earliest by `created_at`, so the recorded evidence is the approval that actually unblocked the owner. If a leader-authored answer exists but no row carries `decision = 'approved'`: refuse `rejected` when any of them carries `decision = 'rejected'`, otherwise refuse `no_decision`. If no leader-authored answer exists at all ⇒ refuse `not_designated_approver`.
-5. Accepted ⇒ set `ack_received_at`, `ack_approver_member_id`, `ack_evidence_message_id`, `ack_enforcement_epoch = 1`. Refused ⇒ **do not** set `ack_received_at`; return `409` from `/dispatch-status` with `reason` in the detail.
+5. Accepted ⇒ set `ack_received_at`, `ack_approver_member_id`, `ack_evidence_message_id`, `ack_enforcement_epoch = 1`, `ack_approval_round = item.approval_round_count`. Refused ⇒ **do not** set `ack_received_at`; return `409` from `/dispatch-status` with `reason` in the detail.
 6. Before any of the above: if `mail_capability_tokens_required` is `False`, refuse `tokens_not_enforced` without evaluating or writing anything (§3.4a).
 
 Rule 1's `no_leader` matters more than it looks: `_leader_slot` returns `None` when no slot is enabled, and `_slot_member` returns `None` when a slot has no registered member. Both are reachable — a preset can be edited while an item is in flight. Treating either as "no approver required" would turn a misconfiguration into an open gate.
@@ -692,7 +873,30 @@ Putting the check in `send_message` rather than only in the tool matters: the to
 - The existing `send_message` answer guard (`:859`, "only the context request recipient can answer it") is preserved rather than bypassed — the leader *is* the recipient of the owner's request, so the guard passes for exactly the right party and fails for everyone else.
 - Zero matching requests ⇒ `404` (nobody asked for this item under this nonce). More than one ⇒ `409` with both ids; do not guess. Multiple matches mean the owner opened two threads for one attempt, which is a shim bug worth surfacing rather than papering over.
 
-**Approve-then-reject within one attempt.** §4.3 rule 4 accepts if *any* qualifying row carries `approved`, so a later `rejected` on the same nonce does not revoke an approval the owner has already acted on. That is deliberate: by then the owner may have pushed commits, and a gate that retroactively un-approves would strand a live PR with no path forward. The leader's route for changing their mind is `revision_requested` → `record_approval_round` (`:672-679`), which is the existing, bounded mechanism. Stated here because "the last decision wins" is the other reasonable reading, and a plan must not have to guess.
+#### 4.3a.1 A rejection needs a next round, and revision 4 gave it none
+
+Revision 4 told a rejected owner to "revise the plan and ask again," and the fourth review's second blocker is that this does not work as specified. Three separate problems, all confirmed:
+
+1. **The second request collides with my own `409`.** §4.3a resolves the thread from `(work_item_id, dispatch_nonce)`, and the nonce does *not* change on revision — only on re-dispatch (§4.2). So an owner who asks again has two `context_request` rows matching the same pair, which is precisely the "more than one ⇒ `409` with both ids; do not guess" case. The documented recovery path is unreachable through the documented tool.
+2. **`record_approval_round` does not identify anything.** Measured, it is four lines: increment the counter, escalate at the cap, commit (`github_dispatch_service.py:672-679`). It does not name the active request, does not touch the ack columns, and does not know a decision exists.
+3. **Approve-then-reject still permits auto-merge.** Revision 4 argued that a recorded approval should stand because the owner may already have pushed. True as far as it goes — but revision 4 then offered `revision_requested` as the leader's remedy, and `revision_requested` clears no ack columns. So the leader's stated lever does nothing to the gate, and auto-merge proceeds on the approval the leader has since withdrawn.
+
+**Decision: decisions are scoped to an approval round.** `item.approval_round_count` already exists (`app/models/database.py:267`, default `0`) and already has a cap (`scope.max_approval_rounds`, `app/models/database.py:221`, default `3`). It becomes the round identifier:
+
+- `deck_request_context` puts `approval_round` in the payload alongside `work_item_id` and `dispatch_nonce`, reading the item's current `approval_round_count`.
+- `deck_approve_work_item` records the round it is deciding, taken from the resolved request's payload — not from the caller, who would then be able to choose it.
+- **The gate considers only the current round.** §4.3 rule 3's match becomes `(work_item_id, dispatch_nonce, approval_round == item.approval_round_count)`, so the thread resolution in §4.3a is unique again: one request per round, and the `409` fires only for a genuine duplicate *within* a round, which remains a shim bug.
+- `revision_requested` → `record_approval_round` increments the counter **and clears the five ack columns**, exactly as `accept_handoff` does (§4.2). The next round therefore starts with no approval, and the gate refuses `no_decision` until the leader decides again.
+
+This makes the withdrawal implicit and total: the leader does not need a second tool to revoke, because moving the round drops the previous round's evidence by construction. And it resolves problem 3 without the retroactive-un-approval hazard revision 4 was right to avoid — the approval is not reversed, it is *superseded*, and only by an explicit act (`revision_requested`) that the leader or owner takes deliberately.
+
+**Approve-then-reject within one round** keeps revision 4's rule: the approval stands. That case is now narrow — the leader approved and then changed their mind *without* requesting a revision — and the correct answer is still not to strand a pushed PR. The leader's lever is `revision_requested`, which now actually works.
+
+**Who may report `revision_requested`** is blocker 5's question, answered in §3.5a. It must be the leader or the owner, not any authenticated slot: a Specialist who could increment the round could otherwise reset another item's approval at will, or drive it to `approval_rounds_exhausted` in three calls.
+
+**A NULL `approval_round` in the payload** — from a pre-upgrade shim, or `deck_request_context` called without it — cannot match round 0 by accident. Treat NULL as "no round stated" and refuse `no_linkage`, on the same reasoning §4.3 rule 3 already applies to a NULL nonce: an item whose evidence predates the linkage requirement must be re-dispatched, not grandfathered.
+
+**Why not a separate `approval_rounds` table.** A round is one integer per item with a cap of 3, and every question the gate asks is answerable from the counter plus the payload. A table would add a migration, a join, and a second source of truth for "which round are we in" — and the counter would still exist, because the cap reads it. Rejected on that measurement, not on taste.
 
 **`deck_reply` is unchanged and still writes `decision = NULL`.** The leader keeps a way to say "I read this, here are my questions" without approving — which is what rows 82 and 92 were actually doing. Their author was behaving correctly; the *gate* was wrong to read them as approval.
 
@@ -730,9 +934,12 @@ auto-merge requires:
     head is green                             (existing)
     mail_capability_tokens_required is True   <-- NEW (§3.4)
     ack_enforcement_epoch == 1                <-- NEW (§3.4a)
+    ack_approval_round == approval_round_count <-- NEW (§4.3a.1)
     ack_approver_member_id is the leader      <-- NEW
     and differs from the owner's member
 ```
+
+The round comparison is what makes a *withdrawn* approval fail the gate rather than merely being absent. §4.3a.1 has `record_approval_round` clear the ack columns, so in the ordinary case the approval is gone and `ack_approver_member_id is the leader` already fails. The comparison is the belt to that suspenders: if a future change to `record_approval_round` forgets the clear — the exact off-by-one that revision 2 committed with `accept_handoff` — the round mismatch still refuses. Fail closed twice on the path where the cost of failing open is a merge nobody approved.
 
 The check reads the **persisted** columns, not a fresh mail lookup: PR0 plus §4.3 mean the columns can only have been written by a verified approval, and re-deriving at merge time would read a mail table that may have changed for unrelated reasons.
 
@@ -774,9 +981,9 @@ The owner's brief already names the leader as "Team leader / approver" (`:428-43
 8. Payload NULL or missing the key ⇒ no raise, treated as `no_linkage`.
     8b. No enabled leader slot, or a leader slot with no registered member ⇒ `409` `no_leader`, not an accepted ack.
 9. A refused ack still lets the monitor nudge, then escalate `leader_ack_timeout`.
-10. `reset_for_retry` clears all four columns; an ack valid before the retry is refused after it.
+10. `reset_for_retry` clears all five columns; an ack valid before the retry is refused after it.
     10b. **Deferred retry** — `reset_for_retry` on an item that still holds a lease returns early without clearing; the monitor's second call, after release, does clear. Both halves asserted.
-11. `accept_handoff` clears all four ack fields and **keeps** the nonce; the previous owner's approval does not carry to the new owner, *and* the new owner can still be acked (proving the §4.2 deadlock is avoided).
+11. `accept_handoff` clears all five ack fields and **keeps** the nonce; the previous owner's approval does not carry to the new owner, *and* the new owner can still be acked (proving the §4.2 deadlock is avoided).
     11b. **`_ack_satisfied` is False for the new owner after a handoff.** This is blocker 4 and it needs its own assertion, because test 11 as written in revision 2 would pass while leaving `ack_received_at` set: set `dispatched_at` in the past, record an ack, hand off, then assert `_ack_satisfied(item) is False`. Against revision 2's two-column clear this fails, since `ack_received_at > dispatched_at` still holds.
     11c. After a handoff, the monitor nudges the leader for the new owner's ack and eventually escalates `leader_ack_timeout`. This is the *consequence* of 11b — the behavior an operator would actually miss — and it is why `last_nudge_at` is cleared too (`:785` branches on `is None`).
 12. Auto-merge with CI-green + fresh head but no distinct approval ⇒ falls back to human merge, `auto_merged_at` stays NULL.
@@ -784,7 +991,7 @@ The owner's brief already names the leader as "Team leader / approver" (`:428-43
     13b. Same item, but `mail_capability_tokens_required = False` ⇒ refuses with `tokens_not_enforced` (§4.5).
 14. The fallback note starts with `"Auto-merge blocked"`, so a second poll does not re-run the fallback.
 15. Replay of the live self-ack shape (`context_request` 16→16, `answer` from 16) ⇒ refused. Regression test written directly from production data.
-16. All four columns appear in `GithubWorkItemResponse` for a real item, and `decision` appears in `MailMessageResponse`.
+16. All five columns appear in `GithubWorkItemResponse` for a real item, and `decision` plus `approval_round` appear in `MailMessageResponse`.
 
 Structured decisions (§4.3a) — the negative-answer tests the third review asked for, written from production rows:
 
@@ -800,6 +1007,18 @@ Structured decisions (§4.3a) — the negative-answer tests the third review ask
 26. Approve, then post `decision = 'rejected'` on the same nonce ⇒ the ack recorded by the approval **stands** (§4.3a), and the item does not become un-acked.
 27. **Grace mode records nothing.** With `mail_capability_tokens_required = False`, a fully valid approval flow ⇒ `record_ack_received` refuses `tokens_not_enforced` and `ack_approver_member_id`, `ack_evidence_message_id`, `ack_enforcement_epoch` are all still NULL. Then flip the flag to `True` and re-run the ack ⇒ accepted. Proves the refusal is not merely time-shifted.
 28. An item whose ack columns are populated with `ack_enforcement_epoch` NULL or `0` (hand-built fixture simulating a pre-enforcement or refactor-regressed write) ⇒ gate refuses `evidence_predates_enforcement`, even with tokens enforced and every other condition green.
+
+Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had none of:
+
+29. **A second round's request is legal.** Round 1: `deck_request_context` with `approval_round = 1`, leader rejects (`revision_requested`). Round 2: the owner opens a *new* request with `approval_round = 2` ⇒ accepted, **no `409`**, and `deck_approve_work_item` resolves to the round-2 thread. Against revision 4 the second request is a duplicate-linkage `409`, so the documented recovery path is blocked by the spec's own guard — this is the blocker-2 test.
+30. **Two requests, two rounds, no ambiguity.** With round-1 and round-2 requests both present on the item, `deck_approve_work_item(work_item_id, dispatch_nonce)` for round 2 resolves to exactly one thread. Test 21's "two matching requests ⇒ `409`" still holds *within* a round — assert both, since a fix that stops filtering by round entirely would pass one and fail the other.
+31. **`revision_requested` clears and increments.** Record a valid approval for round 1, then report `revision_requested` (from the leader — §3.5a) ⇒ `approval_round_count` becomes 2, and `ack_approver_member_id`, `ack_evidence_message_id`, `ack_received_at`, `ack_enforcement_epoch`, `ack_approval_round` are **all** NULL, and `last_nudge_at` is NULL. The nonce is **unchanged** (§4.3a.1 — clearing it would deadlock the next round exactly as it would on handoff).
+32. **The gate refuses after a withdrawal.** The item from 31, CI-green with a fresh head ⇒ no auto-merge, and the fallback note starts with `"Auto-merge blocked"`. This is the consequence test for 31; a clear that happened but left the gate passing would be invisible without it.
+33. **Round mismatch alone refuses — the belt-and-suspenders test.** Hand-build an item with every gate condition green, valid approver columns, `ack_enforcement_epoch = 1`, but `ack_approval_round = 1` while `approval_round_count = 2` ⇒ refuses `stale_round`. This fixture is the state a *forgetful* `record_approval_round` would leave behind, so it tests the second guard independently of the first. §4.5's whole argument for having two guards rests on this test existing.
+34. **Approval in the current round still merges.** The item from 31, then a valid round-2 approval ⇒ `ack_approval_round == 2 == approval_round_count`, and it merges. Proves the round check refuses staleness rather than everything.
+35. An ack attempt against a **round-1** thread after the round has advanced to 2 ⇒ `409 stale_round`, distinguishable in the response detail from `stale_nonce` and `no_linkage`. All three refusals exist because they need different operator responses: re-dispatch, wait, or open a new request.
+36. `approval_round` NULL in a request's payload (a pre-upgrade or hand-posted row) ⇒ treated as `no_linkage`, not as round 0 and not as "any round." Fail closed on an unstated round.
+37. **The cap still escalates.** Reject `max_approval_rounds` times (default 3, `app/models/database.py:221`) ⇒ the item escalates and no further round is opened. Round scoping must not turn a bounded loop into an unbounded one.
 
 **Mutation requirement.** Each guard must be shown to bite:
 
@@ -831,6 +1050,14 @@ Structured decisions (§4.3a) — the negative-answer tests the third review ask
 | write approver columns in grace mode (revision 3's behavior) | **27** |
 | trust ack columns with a NULL/`0` epoch | 28 |
 | let a later `rejected` revoke a recorded approval | 26 |
+| one request per item regardless of round (revision 4's `409`) | **29** |
+| stop filtering linkage by round at all | 30 |
+| `revision_requested` increments the round but clears nothing (revision 4) | **31, 32** |
+| `revision_requested` clears the ack columns but not `ack_approval_round` | 33 |
+| `revision_requested` also clears the nonce | 31 (the next round's request cannot link) |
+| gate compares only the columns, not the round | **33** |
+| gate compares the round but treats NULL `ack_approval_round` as matching | 33, 36 |
+| round scoping bypasses `max_approval_rounds` | **37** |
 
 Tests 17 and 18 are the pair to write **first**. They are the only two written from rows that exist in production today, and revision 3's design passes both. A design change whose regression test is drawn from real refusals is the strongest evidence available here that the new guard bites.
 
@@ -928,13 +1155,13 @@ git -C <workspace> config extensions.worktreeConfig true
 git -C <workspace> config --worktree user.name  "Specialist (Deck agent)"
 git -C <workspace> config --worktree user.email "specialist+slot6@claude-deck.local"
 
-# ONLY when App auth is configured for this repo — see §5.5.3:
+# ONLY when App auth is configured for this repo — see §5.5.6:
 git -C <workspace> config --worktree credential.https://github.com.useHttpPath true
 git -C <workspace> config --worktree credential.https://github.com.helper ""
 git -C <workspace> config --worktree --add credential.https://github.com.helper "<deck helper>"
 ```
 
-The split in that block is load-bearing, not cosmetic. The `credential.*` lines are written **only** when the installation lookup for this repo succeeded at lease time; when it did not, the worktree gets the identity lines and **nothing else**. §5.5.3 gives the measurement behind that rule — the empty-then-add pattern deliberately evicts the human's ambient helper, so configuring a helper that cannot mint a token leaves git with no credential source at all rather than falling back to the previous one.
+The split in that block is load-bearing, not cosmetic. The `credential.*` lines are written **only** when the installation lookup for this repo succeeded at lease time; when it did not, the worktree gets the identity lines and **nothing else**. §5.5.6 gives the measurement behind that rule — the empty-then-add pattern deliberately evicts the human's ambient helper, so configuring a helper that cannot mint a token leaves git with no credential source at all rather than falling back to the previous one.
 
 This is weaker than "the pane never holds a token," which revision 3 claimed and this revision retracts. Git receives the helper's plaintext password on every push, and the agent can run `git credential fill` itself. What §5.4 actually delivers is stated in §8, criterion 10: short-lived, repository-scoped, not persisted to disk, and not inherited by the pane's environment.
 
@@ -991,7 +1218,7 @@ The agent pushes the branch; **Deck opens the PR** with the installation token i
 
 ```
 agent (in the workspace):  git push -u origin deck/specialist/issue-827
-                           -> helper supplies the installation token, per 5.5.3
+                           -> helper supplies the installation token, per 5.5.6
 agent:                     deck_report_dispatch_status(status="pr_ready", lease_token=..., head_ref=...)
 Deck:                      POST /repos/{owner}/{repo}/pulls  (installation token)
                            -> PR author is claude-deck-bot[bot]
@@ -1003,22 +1230,137 @@ Why this is better than the alternative, not merely forced by it:
 - **`pr_number` stops being agent-supplied.** Deck learns it from its own API response, which retires the entire class of defect §5.6 was written to catch (a wrong or hostile number pointing at a stranger's PR).
 - **One credential path, not two.** The pane needs git push only. `gh` is not required in the pane at all for the dispatch flow.
 
-`GithubClient` gains `create_pull(owner, repo, *, title, head, base, body, draft)` — one method beside the existing `get_pull` (`github_client.py:98`) and `merge_pull` (`:165`), using the same `_headers()`/`_client()` shape. The client's module docstring already warns that it is "NOT entirely" read-only and names its two writers; `create_pull` makes three and the docstring must be updated to say so, since that note is how a reader learns this module can mutate GitHub.
+`GithubClient` gains **two** methods beside the existing `get_pull` (`github_client.py:98`) and `merge_pull` (`:165`), using the same `_headers()`/`_client()` shape:
+
+- `create_pull(owner, repo, *, title, head, base, body, draft)` — the write.
+- `list_pulls_for_head(owner, repo, *, head, base=None, state="all")` — a read, required by §5.5.4's reconciliation and absent today.
+
+The client's module docstring names its writers explicitly (`merge_pull`, `mark_pull_ready_for_review`) and warns the module is "NOT entirely" read-only. `create_pull` makes three writers and the docstring must be updated to say so, since that note is how a reader learns this module can mutate GitHub — and it is the note an operator relies on when deciding whether a read-only token is sufficient.
 
 **The reported status changes shape.** `pr_opened` carried a `pr_number` the agent chose. It is replaced for this flow by `pr_ready`, carrying `head_ref` — the branch the agent pushed. Deck then:
 
 1. Validates `head_ref` against the expected `deck/<slot>/issue-<n>` pattern for the item. A mismatch is a `409`; Deck does not open a PR from a branch it did not ask for.
 2. Confirms the ref exists on the remote (`GET /repos/{o}/{r}/git/ref/heads/{ref}`), so a typo fails as "branch not found" rather than as an opaque `422` from the pulls endpoint.
-3. Creates the PR as a draft, with the `[Slot]` title prefix and body from §5.1.
-4. Records `pr_number` from the response and proceeds exactly as `report_pr_opened` does today (`github_verification_service.py:44-86`): `verifying` for code items, `awaiting_human_review` for design items, `last_verified_sha = None`.
+3. **Reconciles before creating** — §5.5.4. A PR may already exist for this head even though `item.pr_number` is NULL.
+4. Creates the PR with the title, body and draft flag from §5.5.5 — which are Deck's to compose, not the agent's.
+5. Records `pr_number` from the response and proceeds exactly as `report_pr_opened` does today (`github_verification_service.py:44-86`): `verifying` for code items, `awaiting_human_review` for design items, `last_verified_sha = None`.
 
 **`pr_opened` is not removed.** It stays for the App-unconfigured path, where there is no installation token and the agent must open its own PR with the ambient credential — today's behavior, which §5.3 promises not to break. So the two paths are: App configured ⇒ `pr_ready` ⇒ Deck creates; App not configured ⇒ `pr_opened` ⇒ as today, including §5.6's now-reduced verification. **This is not a new `dispatch_status` value** — `pr_ready` is a `DispatchStatusReport.status` string handled in the `/dispatch-status` route's branch chain (`agent_teams.py:286-340`), the same kind of value as `triaging` and `handoff_accepted`. The item's own `dispatch_status` column still moves only between existing values.
 
-**Idempotency.** A retried `pr_ready` for an item that already has a `pr_number` must not open a second PR: return the existing number. GitHub itself returns `422` for a duplicate head/base pair, but relying on that means depending on an error path for correctness, and the agent's retry is an ordinary event (a dropped response, a nudge).
+**Idempotency.** A retried `pr_ready` for an item that already has a `pr_number` must not open a second PR: return the existing number. GitHub itself returns `422` for a duplicate head/base pair, but relying on that means depending on an error path for correctness, and the agent's retry is an ordinary event (a dropped response, a nudge). Revision 4 stopped there, and §5.5.4 explains why that is not enough.
 
-**What the brief says.** The brief's PR line (`github_dispatch_service.py:448-450`) changes from "when you open a PR, report `pr_opened` with the PR number" to "push your branch, then report `pr_ready` with `head_ref`; Deck opens the PR." The `[Slot]` prefix and trailers stay the agent's job — they are commit and title content, not authorship. §5.4's per-worktree `user.name`/`user.email` still supply the commit identity, which is the part of §5.1's table that was never in question.
+**What the brief says.** The brief's PR line (`github_dispatch_service.py:448-450`) changes from "when you open a PR, report `pr_opened` with the PR number" to "push your branch, then report `pr_ready` with `head_ref`; Deck opens the PR and composes its title and body."
 
-#### 5.5.3 The helper endpoint
+The `[Slot]` prefix and trailers stay the agent's job **for commits** — they are commit content. They are *not* the agent's job for the PR title, which Deck composes per §5.5.5. Revision 4's wording ("stay the agent's job") did not draw that line and so contradicted its own step 3; the brief must not repeat the ambiguity, because an agent told it owns the title will put one in `status_note` and expect it to be used. §5.4's per-worktree `user.name`/`user.email` still supply the commit identity, which is the part of §5.1's table that was never in question.
+
+#### 5.5.4 Idempotency by reconciliation, because `item.pr_number` is not the record
+
+Revision 4's rule was "if `item.pr_number` is set, return it." The fourth review is right that this is not crash-safe, and the window is not small.
+
+**The window.** `create_pull` is a network call; writing `pr_number` is a local commit. Between them the PR exists on GitHub and Deck has no record of it. Anything that ends the process there — the backend restarting, the `POST` timing out after GitHub committed, an `httpx` read timeout on a request that succeeded server-side — leaves `item.pr_number` NULL with a live PR on the branch. The agent's next `pr_ready` retry then reads NULL, and revision 4's rule says *create*.
+
+What happens next depends on GitHub, and neither outcome is acceptable:
+
+- **`422 Validation Failed`** for a duplicate head/base — the common case. Revision 4 has no handler for it, so the report fails and the item never learns its own PR number. The item then sits `dispatched` with a real, open, invisible-to-Deck PR until it escalates on the monitor's timeout. A human investigating finds a PR that Deck denies exists.
+- **A second PR**, if base or head differ by so much as a ref-name normalization. Two PRs for one issue, and Deck tracks the wrong one.
+
+`item.pr_number` is Deck's *cache* of a fact that lives on GitHub. Using a cache as the idempotency key means a crash between the fact and the cache is unrecoverable. The fix is to ask the source.
+
+**Reconcile by head/base, before creating and after failing.** `GithubClient` gains one read method:
+
+```python
+async def list_pulls_for_head(self, owner: str, repo: str, *, head: str, base: str | None = None,
+                              state: str = "all") -> list[dict]:
+    # GET /repos/{owner}/{repo}/pulls?head={owner}:{head}&base={base}&state=all
+```
+
+This does not exist today — measured: the client has `get_pull` (`github_client.py:98`) and no by-head or list-pulls method at all (`:36-165`), so revision 4's "reconcile" had nothing to reconcile with. The `head` parameter must be qualified `owner:branch`; unqualified it silently matches nothing, which would make the reconciliation a no-op that always says "no PR exists" — a failure mode indistinguishable from the bug it fixes. `state=all` matters too: a closed PR on the same head still blocks creation with `422`, so a reconciliation that only looks at open PRs re-enters the same dead end.
+
+The `pr_ready` handler becomes:
+
+| Step | Action | On match |
+|---|---|---|
+| 1 | `item.pr_number` set? | return it — the cheap path, no network call |
+| 2 | `list_pulls_for_head(head=f"{owner}:{head_ref}", base=scope base)` | adopt the single match: record its number, run §5.6's checks against it, continue as if Deck had just created it |
+| 3 | more than one match | refuse: `409`, `status_note` naming every number found. Deck does not guess which PR is the item's. |
+| 4 | no match ⇒ `create_pull` | record `pr_number` |
+| 5 | `create_pull` raises timeout **or** returns `422` | re-run step 2 **once**. A match means the create actually landed (or a concurrent one did) ⇒ adopt it. Still nothing ⇒ refuse and leave the item dispatched for the monitor. |
+
+Step 5 is the crash-safety half: the same reconciliation runs *after* an ambiguous failure, so "the request timed out but GitHub committed" converges on the next attempt instead of diverging. Step 2 is the restart half. Both are the same call, which is why this is one method and not a special case per failure mode.
+
+**Adoption re-runs §5.6's checks, and that is not redundant.** A PR found by head/base was not necessarily created by Deck — an agent could have opened one by hand. So an adopted PR goes through the repository and head-branch checks (§5.6) before its number is recorded, and on an `app`-mode repo through the author check too. Adoption is not trust; it is discovery followed by the same verification a report gets.
+
+**Serialization: one item at a time.** Two concurrent `pr_ready` reports for one item can both pass step 1 and both reach `create_pull`. Deck already has the right lock for this and it needs no new mechanism: the **workspace lease token**. §3.5a requires the current lease token on `pr_ready`, and a lease is by construction exclusive to one attempt on one item (`github_workspace_service.py:127-136`). Two concurrent reports carrying the *same* token are the same agent retrying, which steps 1–5 already handle; a report carrying a stale token is refused with `409` before any GitHub call. So the exclusion is a consequence of §3.5a's authorization rule rather than an added lock.
+
+That leaves one genuine race — the same agent's two in-flight retries with the same valid token. An `asyncio.Lock` keyed on `item.id`, held across steps 1–5, closes it. Per-item, not global: a global lock would serialize PR creation across every repo behind one network round trip, the same mistake §5.3 avoided for token minting. This is single-process only, which is correct here because Deck is a single uvicorn process (measured: PID 2206652, one worker) — and if that ever changes, the reconciliation in steps 2 and 5 is what keeps the outcome correct without the lock. The lock is an optimization to avoid a wasted `422`; the reconciliation is the correctness argument.
+
+**Tests (offline, mocked client) in §5.8:**
+
+38. `pr_ready` with `item.pr_number` already set ⇒ returns it, and `create_pull` is **never called**. Assert the mock, not the response.
+39. `pr_number` NULL, one existing PR on the head ⇒ adopted, `create_pull` never called, `pr_number` recorded, and the item advances (`verifying` for code).
+40. `pr_number` NULL, **two** PRs on the head ⇒ `409`, `pr_number` stays NULL, both numbers appear in `status_note`.
+41. `pr_number` NULL, no PR ⇒ `create_pull` called exactly once, number recorded.
+42. **The crash window.** `create_pull` raises a timeout, and the reconciliation call that follows returns a PR ⇒ that PR is adopted, `create_pull` is **not** retried, and the item advances. This is the blocker-7 test.
+43. `create_pull` returns `422` and reconciliation finds the PR ⇒ adopted. Same path, different trigger — an implementation can easily handle one and not the other.
+44. `create_pull` raises a timeout and reconciliation finds **nothing** ⇒ `409`, `pr_number` NULL, `dispatch_status` still `dispatched` (not escalated — the monitor owns that decision).
+45. An adopted PR whose `head.repo.full_name` is a different repo ⇒ refused by §5.6's check, `pr_number` NULL. Adoption must not bypass verification.
+46. Reconciliation is called with a **qualified** head (`owner:branch`), a **normalized** base (`master`, from a scope whose `base_ref` is `origin/master`), and `state="all"`. Assert the call arguments; all three mistakes here silently produce "no match."
+
+| Mutant | Test that must fail |
+|---|---|
+| idempotency keyed only on `item.pr_number` (revision 4) | **42, 43** |
+| reconciliation before create, but not after a failure | **42, 43** |
+| `422` treated as a hard error with no reconciliation | 43 |
+| adopted PR skips §5.6's checks | **45** |
+| head passed unqualified, `state="open"`, or `base` passed as the raw refspec | **46** — and 39, which then finds nothing and creates a duplicate |
+| multiple matches ⇒ pick the lowest number | 40 |
+| lock global instead of per-item | — (not observable by test; review item, same as §3.7's `compare_digest` row) |
+
+#### 5.5.5 Title, body, and the draft flag are Deck's, and design PRs are not drafts
+
+Revision 4 left this underspecified in a way that cannot be implemented: step 3 said "creates the PR as a draft, with the `[Slot]` title prefix and body from §5.1," while the brief change said "the `[Slot]` prefix and trailers stay the agent's job" — and the report carries only `head_ref`. Deck cannot apply a prefix to a title it was never sent. The fourth review is right, and the draft half is worse than underspecified.
+
+**Deck composes both, from data it already holds.** The item row has everything needed:
+
+| Field | Value |
+|---|---|
+| title | `[<slot display_name>] <item.issue_title> (#<item.issue_number>)` |
+| body | `Closes #<issue_number>`, then the issue title, then a Deck provenance block: work item id, owner slot, dispatch nonce (§4.2), and `head_ref`. |
+| base | `scope.base_ref` |
+| head | the validated `head_ref` |
+| draft | **`item.issue_type != "design"`** |
+
+The `[Slot]` prefix stays a *commit* convention for the agent (§5.1's table is about commit trailers and authorship, which per-worktree `user.name` supplies) and becomes a *PR title* convention for Deck. Those were conflated in revision 4. Deterministic templates also make §5.5.4's reconciliation cheaper to reason about: an adopted PR's title need not match, because identity comes from head/base, not from text.
+
+**Why design PRs are not drafts.** Measured, and this is the part revision 4 got actively wrong:
+
+- A **draft PR cannot be approved or merged** on GitHub. Reviewers can comment, but the review-approval flow is unavailable until it is marked ready.
+- `report_pr_opened` sends a design item straight to `awaiting_human_review` and notifies the team (`github_verification_service.py:67-82`) — the notification says *"is ready for human review."*
+- The only caller of `mark_pull_ready_for_review` is `_promote_verified_item` (`github_verification_service.py:375+`, draft branch at `:384-385`), and `_process_review_item` returns early for design items (`:219+`, `if item.issue_type == "design"`). **Design items never reach the promotion path.**
+
+So under revision 4 a design PR would be created as a draft, announced as ready for human review, and then never marked ready by anything — a permanent draft awaiting an approval GitHub will not accept. The human's only recourse is to click "Ready for review" themselves, on a PR Deck told them was ready.
+
+`draft = item.issue_type != "design"` fixes it at the one place the distinction is known, using the same field `report_pr_opened` already branches on. Code PRs stay drafts because CI verification runs before a human should look, and the existing promotion path marks them ready — so for code items the draft state has an owner, and for design items it does not.
+
+**Tests in §5.8:**
+
+47. `pr_ready` on a **design** item ⇒ `create_pull` called with `draft=False`, item lands `awaiting_human_review`, and the team notification is sent. This is the blocker-8 test.
+48. `pr_ready` on a **code** item ⇒ `create_pull` called with `draft=True`, item lands `verifying`.
+49. Title and body are asserted verbatim against the template, including `Closes #<n>` and the dispatch nonce in the body.
+    49b. **`base` is normalized.** A scope with `base_ref = "origin/master"` (the live value) ⇒ `create_pull` receives `base="master"`. A scope left at the column default `origin/HEAD` ⇒ the default branch is resolved from the repository rather than a literal `HEAD` being sent. Two cases, because an implementation that only strips the prefix passes the first and fails the second.
+50. The agent's report is `{head_ref, lease_token}` only — a `title` or `body` field in the payload is ignored or rejected, not used. A caller-supplied PR body is an unaudited channel into a human-facing artifact.
+
+| Mutant | Test that must fail |
+|---|---|
+| `draft=True` unconditionally (revision 4) | **47** |
+| `draft=False` unconditionally | 48 |
+| draft keyed on `merge_policy` instead of `issue_type` | 47 (a design item under `merge_policy=auto`) |
+| title taken from the report payload | 49, 50 |
+| `Closes #<n>` omitted | 49 |
+| `scope.base_ref` sent to GitHub unnormalized | **49b** — and 46, whose base filter then matches nothing |
+| prefix stripped but `origin/HEAD` sent as a literal `HEAD` | **49b** |
+
+#### 5.5.6 The helper endpoint
 
 The credential helper survives intact: it exists for `git push`, which TEST E confirms does consume it. `POST /api/v1/agent-teams/git-credential` on the existing loopback-only backend:
 
@@ -1054,10 +1396,13 @@ Git does not resume asking the wiped-out helper. A `501` therefore does not degr
 |---|---|---|
 | App auth configured for this repo (id + key present, installation resolves) | identity + `useHttpPath` + empty-then-add Deck helper | Deck's installation token |
 | App auth **not** configured, or the installation lookup returns `404` | identity **only** — no `credential.*` lines whatsoever | the ambient helper, untouched — today's behavior |
+| installation lookup fails **transiently** (timeout, `5xx`, `403` rate limit) | **nothing is written and the dispatch does not proceed** — see §5.6a | — |
 
-Both rows write identity, because per-worktree `user.name`/`user.email` need no token and are worth having either way. Only the credential lines are conditional. The `501` response stays in the endpoint as a defensive answer to a stale config line (a helper left behind by a config the operator edited, or a race with a settings change), but it is no longer part of any expected flow, and its message says so: *"Deck App auth is not configured; this worktree should not have a Deck credential helper."*
+The first two rows write identity, because per-worktree `user.name`/`user.email` need no token and are worth having either way. Only the credential lines are conditional. The `501` response stays in the endpoint as a defensive answer to a stale config line (a helper left behind by a config the operator edited, or a race with a settings change), but it is no longer part of any expected flow, and its message says so: *"Deck App auth is not configured; this worktree should not have a Deck credential helper."*
 
 This is the same principle as §3.4a one layer down: a degraded mode that *looks* like a fallback but silently changes the failure surface is worse than a mode that never engages. Configure the helper only when it can answer.
+
+The third row is new in revision 5 and is the subject of §5.6a. Revision 4 folded transient failures into row 2 by writing "the installation lookup returns `404`" and leaving every other failure unstated — which in practice means an implementer's `try/except` lands on row 2 and a timeout silently selects the ambient credential.
 
 **When it is applied, and re-applied.** Identity is a function of the *current* owner, so it is written at lease time and rewritten whenever the owner changes:
 
@@ -1086,7 +1431,23 @@ The verification is still required, for two remaining cases:
 | head branch | `head.ref` does not match the expected `deck/<slot>/issue-<n>` pattern for this item | both paths |
 | author | `user.login` != the configured bot login | `pr_opened` only, and only when `github_app_bot_login` is set |
 
-The author check is the one that shrinks. On the `pr_ready` path Deck *is* the author, so checking it verifies only that GitHub attributed a PR to the credential that created it — a tautology. On the `pr_opened` path App auth is by definition unconfigured, so `github_app_bot_login` is empty and revision 3 already said the check is skipped there. The honest statement is that the author check now covers a narrow case: App auth configured *and* an agent using the legacy `pr_opened` report anyway. Keep it, because that combination means something has gone wrong, and refusing is the right answer to that.
+The author check is the one that shrinks. On the `pr_ready` path Deck *is* the author, so checking it verifies only that GitHub attributed a PR to the credential that created it — a tautology.
+
+**Revision 4 then wrote a false sentence here, and the fourth review is right to call the section contradictory.** It said: *"On the `pr_opened` path App auth is by definition unconfigured, so `github_app_bot_login` is empty."* Both halves are wrong, and they are wrong in the direction that disables a security check.
+
+- `github_app_bot_login` is a **global setting** (`config.py`, §5.3). Nothing links its value to whether *this repository* has a resolvable installation. An operator who configures App auth at all has it set, for every repo.
+- App auth is configured or not **per repository**, because the installation is resolved per repository (§5.3, and this is exactly why revision 2's single `github_app_installation_id` was removed). A `404` on `tizonia/tizonia-openmax-il` says nothing about `adrirubio/claude-deck`.
+
+So the two facts the sentence conflated are independent, and the case revision 4 declared impossible — `pr_opened` arriving while `github_app_bot_login` is set — is the *normal* case for any repo the App is not installed on. Under revision 4's reasoning an implementer would skip the author check there, or worse, treat a set `github_app_bot_login` as proof the PR should have come from `pr_ready` and refuse a legitimate report.
+
+Stated correctly: **the author check applies on the `pr_opened` path whenever `github_app_bot_login` is set, and it must compare against the right expectation for that repo.** For a repo with no App installation, the PR is authored by the human's ambient credential, so a bot-login mismatch is *expected* and must not refuse. The check therefore keys on the repo's auth mode, not on the global setting:
+
+| Repo auth mode (§5.6a) | `pr_opened` author check |
+|---|---|
+| `app` | require `user.login == github_app_bot_login`. An `app`-mode repo should be using `pr_ready`; a `pr_opened` report authored by anyone else means something is wrong, and refusing is right. |
+| `ambient` | **skipped.** There is no bot; the author is whoever the ambient credential is. Refusing here would break the path §5.3 promises not to break. |
+
+That table is only writable because a per-repo auth mode exists to key on. It did not in revision 4 — which is why the sentence had to invent a relationship between a global setting and a per-repo condition.
 
 A refusal is a `409` and leaves `pr_number` unset, so the item stays dispatched and the existing monitor handles it.
 
@@ -1114,6 +1475,70 @@ Two candidate fixes, and the second is the one to take:
 
 The brief never asks an agent to send `pr_number` with `in_progress`, so this removes a capability nothing documented uses. §5.8's test 29b asserts it.
 
+### 5.6a The auth mode is per repository, and a lookup failure is not an answer
+
+Two things the fourth review asked for, and both are needed for the same reason: several decisions in §5.4, §5.5.2 and §5.6 branch on "is App auth configured *here*," and revision 4 answered that question by re-running a network call and interpreting its failure inline. A network failure is not a configuration fact.
+
+**The mode, persisted on the scope.** `team_github_scopes` gains one column, on the existing ladder (`app/database.py:384-417`):
+
+```python
+if scope_columns and "github_auth_mode" not in scope_columns:
+    await conn.execute(
+        text("ALTER TABLE team_github_scopes ADD COLUMN github_auth_mode VARCHAR DEFAULT 'unknown' NOT NULL")
+    )
+```
+
+Three values, and the default is deliberately the one that means *no decision yet*:
+
+| Value | Meaning | Set by |
+|---|---|---|
+| `unknown` | never successfully resolved | the migration default, and every pre-upgrade row |
+| `app` | the App has an installation on this repo | a successful `GET /repos/{o}/{r}/installation` |
+| `ambient` | the App is definitively **not** installed on this repo | a `404` from that call, or `github_app_id` / `github_app_private_key_path` empty |
+
+The scope is the right owner because it already carries `repo_owner` / `repo_name` (`app/models/database.py:215-216`) and its unique constraint is `(preset_id, repo_owner, repo_name)` (`:235-237`) — one row per preset per repo, which is exactly the granularity of an installation question. Putting the mode in `config.py` would repeat revision 2's `github_app_installation_id` mistake in a new place: a global answer to a per-repo question.
+
+`unknown` is not a third behaviour. It means *resolve now* — and the resolution's outcome is what §5.4's table branches on. Once a repo resolves, the stored mode is what later reads use, so a transient failure cannot silently reclassify a repo that resolved fine an hour ago.
+
+**Transient failures fail closed.** The classification is by *outcome*, not by exception type at the call site:
+
+| Lookup outcome | Mode written | Dispatch |
+|---|---|---|
+| `200` | `app` | proceeds with the Deck helper |
+| `404` | `ambient` | proceeds with the ambient credential (today's behavior) |
+| `401` / `403` on the **App JWT** (bad key, revoked App) | **unchanged** | refuses — this is a misconfiguration, not an answer about the repo |
+| `403` rate limit, `5xx`, timeout, DNS, connection error | **unchanged** | refuses |
+
+The last two rows are the fix. Revision 4's text named only `404`, so any implementation with a `try/except httpx.HTTPError` around the lookup would treat a timeout as "not installed" and configure the worktree for the ambient credential — on a repo whose whole point is that Deck's bot must be the author. The push would succeed, the PR would be authored by the human, and §5.6's author check would either pass (mode read as `ambient`) or refuse *after* the work was done. A rate limit is the most likely trigger, and rate limits arrive precisely when the dispatch loop is busiest.
+
+Refusing looks like the rest of the fail-closed family: a `pending_reason` of `queued_auth_mode_unresolved` with the repo and the underlying error in `status_note`, the workspace lease **released**, and the item left queued for the next poll. **No new `dispatch_status` value** — same shape as `queued_ambiguous_sessions` (`github_dispatch_service.py:272`) and `queued_no_workspace` (`:281`).
+
+Releasing the lease is safe here and *not* the mistake §5.7 dissects: this refusal happens on a worktree, so the released row is re-acquirable and a later attempt can succeed once the lookup works. §5.7's case was different — there the row that came back was the *primary*, and releasing it guaranteed re-selecting the same row forever.
+
+**Where the resolution happens: once per dispatch, at lease time.** Not in the credential helper. The helper runs per git command (§5.4, measured) and must be fast and predictable; a helper that resolves an installation would fail a push on a rate limit that the dispatch already handled. The helper mints from a *known* installation id and returns `501` only for the stale-config case §5.5.6 describes.
+
+**A stale `app` mode is a visible refusal, not a silent fallback.** If the App is uninstalled from a repo after it resolved, the stored mode stays `app`, the helper's mint fails, and the push fails with Deck's helper returning nothing — a hard failure by §5.5.6's measurement. That is the correct outcome and the reason it is stated: the alternative, re-resolving on every mint and downgrading to `ambient` on a `404`, would let an uninstall silently change PR authorship mid-dispatch. An operator re-resolves by clearing the mode to `unknown` (a settings action, or simply re-saving the scope).
+
+**Tests (offline, mocked client):**
+
+30. Lookup returns `200` ⇒ mode `app`, worktree gets identity **and** the three `credential.*` lines.
+31. Lookup returns `404` ⇒ mode `ambient`, worktree gets identity and **no** `credential.*` line. Assert on the absence, by reading `config.worktree`.
+32. **Lookup times out ⇒ mode is unchanged (`unknown`), NO worktree config is written at all, `pending_reason == "queued_auth_mode_unresolved"`, the lease is released, and `dispatch_status` is a pre-existing value.** This is the blocker-6 test.
+33. Same for `500` and for a `403` rate-limit response — three separate cases, because an implementation can easily catch one and not the others.
+34. A repo already stored as `app` whose lookup then times out ⇒ **no** lookup-driven change of mode, and the dispatch proceeds using the stored mode. Distinguishes "fail closed on an unresolved repo" from "re-resolve every time," which are different bugs.
+35. `github_app_id` empty ⇒ mode `ambient` with **no** network call at all. Assert the mock was never invoked; a spurious call here would burn rate limit on every dispatch for operators who never configured the App.
+36. `pr_opened` on an `ambient` repo with `github_app_bot_login` set ⇒ accepted, author check skipped (§5.6). This is the false-sentence test: revision 4's reasoning would refuse it or skip for the wrong reason.
+37. `pr_opened` on an `app` repo with a non-bot author ⇒ `409`, `pr_number` unset.
+
+| Mutant | Test that must fail |
+|---|---|
+| every lookup exception treated as `404` ⇒ `ambient` | **32, 33** |
+| mode re-resolved on each use instead of read from the scope | 34 |
+| mode stored globally in `config.py` instead of per scope | 36 (two scopes, different modes, one setting cannot serve both) |
+| the lookup runs even with `github_app_id` empty | 35 |
+| author check keyed on `github_app_bot_login` being set rather than on the repo's mode | **36** |
+| worktree config written before the mode resolves | 32 (asserts the config file is absent, not just the refusal) |
+
 ### 5.7 A primary workspace is never given an agent identity
 
 No review raised this. I found it by running §5.4's recipe against a primary checkout instead of a worktree:
@@ -1131,45 +1556,56 @@ The human's identity is overwritten in `.git/config.worktree`, and because per-w
 
 This is not hypothetical. Live DB workspace 1 is `kind='primary'` at `/home/juan/work/repos/tizonia/tizonia-openmax-il` — the actual human checkout. It is `dispatchable=0` today, which is the only reason §5.4 is not already dangerous. But `register_workspace` accepts `kind="primary", dispatchable=True` (`github_workspace_service.py:361`, `:382`) and the lease query filters on `dispatchable` alone (`:117`), so a single flag change would hand a dispatched agent the human's checkout and rewrite their git identity in it.
 
-**Decision: refuse.** When a lease resolves to a `kind == "primary"` workspace, the dispatch refuses rather than writing identity:
+**Decision: a primary workspace is never leased for dispatch.** The check moves earlier than revision 4 put it — into the selection query rather than into a refusal after selection:
 
 - No identity config, no credential helper, no `GH_TOKEN` — the human's checkout is never modified by PR2, at all.
-- The refusal is a `pending_reason` on the item naming the workspace, consistent with the existing fail-closed rule from G2/G3: when Deck cannot act safely, it declines and reports rather than proceeding.
-- **No new `dispatch_status` value.** This is a `pending_reason`, following `queued_ambiguous_sessions`.
+- **No new `dispatch_status` value and no new `pending_reason`.** When no dispatchable non-primary workspace exists, the existing `queued_no_workspace` path already says the right thing; the paragraph below explains why revision 4's `queued_primary_workspace` is withdrawn. This is consistent with the existing fail-closed rule from G2/G3 — when Deck cannot act safely it declines and reports — but it reuses the existing report rather than adding one.
 
-**Refusing is not enough — the lease must be released, and revision 3 omitted that.** The third review caught it and the code confirms it. `acquire` writes the lease *before* returning (`github_workspace_service.py:127-136`), and its very first action on the next call is:
+**How to refuse: exclude primary from the dispatch scan. Revision 4's refuse-and-release does not work, and the reasoning that chose it was wrong.**
 
-```python
-# github_workspace_service.py:103-109
-held = (await db.execute(
-    select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
-)).scalar_one_or_none()
-if held is not None:
-    return held
-```
-
-So a refusal that leaves the lease in place means every later dispatch attempt for that item gets the **same primary workspace** back, refuses again, and never reaches the `dispatchable` scan at `:111-122` that would have found a worktree. The item is stuck on a `pending_reason` forever while a perfectly good worktree sits idle. Worse, the primary workspace stays leased, so it is excluded from `leased_item_id.is_(None)` for every *other* item too.
-
-The refusal therefore releases immediately, using **`release_by_token`** (`:178-194`) and not `release`:
+Revision 4 released the lease and continued, expecting the next attempt to find a worktree. The fourth review says that still loops forever, and the code agrees. `acquire`'s scan is:
 
 ```python
-if workspace.kind == "primary":
-    item.pending_reason = "queued_primary_workspace"
-    item.status_note = f"workspace {workspace.id} ({workspace.path}) is a primary checkout"
-    await github_workspace_service.release_by_token(
-        db, item.id, lease_token=workspace.lease_token
-    )
-    await db.commit()
-    continue
+# github_workspace_service.py:111-122
+select(GithubWorkspace).where(
+    GithubWorkspace.scope_id == scope.id,
+    GithubWorkspace.enabled.is_(True),
+    GithubWorkspace.dispatchable.is_(True),
+    GithubWorkspace.leased_item_id.is_(None),
+).order_by(GithubWorkspace.id)
 ```
 
-`release_by_token` is the right call for the reason its own docstring gives: item identity alone cannot distinguish this acquisition from a replacement owner's live lease. The token is in hand — `acquire` just minted it at `:130` — so there is no reason to use the blunter `release`, and using it would reintroduce the stale-report hazard that `release_by_token` exists to prevent. This follows the existing refusal shape at `github_dispatch_service.py:317-323`, where the `ValueError` launch path escalates and then releases.
+`release` restores `leased_item_id = None` (`:147-164`), so after a release the primary row matches the filter again — and `order_by(id)` puts a lower-id primary first, every time. The next attempt leases the same primary, refuses, releases, and the item never reaches the worktree. Releasing changes *nothing* about selection; it only makes the loop tidy. Revision 4's test 28c ("the next attempt reaches a worktree") **cannot pass** against revision 4's own design, which is exactly the defect class my own memory warns about: a planned test that is silent against the implementation it accompanies.
 
-`queued_primary_workspace` is a new **`pending_reason`**, joining `queued_no_workspace` (`github_dispatch_service.py:281`) and `queued_ambiguous_sessions` (`:272`). Not a `dispatch_status`, not an `escalation_reason`.
+**The fix is the alternative revision 4 rejected**, and it rejected it for a stated reason that is false. Revision 4 said narrowing the scan "would change behavior for callers that are not doing identity work, because `acquire` is also how Deck leases a primary checkout for observation purposes." Measured: `acquire` has **exactly one non-test caller** — `github_dispatch_service.py:277`, the dispatch path. There is no observation caller. Nothing else in `app/` calls it. The claim was invented to justify a choice, and it is retracted.
 
-Primary workspaces therefore become undispatchable *for identity purposes* under PR2. That is the intended trade: `kind="primary"` exists so Deck can observe and lease a human's checkout, and `release_blocker` already treats it as a special case it must not reset (`:200`, `:231`). Treating it as somewhere an agent may assume an identity was always the wrong reading of that column.
+So: `acquire` gains a keyword-only `allow_primary: bool = False`, and its scan excludes `kind == "primary"` unless the caller opts in:
 
-**A cleaner alternative exists and is deliberately not chosen.** `acquire`'s scan could simply exclude `kind == "primary"` at `:111-122`, so a primary workspace is never leased for dispatch at all and no refusal is needed. That is tempting and it is the wrong layer: `acquire` is also how Deck leases a primary checkout for the *observation* purposes that column exists for, and narrowing the query would change behavior for callers that are not doing identity work. Refuse-and-release keeps the change inside the dispatch path where PR2's concern lives. Noted so a reviewer sees the fork was considered.
+```python
+async def acquire(self, db, scope, item, *, allow_primary: bool = False):
+    ...
+    conditions = [
+        GithubWorkspace.scope_id == scope.id,
+        GithubWorkspace.enabled.is_(True),
+        GithubWorkspace.dispatchable.is_(True),
+        GithubWorkspace.leased_item_id.is_(None),
+    ]
+    if not allow_primary:
+        conditions.append(GithubWorkspace.kind != "primary")
+```
+
+The parameter exists rather than a bare exclusion so a future observation caller has a documented, explicit door — and so the default is the safe one. Dispatch never passes it.
+
+Two consequences worth stating, because they are why this is better and not merely different:
+
+- **A primary workspace is never leased for dispatch at all**, so there is no window in which the human's checkout is leased-but-refused, and no `.git/config.worktree` write can precede the check. Revision 4's version had to be careful about ordering; this version has nothing to order.
+- **The existing `dispatchable` filter and this one are independent.** Live workspace 1 is `dispatchable=0`, which already keeps it out — but `register_workspace` accepts `kind="primary", dispatchable=True` (`:361`, `:410`), and the route defaults `dispatchable` from `kind` only when the caller omits it (`agent_teams.py:600-603`). An operator passing `dispatchable: true` explicitly re-opens the hole. The `kind` check does not depend on the flag being right.
+
+**When no dispatchable non-primary workspace exists**, `acquire` returns `None` and the **existing** `queued_no_workspace` path handles it (`github_dispatch_service.py:281`) — no release, no new refusal branch, no new `pending_reason`. Revision 4's `queued_primary_workspace` is therefore **withdrawn**: it existed only to describe a refusal that no longer happens. That also removes the `release_by_token`-versus-`release` question from this section entirely, along with the mutation row revision 4 could not test.
+
+An operator who has explicitly marked a primary workspace `dispatchable` and wonders why nothing dispatches needs to be told. `queued_no_workspace`'s `status_note` gains a count when primaries were skipped: *"no dispatchable worktree available; 1 primary checkout was skipped (agents are never given a primary checkout — see §5.7)."* This is a message change, not a state change.
+
+Primary workspaces are therefore undispatchable *for identity purposes* under PR2. That is the intended trade: `kind="primary"` exists so Deck can observe a human's checkout, and `release_blocker` already treats it as a special case it must not reset (`:200`, `:231`). Treating it as somewhere an agent may assume an identity was always the wrong reading of that column.
 
 ### 5.8 Tests
 
@@ -1181,21 +1617,22 @@ Primary workspaces therefore become undispatchable *for identity purposes* under
 6. `pyjwt[crypto]` and `cryptography` are declared in `requirements.txt`.
 7. With App auth unconfigured, dispatch still works on the existing `github_token` path.
 8. `report_pr_opened` refuses a PR in a different repo (`409`, `pr_number` unset).
-9. `report_pr_opened` refuses a PR whose author is not the bot, when App auth is configured.
+9. `report_pr_opened` refuses a PR whose author is not the bot **on an `app`-mode scope** (§5.6a). Keyed on the scope's `github_auth_mode`, not on `github_app_bot_login` being non-empty — tests 36 and 37 are the pair that pin this distinction.
 10. `report_pr_opened` refuses a PR whose head branch does not match the item's expected branch.
-11. `report_pr_opened` skips the author check when App auth is unconfigured.
-12. Brief contains the `[Slot]` prefix, the `deck/<slot>/issue-<n>` branch instruction, and both trailers — and instructs `pr_ready` with `head_ref`, not `pr_opened` with a number, when App auth is configured.
+11. `report_pr_opened` skips the author check on an **`ambient`-mode** scope even when `github_app_bot_login` is set. This is the false-sentence test; see §5.6 and test 36.
+12. Brief contains the `[Slot]` prefix, the `deck/<slot>/issue-<n>` branch instruction, and both trailers — and instructs `pr_ready` with `head_ref`, not `pr_opened` with a number, on an `app`-mode scope. It must **not** claim the agent owns the PR title (§5.5.5).
 
 Deck creates the PR (§5.5.2):
 
 13. `pr_ready` with a valid `head_ref` ⇒ Deck calls `POST /repos/{o}/{r}/pulls` **once**, records the returned `pr_number`, and the item lands in `verifying` (code) or `awaiting_human_review` (design), matching `report_pr_opened`'s existing behavior.
 14. `pr_ready` with a `head_ref` outside the item's expected `deck/<slot>/issue-<n>` pattern ⇒ `409`, **no** pulls call made, `pr_number` unset. Assert the call was not made, not merely the status code.
 15. `pr_ready` for a ref absent on the remote ⇒ refuses with "branch not found," no pulls call.
-16. `pr_ready` twice for the same item ⇒ one pulls call total, second returns the existing `pr_number`.
-17. With App auth unconfigured, `pr_ready` refuses and `pr_opened` still works — the legacy path is intact.
+16. `pr_ready` twice for the same item ⇒ one pulls call total, second returns the existing `pr_number`. Test 38 is the stronger form of this (it asserts the reconciliation call is skipped too); keep both, since 16 is the behavior an operator sees and 38 is the mechanism.
+17. On an **`ambient`-mode** scope, `pr_ready` refuses and `pr_opened` still works — the legacy path is intact.
+17b. `pr_ready` from the owner with a **stale lease token** ⇒ `409` before any GitHub call (§3.5a test 7f asserts the same rule from the authorization side; this one asserts the mock was never invoked).
 18. `create_pull` sends the installation token, and the token appears in no log record (extends test 5 to the new call site).
 
-Helper endpoint (§5.5.3):
+Helper endpoint (§5.5.6):
 
 19. `useHttpPath` is set, and the helper receives `path=` on stdin. Without it the helper gets only protocol and host — the measured default.
 20. The helper refuses (`400`) when `path` is absent rather than guessing a repo.
@@ -1205,14 +1642,15 @@ Helper endpoint (§5.5.3):
 24. On that same worktree, the ambient global helper is still reachable — `git config --get credential.https://github.com.helper` returns the user's value. Proves the empty-then-add wipe was not applied.
 25. No pane environment contains a token: assert the `extra_env` dict passed to `spawn_session` has no `GH_TOKEN` and no `GITHUB_TOKEN` key.
 
-Owner-change and primary (§5.5.3, §5.7):
+Owner-change and primary (§5.5.6, §5.7):
 
 26. `accept_handoff` rewrites the worktree identity to the new owner slot; a commit made after the handoff carries the new owner's name.
 27. Release removes the helper line and the identity from the worktree config.
-28. **A lease resolving to a `kind="primary"` workspace refuses**, sets `pending_reason = "queued_primary_workspace"`, and leaves `.git/config.worktree` absent or unchanged in that checkout. Assert on the *file*, not only on the refusal: a route that writes first and refuses after would pass a status-code-only test.
-    28b. **The lease is released on refusal.** After the refusal, `get_leased_workspace(item.id)` is `None` and the primary workspace's `leased_item_id` is NULL. This is the blocker-8 second half.
-    28c. **The next attempt reaches a worktree.** With a primary workspace at a lower id than a dispatchable worktree in the same scope, dispatch refuses on the first pass and **succeeds on the second**, leasing the worktree. Against revision 3's no-release design this loops forever on the primary — and 28b alone would not catch it, because a test that only asserts the lease is gone passes even if the retry path is broken elsewhere.
-29. No new `dispatch_status` value is introduced — assert the item's `dispatch_status` is one of the existing set, and that `queued_primary_workspace` appears only in `pending_reason`.
+28. **A `dispatchable` primary workspace at a lower id than a dispatchable worktree is skipped, and the worktree is leased on the *first* attempt.** This is the blocker-1 test and it replaces revision 4's 28/28b/28c entirely. Build both rows with `dispatchable=True` — the point is that the `kind` check does not depend on the flag — assert `acquired.id == worktree.id`, and assert `.git/config.worktree` is absent in the primary checkout. Against revision 4's refuse-and-release design this test fails on the first assertion, because the primary is leased first and only released afterwards. Against today's code it fails too: the primary wins `order_by(id)`.
+    28b. **A primary is never leased even momentarily.** Same fixture, and assert the primary row's `leased_item_id` was NULL throughout: `leased_at` and `lease_token` are still NULL after the acquire, and `released_at` is still NULL. A design that leases-then-releases leaves `released_at` and a cleared `lease_token` behind, so this distinguishes the two designs on the row state rather than on the outcome.
+    28c. **Only a primary available ⇒ `queued_no_workspace`, not a loop.** With a `dispatchable` primary as the *only* workspace in scope, `acquire` returns `None`, the item takes the existing `queued_no_workspace` path, and its `status_note` names the count of skipped primaries. Then add a worktree and re-run: it dispatches. Proves the skip is not a dead end.
+    28d. **`allow_primary=True` still leases it.** The opt-in door works, so a future observation caller is not silently broken — and the default remains the safe one. One line, and it is the only test that may pass a primary.
+29. No new `dispatch_status` value **and no new `pending_reason`** is introduced by §5.7 — assert the item's `dispatch_status` is one of the existing set and its `pending_reason`, when set, is one of `queued_no_workspace` / `queued_ambiguous_sessions`. Revision 4's `queued_primary_workspace` is withdrawn; this test is what stops it coming back.
     29b. **`in_progress` no longer writes `pr_number`** (§5.6). Post `status="in_progress"` with `pr_number=9999` on an item whose `pr_number` is NULL ⇒ the report succeeds (it is a liveness ping), `last_nudge_at` is cleared, and `pr_number` is **still NULL**. Then assert the consequence that made it matter: `_ack_satisfied(item)` is still `False`, so the leader-ack gate was not silenced. Against today's code this test fails on both assertions.
 
 **Mutation requirement.**
@@ -1224,8 +1662,10 @@ Owner-change and primary (§5.5.3, §5.7):
 | configure the Deck helper unconditionally, relying on `501` to fall back | **23, 24** |
 | write the empty-then-add wipe without the Deck helper line | 24 |
 | primary check applied after the config write | **28** |
-| refuse the primary workspace without releasing the lease (revision 3's bug) | **28b, 28c** |
-| release with `release(db, item.id)` instead of `release_by_token` | — (not behaviourally distinguishable here; enforce in review, per §5.7's reasoning) |
+| lease the primary and release it instead of excluding it from the scan (revision 4's bug) | **28, 28b** |
+| exclude primary by `dispatchable` alone instead of by `kind` | **28** — the fixture sets `dispatchable=True` on both rows |
+| `allow_primary` defaults to `True` | 28 |
+| drop the `allow_primary` parameter entirely (hard exclusion) | 28d |
 | trust the agent's `pr_number` on the `pr_ready` path | 13 |
 | accept any `head_ref` without pattern-matching it | **14** |
 | leave `in_progress`'s `pr_number` write in place (today's code) | **29b** |
@@ -1234,7 +1674,9 @@ Owner-change and primary (§5.5.3, §5.7):
 | handoff leaves the previous owner's identity in place | 26 |
 | `GH_TOKEN` reintroduced into `extra_env` "for convenience" | 25 |
 
-The `release_by_token` row is deliberate, in the same spirit as §3.7's `compare_digest` row. In a single-attempt test the two calls behave identically, so a test asserting the difference would have to construct a second concurrent acquisition — which is worth doing if it is cheap, and is honestly labelled a review item if it is not. Claiming a test covers it when it does not is the failure mode this table exists to prevent.
+**Tests 30-50 live in this file too**, and are specified where their design is argued rather than repeated here: 30-37 in §5.6a (per-repo auth mode and transient-failure refusal), 38-46 in §5.5.4 (`pr_ready` reconciliation), 47-50 plus 49b in §5.5.5 (title, body, draft, and the base-ref normalization). Their mutation tables are with them, for the same reason: a mutant list separated from the guard it describes goes stale silently.
+
+Revision 4 closed this section with a paragraph defending a `release_by_token` mutation row. That row is **gone** — §5.7 no longer leases the primary at all, so there is no release call to distinguish and no untestable guard to excuse. The paragraph is deleted rather than reworded, because the honest summary is simply that the design change removed the problem.
 
 ### 5.9 Deployment (gated, manual, not part of the PR)
 
@@ -1247,15 +1689,17 @@ Restoring tizonia branch protection is the hard gate the soak log records. The b
 - **`route_item`'s fallback is unchanged.** Refusing to route to the leader strands work when no specialist matches; the enforced gate makes leader ownership *safe* rather than forbidden.
 - **No ack timeout changes.** No softening, no tiering, no idle monitor — that is #280, and mixing it in risks the C1 invariant.
 - **No new `dispatch_status` values.**
+- **Authorizing `/dispatch-status` by anything other than team role.** §3.5a's matrix is owner / leader / handoff-target, derived from columns that already exist on the item. It has no notion of a delegated reporter, an operator reporting on an agent's behalf, or a per-branch permission grant. An operator who needs to move an item does it through the existing retry and escalation endpoints, not by impersonating a slot.
 - **Autonomy stays off** (`autonomy_enabled = 0`, both presets). No PR here enables it, and none restores branch protection.
 - **Confidentiality of mail reads.** PR0 authenticates identity-bearing *writes*, plus `GET /agent/inbox` because that endpoint mutates (§3.5). `GET /team` and `GET /messages` stay open; any agent can still read the roster and message list. That is a real gap and a separate decision.
 - **Per-slot bot accounts** — considered, rejected in §5.1.
 - **Co-resident pane compromise.** Every pane runs as one user with no `hidepid`, so any pane can read any other's `/proc/<pid>/environ` — measured, 123 entries including `CLAUDE_DECK_TEAM_SLOT_ID`. §3.3's binding defeats *claiming* another slot; it does not defeat a pane that reads another's memory or files. Closing this needs OS-level isolation (separate users, `hidepid=2`, or containers) and is a hosting decision, not a code change.
 - **Remotely hosted Deck.** §3.6's UI self-provisioning depends on the loopback gate, so it only works when browser and backend share a host. That is the only configuration Deck supports today (CORS is pinned to `localhost:5173`). Serving Deck remotely needs real user authentication — a project of its own.
-- **Primary-workspace dispatch under PR2.** §5.7 refuses rather than assigning an identity in a human's checkout. Making primary workspaces safely dispatchable would need a way to scope git identity to a process rather than a checkout, which git does not offer for commits an agent makes itself.
+- **Primary-workspace dispatch under PR2.** §5.7 excludes a `kind == "primary"` workspace from the dispatch scan rather than assigning an identity in a human's checkout. Making primary workspaces safely dispatchable would need a way to scope git identity to a process rather than a checkout, which git does not offer for commits an agent makes itself. The `allow_primary=True` door exists for a future observation caller; nothing in this spec passes it.
 - **Absence of any reachable credential in a pane.** §8 criterion 10 replaces revision 3's "no pane ever holds a token." An agent that pushes can read what it pushes with, so the guarantee is short-lived + repo-scoped + unpersisted + not in pane env. Removing even that reach would mean Deck performing the push on the agent's behalf — plausible, larger than PR2, and not attempted here.
 - **`gh` in agent panes.** PR2 makes `gh` unnecessary for the dispatch flow, but does not remove or restrict it. A pane with the user's `gh` already authenticated can still act as the human; that is pre-existing, unchanged by this spec, and would need the same OS isolation as co-resident compromise.
 - **Auto-merge of PRs Deck did not create.** The `pr_opened` legacy path still records an agent-supplied number, verified by §5.6 but not created by Deck. Requiring Deck-created PRs for auto-merge would be a stronger invariant; it is not adopted because it would make App provisioning a hard prerequisite for any autonomy at all.
+  Note that §5.5.4's reconciliation makes "created by Deck" a weaker distinction than it sounds: on the crash path Deck **adopts** a PR whose creation it cannot confirm, because from GitHub's side the two are indistinguishable — the PR exists on the expected head and base, and there is no record of which process's `POST` produced it. Adoption therefore re-runs §5.6's repo/branch/author checks rather than trusting the head match, and the result is exactly as trustworthy as the `pr_opened` path plus the head/base agreement. Making auto-merge require provable Deck authorship would need an idempotency key GitHub does not offer for pull creation.
 
 ## 7. Deferred
 
@@ -1266,6 +1710,8 @@ Restoring tizonia branch protection is the hard gate the soak log records. The b
 - **Non-tmux agents.** §3.3 mints an unbound token when the caller has no tmux ancestor, so such a session can send mail but can never approve. Binding them needs a different channel (a launch-issued code, or OS credentials) and no such agent exists in this deployment today.
 - **A decision UI for the operator.** §4.3a gives the leader a tool and exposes `decision` in the API (§4.6), but adds no approve/reject control to the Deck frontend. An operator who wants to approve does it by merging, per §3.6. A UI button would need the operator to act *as* the leader member, which is exactly the actor/member distinction PR0 draws — worth doing, and a separate decision.
 - **Pruning per-tab UI actors.** §3.6 accumulates one `mail_external_actors` row per operator tab. Inert, but noisy in the roster over months. A `last_used_at` sweep is the obvious fix and is not in PR0.
+- **Re-resolving a scope's auth mode.** §5.6a writes `github_auth_mode` at lease time when the lookup answers, and leaves it `unknown` when it does not. Nothing re-resolves a mode that is *already* set: a scope recorded `ambient` before the App was installed keeps dispatching under the human's credential until an operator clears the column. §5.6a explains why this is the safe direction (a stale `app` is caught by the author check; a stale `ambient` is merely the pre-PR2 behavior), but the operator has no control for it — no UI, no endpoint, only a manual `UPDATE`. A "re-check auth mode" action belongs with the workspace UI and is not in PR2.
+- **A cross-process lock for PR creation.** §5.5.4 serializes creation with the lease token plus a per-item `asyncio.Lock`, which is correct for one uvicorn process (today: PID 2206652, single worker). Two workers or two hosts would each hold their own lock, and the reconcile-before-create step becomes the only defense — it narrows the window to the round trip between `list_pulls_for_head` and `create_pull` but does not close it. Closing it needs a DB-level advisory lock or a unique constraint on (item, head), and SQLite gives neither cheaply. Stated so a future multi-worker deployment knows what it inherits.
 - **Retiring the `pr_opened` path.** Once App auth is provisioned everywhere, `pr_ready` makes `pr_opened` and most of §5.6 dead code. Removing it is a cleanup that should wait until no scope depends on the ambient-credential flow.
 
 ## 8. Success criteria
@@ -1277,7 +1723,7 @@ Restoring tizonia branch protection is the hard gate the soak log records. The b
 3. Only the designated leader member's own answer can approve — not any non-owner, and not a member with no slot.
    3b. **A reply is not an approval.** Only an explicit `decision = 'approved'` written by the leader satisfies the gate; live rows 82 and 92 — the Leader refusing in prose — are refused by regression tests, and row 40's genuine approval is accepted despite containing negative words.
 4. Evidence from a previous dispatch attempt cannot approve the current one, across both retry and handoff.
-5. Every recorded ack names its approver and the message that proves it, and all four columns are visible to operators and to `deck_list_work_items`.
+5. Every recorded ack names its approver, the message that proves it, and the round it belongs to, and all five columns are visible to operators and to `deck_list_work_items`.
 6. Auto-merge cannot happen without a valid distinct approval, and failing that check falls back to human merge stickily, without escalating.
 7. A bot-authored PR is approvable by `juanrubio`, so branch protection can be restored to `required_reviews=1, enforce_admins=true`.
 8. Commits, PR titles, and branch names identify which agent produced them, on the reuse path as well as the spawn path.
@@ -1285,5 +1731,12 @@ Restoring tizonia branch protection is the hard gate the soak log records. The b
 10. **No pane holds a *persistent* GitHub credential.** No `GH_TOKEN`, no `GITHUB_TOKEN`, nothing in `extra_env`, nothing written to disk in the working tree, and no log or brief containing the App private key. The credential an agent can reach is minted at use time, scoped to one repository, expires within the hour, and dies with the lease.
     **This is deliberately weaker than revision 3's claim** that "no pane ever holds a token." That was not achievable: git receives the helper's plaintext password on every push, and an agent with a shell can run `git credential fill` and read it. Since the agent must push, some reachable credential is unavoidable. What PR2 guarantees is the four properties above — short-lived, repo-scoped, unpersisted, not inherited in the pane environment — which is what actually bounds the damage. Claiming absence would have been a claim a reviewer could disprove in one command, and a success criterion that can be disproved in one command is worse than a modest one that holds.
 11. Deploying PR0 changes no behavior until the operator enables enforcement; PR1's gate refuses to merge while enforcement is off, **and no approver evidence is recorded during that period** — so flipping the flag cannot legitimize anything written before it.
-12. A human's primary checkout is never given an agent git identity, and refusing it does not strand the item: the lease is released and the next attempt reaches a real worktree.
-13. Every new guard is shown to bite by mutation, and the guards that cannot be tested (`hmac.compare_digest`, `release_by_token` vs `release`) are named as review items rather than claimed as covered.
+12. A human's primary checkout is never given an agent git identity, and refusing it does not strand the item: a primary is **excluded from the dispatch scan**, so it is never leased at all, and the next dispatchable worktree is leased on the first attempt.
+13. Every new guard is shown to bite by mutation, and the guards that cannot be tested (`hmac.compare_digest`, a per-item lock's global/per-key distinction) are named as review items rather than claimed as covered.
+14. **Every `/dispatch-status` branch states who may report it.** Authentication is not authorization: an agent that is not the item's owner, leader, or handoff target is refused, the refusal happens before any state change, and the two GitHub-writing branches additionally require the current lease token (§3.5a).
+15. **A rejection has a workable next round.** After `revision_requested` the owner can open a new approval request, the previous round's approval no longer satisfies the gate, and `max_approval_rounds` still bounds the loop (§4.3a.1).
+16. **A tmux pane Deck did not launch keeps working.** It registers, mints an unbound token, and can send mail; it can never approve. `bind_pending` is reserved for a pane that claims a Deck launch (§3.3a).
+17. **A transient GitHub failure never silently changes authorship.** An unresolved installation lookup refuses the dispatch and leaves the workspace unconfigured, rather than falling back to the human's ambient credential (§5.6a).
+18. **A crash between `create_pull` and the commit does not produce a second PR or an orphaned one.** The retry reconciles by head/base, adopts the existing PR through §5.6's checks, and records its number (§5.5.4).
+19. **A design PR is immediately reviewable.** It is created non-draft, because nothing in the design path would ever mark it ready, and a draft PR cannot be approved (§5.5.5).
+20. **Deck's PR calls speak GitHub's vocabulary, not git's.** `scope.base_ref` is a refspec (live value `origin/master`, column default `origin/HEAD`) and every existing consumer treats it as one. It is normalized to a branch name before it reaches `create_pull` or `list_pulls_for_head`, in one shared helper, so the base filter cannot silently match nothing (§5.5.5).
