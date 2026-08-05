@@ -58,9 +58,10 @@ class ProviderLaunchError(ValueError):
 
 def argv0_name(command: str) -> str:
     """Return the executable basename from a command or argv0 string."""
-    if not command:
+    parts = command.split() if command else []
+    if not parts:
         return ""
-    return Path(command.strip().split()[0]).name.lower()
+    return Path(parts[0]).name.lower()
 
 
 def has_binary_descendant(
