@@ -1994,6 +1994,44 @@ async def test_ambiguity_gate_is_stable_when_discovery_blips(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_check_holds_when_discovery_raises(db, monkeypatch):
+    """strict=True converts a discovery exception into a hold, not a dispatch."""
+    preset, slots, scope = await _team(db)
+    owner = next(slot for slot in slots if slot.display_name == "Backend SME")
+    await _seed_observed_panes(db, preset, owner, [("%1", "w:0.1")])
+
+    def raises_like_a_failed_fork():
+        raise OSError(12, "Cannot allocate memory")
+
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        raises_like_a_failed_fork,
+    )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=954,
+        issue_title="discovery exploded",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=_launcher_that_must_not_run,
+        issue_labels_by_number={954: ["area:backend"]},
+    )
+
+    await db.refresh(item)
+    assert item.pending_reason == "queued_ambiguous_sessions"
+    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 1
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_check_allows_one_nudgeable_pane(db, monkeypatch):
     preset, slots, scope = await _team(db)
     owner = next(slot for slot in slots if slot.display_name == "Backend SME")
