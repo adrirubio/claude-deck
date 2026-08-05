@@ -542,6 +542,9 @@ class AgentMailService:
         for session in result.scalars().all():
             if session.session_key in active_observed_keys:
                 continue
+            # Absence from one discovery pass is not evidence of death.
+            if self._pid_is_running(session.pid):
+                continue
             affected_member_ids.add(session.member_id)
             await db.delete(session)
 
