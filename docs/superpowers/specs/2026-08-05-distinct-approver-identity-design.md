@@ -1,7 +1,7 @@
 # Distinct Approver Identity — Design (Findings #1 and #6)
 
 **Date:** 2026-08-05
-**Status:** Design, revision 6 — revised after a fifth implementer review of `cdd1eb5` found five further blockers, all confirmed against source, live data, or measurement. **Not yet approved for implementation planning.**
+**Status:** Design, revision 7 — revised after a sixth implementer review of `3b204cd` found four further blockers, all confirmed against source or measurement. **Not yet approved for implementation planning.**
 **Closes:** Finding #1 (Leader self-ack), Finding #6 (agent commit identity collides with human reviewer identity)
 **Both are Window 2 gates** — `merge_policy=auto` must not be enabled until PR0 and PR1 land.
 
@@ -83,13 +83,27 @@ Revision 6 also closes the same hole one layer downstream, found while confirmin
 
 **A third retraction, and it is mine rather than a reviewer's.** Revision 5 justified `state="all"` with "a closed PR on the same head still blocks creation with `422`." That is an empirical claim about GitHub's behaviour, stated without measurement, and GitHub's own reference does not support it (checked). It happens to be load-bearing for nothing — §5.5.4a's ladder is correct either way — but it was written as though it had been verified. Retracted and replaced with two reasons this design controls (§5.5.4). Same failure as the two retractions above: **a confident sentence about behaviour nobody measured**, this time about a third party's API rather than about our own callers. The rule generalizes — if a design decision rests on how an external system behaves, either measure it or write the design so the answer does not matter.
 
-**Three measurements revision 6 rests on, so a reviewer can re-run them rather than trust them.** Both were written as throwaway pytest files against in-memory SQLite with a fake client, no network:
+**What revision 7 changed.** The sixth review confirmed all five revision-6 blockers closed and found four more. All four confirmed against source or measurement; **none refuted**. They share a shape too, and it is a narrower one than revision 6's: each is a place where a *new* rule from revision 6 meets *existing* transaction, retry, legacy, or fixture behaviour and the two do not compose. Revision 6's seams were between sections of the spec. Revision 7's are between the spec and the repository.
+
+| # | Revision 6 said | Measured reality | Now |
+|---|---|---|---|
+| 1 | `advance_approval_round` clears, increments, commits the decision, then *maybe* escalates — one sequence with a conditional tail | the cap case does not fit that sequence at all (it clears nothing and increments nothing), so test 31b asked for a fixture that cannot exist. Worse, on the cap path `escalate` has **no commit of its own** and rolls back on broadcast failure (`:1017-1018`) — measured: rejection durable on disk, escalation only in memory, `dispatch_status='dispatched'` with `ack_received_at` **still set** | **two explicit branches** (§4.3a.1). Branch A: one commit, no escalation. Branch B: decision row + escalated state in the **same** commit, notification strictly after it, requiring a no-commit mail write. Tests 31b / 31b-1 |
+| 2 | recovery from `pr_closed_unmerged` is `deck_retry_work_item` | the branch `deck/<slot>/issue-<n>` is a pure function of slot and issue, so the retry pushes the **same head**, rediscovers the **same** closed PR, and escalates again. Deck refuses to reopen it and refuses to create beside it — the documented recovery was an infinite loop through a human | the head is scoped to the **attempt**: `deck/<slot>/issue-<n>/<nonce8>`. `dispatch_nonce` is re-minted at the dispatch site a retried item re-enters (`:231` → `:344`), so attempt 2 pushes a fresh head no PR is attached to. No new column (§5.5.4a). Test 46h runs the full cycle |
+| 3 | a PR Deck finds is classified before use (criterion 22) | true on the `pr_ready` path and in the verifier, **false on the legacy `pr_opened` path**: `report_pr_opened` (`github_verification_service.py:44-86`) reads neither `merged` nor `state`, and its design branch broadcasts *"Design PR ready for review"* at `:66-81` before any verification. Same false-ask defect §5.5.4a removed, one stage earlier than §5.6b reaches | **one shared `_classify_pull` helper, three call sites** — reconciliation, `pr_opened`, and the verifier. Classification runs after the repo/head checks and before any write or mail (§5.6). Tests 11b-11e |
+| 4 | test 29 scans "items left behind by every other test in this file" | **cannot run.** `tests/agent_teams/conftest.py:15-23` builds a fresh in-memory engine per test, and two test modules define their own identical local `db` fixture — no test sees another's rows. The invariant was also self-contradictory: "no new `pending_reason`" above an allowlist containing the new `queued_auth_mode_unresolved` | renamed to **no *undeclared* namespace value**, and split into **29-a** (three frozensets asserted against expected literals) and **29-b** (a table-driven test executing every PR2 writer in its own database). Neither depends on another test having run |
+
+Revision 7 also answers a question no review raised, found while writing blocker 1's branch B: `record_approval_round`'s trailing `await db.commit()` at `:679` is the **only** reason today's escalation is durable, and nothing in the function or its callers says so. Any refactor that moves escalation into a helper whose caller commits *first* silently deletes that guarantee — which is precisely what revision 6's ordering did. The plan must treat that commit as load-bearing rather than incidental.
+
+**The lesson, updated.** Revision 6 said the check is "what else already reads this, and does it still hold?" Revision 7 narrows it: **when a new rule meets an existing mechanism, the mechanism's undocumented properties are where the defect lives.** A commit nobody mentions. A branch name that happens to be deterministic. A legacy path that verifies three fields and not a fourth. A fixture whose scope makes a test unrunnable. None of these are visible in the new rule, and none are visible in the old code either — only in the join.
+
+**Four measurements this spec rests on, so a reviewer can re-run them rather than trust them.** Each was written as a throwaway pytest file against in-memory SQLite with a fake client, no network:
 
 | Claim | How it was measured | Result |
 |---|---|---|
 | a closed-unmerged PR is promoted as ready for review today | `_verify_item` with `merged: false, state: "closed"` and an all-green check run, `merge_policy="human"` | `dispatch_status='ready_for_review'`, `status_note='PR #5 is ready for review.'` |
 | a closed **draft** PR polls forever without consuming the retry budget | `process_scope` three times over the same fixture with `draft: true`, `mark_pull_ready_for_review` raising as GitHub does for a closed PR | `ready_calls` 1→2→3, `retry_count=0` throughout, `dispatch_status='verifying'` throughout |
 | adopting a merged PR sends a false review request | `report_pr_opened(…, 5)` on a **design** item, then one `process_scope` with `merged: true` | `awaiting_human_review` + one `'Design PR ready for review'` mail row; next poll corrects the status to `merged` and **leaves the mail row** |
+| an escalation whose broadcast fails is **not** durable unless the caller commits | item at the approval cap, `_send_escalation_broadcast` monkeypatched to raise, `escalate` called with no trailing commit; row re-read in a **fresh session** | in memory `status='escalated'`; **on disk** `dispatch_status='dispatched'`, `escalation_reason=None`, `ack_received_at` **SET**. Adding one `await db.commit()` after `escalate` returns makes it `'escalated'` |
 
 ---
 
@@ -586,7 +600,7 @@ Five points where the shape of that table is a decision rather than a transcript
 
 **3. The lease token is required exactly where the branch reaches GitHub, which is both `pr_opened` and `pr_ready`.** Measured: `report_pr_opened` (`github_verification_service.py:44-86`) makes no GitHub call itself, but it sets `item.pr_number`, which is what admits the item to `process_scope`'s query (`:95-110`) and from there to `_verify_item` and `_promote_verified_item` — the merge. So `pr_opened` is the entry point to the write path even though it writes nothing itself. `pr_ready` is stronger still: it makes Deck call `GET /git/ref`, `GET /pulls`, and `POST /pulls` synchronously, so an unauthorized report burns rate limit and can create a public artifact. Requiring the current lease token on both means a stale attempt cannot inject a PR into a re-dispatched item, which is precisely the class of bug the lease token was introduced for in G2.
 
-  **Order matters more on `pr_ready` than anywhere else in this table.** Both checks — owner, then current lease token — run before the first GitHub call and before any column is written. On the other branches an out-of-order check leaks a local mutation that a test can catch by reading the row; here it leaks a PR on someone's repository, which no rollback undoes. §5.8's test 17b asserts the mock was never invoked, and §3.5a's test 7f asserts the same rule from the authorization side.
+  **Order matters more on `pr_ready` than anywhere else in this table.** Both checks — owner, then current lease token — run before the first GitHub call and before any column is written. On the other branches an out-of-order check leaks a local mutation that a test can catch by reading the row; here it leaks a PR on someone's repository, which no rollback undoes. §5.8's test 17b asserts the mock was never invoked, and §3.5a's tests **7h** and **7i** assert the same rule from the authorization side — 7h for a non-owner slot, 7i for the owner with a dead lease. (Not 7f, which is the `pr_opened` branch: the sixth review caught the same mis-citation at §5.8's test 17b, and this was its second instance.)
 
   `in_progress` is **not** on the required list, because §5.6 removes its `pr_number` write entirely. If a future change restores that write, this row must change with it — noted here because the two facts are only safe together.
 
@@ -600,7 +614,7 @@ Five points where the shape of that table is a decision rather than a transcript
 
 **Tests** (offline, in §3.7's file since they are token-dependent):
 
-7b. Each branch in the matrix, reported by a non-authorized slot ⇒ the stated `403`, and the item's columns are **unchanged**. Assert the state, not just the status code — a route that mutates then refuses returns the same code.
+7b. Each branch in the matrix, reported by a non-authorized slot ⇒ the stated `403`, and the item's columns are **unchanged**. Assert the state, not just the status code — a route that mutates then refuses returns the same code. **One exception, and it is not a hole:** `revision_requested` is retired (§4.3a.1) and refuses **every** caller with `409 use_deck_approve_work_item`, authorized or not. So the table this test iterates must carry the expected status per branch rather than a single `403` constant — a test hardcoding `403` fails on the one branch whose refusal is stronger than authorization.
 7c. **The matrix is exhaustive.** Enumerate the route's accepted statuses from the branch chain itself and assert every one appears in the authorization resolver's table; a status the resolver does not know refuses rather than defaulting to allowed. This is the blocker-1 test in its general form: revision 5's `pr_ready` hole was one missing row, and a per-row test would have to be written for each future branch to catch the next one. Written to fail against a resolver whose fall-through is "no rule ⇒ proceed."
 7d. `revision_requested` from **any** slot — owner, leader, or a third — ⇒ `409 use_deck_approve_work_item`, and `approval_round_count`, the five ack columns, and `dispatch_status` are all unchanged. This is the withdrawal-spam test in its final form: against revision 4 any agent could drive the counter to `max_approval_rounds`, and against revision 5 the leader could advance a round without deciding anything.
 7e. `handoff_accepted` from a slot that is neither target nor owner ⇒ `403 not_handoff_target`; from the target ⇒ `200`. Both against an item whose `handoff_target_slot_id` is set, so the existing `409` path is not what produces the refusal.
@@ -770,7 +784,8 @@ Minted where `dispatched_at` is set (`github_dispatch_service.py:344`), so one n
 | dispatch | `:344` | mint a fresh nonce, **and open round 1** (§4.2a) |
 | retry | `reset_for_retry:64-73` | clear nonce + the four new ack columns alongside the existing `ack_received_at = None`; `approval_round_count` is already set to `0` here (`:73`) |
 | handoff accepted | `accept_handoff:705` | clear **all five** ack fields + `last_nudge_at`; **keep the nonce** and **keep the round** — see below |
-| rejection | `advance_approval_round` (replacing `record_approval_round:672-679`) | increment the round, then clear **all five** ack fields + `last_nudge_at`; **keep the nonce** (§4.3a.1) |
+| rejection **below the cap** | `advance_approval_round` branch A (replacing `record_approval_round:672-679`) | increment the round, clear **all five** ack fields + `last_nudge_at`, **keep the nonce** — one commit, no escalation (§4.3a.1) |
+| rejection **at the cap** | `advance_approval_round` branch B | counter unchanged, ack fields **kept** for the operator, `dispatch_status = escalated` / `approval_rounds_exhausted` in the *same* commit as the decision row (§4.3a.1) |
 
 The nonce is a *correlation* value, not a secret — PR0 provides the authentication. It exists so that evidence from attempt N cannot satisfy attempt N+1, which no amount of authentication would prevent on its own.
 
@@ -1024,22 +1039,46 @@ async def advance_approval_round(
 
 It is called from the `POST /agent-mail/decisions` route (§4.3a) when and only when `decision == "rejected"`, after that route has resolved the thread and authenticated the leader. An `approved` decision does not call it: approval ends the round, it does not open one.
 
-**The order of the four steps is not arbitrary — it is the difference between working and silently losing the withdrawal.** Measured on this venv, and the measurement is the reason this paragraph exists:
+**Two branches, not one sequence.** Revision 6 wrote this as a universal order — clear, increment, commit the decision, then *maybe* escalate — and the sixth review is right that the cap case does not fit it. At the cap nothing is cleared and nothing is incremented, so "step 4 is conditional" understates the difference: the two paths share only the decision row. They are specified separately, and each one's commit boundary is stated because in this codebase the commit boundary is where the correctness lives.
+
+**Branch A — below the cap (`item.approval_round_count < scope.max_approval_rounds`).** One commit, no escalation:
 
 1. Clear the five ack columns and `last_nudge_at` on `item` — **pending, not committed**.
 2. Increment `item.approval_round_count` — pending.
-3. Call `send_message` with the `answer` row carrying `decision = 'rejected'`. `send_message` ends in `await db.commit()` (`agent_mail_service.py:899`), and that commit is on the **same** `AsyncSession`, so it persists the decision row *and* steps 1-2 together. Verified directly: mutate an item without committing, call `send_broadcast` on the same session, then read the row back through a raw `text()` query that bypasses the identity map — the mutation is present.
-4. Only then, if the new round exceeds the cap, `await self.escalate(...)`.
+3. Call `send_message` with the `answer` row carrying `decision = 'rejected'`. `send_message` ends in `await db.commit()` (`agent_mail_service.py:899`) on the **same** `AsyncSession`, so that one commit persists the decision row *and* steps 1-2 together. Verified directly: mutate an item without committing, call `send_broadcast` on the same session, then read the row back through a raw `text()` query that bypasses the identity map — the mutation is present.
 
-Putting step 4 before step 3 loses the transition. `escalate` calls `await db.rollback()` when the escalation broadcast raises (`github_dispatch_service.py:1017`, inside the `except Exception` at `:1013-1018`), and that rollback discards **every** uncommitted change on the session — including the ack clears and the round increment. Measured, with the mail broadcast monkeypatched to raise: escalating before the decision row is committed leaves `approval_round_count = 1` and `ack_received_at` **still set**, while the `answer` row carrying the rejection persists from its own earlier commit. That is the worst reachable state in this spec — *the leader's rejection is on the record and the item still carries a live approval* — and it is produced by ordinary mail failure, not by an attack. With the order above, the same injected failure leaves `approval_round_count = 2` and `ack_received_at = NULL`: the withdrawal survives, and only the notification is lost.
+Nothing escalates on this branch, so there is no rollback to order around. The ordering still matters for a different reason, recorded here because revision 6 measured it: putting an `escalate` call *before* step 3 would discard steps 1-2 entirely, since `escalate` calls `await db.rollback()` when its broadcast raises (`github_dispatch_service.py:1017`, inside `except Exception` at `:1013-1018`). Measured with the broadcast monkeypatched to raise: `approval_round_count` unchanged and `ack_received_at` **still set**, while the `answer` row persists from its own commit — the leader's rejection on the record beside a live approval. Branch A avoids it by construction.
 
-The bound on that hazard, stated so the plan does not have to rediscover it: `approval_rounds_exhausted` is **not** in `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`), and `process_scope` polls only `dispatched`, `verifying`, `ready_for_review`, `awaiting_human_review` (`:96-107`) — never `escalated`. So an item stuck this way does not auto-merge; it stalls. Stalling is the correct failure, which is exactly why the ordering must be specified rather than left to whichever reads more naturally.
+**Branch B — at the cap (`item.approval_round_count >= scope.max_approval_rounds`).** The counter does not move, the ack columns are **not** cleared (an operator needs to see what the leader last approved), and the item escalates. The hazard here is real, and revision 6's ordering did not address it because revision 6 treated escalation as a tail-call on branch A.
 
-**The cap is a precondition, not a post-check** — the code and the measurement behind it are in §4.2a, which is the single normative statement of the arithmetic. Steps 2 and 4 above are that `if`/`else`: below the cap, increment; at it, escalate and leave the counter on the last real round.
+`escalate` applies the escalation in memory, and on broadcast failure it **rolls back and re-applies in memory without committing** (`:1017-1018`). It has no `commit` of its own. So "write the decision through `send_message`, then call `escalate`" leaves the escalation *only* in the session. **Measured** — the probe is in the table at the top of this spec:
 
-**A rejection at the cap does not open a round and does not clear the ack columns.** The item escalates for a human. Clearing the evidence on the way out would destroy the record of what the leader last approved, which is the first thing an operator needs. The decision row is still written — the leader's verdict is always recorded — and `dispatch_status` becomes `escalated` with `escalation_reason = "approval_rounds_exhausted"`.
+```
+IN MEMORY after escalate: status='escalated' reason='approval_rounds_exhausted'
+ON DISK:                  dispatch_status='dispatched' escalation_reason=None
+ON DISK:                  ack_received_at=SET  round=3  note='REJECTED by leader (round 3)'
+```
 
-One measured caveat for the plan: `escalate` returns early without notifying when the item is *already* `escalated` with a reason (`_apply_escalation:1020-1040`, whose `preserve_existing_reason=True` default makes the guard at `:1028-1033` return `False`, and `escalate:1000-1001` then returns). Verified — a rejection against an item already escalated as `leader_offline` advances the counter to `2` and keeps `escalation_reason = "leader_offline"`, sending no broadcast. `advance_approval_round` must therefore refuse before doing anything when `item.dispatch_status == "escalated"`: `409 item_escalated`. A leader deciding on an escalated item is acting on stale information, and the round must not move underneath a human who has already been called in.
+The rejection is durable and the escalation is not. Worse than the review states: `ack_received_at` is still set on disk, so the item is not merely un-escalated — it is un-escalated *with a live approval*, which is the exact state §4.3a exists to prevent.
+
+**Why today's code does not have this bug, and why the plan must not inherit it.** `record_approval_round` calls `escalate` and then `await db.commit()` at `:679`. That trailing commit is load-bearing and unremarked — it is the only reason the current escalation is durable. Any refactor that moves the escalation into a function whose caller commits *first* silently removes it. That is precisely the seam this spec keeps finding: the commit that makes a neighbour correct is invisible from the neighbour.
+
+So branch B is specified as **one commit containing both**, with the notification strictly after it:
+
+1. Build the `answer` row carrying `decision = 'rejected'` and add it to the session — **do not** call `send_message` (its internal commit is what splits the transaction).
+2. Apply the escalated state on `item`: `dispatch_status = "escalated"`, `escalation_reason = "approval_rounds_exhausted"`, `pending_reason = None`. Reuse `_apply_escalation` (`:1020-1040`), which does exactly this and does not commit.
+3. `await db.commit()` — **one** commit, decision row and escalated state together.
+4. Send the escalation broadcast as **post-commit best effort**, inside its own `try/except` that logs and swallows. A failed notification must not roll back a committed escalation.
+
+This needs a no-commit variant of the mail write. The plan must add `send_message(..., commit=False)` (or a `_build_answer_row` helper the route adds to the session itself) rather than calling the committing version — and PR1's task for this must state that the parameter exists **for** branch B, because a future reader deleting an "unused" flag would reintroduce the split silently.
+
+**The exposure, characterized precisely.** The review calls the un-escalated state an auto-merge exposure via `process_scope`. That needs one correction: `process_scope`'s query also requires `pr_number IS NOT NULL` (`github_verification_service.py:99`), and an item at the approval cap has not opened a PR yet, so `process_scope` does not select it. The real exposure is the **monitor**, which selects `dispatch_status == "dispatched"` with `pr_number IS NULL` (`github_dispatch_service.py:738-746`) — exactly this item. With `ack_received_at` still set, `_ack_satisfied` returns `True` (`:902-912`), so the item skips the ack gate at `:778` and falls through to the idle-timeout branch at `:792`. The item is not auto-merged; it is treated as **an item whose plan the leader approved**, and the next thing that can happen is the owner proceeding on a rejected plan. That is a worse outcome than the review's framing, by a different mechanism, and it is why branch B is one commit rather than two.
+
+**The cap is a precondition, not a post-check** — the arithmetic is stated once, normatively, in §4.2a. Branch A and branch B above *are* that `if`/`else`; neither is a modifier on the other.
+
+One measured caveat that applies to both branches: `escalate` returns early without notifying when the item is *already* `escalated` with a reason (`_apply_escalation:1020-1040`, whose `preserve_existing_reason=True` default makes the guard at `:1028-1033` return `False`, and `escalate:1000-1001` then returns). Verified — a rejection against an item already escalated as `leader_offline` advanced the counter to `2` and kept `escalation_reason = "leader_offline"`, sending no broadcast. `advance_approval_round` must therefore refuse before doing anything when `item.dispatch_status == "escalated"`: `409 item_escalated`. A leader deciding on an escalated item is acting on stale information, and the round must not move underneath a human who has already been called in.
+
+The bound worth keeping from revision 6: `approval_rounds_exhausted` is **not** in `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`), and `process_scope` never polls `escalated` (`:96-107`). So a correctly-escalated item stalls for a human rather than proceeding — which is the right failure, and the reason branch B's durability matters.
 
 **What `revision_requested` becomes: a `409`.** It is retired as an agent-reportable status (§3.5a), refusing with `use_deck_approve_work_item` for **every** caller — leader, owner, and third party alike. The branch is not deleted, because the shim's docstring still advertises it (`mcp_shim/agent_mail_server.py:612`) and a deployed agent will call it; a named refusal that tells the agent which tool to use instead is strictly better than a `422` on an unknown enum value. This is what closes the contradiction: there is no longer a question of *who* may report `revision_requested`, because nobody may, and the authority that used to attach to it now attaches to the decision itself — which only the designated leader can write (§4.3a).
 
@@ -1166,7 +1205,8 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 29. **A second round's request is legal.** Round 1: `deck_request_context` with a server-derived `approval_round = 1`, leader posts `decision = "rejected"`. Round 2: the owner opens a *new* request, which the route stamps `approval_round = 2` ⇒ accepted, **no `409`**, and `deck_approve_work_item` resolves to the round-2 thread. Against revision 4 the second request is a duplicate-linkage `409`, and against revision 5 the round never advances because the leader made no second call — this is the blocker-2 test, and the owner calls **only** `deck_request_context` to recover.
 30. **Two requests, two rounds, no ambiguity.** With round-1 and round-2 requests both present on the item, `deck_approve_work_item(work_item_id, dispatch_nonce)` for round 2 resolves to exactly one thread. Test 21's "two matching requests *from the same owner* ⇒ `409`" still holds *within* a round — assert both, since a fix that stops filtering by round entirely would pass one and fail the other.
 31. **One rejection clears and increments, with no second call.** Record a valid approval for round 1, then post exactly one `deck_approve_work_item(decision="rejected")` and call **nothing else** ⇒ `approval_round_count` becomes 2, and `ack_approver_member_id`, `ack_evidence_message_id`, `ack_received_at`, `ack_enforcement_epoch`, `ack_approval_round` are **all** NULL, and `last_nudge_at` is NULL. The nonce is **unchanged** (§4.3a.1 — clearing it would deadlock the next round exactly as it would on handoff). "Nothing else" is the assertion that distinguishes revision 6 from revision 5: this test must be written so that inserting a `revision_requested` report would be a *change* to it, not a prerequisite of it.
-    31b. **All of it lands in one commit.** Same flow, but with `_send_escalation_broadcast` monkeypatched to raise and the item one round below the cap so the rejection *also* escalates. Assert the round increment and all five clears are **persisted** — read them back through a raw `text()` query, not the identity map, since a rolled-back-but-still-in-memory object reads correctly from the session and would make this test pass while proving nothing. Measured against the wrong ordering (escalate before the decision row commits), this leaves `approval_round_count = 1` and `ack_received_at` set while the rejection row persists — the split-brain state §4.3a.1 exists to prevent.
+    31b. **Branch A lands in one commit (below the cap).** `max_approval_rounds = 3`, item at round `1`, so the rejection opens round 2 and does **not** escalate. Assert through a raw `text()` query — not the identity map, since a rolled-back-but-still-in-memory object reads correctly from the session and would make this test pass while proving nothing — that `approval_round_count == 2`, all five ack fields are NULL, `last_nudge_at` is NULL, the nonce is unchanged, `dispatch_status` is still `dispatched`, and the `answer` row carrying `decision='rejected'` exists. Also assert `escalate` was never called: monkeypatch it and assert zero calls. Revision 6's version of this test asked for an item "one round below the cap" whose rejection *also* escalated — a fixture that cannot exist under §4.2a's arithmetic, which is why it is replaced.
+    31b-1. **Branch B is durable when the broadcast fails (at the cap).** `max_approval_rounds = 3`, item at round `3`, `_send_escalation_broadcast` monkeypatched to raise. This is the failure-injection test the sixth review required, and it is the one that fails against revision 6's ordering. Re-read the row in a **fresh session** (a new `async_sessionmaker` checkout, not just raw SQL on the same session — the point is what survived the commit boundary) and assert **all** of: `dispatch_status == 'escalated'`, `escalation_reason == 'approval_rounds_exhausted'`, `approval_round_count == 3` (**not** 4 — the counter stops on the last real round), the ack fields are **still set** (branch B keeps them deliberately), and the `answer` row exists. Then assert the consequence, because the status alone is not the hazard: with `dispatch_status == 'escalated'` the item is **not** selected by the monitor's query (`dispatch_status == "dispatched"` and `pr_number IS NULL`, `github_dispatch_service.py:738-746`). Against the wrong ordering the measured on-disk state is `dispatch_status='dispatched'`, `escalation_reason=None`, `ack_received_at` **set** — so the monitor selects it, `_ack_satisfied` returns `True` (`:902-912`), the ack gate at `:778` is skipped, and a rejected plan is treated as an approved one.
     31c. **A rejection against an already-escalated item refuses.** Item `escalated` with `escalation_reason = "leader_offline"`, leader posts a rejection ⇒ `409 item_escalated`, `approval_round_count` unchanged, `escalation_reason` still `leader_offline`, and **no decision row written**. Measured against today's code the counter advances to 2 and the reason is silently preserved with no broadcast, so this test fails without the guard.
 32. **The gate refuses after a withdrawal.** The item from 31, CI-green with a fresh head ⇒ no auto-merge, and the fallback note starts with `"Auto-merge blocked"`. This is the consequence test for 31; a clear that happened but left the gate passing would be invisible without it.
 33. **Round mismatch alone refuses — the belt-and-suspenders test.** Hand-build an item with every gate condition green, valid approver columns, `ack_enforcement_epoch = 1`, but `ack_approval_round = 1` while `approval_round_count = 2` ⇒ refuses `stale_round`. This fixture is the state a *forgetful* `advance_approval_round` would leave behind — or a reordered one whose increment persisted while its clears rolled back — so it tests the second guard independently of the first. §4.5's whole argument for having two guards rests on this test existing.
@@ -1216,6 +1256,12 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 | `advance_approval_round` also clears the nonce | 31 (the next round's request cannot link) |
 | escalate *before* committing the decision row, so a mail failure rolls back the clears | **31b** |
 | allow a rejection on an already-escalated item | **31c** |
+| branch B calls `send_message` (which commits) and then `escalate`, with no commit after | **31b-1** — the escalation is in memory only; the fresh-session re-read finds `dispatched` |
+| branch B commits the escalation but rolls back the decision row on notification failure | **31b-1** — the `answer` row is missing |
+| branch B clears the ack columns like branch A does | **31b-1** — the ack fields must still be set |
+| branch B increments the counter past the cap | **31b-1** — asserts `approval_round_count == 3`, not 4 |
+| branch A calls `escalate` at all | **31b** — asserts zero `escalate` calls |
+| the notification is sent inside the same `try` as the commit, so a mail failure rolls both back | **31b-1** |
 | gate compares only the columns, not the round | **33** |
 | gate compares the round but treats NULL `ack_approval_round` as matching | 33, 36 |
 | round scoping bypasses `max_approval_rounds` | **37** |
@@ -1426,7 +1472,7 @@ The client's module docstring names its writers explicitly (`merge_pull`, `mark_
 
 **The reported status changes shape.** `pr_opened` carried a `pr_number` the agent chose. It is replaced for this flow by `pr_ready`, carrying `head_ref` — the branch the agent pushed. Deck then:
 
-1. Validates `head_ref` against the expected `deck/<slot>/issue-<n>` pattern for the item. A mismatch is a `409`; Deck does not open a PR from a branch it did not ask for.
+1. Validates `head_ref` against the expected **attempt-scoped** `deck/<slot>/issue-<n>/<nonce8>` pattern for the item, where `<nonce8>` is the first 8 characters of the item's *current* `dispatch_nonce` (§5.5.4a). A mismatch is a `409`; Deck does not open a PR from a branch it did not ask for, and a *previous* attempt's nonce is a mismatch.
 2. Confirms the ref exists on the remote (`GET /repos/{o}/{r}/git/ref/heads/{ref}`), so a typo fails as "branch not found" rather than as an opaque `422` from the pulls endpoint.
 3. **Reconciles before creating** — §5.5.4. A PR may already exist for this head even though `item.pr_number` is NULL.
 4. Creates the PR with the title, body and draft flag from §5.5.5 — which are Deck's to compose, not the agent's.
@@ -1523,12 +1569,46 @@ So the self-correction is real and the notification is not corrected with it. A 
 
 It is deliberately **not** added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`). Every reason on that list means *the agent got stuck and a late PR resolves it*; this one means *a human closed the PR*, which a subsequent `pr_opened` does not resolve. Recovery is `deck_retry_work_item`, which clears `pr_number` and `escalation_reason` and re-dispatches from `pending` (`reset_for_retry:64-74`) — the operator's explicit "try again," which is the right shape for a decision only they can make.
 
+**Escalation is the report, not the recovery — and revision 6 left the recovery in a loop.** The sixth review found it: `deck_retry_work_item` returns the item to `pending` and clears `pr_number`, but the *branch name is deterministic*. `deck/<slot>/issue-<n>` is a pure function of the slot and the issue (§5.5.4 step 1, §5.6's head check), so the next dispatch pushes the same head, reconciliation finds the same closed PR, and §5.5.4a escalates `pr_closed_unmerged` again. Deck refuses to reopen it and refuses to create beside it. The documented recovery was an infinite loop through a human: escalate, operator retries, escalate again.
+
+Revision 6 did not see this because §5.5.4a and the branch-naming rule are in different sections and neither mentions the other — the same seam this spec keeps tripping over, this time between a *policy* and a *name*.
+
+**The fix: the head is scoped to the attempt, not to the issue.**
+
+| | Revision 6 | Revision 7 |
+|---|---|---|
+| head branch | `deck/<slot>/issue-<n>` | `deck/<slot>/issue-<n>/<first 8 of dispatch_nonce>` |
+| after a retry | same head — rediscovers the closed PR | **fresh head** — no PR is attached to it |
+
+This costs no new column and no new state, because the attempt already has an identity: `dispatch_nonce`, minted at the dispatch site alongside `dispatched_at` and `approval_round_count` (§4.2a, `github_dispatch_service.py:344`). A retry sets `dispatch_status = "pending"` (`reset_for_retry:64`), the next poll selects `pending` at `:231`, and that path runs the mint site again — so the retried attempt gets a **new** nonce by construction. Verified that this is the actual control flow, and that `dispatch_nonce` does not exist in `app/` today, so `:344` is the only site that will ever write it.
+
+What the loop becomes:
+
+```
+attempt 1:  head deck/leader/issue-42/a3f9c1b2   -> PR #5   -> human closes it
+            reconciliation -> closed-unmerged    -> escalate pr_closed_unmerged (#5)
+operator:   deck_retry_work_item                 -> pending, new nonce 7d2e4f81
+attempt 2:  head deck/leader/issue-42/7d2e4f81   -> list_pulls_for_head finds NOTHING
+                                                 -> create_pull -> PR #9, open
+```
+
+The closed PR keeps its head and stays exactly as the human left it. Deck neither reopens it nor creates a second PR on the same branch — the objection that killed candidate policies 1 and 2 above does not apply, because attempt 2 is not competing for attempt 1's head.
+
+**Three consequences the plan must carry, or the fix is cosmetic:**
+
+1. **§5.6's head-pattern check** (`:1692`) validates the attempt-scoped pattern, matching the nonce against `item.dispatch_nonce` — not against "any hex." A `head_ref` carrying a *previous* attempt's nonce is a `409`, because that is an agent pushing from a stale worktree, which is precisely the case the pattern check exists to catch.
+2. **The brief** (`github_dispatch_service.py:448-450`) must state the full attempt-scoped branch name, computed from the item at brief-composition time. An agent cannot derive its own nonce; it has to be told.
+3. **A pre-upgrade item with `dispatch_nonce = NULL`** has no attempt suffix. It must not silently fall back to the unsuffixed name, because that reintroduces the collision for exactly the rows most likely to have history. §4.1 already requires such rows to be re-dispatched before they can be acked; the same rule applies here, and `pr_ready` on a NULL-nonce item refuses `stale_dispatch` rather than guessing a head.
+
+**A bound on the claim, so this is not oversold.** Attempt-scoping removes the *loop*; it does not make a closed PR recoverable without a human. The escalation still happens on attempt 1, and it still requires an operator to decide. What changes is that their decision now leads somewhere: one `deck_retry_work_item` produces a usable open PR instead of the same escalation a second time. It also does not help if the human closes *every* attempt's PR — but that is a human repeatedly saying no, which is not a state Deck should engineer around.
+
 **The multiple-match rule, restated by state.** The fifth review asked that closed history not make an open PR ambiguous. Applied in order:
 
 | Matches | Action |
 |---|---|
 | exactly one open, any number of closed/merged alongside | **adopt the open one.** The closed ones are history; an item's live PR is the open one |
 | no open, exactly one merged (any number of closed alongside) | **reconcile to `merged`** on that PR |
+| no open, **two or more merged** | **reconcile to `merged`** on the highest-numbered merged PR, and name every merged number found in `status_note`. Not a `409`: two merged PRs on one head both represent work that landed, so there is no ambiguity about the *outcome* — only about which row to cite. The highest number is the most recent. Attempt-scoping makes this rare (each attempt has its own head), but a force-push or a squash-merge-then-remerge can still produce it, and revision 6 left it undefined |
 | no open, no merged, one or more closed-unmerged | **escalate `pr_closed_unmerged`**, `status_note` naming every closed number found |
 | **two or more open** | **`409`**, `status_note` naming both open numbers. This is the only genuinely ambiguous case, and it is what revision 5's blanket `409` was reaching for |
 
@@ -1552,8 +1632,12 @@ Classification (§5.5.4a) — the blocker-5 tests:
 
 46b. **A merged match reconciles to `merged`, and asks nobody to review it.** `pr_number` NULL, one match with `merged: true` ⇒ `dispatch_status == "merged"`, `pr_number` recorded, `create_pull` never called, and the item never passes through `verifying` or `awaiting_human_review`. Run it on a **design** item and assert **no** `github_dispatch_design_pr_ready` mail row exists — that is the false ask measured above, and a status-only assertion misses it because the next poll repairs the status.
 46c. **A closed-unmerged match escalates.** One match, `merged: false`, `state: "closed"` ⇒ `dispatch_status == "escalated"`, `escalation_reason == "pr_closed_unmerged"`, the PR number present in `status_note`, `pr_number` still **NULL**, and `create_pull` never called. Against revision 5 this PR is adopted and the item advances with a closed PR.
-46d. **The escalation is not `pr_opened`-recoverable.** On the item from 46c, `report_pr_opened` ⇒ raises (the reason is not in `_PR_OPENED_RECOVERABLE_ESCALATIONS`), then `deck_retry_work_item` ⇒ the item returns to `pending` with `pr_number` and `escalation_reason` cleared. Both halves: the wrong recovery is refused and the right one works.
-46e. **Closed history does not make an open PR ambiguous.** Three matches on one head — two closed-unmerged, one open ⇒ the **open** one is adopted, no `409`, and `create_pull` is never called. This is the retried-item shape, and revision 5's blanket "more than one match ⇒ `409`" fails it.
+46d. **The escalation is not `pr_opened`-recoverable.** On the item from 46c, `report_pr_opened` ⇒ raises (the reason is not in `_PR_OPENED_RECOVERABLE_ESCALATIONS`), then `deck_retry_work_item` ⇒ the item returns to `pending` with `pr_number` and `escalation_reason` cleared. Both halves: the wrong recovery is refused and the right one works. This test stops at `pending`, which is why it did not catch blocker 2 — see 46h, which carries on past it.
+46e. **Closed history does not make an open PR ambiguous.** Three matches on one head — two closed-unmerged, one open ⇒ the **open** one is adopted, no `409`, and `create_pull` is never called. Note what this test is and is not: under attempt-scoped heads (§5.5.4a) this shape no longer arises from a *retry*, because each attempt has its own head. It arises from a force-push, a manually-opened PR on the same branch, or a pre-upgrade item. The rule is still needed and revision 5's blanket "more than one match ⇒ `409`" still fails it — but revision 6 justified this test by the retry path, and after blocker 2 that justification is wrong even though the test is right.
+46h. **End-to-end recovery: a closed PR does not trap the item.** The test the sixth review required, and the one that fails against revision 6. Full cycle in one test, offline: dispatch (nonce `A`) ⇒ `pr_ready` ⇒ `create_pull` returns PR #5 ⇒ mock the PR closed-unmerged ⇒ poll ⇒ `escalated` / `pr_closed_unmerged` ⇒ `deck_retry_work_item` ⇒ `pending` ⇒ next dispatch mints nonce `B` ⇒ `pr_ready` with the attempt-`B` head. Assert three things: the attempt-`B` `head_ref` **differs** from attempt `A`'s, `list_pulls_for_head` was called with the **`B`** head and returned no match, and `create_pull` was called (total calls now 2) yielding an **open** PR with the item in `verifying`. Against revision 6 the second `pr_ready` re-finds PR #5 on the identical head and escalates `pr_closed_unmerged` a second time — assert against that specifically, so the test cannot pass by accident.
+46i. **The head carries *this* attempt's nonce, not any nonce.** `pr_ready` whose `head_ref` is well-formed and attempt-scoped but carries the **previous** attempt's nonce ⇒ `409`, zero client calls, `pr_number` NULL. A pattern check written as a regex over `[0-9a-f]{8}` passes this and must not.
+46j. **A NULL-nonce item refuses rather than guessing a head.** A pre-upgrade item (`dispatch_nonce IS NULL`) reporting `pr_ready` ⇒ refused `stale_dispatch`, zero client calls, `pr_number` NULL. The failure mode this prevents is falling back to the unsuffixed `deck/<slot>/issue-<n>`, which would reintroduce the collision for exactly the rows most likely to have closed history.
+46k. **Two or more merged matches, no open.** Two matches, both `merged: true`, numbers #5 and #9 ⇒ reconciled to `merged` on **#9**, with both numbers in `status_note`, and **not** a `409`. Revision 6 left this state undefined.
 46f. **Merged wins over closed when no open PR exists.** Two matches, one `merged: true` and one closed-unmerged ⇒ reconciled to `merged` on the merged number, **not** escalated. Pins the precedence order; a classifier that checks closed-unmerged first fails here.
 46g. **`state` alone is not the discriminator.** Two separate one-match cases whose `state` is identically `"closed"`, differing only in `merged` ⇒ one reconciles to `merged`, the other escalates. Written as a pair on purpose: any implementation keyed on `state` passes one and fails the other.
 
@@ -1573,7 +1657,7 @@ Classification (§5.5.4a) — the blocker-5 tests:
 | closed-unmerged reopened via `PATCH` instead of escalated | 46c |
 | "more than one match ⇒ `409`" kept for closed history (revision 5) | **46e** |
 | closed-unmerged checked before merged | **46f** |
-| `pr_closed_unmerged` introduced as a `dispatch_status` rather than an `escalation_reason` | §5.8 test 29 (the namespace test, whose first assertion this trips) |
+| `pr_closed_unmerged` introduced as a `dispatch_status` rather than an `escalation_reason` | §5.8 test **29-a** — `DISPATCH_STATUSES` no longer equals its expected literal |
 | lock global instead of per-item | — (not observable by test; review item, same as §3.7's `compare_digest` row) |
 
 #### 5.5.5 Title, body, and the draft flag are Deck's, and design PRs are not drafts
@@ -1689,8 +1773,32 @@ The verification is still required, for two remaining cases:
 | Check | Refuse if | Applies to |
 |---|---|---|
 | repository | `head.repo.full_name` != the scope's `owner/repo` | both paths |
-| head branch | `head.ref` does not match the expected `deck/<slot>/issue-<n>` pattern for this item | both paths |
+| head branch | `head.ref` does not match the expected attempt-scoped `deck/<slot>/issue-<n>/<nonce8>` pattern for this item, matched against the item's current `dispatch_nonce` (§5.5.4a) | both paths |
 | author | `user.login` != the configured bot login | `pr_opened` only, and only when `github_app_bot_login` is set |
+| **state** | the PR is not open — see the classification below | **both paths** |
+
+**The state check is new in revision 7, and it is blocker 3.** Revision 6 classified PR state on the `pr_ready` reconciliation path (§5.5.4a) and in both verifier stages (§5.6b), and left the legacy `pr_opened` registration path checking *who* and *where* but never *what state*. Confirmed against source: `report_pr_opened` (`github_verification_service.py:44-86`) reads neither `merged` nor `state`. It sets `pr_number`, and for a design item sets `awaiting_human_review` and broadcasts *"Design PR ready for review"* at `:66-81` — before any verification runs.
+
+So an agent on an `ambient`-mode repo reporting a merged or closed PR number produces the identical false broadcast §5.5.4a exists to remove. The measured evidence is the same probe, because it is the same function:
+
+```
+Q5 after adoption:  status='awaiting_human_review'  mail_rows=1  ['Design PR ready for review']
+Q5 after next poll: status='merged'                 mail_rows=1  ['Design PR ready for review']
+```
+
+The next poll repairs the *status*. Nothing repairs the *mail*. And §5.6b's verifier fix does not help, because the broadcast already went out during registration — one stage earlier than anything §5.6b touches.
+
+**Resolution: one classifier, both paths.** `report_pr_opened` already fetches the PR via `get_pull` for the repository, head, and author checks above. It classifies that same response before recording anything, using the *same* three-way function as §5.5.4a rather than a second copy:
+
+| Reported PR state | `pr_opened` behaviour |
+|---|---|
+| open | today's transition, unchanged — `verifying` (code) or `awaiting_human_review` + broadcast (design) |
+| merged | record `pr_number`, reconcile **directly** to `merged` via `_mark_merged` (`:415-419`) plus the `_notify_blocker_merged` broadcast. **No** design-review mail |
+| closed, unmerged | **escalate `pr_closed_unmerged`** with the number in `status_note`. `pr_number` left NULL, no mail of any kind |
+
+The plan must implement this as a shared helper — `_classify_pull(pull) -> "open" | "merged" | "closed_unmerged"` — called from §5.5.4a's reconciliation, from `report_pr_opened`, and from §5.6b's verifier condition. Three call sites, one rule. Two copies of a three-way branch is how the `pr_ready` path came to be classified while the `pr_opened` path was not; a shared helper is the only version of this fix that cannot drift again.
+
+Note the ordering requirement: classification happens **after** the repository and head checks (a PR on the wrong repo should be refused as a wrong-repo report, not reconciled as a merge) and **before** any column write or mail send. Both halves are testable and both are asserted in §5.8.
 
 The author check is the one that shrinks. On the `pr_ready` path Deck *is* the author, so checking it verifies only that GitHub attributed a PR to the credential that created it — a tautology.
 
@@ -1775,6 +1883,10 @@ It stays nullable, and the nullability is meaningful rather than incidental:
 | `app` | an integer | resolved; the helper mints from this id |
 | `app` | NULL | **unreachable by construction**, and treated as a fault: refuse exactly as an unresolved repo does (`queued_auth_mode_unresolved`), because an `app` scope with no id can mint nothing. A pre-upgrade row cannot land here — the migration default is `unknown` — so this covers a partial write or a hand-edited row |
 | `ambient` | NULL | the App is not installed here; nothing to mint |
+| `unknown` | an integer | **normalize, do not trust.** Clear the id to NULL and resolve the mode from scratch at the next lease. An id without a mode says a resolution was interrupted between the two writes, or that a hand-edit set one column and not the other (§5.9 step 1 updates exactly this pair). The id may name an installation that no longer exists, and `unknown` is the value that means *go and find out* — so the safe action discards the unverified half rather than keeping it |
+| `ambient` | an integer | **normalize, do not trust.** Same treatment: clear the id to NULL, leave the mode `ambient`. An `ambient` scope must never mint, and an id sitting on one is the raw material for a helper that mints anyway should a later refactor key on the id instead of the mode. Removing it removes the possibility rather than relying on the check |
+
+**Why this table has six rows and not four.** The sixth review found `unknown`/id and `ambient`/id undefined, and §5.9's deployment step warned about the first while this normative table did not cover it — a rule living in the deployment section and missing from the section that governs behaviour. Both now resolve the same way, and the principle is worth stating once: **the mode is authoritative and the id is derived, so when they disagree the id loses.** Normalizing rather than refusing is deliberate, and it differs from the `app`/NULL row directly above on a real distinction — `app`/NULL cannot mint at all and must fail closed, while `unknown`/id and `ambient`/id can both proceed correctly once the stale id is dropped. Fail closed when you cannot act; normalize when you can act correctly by discarding the untrustworthy input.
 
 The token cache stays in memory, unchanged and correctly so: tokens expire within the hour, they are live credentials, and §5.3's reason not to store them at rest is sound. It is only the id — a stable, non-secret integer that identifies *which* installation, not a credential — that is persisted. Stating that split explicitly is what keeps a later reader from "fixing" the inconsistency by persisting the tokens too.
 
@@ -1813,6 +1925,8 @@ Releasing the lease is safe here and *not* the mistake §5.7 dissects: this refu
 
 30. Lookup returns `200` ⇒ mode `app`, **`github_app_installation_id` persisted to the returned id**, worktree gets identity **and** the three `credential.*` lines. Assert the id by re-reading the scope row, not the in-memory cache.
     30b. **The restart case — this is the blocker-4 test.** Resolve a scope to `app` with a live lease and a configured worktree, then **clear the in-memory installation-id cache** to simulate a backend restart (construct a fresh service instance, or clear the dict directly — the test must not restart a process). Now call the helper endpoint. It mints successfully, using the id read from the scope row, with **no** `GET /repos/{o}/{r}/installation` call — assert the lookup mock was never invoked, since re-resolving here is the behaviour §5.6a's stale-`app` rule forbids. Against revision 5 the cache is empty, there is no persisted id, and the mint has nothing to work from: the push and `create_pull` both fail on a workspace the spec calls configured.
+    30d. **`unknown` with an id normalizes.** Hand-build `github_auth_mode = 'unknown'`, `github_app_installation_id = 4242`, then dispatch ⇒ the id is **NULL** afterwards and the mode was resolved by an actual lookup call (assert the lookup mock *was* invoked, which is the opposite of test 30b's assertion and is why the pair is worth having). The failure mode this excludes: an implementation that sees a non-NULL id and mints from it without ever checking whether the mode agrees.
+    30e. **`ambient` with an id normalizes and still does not mint.** `github_auth_mode = 'ambient'`, `github_app_installation_id = 4242` ⇒ after dispatch the id is **NULL**, the mode is still `ambient`, no `credential.*` line is written to `config.worktree`, and the token-minting mock was **never** called. Assert the mock: the whole point is that an id on an ambient scope is inert.
     30c. **An `app` scope with a NULL id refuses rather than re-resolving.** Hand-build the unreachable row (`github_auth_mode = 'app'`, `github_app_installation_id = NULL`), then dispatch ⇒ `pending_reason == "queued_auth_mode_unresolved"`, lease released, no worktree `credential.*` lines written. Proves the fault case fails closed instead of falling through to a lookup or to the ambient credential.
 31. Lookup returns `404` ⇒ mode `ambient`, **`github_app_installation_id` left NULL**, worktree gets identity and **no** `credential.*` line. Assert on the absence, by reading `config.worktree`. Assert too that this is *not* an `app_not_installed` refusal — the dispatch proceeds (§5.3a row 1).
     31b. **`app_not_installed` is a mint-time refusal.** A scope stored `app` with an id whose `POST /app/installations/{id}/access_tokens` returns `404` ⇒ the helper refuses `app_not_installed` naming the repo and the id, the mode is **not** downgraded to `ambient`, and the id is **not** cleared. Paired with 31 this is the §5.3a test: the same status code, two behaviours, keyed on which call returned it. A single shared `404` handler passes one of the two and fails the other.
@@ -1979,16 +2093,20 @@ Primary workspaces are therefore undispatchable *for identity purposes* under PR
 9. `report_pr_opened` refuses a PR whose author is not the bot **on an `app`-mode scope** (§5.6a). Keyed on the scope's `github_auth_mode`, not on `github_app_bot_login` being non-empty — tests 36 and 37 are the pair that pin this distinction, and 37b/37c pin what happens when the expectation itself is missing.
 10. `report_pr_opened` refuses a PR whose head branch does not match the item's expected branch.
 11. `report_pr_opened` skips the author check on an **`ambient`-mode** scope even when `github_app_bot_login` is set. This is the false-sentence test; see §5.6 and test 36.
-12. Brief contains the `[Slot]` prefix, the `deck/<slot>/issue-<n>` branch instruction, and both trailers — and instructs `pr_ready` with `head_ref`, not `pr_opened` with a number, on an `app`-mode scope. It must **not** claim the agent owns the PR title (§5.5.5).
+    11b. **A merged PR reported through `pr_opened` on a design item asks nobody to review it.** `ambient`-mode scope, design item, `pr_opened` with a number whose `get_pull` returns `merged: true` ⇒ `dispatch_status == "merged"`, `pr_number` recorded, and **zero** `github_dispatch_design_pr_ready` mail rows. Count the mail rows; the status assertion alone passes against today's code by the next poll, which is exactly how this defect survived revision 6.
+    11c. **A closed-unmerged PR reported through `pr_opened` escalates and notifies nobody.** Same fixture, `merged: false, state: "closed"` ⇒ `escalated` / `pr_closed_unmerged`, the number in `status_note`, `pr_number` still **NULL**, and zero mail rows of any kind. Against revision 6 this is `awaiting_human_review` with a review request for a PR the human already closed.
+    11d. **The shared classifier is shared.** Assert the same function object backs all three call sites — §5.5.4a's reconciliation, `report_pr_opened`, and §5.6b's verifier condition — by monkeypatching `_classify_pull` to a sentinel and driving each of the three paths, asserting the sentinel was consulted every time. This is a structural test, and it is deliberate: two independent copies of the three-way branch is the exact mechanism by which revision 6 classified one path and not the other. A behavioural test cannot catch a *duplicate* that currently agrees.
+    11e. **State is classified after repo/head, not before.** A `pr_opened` report whose PR is `merged: true` **and** in the wrong repository ⇒ refused as a wrong-repo report (`409`, `pr_number` unset), **not** reconciled to `merged`. Pins the ordering requirement; a classifier called first would accept a foreign merged PR as this item's outcome.
+12. Brief contains the `[Slot]` prefix, the **attempt-scoped** `deck/<slot>/issue-<n>/<nonce8>` branch instruction computed from the item's current `dispatch_nonce` (§5.5.4a — assert the actual nonce appears, not merely that the string has four segments), and both trailers — and instructs `pr_ready` with `head_ref`, not `pr_opened` with a number, on an `app`-mode scope. It must **not** claim the agent owns the PR title (§5.5.5).
 
 Deck creates the PR (§5.5.2):
 
 13. `pr_ready` with a valid `head_ref` ⇒ Deck calls `POST /repos/{o}/{r}/pulls` **once**, records the returned `pr_number`, and the item lands in `verifying` (code) or `awaiting_human_review` (design), matching `report_pr_opened`'s existing behavior.
-14. `pr_ready` with a `head_ref` outside the item's expected `deck/<slot>/issue-<n>` pattern ⇒ `409`, **no** pulls call made, `pr_number` unset. Assert the call was not made, not merely the status code.
+14. `pr_ready` with a `head_ref` outside the item's expected attempt-scoped pattern ⇒ `409`, **no** pulls call made, `pr_number` unset. Assert the call was not made, not merely the status code. Tests 46i and 46j are the two sharper cases (a *previous* attempt's nonce, and a NULL nonce); this one is the plainly-wrong branch name.
 15. `pr_ready` for a ref absent on the remote ⇒ refuses with "branch not found," no pulls call.
 16. `pr_ready` twice for the same item ⇒ one pulls call total, second returns the existing `pr_number`. Test 38 is the stronger form of this (it asserts the reconciliation call is skipped too); keep both, since 16 is the behavior an operator sees and 38 is the mechanism.
 17. On an **`ambient`-mode** scope, `pr_ready` refuses and `pr_opened` still works — the legacy path is intact.
-17b. `pr_ready` from the owner with a **stale lease token** ⇒ `409` before any GitHub call (§3.5a test 7f asserts the same rule from the authorization side; this one asserts the mock was never invoked).
+17b. `pr_ready` from the owner with a **stale lease token** ⇒ `409` before any GitHub call (§3.5a test 7i asserts the same rule from the authorization side; this one asserts the mock was never invoked).
 18. `create_pull` sends the installation token, and the token appears in no log record (extends test 5 to the new call site).
 
 Helper endpoint (§5.5.6):
@@ -2009,11 +2127,21 @@ Owner-change and primary (§5.5.6, §5.7):
     28b. **A primary is never leased even momentarily.** Same fixture, and assert the primary row's `leased_item_id` was NULL throughout: `leased_at` and `lease_token` are still NULL after the acquire, and `released_at` is still NULL. A design that leases-then-releases leaves `released_at` and a cleared `lease_token` behind, so this distinguishes the two designs on the row state rather than on the outcome.
     28c. **Only a primary available ⇒ `queued_no_workspace`, not a loop.** With a `dispatchable` primary as the *only* workspace in scope, `acquire` returns `None`, the item takes the existing `queued_no_workspace` path, and its `status_note` names the count of skipped primaries. Then add a worktree and re-run: it dispatches. Proves the skip is not a dead end.
     28d. **`allow_primary=True` still leases it.** The opt-in door works, so a future observation caller is not silently broken — and the default remains the safe one. One line, and it is the only test that may pass a primary.
-29. **No new `dispatch_status` value and no new `pending_reason` anywhere in PR2** — not only in §5.7. Written as a namespace test rather than a per-section one, because the sections that could violate it (§5.5.4a, §5.6a, §5.6b, §5.7) were each written at a different time and none of them can see the others. Three assertions, over the items left behind by every other test in this file:
-    - every observed `dispatch_status` is in the existing set;
-    - every non-NULL `pending_reason` is one of `queued_no_workspace` / `queued_ambiguous_sessions` / `queued_auth_mode_unresolved` (§5.6a's, which is a `pending_reason` and is declared here so the test does not have to be edited to admit it);
-    - every non-NULL `escalation_reason` is one of the eleven existing reasons (§5.5.4a enumerates them from the call sites) plus `pr_closed_unmerged`.
-    Revision 4's `queued_primary_workspace` is withdrawn; this test is what stops it coming back. It is also what catches `pr_closed_unmerged` being implemented as a `dispatch_status`: such an implementation trips assertion one, because `escalate()` would no longer be the thing that set the status.
+29. **No undeclared namespace value.** The invariant, renamed. Revision 6 called this "no new `dispatch_status` and no new `pending_reason`" and then listed `queued_auth_mode_unresolved` — a value PR2 introduces — in its own allowlist. The sixth review is right that the heading contradicted the test. What PR2 actually promises is narrower and checkable: **every status/reason value the code can produce is one this spec declares**, and the count of `dispatch_status` values does not grow.
+
+    Revision 6 also specified this as a scan over "items left behind by every other test in this file," which **cannot run**. Confirmed against the fixtures: `tests/agent_teams/conftest.py:15-23` builds a fresh `sqlite+aiosqlite:///:memory:` engine per test, and `test_github_dispatch_service.py:32-40` and `test_github_verification_service.py:26-34` each define their own identical local `db` fixture. No test observes another test's rows, and making the fixture session-scoped would trade a missing assertion for order dependence across ~90 tests. Withdrawn.
+
+    Replaced with a two-part test that needs no cross-test residue:
+
+    29-a. **The constants test.** PR2 introduces three module-level frozensets next to the code that uses them — `DISPATCH_STATUSES`, `PENDING_REASONS`, `ESCALATION_REASONS` — and the route/service code writes only values drawn from them. The test asserts each set equals its expected literal, spelled out in the test itself:
+    - `DISPATCH_STATUSES` — the existing set, **unchanged by PR2**. This is the assertion that carries the standing "no new `dispatch_status` values" rule, and it is the one that fails if `pr_closed_unmerged` is implemented as a status.
+    - `PENDING_REASONS` — existing plus `queued_auth_mode_unresolved` (§5.6a).
+    - `ESCALATION_REASONS` — the eleven enumerated in §5.5.4a plus `pr_closed_unmerged`.
+
+    Spelling the expected sets as literals is the point: the test fails when someone *adds* a value, which is when a human should look, rather than tautologically re-deriving whatever the code contains. Note these are conventions, not database constraints — both columns are plain nullable `String` (`models/database.py:255`, `:278`), verified — so the constants plus this test are the whole of the enforcement, which is why the test is a deliverable rather than a nicety.
+
+    29-b. **The exhaustive-path test.** A table-driven test, one fresh database per case, that executes every PR2 path capable of writing one of the three columns and asserts the written value is in the corresponding set. Enumerated explicitly rather than "every path," so the list is reviewable: `pr_ready` (open / merged / closed-unmerged / no-match / two-open), `pr_opened` (open / merged / closed-unmerged), the verifier's closed-unmerged condition (§5.6b), the auth-mode refusal (§5.6a), and the no-dispatchable-workspace refusal (§5.7). Each case runs in its own `db` fixture and asserts on rows it created itself. If a later PR adds a writer, it belongs in this table — and the mutation row below is what makes forgetting it visible.
+
     29b. **`in_progress` no longer writes `pr_number`** (§5.6). Post `status="in_progress"` with `pr_number=9999` on an item whose `pr_number` is NULL ⇒ the report succeeds (it is a liveness ping), `last_nudge_at` is cleared, and `pr_number` is **still NULL**. Then assert the consequence that made it matter: `_ack_satisfied(item)` is still `False`, so the leader-ack gate was not silenced. Against today's code this test fails on both assertions.
 
 **Mutation requirement.**
@@ -2031,6 +2159,18 @@ Owner-change and primary (§5.5.6, §5.7):
 | drop the `allow_primary` parameter entirely (hard exclusion) | 28d |
 | trust the agent's `pr_number` on the `pr_ready` path | 13 |
 | accept any `head_ref` without pattern-matching it | **14** |
+| head stays `deck/<slot>/issue-<n>` (revision 6's name) | **46h** — attempt 2 rediscovers the closed PR and escalates a second time |
+| attempt suffix matched as any `[0-9a-f]{8}` rather than against `item.dispatch_nonce` | **46i** |
+| NULL `dispatch_nonce` falls back to the unsuffixed head | **46j** |
+| the brief prints the unsuffixed branch name | **12** — asserts the actual nonce appears |
+| `report_pr_opened` records `pr_number` before classifying the PR's state | **11b, 11c** |
+| `_classify_pull` duplicated rather than shared across the three call sites | **11d** — the sentinel is not consulted on every path |
+| classification runs before the repository check | **11e** — a foreign merged PR is accepted as the outcome |
+| `pr_closed_unmerged` on the `pr_opened` path still sends the design-review mail | **11c** — asserts zero mail rows |
+| `unknown`/`ambient` scope with a stale id mints from the id | **30d, 30e** |
+| two-or-more-merged treated as a `409` | **46k** |
+| `queued_auth_mode_unresolved` declared in `DISPATCH_STATUSES` rather than `PENDING_REASONS` | **29-a** — the status set no longer equals its expected literal |
+| a PR2 path writes a status/reason string literal instead of drawing from the frozensets | **29-b** — and a writer *missing* from 29-b's table is exactly the one where this mutant survives, which is how the omission becomes visible |
 | leave `in_progress`'s `pr_number` write in place (today's code) | **29b** |
 | route `in_progress`'s `pr_number` through verification instead of dropping it | 29b — the report must succeed *and* leave the column NULL |
 | open a second PR on a retried `pr_ready` | 16 |
@@ -2058,7 +2198,7 @@ UPDATE team_github_scopes
  WHERE repo_owner = ? AND repo_name = ?;
 ```
 
-Both columns, not just the mode — an `unknown` mode with a stale id left behind is a row §5.6a's state table does not cover, and the next lookup overwrites the id anyway. The next dispatch re-resolves and writes `app`. `unknown` is the only value that means "ask again"; `ambient` means "already asked, the answer was no."
+Both columns, not just the mode. §5.6a's state table now *does* define `unknown` with a stale id — it normalizes the id to NULL at the next lease — so clearing it here is no longer the difference between defined and undefined behaviour. It is still the right `UPDATE` to write: it makes the operator's intent explicit in one statement rather than relying on a self-healing rule to tidy up afterwards, and an operator reading the row back sees the state they asked for. The next dispatch re-resolves and writes `app`. `unknown` is the only value that means "ask again"; `ambient` means "already asked, the answer was no."
 
 This must happen while **no dispatch is in flight** on those scopes, since a live `app`-mode lease reads the id the `UPDATE` clears. With autonomy off (§6) that is the normal state, but check `github_workspaces` for a non-NULL `leased_item_id` first.
 
@@ -2123,4 +2263,7 @@ This must happen while **no dispatch is in flight** on those scopes, since a liv
 19. **A design PR is immediately reviewable.** It is created non-draft, because nothing in the design path would ever mark it ready, and a draft PR cannot be approved (§5.5.5).
 20. **Deck's PR calls speak GitHub's vocabulary, not git's.** `scope.base_ref` is a refspec (live value `origin/master`, column default `origin/HEAD`) and every existing consumer treats it as one. It is normalized to a branch name before it reaches `create_pull` or `list_pulls_for_head`, in one shared helper, so the base filter cannot silently match nothing (§5.5.5).
 21. **An App-mode workspace survives a backend restart.** The installation id is persisted beside the mode it implies, so a live lease whose in-memory cache was lost still mints a credential — without re-resolving, and without a lookup call from the credential helper. An `app` scope with no id refuses rather than falling through to the human's credential (§5.3a, §5.6a).
-22. **A PR Deck finds is classified before it is used, and a PR closed by a human is never presented as ready.** Reconciliation adopts only an open match, reconciles a merged match to `merged` without asking anyone to review it, and escalates `pr_closed_unmerged` on a closed-unmerged one; the verifier applies the same condition to a PR closed *after* adoption, before any check-run call or draft-to-ready mutation. Closed history does not make a live PR ambiguous, and no new `dispatch_status` value is introduced (§5.5.4a, §5.6b).
+22. **A PR is classified before it is used on *every* path, and a PR closed by a human is never presented as ready.** Reconciliation adopts only an open match, reconciles a merged match to `merged` without asking anyone to review it, and escalates `pr_closed_unmerged` on a closed-unmerged one; the verifier applies the same condition to a PR closed *after* adoption, before any check-run call or draft-to-ready mutation; and the **legacy `pr_opened` path** classifies the reported PR too, so an `ambient`-mode repo cannot produce the false design-review broadcast either. All three call the **same** `_classify_pull` helper — the criterion is not met by three correct copies, because revision 6 had two correct copies and one missing one. Closed history does not make a live PR ambiguous, and no new `dispatch_status` value is introduced (§5.5.4a, §5.6, §5.6b).
+23. **An escalation that is reported is an escalation that is durable.** A rejection at the approval cap persists the leader's decision and the escalated state in one commit, so a failed notification loses the notification and nothing else. Measured against the alternative: the item stays `dispatched` with a live `ack_received_at`, which the monitor reads as an approved plan (§4.3a.1).
+24. **A closed PR does not trap a work item.** One operator `deck_retry_work_item` after a `pr_closed_unmerged` escalation produces a usable open PR, because the retried attempt pushes an attempt-scoped head that no closed PR is attached to. Deck neither reopens a PR a human closed nor opens a second PR on that PR's branch (§5.5.4a).
+25. **Every status and reason value the code can write is one this spec declares**, enforced by three frozensets and a test that asserts them against expected literals — not by a scan over other tests' leftover rows, which the per-test database fixtures make impossible (§5.8 test 29-a).
