@@ -1,7 +1,7 @@
 # Distinct Approver Identity — Design (Findings #1 and #6)
 
 **Date:** 2026-08-05
-**Status:** Design, revision 5 — revised after a fourth implementer review of `732e48d` found eight further blockers, all confirmed against source, live data, or measurement. **Not yet approved for implementation planning.**
+**Status:** Design, revision 6 — revised after a fifth implementer review of `cdd1eb5` found five further blockers, all confirmed against source, live data, or measurement. **Not yet approved for implementation planning.**
 **Closes:** Finding #1 (Leader self-ack), Finding #6 (agent commit identity collides with human reviewer identity)
 **Both are Window 2 gates** — `merge_policy=auto` must not be enabled until PR0 and PR1 land.
 
@@ -53,7 +53,7 @@ Revision 4 also answers a question no review raised, found while tracing every w
 | # | Revision 4 said | Measured reality | Now |
 |---|---|---|---|
 | 1 | refuse a primary workspace, release the lease, let the next attempt find a worktree | `release` sets `leased_item_id = None`, so the primary re-matches `acquire`'s filter and `order_by(id)` returns it again — forever. Revision 4's own test 28c **could not pass against revision 4's design** | `acquire(..., allow_primary=False)` **excludes** `kind == "primary"` from the scan; nothing is leased and nothing needs releasing (§5.7) |
-| 2 | a rejection increments `approval_round_count`; approval evidence is not revisited | `record_approval_round` is 4 lines that identify nothing and clear nothing, and revision 4's own one-request-per-item `409` **blocks** the documented recovery: the owner cannot open a round-2 request | decisions are **round-scoped**: `approval_round` on the request and the decision, `ack_approval_round` on the item, and `revision_requested` increments the round *and* clears all five ack columns (§4.3a.1) |
+| 2 | a rejection increments `approval_round_count`; approval evidence is not revisited | `record_approval_round` is 4 lines that identify nothing and clear nothing, and revision 4's own one-request-per-item `409` **blocks** the documented recovery: the owner cannot open a round-2 request | decisions are **round-scoped**: `approval_round` on the request and the decision, `ack_approval_round` on the item. Revision 5 made the round advance a *separate* `revision_requested` report; revision 6 folds it into the rejection itself — see blocker 2 below (§4.3a.1) |
 | 3 | no binding row ⇒ `bind_pending`, retried "every 60s" | a hand-started pane has no binding row and never will, so **every mail tool fails for its whole life** (`_guard` re-registers before each one). And the failing heartbeat backs off to `HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0`, not 60 | "no row **and** no claimed team context" ⇒ mint **unbound**; `bind_pending` is reserved for a pane claiming a Deck launch; the retry interval is stated as **300s** with `_guard` as the fast path (§3.3a) |
 | 4 | table row 4 refuses a tokenless re-registration; the next paragraph re-mints when the pane binding matches | the same request, two opposite answers. And the case the paragraph existed to rescue **cannot occur**: `session_key` is minted per process (`agent_mail_server.py:26`), so a restarted shim is a *first* registration | the rescue rule is **withdrawn**; row 4 stands unqualified, and the reasoning is pinned by tests 14b/14c (§3.4) |
 | 5 | deriving `reporting_slot_id` from a token fixes dispatch-status trust | authentication is not authorization: **1 of 9** branches compares the reporter to the item. A Specialist could withdraw another slot's approval, accept a foreign handoff, or plant a `pr_number` | an explicit owner/leader/target **matrix** for every branch, plus the current lease token on the two GitHub-writing branches (§3.5a) |
@@ -66,6 +66,30 @@ Revision 5 also answers a question no review raised, found while writing §5.5.5
 **A second retraction, and the lesson behind it.** Revision 4 rejected the scan-exclusion fix for blocker 1 by asserting that narrowing `acquire`'s filter "would change behavior for callers that are not doing identity work, because `acquire` is also how Deck leases a primary checkout for observation purposes." Measured: `acquire` has **exactly one** non-test caller, `github_dispatch_service.py:277`, the dispatch path. There is no observation caller. The sentence was invented to justify a choice already made, and it is retracted in §5.7.
 
 That is now twice in this spec that the alternative dismissed in a "deliberately not chosen" note turned out to be the right answer, both times dismissed on an unverified claim about callers. A rejected alternative needs a measurement, or it is just a confident sentence — and a confident sentence is what a reviewer has no way to check.
+
+**What revision 6 changed.** The fifth review found five blockers in revision 5. All five confirmed; **none refuted**. Four of them are the same defect wearing different clothes: revision 5 added a *new* mechanism and left the *old* text describing the world before it.
+
+| # | Revision 5 said | Measured reality | Now |
+|---|---|---|---|
+| 1 | §3.5a's matrix authorizes every `/dispatch-status` branch, and three later sections cite it as `pr_ready`'s protection | the matrix has rows for the **nine branches that exist today** and no row for `pr_ready`, the tenth branch §5.5.2 adds. An implementer following the normative table lets any registered agent trigger `POST /pulls` on another slot's item | `pr_ready` is a matrix row: **owner only, current lease token required**, both checked before any GitHub call or mutation (§3.5a) |
+| 2 | `deck_approve_work_item(decision="rejected")` records a verdict; `revision_requested` advances the round | two operations, two actors, contradictory authority. The matrix makes `revision_requested` leader-only; §4.3a.1 said "the leader or the owner"; the owner is told to *"revise the plan and ask again"* through a branch the matrix forbids them. Nothing obliges the leader to make the second call, so the deadlock revision 5 set out to remove survived | **the rejection *is* the transition.** One function, `advance_approval_round`, writes the decision row, opens the next round, and clears the five ack columns **in one commit** (§4.3a.1) |
+| 3 | `approval_round_count` "becomes the round identifier" | it defaults to `0`, `reset_for_retry` sets it to `0`, and `record_approval_round` escalates at `>= max_approval_rounds` — while every lifecycle example in the spec starts at round 1 and nothing initialized it. The round also travelled in a payload the **caller** filled, so an owner could pre-date a request for a round that had not opened | `0` means *not dispatched*; dispatch opens round 1; a rejection of round N opens N+1 only while `N < max_approval_rounds`. The round is derived **server-side** after the owner and nonce are validated; a conflicting caller value is a `403` (§4.2a, §4.3a.1) |
+| 4 | a scope's `github_auth_mode` persists, and installation ids are cached in memory "because a restart mints fresh tokens" | the **mode** survives a restart and the **id** does not. A live `app`-mode lease after a restart has no id to mint from, and §5.6a forbids re-resolving. So `git push` and Deck's own `create_pull` both fail on a workspace the spec says is configured | `github_app_installation_id` is persisted on the scope beside the mode, and the restart case is a test (§5.6a). The two contradictory `404` rules are separated by *where* the `404` happens (§5.3a) |
+| 5 | reconciliation queries `state="all"` because a closed PR blocks a create | the *reason* is an unverified claim about GitHub (the REST reference documents `422` for create only as "Validation failed, or the endpoint has been spammed" — nothing about duplicate head/base), and step 2 then adopts **any** single match and advances the item. `merged` is read at `github_verification_service.py:164` and `state` is read **nowhere** in the file, so a merged match enters `verifying` and a **closed** match is presented as ready for review while its PR is closed — measured: `status='ready_for_review'`, `note='PR #5 is ready for review.'` | matches are **classified before adoption**: a unique open match is adopted, a merged match reconciles to `merged`, and a closed-unmerged match escalates `pr_closed_unmerged` with the number in `status_note` (§5.5.4a). `state="all"` is kept, for two reasons the design controls rather than one it guessed at (§5.5.4) |
+
+Revision 6 also closes the same hole one layer downstream, found while confirming blocker 5 — and measurement made it the more serious half. `_verify_item` has no closed-unmerged branch **at all**, so a PR closed *after* Deck adopted or created it keeps being polled as if it were live. For a **draft** PR, which is what Deck creates for every code item (§5.5.5), that is an **unbounded** loop: `_promote_verified_item` calls `mark_pull_ready_for_review`, GitHub refuses it on a closed PR, and `process_scope`'s `except httpx.HTTPError` catches the raise without ever touching `retry_count` — measured at 3 polls, 3 API calls, `retry_count=0`, `status='verifying'`, note *"will retry"* forever. One condition in the verifier, one escalation reason, one test (§5.6b).
+
+**The lesson, stated once because it now has five instances.** Every blocker in this review is a *seam* defect: revision 5 changed a mechanism and left neighbouring text describing the mechanism it replaced. A new branch was added to a route but not to the route's authorization table. A verdict was made structured but the transition that consumes it stayed where it was. A counter was given a meaning but not an initial value. A classification was persisted but not the key it implies. A query was widened but not the code that reads its results. None of these are visible in the section that introduces the change — they are only visible from the *other* side of the seam. So the check that finds them is not "is this section right?" but "what else already reads this, and does it still hold?"
+
+**A third retraction, and it is mine rather than a reviewer's.** Revision 5 justified `state="all"` with "a closed PR on the same head still blocks creation with `422`." That is an empirical claim about GitHub's behaviour, stated without measurement, and GitHub's own reference does not support it (checked). It happens to be load-bearing for nothing — §5.5.4a's ladder is correct either way — but it was written as though it had been verified. Retracted and replaced with two reasons this design controls (§5.5.4). Same failure as the two retractions above: **a confident sentence about behaviour nobody measured**, this time about a third party's API rather than about our own callers. The rule generalizes — if a design decision rests on how an external system behaves, either measure it or write the design so the answer does not matter.
+
+**Three measurements revision 6 rests on, so a reviewer can re-run them rather than trust them.** Both were written as throwaway pytest files against in-memory SQLite with a fake client, no network:
+
+| Claim | How it was measured | Result |
+|---|---|---|
+| a closed-unmerged PR is promoted as ready for review today | `_verify_item` with `merged: false, state: "closed"` and an all-green check run, `merge_policy="human"` | `dispatch_status='ready_for_review'`, `status_note='PR #5 is ready for review.'` |
+| a closed **draft** PR polls forever without consuming the retry budget | `process_scope` three times over the same fixture with `draft: true`, `mark_pull_ready_for_review` raising as GitHub does for a closed PR | `ready_calls` 1→2→3, `retry_count=0` throughout, `dispatch_status='verifying'` throughout |
+| adopting a merged PR sends a false review request | `report_pr_opened(…, 5)` on a **design** item, then one `process_scope` with `merged: true` | `awaiting_human_review` + one `'Design PR ready for review'` mail row; next poll corrects the status to `merged` and **leaves the mail row** |
 
 ---
 
@@ -525,7 +549,7 @@ So `curl "/agent/inbox?member_id=16&mark_read=true"` forges the leader's livenes
 
 ### 3.5a Authentication is not authorization: who may report what
 
-§3.5 makes `reporting_slot_id` **derived** rather than claimed. The fourth review is right that this answers "who is calling" and leaves "may they do this" unanswered, and the gap is measurable: of the nine branches in `report_dispatch_status`, exactly **one** compares the reporter to the item.
+§3.5 makes `reporting_slot_id` **derived** rather than claimed. The fourth review is right that this answers "who is calling" and leaves "may they do this" unanswered, and the gap is measurable: of the nine branches in `report_dispatch_status` **today**, exactly **one** compares the reporter to the item.
 
 ```python
 # agent_teams.py:333-338 — the only authorization check in the whole endpoint
@@ -538,6 +562,8 @@ Every other branch reads `report.work_item_id` and acts. Deriving the slot from 
 
 **The matrix.** Roles are: **owner** = `item.owner_slot_id`; **leader** = `_leader_slot(preset_slots)` (`github_dispatch_service.py:534-539`); **target** = `item.handoff_target_slot_id`. A row's authority is checked *after* the token resolves the caller's slot and *before* any state change.
 
+The table covers **every** status the route accepts after this spec lands — the nine branches that exist today plus `pr_ready`, which §5.5.2 adds. That completeness is the point: a status absent from this table is unauthorized by omission, and revision 5 proved that failure mode by adding `pr_ready` to §5.5.2 and not to this table, while three later sections cited the table as its protection.
+
 | Branch | Who may report it | Lease token | Refusal |
 |---|---|---|---|
 | `triaging` | owner | not required | `403 not_item_owner` |
@@ -545,23 +571,28 @@ Every other branch reads `report.work_item_id` and acts. Deriving the slot from 
 | `blocked` | owner | not required | `403 not_item_owner` |
 | `handoff_initiated` | owner **or** leader | not required | `403 not_owner_or_leader` |
 | `handoff_accepted` | **target** only | not required | `403 not_handoff_target` (in addition to the existing `409` when `handoff_target_slot_id` disagrees) |
-| `revision_requested` | **leader** only | not required | `403 not_leader` |
+| `revision_requested` | **nobody** — retired as an agent-reportable status (§4.3a.1) | — | `409 use_deck_approve_work_item` |
 | `ack_received` | owner | not required | `403 not_item_owner` |
 | `pr_opened` | owner | **required** | `403 not_item_owner`; `409` on token mismatch |
+| `pr_ready` | owner | **required** | `403 not_item_owner`; `409` on token mismatch |
 | `workspace_released` | owner (already enforced) | **required** (already enforced) | unchanged |
 | unknown status | — | — | `400` (unchanged) |
 
-Four points where the shape of that table is a decision rather than a transcription:
+Five points where the shape of that table is a decision rather than a transcription:
 
-**1. `revision_requested` is the leader's, and it is the one branch where the current code is actively dangerous.** It calls `record_approval_round` (`:301-302`), which under §4.3a.1 increments the round and **clears the ack columns**. Left unauthorized, any agent can withdraw an approval it does not own — or, more usefully to a blocked agent, spam the round counter to `max_approval_rounds` and force an escalation. It is also the semantic opposite of the others: a rejection is an *approver's* act, so the owner must not be able to report it. That the owner cannot self-reject is the same distinctness principle §4.5 enforces for approval, applied to the other direction.
+**1. `revision_requested` is nobody's, because a round advance is no longer a report.** Revision 5 made this row leader-only, which was the right instinct and the wrong mechanism: it left round advancement as a second, optional leader action that nothing obliged the leader to take, and §4.3a.1 then contradicted this row in prose. §4.3a.1 now makes the rejection itself advance the round, in one commit, so there is nothing left for this branch to do. It is retained in the route as an explicit `409` naming `deck_approve_work_item` — not deleted — because a shim released before this change still lists it in `deck_report_dispatch_status`'s docstring (`mcp_shim/agent_mail_server.py:612`), and an agent following that docstring deserves a message that tells it where the operation went. A silent `400 unknown status` would read as a Deck bug.
 
 **2. `handoff_accepted` belongs to the target, not the owner.** The existing `ValueError` in `accept_handoff` (`:697-702`) compares the accepting slot against `handoff_target_slot_id` and does discriminate correctly — this row mostly makes an existing implicit rule explicit and gives it a `403` instead of a `409`. Keep both checks: the `403` says "you are not the target," the `409` says "there is no handoff to accept," and collapsing them loses the distinction an agent needs to act on.
 
-**3. The lease token is required exactly where the branch causes a GitHub write, and `pr_opened` is the only new one.** Measured: `report_pr_opened` (`github_verification_service.py:44-86`) makes no GitHub call itself, but it sets `item.pr_number`, which is what admits the item to `process_scope`'s query (`:95-110`) and from there to `_verify_item` and `_promote_verified_item` — the merge. So `pr_opened` is the entry point to the write path even though it writes nothing itself. Requiring the current lease token means a stale attempt cannot inject a PR number into a re-dispatched item, which is precisely the class of bug the lease token was introduced for in G2.
+**3. The lease token is required exactly where the branch reaches GitHub, which is both `pr_opened` and `pr_ready`.** Measured: `report_pr_opened` (`github_verification_service.py:44-86`) makes no GitHub call itself, but it sets `item.pr_number`, which is what admits the item to `process_scope`'s query (`:95-110`) and from there to `_verify_item` and `_promote_verified_item` — the merge. So `pr_opened` is the entry point to the write path even though it writes nothing itself. `pr_ready` is stronger still: it makes Deck call `GET /git/ref`, `GET /pulls`, and `POST /pulls` synchronously, so an unauthorized report burns rate limit and can create a public artifact. Requiring the current lease token on both means a stale attempt cannot inject a PR into a re-dispatched item, which is precisely the class of bug the lease token was introduced for in G2.
+
+  **Order matters more on `pr_ready` than anywhere else in this table.** Both checks — owner, then current lease token — run before the first GitHub call and before any column is written. On the other branches an out-of-order check leaks a local mutation that a test can catch by reading the row; here it leaks a PR on someone's repository, which no rollback undoes. §5.8's test 17b asserts the mock was never invoked, and §3.5a's test 7f asserts the same rule from the authorization side.
 
   `in_progress` is **not** on the required list, because §5.6 removes its `pr_number` write entirely. If a future change restores that write, this row must change with it — noted here because the two facts are only safe together.
 
-**4. Everything else takes no token deliberately.** Requiring a lease token on `triaging` or `blocked` would break the one path that most needs to work: an agent reporting that it is stuck. `blocked` escalates to a human, and a gate that can refuse an escalation because a lease rotated is a gate that hides failures. Authority without a token is the right trade for reports that only ever *reduce* Deck's confidence.
+**4. `pr_ready` is owner-only and not owner-or-leader.** `handoff_initiated` admits the leader because it is a management act on someone else's item. Creating a PR is not: the branch being turned into a PR was pushed by the owner's credential from the owner's leased worktree, and the lease token the row requires is the owner's. A leader holding no lease could not satisfy the second check anyway, so admitting them would produce a `409` that reads like a Deck fault instead of a `403` that states the rule.
+
+**5. Everything else takes no token deliberately.** Requiring a lease token on `triaging` or `blocked` would break the one path that most needs to work: an agent reporting that it is stuck. `blocked` escalates to a human, and a gate that can refuse an escalation because a lease rotated is a gate that hides failures. Authority without a token is the right trade for reports that only ever *reduce* Deck's confidence.
 
 **Where the check lives.** In `report_dispatch_status`, as a small resolver called once before the branch chain — not inside each service function. The services are also called from the monitor loop and from operator paths that have no reporting slot, and pushing agent authorization into them would either block those callers or grow an `if caller_is_agent` parameter through five signatures. The endpoint is the trust boundary; the check belongs at the boundary.
 
@@ -570,19 +601,25 @@ Four points where the shape of that table is a decision rather than a transcript
 **Tests** (offline, in §3.7's file since they are token-dependent):
 
 7b. Each branch in the matrix, reported by a non-authorized slot ⇒ the stated `403`, and the item's columns are **unchanged**. Assert the state, not just the status code — a route that mutates then refuses returns the same code.
-7c. `revision_requested` from the **owner** ⇒ `403 not_leader`, and `approval_round_count` is unchanged. This is the withdrawal-spam test; it must fail against revision 4, which had no authorization here at all.
-7d. `revision_requested` from the **leader** ⇒ `200`, round incremented, ack columns cleared (§4.3a.1).
+7c. **The matrix is exhaustive.** Enumerate the route's accepted statuses from the branch chain itself and assert every one appears in the authorization resolver's table; a status the resolver does not know refuses rather than defaulting to allowed. This is the blocker-1 test in its general form: revision 5's `pr_ready` hole was one missing row, and a per-row test would have to be written for each future branch to catch the next one. Written to fail against a resolver whose fall-through is "no rule ⇒ proceed."
+7d. `revision_requested` from **any** slot — owner, leader, or a third — ⇒ `409 use_deck_approve_work_item`, and `approval_round_count`, the five ack columns, and `dispatch_status` are all unchanged. This is the withdrawal-spam test in its final form: against revision 4 any agent could drive the counter to `max_approval_rounds`, and against revision 5 the leader could advance a round without deciding anything.
 7e. `handoff_accepted` from a slot that is neither target nor owner ⇒ `403 not_handoff_target`; from the target ⇒ `200`. Both against an item whose `handoff_target_slot_id` is set, so the existing `409` path is not what produces the refusal.
 7f. `pr_opened` from the owner with a **stale** lease token ⇒ `409`, and `item.pr_number` stays `NULL`. Then the same call with the current token ⇒ `200`. The `NULL` assertion is the point: if `pr_number` is set before the token check, the item enters `process_scope` and the refusal is cosmetic.
 7g. `blocked` from the owner with **no** lease token ⇒ `200` and the escalation is recorded. Written to fail against an implementation that requires the token everywhere "for consistency."
+7h. **`pr_ready` from a non-owner slot** holding *its own* valid lease on *another* item ⇒ `403 not_item_owner`, `item.pr_number` stays `NULL`, and the mocked client records **zero** calls — not even the `GET /git/ref` existence check. The foreign-but-valid lease is the point: an implementation that checks "is this token current for some workspace" instead of "does this token lease *this* item" passes a naive test and fails this one.
+7i. **`pr_ready` from the owner with a stale lease token** ⇒ `409`, `pr_number` stays `NULL`, and again zero client calls. Paired with 7h so the two failure modes stay distinguishable: 7h is "wrong agent," 7i is "right agent, dead lease."
 
 | Mutant | Test that must fail |
 |---|---|
 | authorization checked after the state change | **7b, 7f** |
-| `revision_requested` allowed to the owner | **7c** |
+| a branch with no matrix row falls through to allowed (revision 5's `pr_ready`) | **7c, 7h** |
+| `revision_requested` still advances the round for the leader (revision 5) | **7d** |
 | `handoff_accepted` authorized to the owner instead of the target | 7e |
 | lease token required on every branch | **7g** |
 | lease token dropped from `pr_opened` | 7f |
+| lease token dropped from `pr_ready` | **7i** |
+| lease validated as "current for any workspace" rather than for this item | **7h** |
+| `pr_ready` authorization checked after the ref-existence call | **7h, 7i** — both assert zero client calls |
 
 ### 3.6 The operator path stays open
 
@@ -668,9 +705,10 @@ Inbox (§3.5):
 | inbox route authenticates but still honours the query `member_id` | 19 |
 | inbox mutations applied before the auth check | **18** |
 | token compared with `==` instead of `hmac.compare_digest` | — (not observable by test; enforce in review) |
-| rotation leaves the old hash valid | 6 |
 
-The third row is deliberate. A timing-safe comparison is not test-observable, so listing it as a review item is honest; claiming a test covers it would not be.
+The last row is deliberate. A timing-safe comparison is not test-observable, so listing it as a review item is honest; claiming a test covers it would not be.
+
+Revision 5 had one further row here, "rotation leaves the old hash valid | 6," and it is **removed** rather than repointed. Test 6 is the external-actor test (`sender_actor_id` set, `sender_member_id` NULL) and has nothing to do with rotation; and after §3.4 ordinary re-registration does not rotate at all, so the mutant describes a mechanism this spec no longer has. The rotation-adjacent behaviour that *does* still need covering — that re-registration authenticates without re-issuing, and that an interleaved header stays valid — is already pinned by tests 13 and 14 above. A mutation row pointing at an unrelated test is worse than no row: it reads as coverage during review and bites nothing.
 
 ### 3.8 Blast radius, stated plainly
 
@@ -729,12 +767,79 @@ Minted where `dispatched_at` is set (`github_dispatch_service.py:344`), so one n
 
 | Event | Site | Action |
 |---|---|---|
-| dispatch | `:344` | mint a fresh nonce |
-| retry | `reset_for_retry:64-71` | clear nonce + the four new ack columns alongside the existing `ack_received_at = None` |
-| handoff accepted | `accept_handoff:705` | clear **all five** ack fields + `last_nudge_at`; **keep the nonce** — see below |
-| revision requested | `record_approval_round:672-679` | increment the round, then clear **all five** ack fields + `last_nudge_at`; **keep the nonce** (§4.3a.1) |
+| dispatch | `:344` | mint a fresh nonce, **and open round 1** (§4.2a) |
+| retry | `reset_for_retry:64-73` | clear nonce + the four new ack columns alongside the existing `ack_received_at = None`; `approval_round_count` is already set to `0` here (`:73`) |
+| handoff accepted | `accept_handoff:705` | clear **all five** ack fields + `last_nudge_at`; **keep the nonce** and **keep the round** — see below |
+| rejection | `advance_approval_round` (replacing `record_approval_round:672-679`) | increment the round, then clear **all five** ack fields + `last_nudge_at`; **keep the nonce** (§4.3a.1) |
 
 The nonce is a *correlation* value, not a secret — PR0 provides the authentication. It exists so that evidence from attempt N cannot satisfy attempt N+1, which no amount of authentication would prevent on its own.
+
+### 4.2a The round has an initial value, and revision 5 never gave it one
+
+Revision 5 said `approval_round_count` "becomes the round identifier" and left three questions unanswered. The fifth review's third blocker is all three, and each is measurable.
+
+**1. `0` is the live default and no lifecycle example uses it.** `approval_round_count` defaults to `0` (`app/models/database.py:267`), `reset_for_retry` sets it to `0` (`github_dispatch_service.py:73`), and every example in revision 5 — §4.8's tests 29-37, §4.3a.1's prose — begins at round 1. Nothing initialized it. An implementer reading only the mechanism would ship a first dispatch whose request payload says `approval_round = 0` while the spec's tests all assert `1`.
+
+**2. The cap's arithmetic changes with the starting value.** `record_approval_round` escalates at `>= scope.max_approval_rounds` (`:676`) with the default `3` (`app/models/database.py:221`). Starting at `0`, three rejections reach `3` and escalate — so the item gets rounds 0, 1, 2 and dies entering round 3. Starting at `1`, three rejections reach `4`, which never triggers `>= 3` on the third and triggers it on the second. The same constant means different things depending on an initial value the spec did not state, and the existing test asserts the `0`-based arithmetic (`tests/agent_teams/test_github_dispatch_service.py:2334-2355`: `max_approval_rounds = 2`, two calls, escalates on the second).
+
+**3. The round travelled in a payload the caller filled.** §4.3a.1 had `deck_request_context` read the item's counter and put it in the payload. The shim is the honest caller; `POST /agent-mail/messages` is not the only writer ([[deck-mail-writes-are-unauthenticated]]). An owner could post a `context_request` with `approval_round = 5` before round 5 opened, and it would become the matching request the moment the counter arrived — an approval pre-dated for a round that had not happened.
+
+**Decision: `0` means not dispatched; dispatch opens round 1; the server derives the round.**
+
+| Value of `approval_round_count` | Meaning |
+|---|---|
+| `0` | the item has never been dispatched, or has been reset for retry. **No round is open**, so no approval request is valid and the gate has nothing to compare |
+| `1` | the first dispatch's round — set at `:344` alongside `dispatched_at` and the nonce, in the same commit |
+| `n` where `1 < n <= max_approval_rounds` | the round opened by the (n-1)th rejection |
+
+So the mint site does three things atomically, not one:
+
+```python
+item.dispatched_at = datetime.utcnow()
+item.dispatch_nonce = secrets.token_hex(8)
+item.approval_round_count = 1          # <-- the round opens with the attempt
+```
+
+Setting the round to `1` rather than leaving it `0` is what makes "which round is open" answerable without consulting `dispatched_at`, and it means a pre-upgrade row (`0`, no nonce) refuses on both counts rather than accidentally matching a request that omitted the round.
+
+**The cap, restated for a 1-based counter.** `advance_approval_round` (§4.3a.1) checks *before* it increments, so the counter never holds a round that did not happen:
+
+```python
+if item.approval_round_count >= scope.max_approval_rounds:
+    # the round we would open does not exist; leave the counter on the last real round
+    await self.escalate(db, item, "approval_rounds_exhausted")
+else:
+    item.approval_round_count += 1
+```
+
+The comparison keeps its `>=` and the **structure** changes instead. That is the point worth stating plainly, because the obvious fix is to leave `record_approval_round`'s shape alone and flip `>=` to `>`:
+
+```python
+item.approval_round_count += 1                        # DO NOT ship this form
+if item.approval_round_count > scope.max_approval_rounds:
+    await self.escalate(db, item, "approval_rounds_exhausted")
+```
+
+Both forms escalate on exactly the same rejection — measured, not reasoned: with `max_approval_rounds = 3` from a start of `1`, both allow rounds 2 and 3 and escalate on the attempt to open 4, and both fail the same three existing tests. They differ only in what they leave in the row. Increment-then-compare ends at `4`, a round no request can ever match; the precondition form ends at `3`, the last round that really happened. Choose the precondition form, because §4.5's `ack_approval_round == approval_round_count` comparison and §4.3 rule 3's `stale_round` refusal both read this column, and a column holding a fictional round makes both unreadable during an incident. Revision 5's inherited `>=` was wrong about the *arithmetic* (it reduced the available rounds by one under a 1-based counter); flipping the operator fixes the arithmetic and leaves the state wrong. Fix both.
+
+**Three existing tests must be updated, and the plan must name all three.** Measured by applying each candidate form to `:672-679` and running the suite (`tests/agent_teams/test_github_dispatch_service.py`, 106 tests): both forms give 103 pass and exactly these three fail.
+
+| Test | Line | Why it fails | What it must become |
+|---|---|---|---|
+| `test_approval_round_cap_escalates` | `:2335` | `max_approval_rounds = 2`, item starts at `0`, two calls reach `2` — which escalated under the old 0-based rule and does not under either new form | start the item at `1` (dispatch's value) and assert the *rounds* available: rejections open 2 then 3, and the rejection that would open 4 escalates. Assert the final counter is `3`, not `4` — that assertion is what separates the two candidate forms |
+| `test_escalation_creates_agent_mail_broadcast` | `:2359` | `max_approval_rounds = 1` and one call reached `1`; it uses the cap only as a convenient way to *trigger* an escalation | keep testing the broadcast, not the arithmetic: set the item's round to the cap first, so one rejection crosses it |
+| `test_escalation_state_persists_when_notification_fails` | `:2393` | same trigger, same reason | same fix |
+
+The last two are the instructive ones. Neither is a cap test — they are a mail test and a rollback test that borrow the cap as a trigger, so a plan that only looks for tests *named* after approval rounds will find one of the three and leave two red. That is the same seam the whole review is about: the change is in the arithmetic, and two of its three consequences live in sections about something else. **Do not** repair them by reverting to `>=` locally or by loosening an assertion; the second and third tests should stop depending on the exact cap value at all.
+
+**The round is derived, never accepted.** Both tools that carry a round derive it server-side:
+
+- `deck_request_context(work_item_id, dispatch_nonce)` — the **route** reads `item.approval_round_count` after resolving the item and confirming the caller is its current owner, and writes that value into the payload. The tool signature gains no `approval_round` parameter, so the shim cannot supply one.
+- A caller that posts `POST /agent-mail/messages` directly with a payload `approval_round` that disagrees with the item's current count ⇒ `403 approval_round_mismatch`. Not silently overwritten: the same "derive, do not compare" rule §3.5 applies to `sender_member_id`, and for the same reason — silently correcting a wrong value hides a misconfigured or hostile caller behind a success.
+- A payload `approval_round` that *agrees* is accepted, which keeps a future shim's explicit value valid and keeps this rule from being a version tripwire.
+- `deck_approve_work_item` (§4.3a) takes the round from the **resolved request's** payload, which is now itself server-derived, so the leader cannot choose it either.
+
+**Why not drop `approval_round` from the payload entirely** and have the gate read only `item.approval_round_count`? Because then a request carries no record of the round it was made in, and §4.3 rule 3's `stale_round` refusal becomes unimplementable: every request would match every round. The payload value is the request's own statement of when it was made; the derivation rule is what makes that statement trustworthy.
 
 **Handoff clears five fields, not two.** Revision 2 said "both ack columns," meaning the two new ones. That was an off-by-one with a consequence. `ack_received_at` already exists and `_ack_satisfied` reads it (`:905-911`):
 
@@ -763,6 +868,8 @@ So `accept_handoff` clears:
 
 **Why handoff keeps the nonce.** Clearing it would deadlock the item. `accept_handoff` sends **no new brief**, so the new owner never learns a replacement nonce, and every subsequent ack attempt would refuse with `no_linkage` forever. Clearing the *ack* fields is what matters: the new owner must obtain their own approval, and §4.3 rule 3 requires the `context_request` to have been sent **by the current owner member**, so the previous owner's request cannot satisfy the new one even though the nonce is unchanged. Retry is different — it re-dispatches through `:344`, which mints a fresh nonce, so clearing is both safe and necessary there.
 
+**Why handoff keeps the round too.** A handoff is not a rejection: nobody has declined anything, so no new round should open, and the cap must not be consumed by an event the leader did not cause. Handing an item back and forth three times would otherwise exhaust `max_approval_rounds` without a single review ever happening. The *owner* changed and the *round* did not, which is exactly the state §4.3 rule 3 already handles — the request must come from the current owner member, so the new owner opens a fresh `context_request` **in the same round** and the previous owner's request in that round no longer matches. That is also why §4.3a's duplicate-request `409` is scoped to `(work item, nonce, round, owner)` and not to `(work item, nonce, round)`: two requests in one round from two different owners is the normal shape of a handoff, not a shim bug.
+
 **The deferred-retry path is already covered.** `reset_for_retry` returns early at `:56-63` when the item still holds a lease, setting only `retry_requested_at`. The monitor at `:84-98` later re-selects those items and calls `reset_for_retry` **again** once the lease is gone, and that second call reaches the clearing block. So the deferred path clears the columns too, with no extra work — but a test must prove it, because "the early return skips the clear" is exactly the kind of thing that looks broken and is not (test 10b).
 
 ### 4.3 Structured evidence
@@ -787,7 +894,7 @@ A `MailMessage | None` return cannot carry the distinct refusal reasons the test
 
 1. Resolve the **designated leader member**: `_leader_slot(preset_slots)` → `_slot_member(db, leader.id)`. This is the *only* acceptable approver. Not "any member," not "any slot member" — the specific member bound to the leader slot. Live data justifies the strictness: 12 of 19 members have no slot at all. If either the leader slot or its member cannot be resolved, refuse `no_leader` — fail closed, never treat an unresolvable approver as satisfied.
 2. Resolve the owner member via the existing `_owner_member(db, item)`. If the owner **is** the designated leader, refuse with `self_ack` immediately — this is Finding #1's exact shape and needs no evidence lookup to reject. If the owner member cannot be resolved, refuse `no_owner`.
-3. Find `context_request` rows whose payload `work_item_id` equals `item.id`, sent by the owner member and addressed to the leader member. If **no** row matches the work item at all ⇒ refuse `no_linkage`. If a row matches the work item but **none** matches `item.dispatch_nonce` ⇒ refuse `stale_nonce`. If a row matches the nonce but **none** carries `approval_round == item.approval_round_count` ⇒ refuse `stale_round` (§4.3a.1) — the owner is replaying an approval from before a revision was requested. Evaluate in that order, so the three reasons stay distinguishable: `no_linkage` means "they never asked," `stale_nonce` means "they are replaying an older *attempt*," `stale_round` means "they are replaying an older *round* of this attempt." A NULL `item.dispatch_nonce` (a pre-upgrade row) can never match, so it refuses `stale_nonce` — correct, and §4.1 already states such items must be re-dispatched. A NULL payload `approval_round` likewise never matches, refusing `no_linkage` per §4.3a.1.
+3. Find `context_request` rows whose payload `work_item_id` equals `item.id`, sent by the owner member and addressed to the leader member. If **no** row matches the work item at all ⇒ refuse `no_linkage`. If a row matches the work item but **none** matches `item.dispatch_nonce` ⇒ refuse `stale_nonce`. If a row matches the nonce but **none** carries `approval_round == item.approval_round_count` ⇒ refuse `stale_round` (§4.3a.1) — the owner is replaying an approval from before a revision was requested. Evaluate in that order, so the three reasons stay distinguishable: `no_linkage` means "they never asked," `stale_nonce` means "they are replaying an older *attempt*," `stale_round` means "they are replaying an older *round* of this attempt." A NULL `item.dispatch_nonce` (a pre-upgrade row) can never match, so it refuses `stale_nonce` — correct, and §4.1 already states such items must be re-dispatched. A NULL payload `approval_round` likewise never matches, refusing `no_linkage` per §4.3a.1. `item.approval_round_count == 0` means no round is open (§4.2a), so it too can never match a stated round and refuses `stale_round` rather than matching a request that said `0`.
 4. Among the matching threads, require an `answer` row whose `thread_root_id` is that `context_request`, whose `sender_member_id == leader_member.id`, **and whose `decision` column is `'approved'`** (§4.3a). Found ⇒ accept, recording `approver_member_id` and `evidence_message_id` (the **answer** row's id, not the request's — the answer is the approval). If more than one qualifies, take the earliest by `created_at`, so the recorded evidence is the approval that actually unblocked the owner. If a leader-authored answer exists but no row carries `decision = 'approved'`: refuse `rejected` when any of them carries `decision = 'rejected'`, otherwise refuse `no_decision`. If no leader-authored answer exists at all ⇒ refuse `not_designated_approver`.
 5. Accepted ⇒ set `ack_received_at`, `ack_approver_member_id`, `ack_evidence_message_id`, `ack_enforcement_epoch = 1`, `ack_approval_round = item.approval_round_count`. Refused ⇒ **do not** set `ack_received_at`; return `409` from `/dispatch-status` with `reason` in the detail.
 6. Before any of the above: if `mail_capability_tokens_required` is `False`, refuse `tokens_not_enforced` without evaluating or writing anything (§3.4a).
@@ -840,9 +947,18 @@ def deck_approve_work_item(
     decision: str,            # "approved" | "rejected"
     reason: str,
 ) -> dict:
-    """Record an explicit approval decision for a dispatched work item. Only the
-    designated team leader's decision counts, and it only counts for the dispatch
-    attempt named by dispatch_nonce."""
+    """Record an explicit approval decision for a dispatched work item.
+
+    Only the designated team leader's decision counts, and it only counts for
+    the dispatch attempt named by dispatch_nonce, in the approval round that is
+    currently open.
+
+    decision="rejected" also opens the next approval round: it clears the
+    previous round's approval so the merge gate no longer passes, and the owner
+    revises and sends a new deck_request_context. No other call is needed by
+    anyone. If no round remains under the scope's max_approval_rounds, the item
+    escalates for a human instead (approval_rounds_exhausted).
+    """
 ```
 
 It posts an `answer` row in the owner's `context_request` thread — the same shape §4.3 rules 3-4 already match on — with `decision` and `reason` carried as **columns**, not prose. `reason` is required and free text; it is what an operator reads in the UI and what the owner reads in the thread body. `decision` is what the gate reads, and the two are independent: a verbose approval and a terse one are equally valid, and a refusal with a long explanation is still a refusal.
@@ -867,42 +983,79 @@ Nullable, so every existing row — including rows 82 and 92 — reads `NULL`, w
 
 Putting the check in `send_message` rather than only in the tool matters: the tool is a convenience wrapper over the same HTTP endpoint every agent can call directly with `curl`. A guard that lives only in the shim guards nothing (§1.5's whole argument).
 
-**The tool does not choose the thread; the server resolves it.** `deck_approve_work_item` takes a work item and a nonce, not a `thread_root_id`, so it needs one new route: `POST /agent-mail/decisions`, which resolves the `context_request` whose payload matches `(work_item_id, dispatch_nonce)` **and** whose `recipient_member_id` is the authenticated caller, then delegates to `send_message` with `kind="answer"` and the decision. Resolution is server-side on purpose:
+**The tool does not choose the thread; the server resolves it.** `deck_approve_work_item` takes a work item and a nonce, not a `thread_root_id`, so it needs one new route: `POST /agent-mail/decisions`, which resolves the `context_request` whose payload matches `(work_item_id, dispatch_nonce, item.approval_round_count)` **and** whose `recipient_member_id` is the authenticated caller. It then branches on the verdict:
+
+- `approved` ⇒ delegate to `send_message` with `kind="answer"` and the decision. Nothing on the work item changes; §4.3's ack path is what reads the row.
+- `rejected` ⇒ call `advance_approval_round` (§4.3a.1), which writes that same `answer` row **and** opens the next round in one commit. The route does not write the decision row itself in this branch, because splitting the write from the transition is exactly the defect §4.3a.1 exists to remove.
+
+Resolution is server-side on purpose:
 
 - The leader cannot post a decision into the wrong thread by mistyping an id.
 - The existing `send_message` answer guard (`:859`, "only the context request recipient can answer it") is preserved rather than bypassed — the leader *is* the recipient of the owner's request, so the guard passes for exactly the right party and fails for everyone else.
-- Zero matching requests ⇒ `404` (nobody asked for this item under this nonce). More than one ⇒ `409` with both ids; do not guess. Multiple matches mean the owner opened two threads for one attempt, which is a shim bug worth surfacing rather than papering over.
+- Zero matching requests ⇒ `404` (nobody asked for this item under this nonce **in the current round**). More than one *from the current owner* ⇒ `409` with both ids; do not guess. Multiple matches mean the owner opened two threads for one round, which is a shim bug worth surfacing rather than papering over. Two matches from *different* owners is the handoff shape (§4.2) and resolves to the current owner's, not a `409`.
 
-#### 4.3a.1 A rejection needs a next round, and revision 4 gave it none
+#### 4.3a.1 The rejection *is* the transition — one function, one commit
 
-Revision 4 told a rejected owner to "revise the plan and ask again," and the fourth review's second blocker is that this does not work as specified. Three separate problems, all confirmed:
+Revision 4 told a rejected owner to "revise the plan and ask again," and the fourth review's second blocker was that this does not work as specified. Three problems, all confirmed then and all still worth stating because the fix must close all three:
 
-1. **The second request collides with my own `409`.** §4.3a resolves the thread from `(work_item_id, dispatch_nonce)`, and the nonce does *not* change on revision — only on re-dispatch (§4.2). So an owner who asks again has two `context_request` rows matching the same pair, which is precisely the "more than one ⇒ `409` with both ids; do not guess" case. The documented recovery path is unreachable through the documented tool.
+1. **The second request collides with my own `409`.** §4.3a resolved the thread from `(work_item_id, dispatch_nonce)`, and the nonce does *not* change on revision — only on re-dispatch (§4.2). So an owner who asks again has two `context_request` rows matching the same pair, which is precisely the "more than one ⇒ `409`; do not guess" case. The documented recovery path was unreachable through the documented tool.
 2. **`record_approval_round` does not identify anything.** Measured, it is four lines: increment the counter, escalate at the cap, commit (`github_dispatch_service.py:672-679`). It does not name the active request, does not touch the ack columns, and does not know a decision exists.
-3. **Approve-then-reject still permits auto-merge.** Revision 4 argued that a recorded approval should stand because the owner may already have pushed. True as far as it goes — but revision 4 then offered `revision_requested` as the leader's remedy, and `revision_requested` clears no ack columns. So the leader's stated lever does nothing to the gate, and auto-merge proceeds on the approval the leader has since withdrawn.
+3. **Approve-then-reject still permits auto-merge.** Revision 4 argued a recorded approval should stand because the owner may already have pushed. True as far as it goes — but revision 4 offered `revision_requested` as the leader's remedy, and `revision_requested` clears no ack columns. The leader's stated lever did nothing to the gate.
 
-**Decision: decisions are scoped to an approval round.** `item.approval_round_count` already exists (`app/models/database.py:267`, default `0`) and already has a cap (`scope.max_approval_rounds`, `app/models/database.py:221`, default `3`). It becomes the round identifier:
+**Revision 5 split the fix across two operations and thereby kept the deadlock.** It made the verdict structured (`deck_approve_work_item`) and left the transition where it was (`revision_requested` → `record_approval_round`). The fifth review's second blocker is what that split produces:
 
-- `deck_request_context` puts `approval_round` in the payload alongside `work_item_id` and `dispatch_nonce`, reading the item's current `approval_round_count`.
-- `deck_approve_work_item` records the round it is deciding, taken from the resolved request's payload — not from the caller, who would then be able to choose it.
-- **The gate considers only the current round.** §4.3 rule 3's match becomes `(work_item_id, dispatch_nonce, approval_round == item.approval_round_count)`, so the thread resolution in §4.3a is unique again: one request per round, and the `409` fires only for a genuine duplicate *within* a round, which remains a shim bug.
-- `revision_requested` → `record_approval_round` increments the counter **and clears the five ack columns**, exactly as `accept_handoff` does (§4.2). The next round therefore starts with no approval, and the gate refuses `no_decision` until the leader decides again.
+- The §3.5a matrix made `revision_requested` **leader-only**, while this section said "the leader or the owner" — a flat contradiction between two sections of one spec.
+- The owner was told to *"revise the plan and ask again"* through a branch the matrix forbids them to call.
+- **Nothing obliged the leader to make the second call.** A leader who rejects and stops has done everything the tool contract asks; the round never advances, the ack columns are never cleared, and the owner cannot legally open round 2. Same deadlock, one layer further in.
 
-This makes the withdrawal implicit and total: the leader does not need a second tool to revoke, because moving the round drops the previous round's evidence by construction. And it resolves problem 3 without the retroactive-un-approval hazard revision 4 was right to avoid — the approval is not reversed, it is *superseded*, and only by an explicit act (`revision_requested`) that the leader or owner takes deliberately.
+**Decision: `deck_approve_work_item(decision="rejected")` advances the round itself.** There is no second call to forget. One function on the dispatch service replaces `record_approval_round`:
 
-**Approve-then-reject within one round** keeps revision 4's rule: the approval stands. That case is now narrow — the leader approved and then changed their mind *without* requesting a revision — and the correct answer is still not to strand a pushed PR. The leader's lever is `revision_requested`, which now actually works.
+```python
+async def advance_approval_round(
+    self,
+    db: AsyncSession,
+    item: GithubWorkItem,
+    scope: TeamGithubScope,
+    *,
+    decision_message: MailMessageCreate,
+) -> None:
+    """Record a rejection and open the next approval round in one commit."""
+```
 
-**Who may report `revision_requested`** is blocker 5's question, answered in §3.5a. It must be the leader or the owner, not any authenticated slot: a Specialist who could increment the round could otherwise reset another item's approval at will, or drive it to `approval_rounds_exhausted` in three calls.
+It is called from the `POST /agent-mail/decisions` route (§4.3a) when and only when `decision == "rejected"`, after that route has resolved the thread and authenticated the leader. An `approved` decision does not call it: approval ends the round, it does not open one.
+
+**The order of the four steps is not arbitrary — it is the difference between working and silently losing the withdrawal.** Measured on this venv, and the measurement is the reason this paragraph exists:
+
+1. Clear the five ack columns and `last_nudge_at` on `item` — **pending, not committed**.
+2. Increment `item.approval_round_count` — pending.
+3. Call `send_message` with the `answer` row carrying `decision = 'rejected'`. `send_message` ends in `await db.commit()` (`agent_mail_service.py:899`), and that commit is on the **same** `AsyncSession`, so it persists the decision row *and* steps 1-2 together. Verified directly: mutate an item without committing, call `send_broadcast` on the same session, then read the row back through a raw `text()` query that bypasses the identity map — the mutation is present.
+4. Only then, if the new round exceeds the cap, `await self.escalate(...)`.
+
+Putting step 4 before step 3 loses the transition. `escalate` calls `await db.rollback()` when the escalation broadcast raises (`github_dispatch_service.py:1017`, inside the `except Exception` at `:1013-1018`), and that rollback discards **every** uncommitted change on the session — including the ack clears and the round increment. Measured, with the mail broadcast monkeypatched to raise: escalating before the decision row is committed leaves `approval_round_count = 1` and `ack_received_at` **still set**, while the `answer` row carrying the rejection persists from its own earlier commit. That is the worst reachable state in this spec — *the leader's rejection is on the record and the item still carries a live approval* — and it is produced by ordinary mail failure, not by an attack. With the order above, the same injected failure leaves `approval_round_count = 2` and `ack_received_at = NULL`: the withdrawal survives, and only the notification is lost.
+
+The bound on that hazard, stated so the plan does not have to rediscover it: `approval_rounds_exhausted` is **not** in `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`), and `process_scope` polls only `dispatched`, `verifying`, `ready_for_review`, `awaiting_human_review` (`:96-107`) — never `escalated`. So an item stuck this way does not auto-merge; it stalls. Stalling is the correct failure, which is exactly why the ordering must be specified rather than left to whichever reads more naturally.
+
+**The cap is a precondition, not a post-check** — the code and the measurement behind it are in §4.2a, which is the single normative statement of the arithmetic. Steps 2 and 4 above are that `if`/`else`: below the cap, increment; at it, escalate and leave the counter on the last real round.
+
+**A rejection at the cap does not open a round and does not clear the ack columns.** The item escalates for a human. Clearing the evidence on the way out would destroy the record of what the leader last approved, which is the first thing an operator needs. The decision row is still written — the leader's verdict is always recorded — and `dispatch_status` becomes `escalated` with `escalation_reason = "approval_rounds_exhausted"`.
+
+One measured caveat for the plan: `escalate` returns early without notifying when the item is *already* `escalated` with a reason (`_apply_escalation:1020-1040`, whose `preserve_existing_reason=True` default makes the guard at `:1028-1033` return `False`, and `escalate:1000-1001` then returns). Verified — a rejection against an item already escalated as `leader_offline` advances the counter to `2` and keeps `escalation_reason = "leader_offline"`, sending no broadcast. `advance_approval_round` must therefore refuse before doing anything when `item.dispatch_status == "escalated"`: `409 item_escalated`. A leader deciding on an escalated item is acting on stale information, and the round must not move underneath a human who has already been called in.
+
+**What `revision_requested` becomes: a `409`.** It is retired as an agent-reportable status (§3.5a), refusing with `use_deck_approve_work_item` for **every** caller — leader, owner, and third party alike. The branch is not deleted, because the shim's docstring still advertises it (`mcp_shim/agent_mail_server.py:612`) and a deployed agent will call it; a named refusal that tells the agent which tool to use instead is strictly better than a `422` on an unknown enum value. This is what closes the contradiction: there is no longer a question of *who* may report `revision_requested`, because nobody may, and the authority that used to attach to it now attaches to the decision itself — which only the designated leader can write (§4.3a).
+
+**Withdrawal is implicit and total.** The leader needs no second tool to revoke, because opening the round drops the previous round's evidence by construction. And this resolves problem 3 without the retroactive-un-approval hazard revision 4 was right to avoid: the approval is not reversed, it is *superseded*, by the single act the leader already performs.
+
+**Approve-then-reject within one round** keeps revision 4's rule with a correction to its reasoning. The `approved` row stays in the thread — history is not rewritten — but the *rejection* is now a real transition, so it clears the ack columns and opens the next round exactly as any other rejection does. Revision 4 said the approval "stands"; that was correct only because it had no working lever. With `advance_approval_round` the lever exists, and a leader who changes their mind gets the behavior they obviously intend: no merge on the approval they just withdrew. The owner may already have pushed a PR — that PR simply needs approval in round 2, which is the whole point of the gate.
 
 **A NULL `approval_round` in the payload** — from a pre-upgrade shim, or `deck_request_context` called without it — cannot match round 0 by accident. Treat NULL as "no round stated" and refuse `no_linkage`, on the same reasoning §4.3 rule 3 already applies to a NULL nonce: an item whose evidence predates the linkage requirement must be re-dispatched, not grandfathered.
 
 **Why not a separate `approval_rounds` table.** A round is one integer per item with a cap of 3, and every question the gate asks is answerable from the counter plus the payload. A table would add a migration, a join, and a second source of truth for "which round are we in" — and the counter would still exist, because the cap reads it. Rejected on that measurement, not on taste.
 
-**`deck_reply` is unchanged and still writes `decision = NULL`.** The leader keeps a way to say "I read this, here are my questions" without approving — which is what rows 82 and 92 were actually doing. Their author was behaving correctly; the *gate* was wrong to read them as approval.
+**`deck_reply` is unchanged and still writes `decision = NULL`.** The leader keeps a way to say "I read this, here are my questions" without approving — which is what rows 82 and 92 were actually doing. Their author was behaving correctly; the *gate* was wrong to read them as approval. A `deck_reply` does **not** advance the round: only a structured rejection does.
 
-**The brief must name the tool, and the nudge must too.** `_leader_ack_instruction` (`:541-573`) currently tells the owner to wait for "acknowledgment." It now tells the owner to wait for the leader's `deck_approve_work_item` decision, and `_nudge_leader_for_ack` (`:920-943`) asks the leader for a decision by name, passing `work_item_id` and `dispatch_nonce` (the nudge payload already carries `work_item_id` at `:939`). Wording again carries no enforcement weight — but a leader who is never told the tool exists will keep replying in prose, and the item will time out with `leader_ack_timeout`. That is a *safe* failure and an annoying one; naming the tool is how it stays rare.
+**The brief, the nudge, and the tool docstring must all say the same thing.** `_leader_ack_instruction` (`:541-573`) currently tells the owner to wait for "acknowledgment." It now tells the owner to wait for the leader's `deck_approve_work_item` decision, **and that a rejection opens the next round automatically — the owner revises and sends a fresh `deck_request_context`, calling nothing else.** `_nudge_leader_for_ack` (`:920-943`) asks the leader for a decision by name, passing `work_item_id` and `dispatch_nonce` (the nudge payload already carries `work_item_id` at `:939`). `deck_approve_work_item`'s own docstring (§4.3a) states that `decision="rejected"` advances the approval round and clears the previous round's approval. Wording carries no enforcement weight — but the whole of blocker 2 was an actor not knowing which call to make, and three pieces of copy are where that is prevented.
 
-**Refusal is not escalation.** A `decision = 'rejected'` answer means the leader has declined this plan. The item stays un-acked, and the existing monitor path handles it: nudge, then `leader_ack_timeout` (`:785-791`). No new `dispatch_status` value and no new escalation reason — `rejected` is an `AckEvidence.reason` returned in a `409`, not an item state. The owner's correct response is to revise the plan and ask again, which is what `revision_requested` → `record_approval_round` (`:672-679`) already models.
+**Refusal is not escalation** (until the cap). A `decision = 'rejected'` below the cap leaves the item `dispatched` in a fresh round with no approval, and the existing monitor path handles the rest: nudge, then `leader_ack_timeout` (`:785-791`) if the next round also goes unanswered. No new `dispatch_status` value, and the only escalation reason involved is the existing `approval_rounds_exhausted`.
 
 ### 4.4 The anchor does not exist yet — PR1 must create it
 
@@ -939,7 +1092,7 @@ auto-merge requires:
     and differs from the owner's member
 ```
 
-The round comparison is what makes a *withdrawn* approval fail the gate rather than merely being absent. §4.3a.1 has `record_approval_round` clear the ack columns, so in the ordinary case the approval is gone and `ack_approver_member_id is the leader` already fails. The comparison is the belt to that suspenders: if a future change to `record_approval_round` forgets the clear — the exact off-by-one that revision 2 committed with `accept_handoff` — the round mismatch still refuses. Fail closed twice on the path where the cost of failing open is a merge nobody approved.
+The round comparison is what makes a *withdrawn* approval fail the gate rather than merely being absent. §4.3a.1 has `advance_approval_round` clear the ack columns, so in the ordinary case the approval is gone and `ack_approver_member_id is the leader` already fails. The comparison is the belt to that suspenders: if a future change to `advance_approval_round` forgets the clear — the exact off-by-one that revision 2 committed with `accept_handoff` — the round mismatch still refuses. There is a second, measured reason to keep both guards: `advance_approval_round`'s clears and its increment ride the decision row's commit, and an escalation on the same call can `rollback` (§4.3a.1). The specified ordering keeps both together, but *any* future edit that reorders them can persist one without the other. Two independent guards mean either survivor refuses. Fail closed twice on the path where the cost of failing open is a merge nobody approved.
 
 The check reads the **persisted** columns, not a fresh mail lookup: PR0 plus §4.3 mean the columns can only have been written by a verified approval, and re-deriving at merge time would read a mail table that may have changed for unrelated reasons.
 
@@ -959,7 +1112,7 @@ A leader-owned code item therefore cannot auto-merge; it waits for a human. Find
 
 ### 4.6 Operator and agent visibility
 
-`GithubWorkItemResponse` (`schemas.py:2272-2299`) and `_work_item_response` (`agent_teams.py:196-229`) both enumerate every field by hand, so a new column is invisible until added in **both** places. All four new columns are added to both, which is what makes the gate auditable by an operator in the UI *and* by the leader through `deck_list_work_items`.
+`GithubWorkItemResponse` (`schemas.py:2272-2299`) and `_work_item_response` (`agent_teams.py:196-229`) both enumerate every field by hand, so a new column is invisible until added in **both** places. All **five** new columns are added to both — `ack_approver_member_id`, `ack_evidence_message_id`, `dispatch_nonce`, `ack_enforcement_epoch`, `ack_approval_round` — which is what makes the gate auditable by an operator in the UI *and* by the leader through `deck_list_work_items`. (`approval_round_count` is already exposed at `agent_teams.py:218`.)
 
 `mail_messages.decision` needs the same treatment one table over: `MailMessageResponse` enumerates its fields by hand too (`schemas.py:1877-1894`), so without the addition the decision is invisible in the thread view, in `deck_check_inbox`, and in the UI — the operator would see a gate refusing an item and an approval-looking reply, with no way to tell which reply carried the decision.
 
@@ -999,26 +1152,31 @@ Structured decisions (§4.3a) — the negative-answer tests the third review ask
 18. **Row 92 replayed.** Same shape, body *"Acknowledged, but this request is superseded… I am not treating this stub as separate implementation approval."* ⇒ `409` `no_decision`. Kept separate from 17 because it refuses *using the brief's own word* "acknowledged" — a keyword classifier tuned to pass row 40's approval would accept this one.
 19. Leader-authored answer with `decision = 'rejected'` ⇒ `409` `rejected`, distinguishable from `no_decision` in the response detail.
 20. **Row 40 replayed** — *"Approved. Proceed with the scoped #843 plan: first verify there is no active duplicate branch/PR…"* — with `decision = 'approved'` ⇒ **accepted**, despite containing "no". This is the counterpart to 17/18: it proves the gate reads the column and not the prose in the direction that would otherwise cause false refusals.
-21. `deck_approve_work_item` resolves the thread from `(work_item_id, dispatch_nonce)`: correct pair ⇒ answer posted in the owner's thread with `decision` set. No matching request ⇒ `404`. Two matching requests ⇒ `409` naming both ids.
+21. `deck_approve_work_item` resolves the thread from `(work_item_id, dispatch_nonce, item.approval_round_count)` — the round included, since round-scoped resolution is what makes the recovery path in test 29 legal. Correct triple ⇒ answer posted in the owner's thread with `decision` set. No matching request ⇒ `404`. Two matching requests **from the current owner, in the current round** ⇒ `409` naming both ids. Two matching requests from *different* owners is the handoff shape (§4.2) and resolves to the current owner's — assert that too, since a resolver that ignores the owner would raise `409` on an ordinary post-handoff approval.
 22. A **Specialist** calling `deck_approve_work_item` (or posting `decision` directly to `POST /messages`) ⇒ `403`, and no `mail_messages` row is written with a non-NULL `decision`. Assert the row state, not only the status code — a route that writes then refuses would pass a status-only assertion.
 23. A **tokenless** caller supplying `decision` ⇒ `403` even with `mail_capability_tokens_required = False`. §3.4a's rule applied to the decision column.
 24. `decision` outside `{'approved','rejected'}` (e.g. `'maybe'`, `'APPROVED'`) ⇒ `422`. Case is not normalized; an unrecognized value is never treated as approval.
 25. `deck_reply` still works and writes `decision = NULL`; the leader can ask questions without approving, and that reply does not satisfy the gate.
-26. Approve, then post `decision = 'rejected'` on the same nonce ⇒ the ack recorded by the approval **stands** (§4.3a), and the item does not become un-acked.
+26. **Approve, then reject in the same round ⇒ the withdrawal takes effect.** Approve, then post `decision = 'rejected'` on the same nonce ⇒ the `approved` answer row is still in the thread (history is not rewritten), but the item's ack columns are cleared, `approval_round_count` has advanced, and the gate refuses. Revision 4 asserted the opposite here ("the ack stands"); that was only defensible while no working lever existed, and §4.3a.1 now gives the leader one. Assert both halves — the surviving row and the cleared columns — because an implementation that "fixes" this by deleting or mutating the earlier row would otherwise pass.
 27. **Grace mode records nothing.** With `mail_capability_tokens_required = False`, a fully valid approval flow ⇒ `record_ack_received` refuses `tokens_not_enforced` and `ack_approver_member_id`, `ack_evidence_message_id`, `ack_enforcement_epoch` are all still NULL. Then flip the flag to `True` and re-run the ack ⇒ accepted. Proves the refusal is not merely time-shifted.
 28. An item whose ack columns are populated with `ack_enforcement_epoch` NULL or `0` (hand-built fixture simulating a pre-enforcement or refactor-regressed write) ⇒ gate refuses `evidence_predates_enforcement`, even with tokens enforced and every other condition green.
 
 Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had none of:
 
-29. **A second round's request is legal.** Round 1: `deck_request_context` with `approval_round = 1`, leader rejects (`revision_requested`). Round 2: the owner opens a *new* request with `approval_round = 2` ⇒ accepted, **no `409`**, and `deck_approve_work_item` resolves to the round-2 thread. Against revision 4 the second request is a duplicate-linkage `409`, so the documented recovery path is blocked by the spec's own guard — this is the blocker-2 test.
-30. **Two requests, two rounds, no ambiguity.** With round-1 and round-2 requests both present on the item, `deck_approve_work_item(work_item_id, dispatch_nonce)` for round 2 resolves to exactly one thread. Test 21's "two matching requests ⇒ `409`" still holds *within* a round — assert both, since a fix that stops filtering by round entirely would pass one and fail the other.
-31. **`revision_requested` clears and increments.** Record a valid approval for round 1, then report `revision_requested` (from the leader — §3.5a) ⇒ `approval_round_count` becomes 2, and `ack_approver_member_id`, `ack_evidence_message_id`, `ack_received_at`, `ack_enforcement_epoch`, `ack_approval_round` are **all** NULL, and `last_nudge_at` is NULL. The nonce is **unchanged** (§4.3a.1 — clearing it would deadlock the next round exactly as it would on handoff).
+29. **A second round's request is legal.** Round 1: `deck_request_context` with a server-derived `approval_round = 1`, leader posts `decision = "rejected"`. Round 2: the owner opens a *new* request, which the route stamps `approval_round = 2` ⇒ accepted, **no `409`**, and `deck_approve_work_item` resolves to the round-2 thread. Against revision 4 the second request is a duplicate-linkage `409`, and against revision 5 the round never advances because the leader made no second call — this is the blocker-2 test, and the owner calls **only** `deck_request_context` to recover.
+30. **Two requests, two rounds, no ambiguity.** With round-1 and round-2 requests both present on the item, `deck_approve_work_item(work_item_id, dispatch_nonce)` for round 2 resolves to exactly one thread. Test 21's "two matching requests *from the same owner* ⇒ `409`" still holds *within* a round — assert both, since a fix that stops filtering by round entirely would pass one and fail the other.
+31. **One rejection clears and increments, with no second call.** Record a valid approval for round 1, then post exactly one `deck_approve_work_item(decision="rejected")` and call **nothing else** ⇒ `approval_round_count` becomes 2, and `ack_approver_member_id`, `ack_evidence_message_id`, `ack_received_at`, `ack_enforcement_epoch`, `ack_approval_round` are **all** NULL, and `last_nudge_at` is NULL. The nonce is **unchanged** (§4.3a.1 — clearing it would deadlock the next round exactly as it would on handoff). "Nothing else" is the assertion that distinguishes revision 6 from revision 5: this test must be written so that inserting a `revision_requested` report would be a *change* to it, not a prerequisite of it.
+    31b. **All of it lands in one commit.** Same flow, but with `_send_escalation_broadcast` monkeypatched to raise and the item one round below the cap so the rejection *also* escalates. Assert the round increment and all five clears are **persisted** — read them back through a raw `text()` query, not the identity map, since a rolled-back-but-still-in-memory object reads correctly from the session and would make this test pass while proving nothing. Measured against the wrong ordering (escalate before the decision row commits), this leaves `approval_round_count = 1` and `ack_received_at` set while the rejection row persists — the split-brain state §4.3a.1 exists to prevent.
+    31c. **A rejection against an already-escalated item refuses.** Item `escalated` with `escalation_reason = "leader_offline"`, leader posts a rejection ⇒ `409 item_escalated`, `approval_round_count` unchanged, `escalation_reason` still `leader_offline`, and **no decision row written**. Measured against today's code the counter advances to 2 and the reason is silently preserved with no broadcast, so this test fails without the guard.
 32. **The gate refuses after a withdrawal.** The item from 31, CI-green with a fresh head ⇒ no auto-merge, and the fallback note starts with `"Auto-merge blocked"`. This is the consequence test for 31; a clear that happened but left the gate passing would be invisible without it.
-33. **Round mismatch alone refuses — the belt-and-suspenders test.** Hand-build an item with every gate condition green, valid approver columns, `ack_enforcement_epoch = 1`, but `ack_approval_round = 1` while `approval_round_count = 2` ⇒ refuses `stale_round`. This fixture is the state a *forgetful* `record_approval_round` would leave behind, so it tests the second guard independently of the first. §4.5's whole argument for having two guards rests on this test existing.
+33. **Round mismatch alone refuses — the belt-and-suspenders test.** Hand-build an item with every gate condition green, valid approver columns, `ack_enforcement_epoch = 1`, but `ack_approval_round = 1` while `approval_round_count = 2` ⇒ refuses `stale_round`. This fixture is the state a *forgetful* `advance_approval_round` would leave behind — or a reordered one whose increment persisted while its clears rolled back — so it tests the second guard independently of the first. §4.5's whole argument for having two guards rests on this test existing.
 34. **Approval in the current round still merges.** The item from 31, then a valid round-2 approval ⇒ `ack_approval_round == 2 == approval_round_count`, and it merges. Proves the round check refuses staleness rather than everything.
 35. An ack attempt against a **round-1** thread after the round has advanced to 2 ⇒ `409 stale_round`, distinguishable in the response detail from `stale_nonce` and `no_linkage`. All three refusals exist because they need different operator responses: re-dispatch, wait, or open a new request.
 36. `approval_round` NULL in a request's payload (a pre-upgrade or hand-posted row) ⇒ treated as `no_linkage`, not as round 0 and not as "any round." Fail closed on an unstated round.
-37. **The cap still escalates.** Reject `max_approval_rounds` times (default 3, `app/models/database.py:221`) ⇒ the item escalates and no further round is opened. Round scoping must not turn a bounded loop into an unbounded one.
+37. **The cap still escalates, and the counter stops at a real round.** From a dispatched item (round 1, `max_approval_rounds = 3`), reject three times ⇒ rounds 2 and 3 open, the third rejection escalates `approval_rounds_exhausted`, **`approval_round_count == 3` and not `4`**, and the ack columns are **not** cleared on the escalating call (§4.3a.1 — the operator needs to see what was last approved). The `== 3` assertion is what separates the two candidate cap forms in §4.2a; without it both pass.
+    37b. **Dispatch opens round 1.** A freshly dispatched item has `approval_round_count == 1`, set in the same commit as `dispatched_at` and `dispatch_nonce` (§4.2a). Against revision 5 it is `0`, and every round-scoped test above would then be asserting a round the code never opened.
+    37c. **Retry closes the round.** `reset_for_retry` on a live item leaves `approval_round_count == 0`, and a `deck_request_context` against it refuses rather than being stamped round 0 — `0` means *no round is open* (§4.2a, §4.3 rule 3).
+    37d. **A caller cannot pre-date a round.** `POST /agent-mail/messages` with `kind="context_request"` and a payload `approval_round = 5` on an item whose count is `1` ⇒ `403 approval_round_mismatch`, no row written. Then the same post with `approval_round = 1` ⇒ accepted. Proves the rule refuses disagreement rather than refusing the key, and that a future shim sending an honest value is not broken by it.
 
 **Mutation requirement.** Each guard must be shown to bite:
 
@@ -1049,15 +1207,23 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 | allow a tokenless caller to write `decision` in grace mode | 23 |
 | write approver columns in grace mode (revision 3's behavior) | **27** |
 | trust ack columns with a NULL/`0` epoch | 28 |
-| let a later `rejected` revoke a recorded approval | 26 |
+| a later `rejected` leaves the recorded approval intact (revision 4's rule) | **26, 32** |
 | one request per item regardless of round (revision 4's `409`) | **29** |
 | stop filtering linkage by round at all | 30 |
-| `revision_requested` increments the round but clears nothing (revision 4) | **31, 32** |
-| `revision_requested` clears the ack columns but not `ack_approval_round` | 33 |
-| `revision_requested` also clears the nonce | 31 (the next round's request cannot link) |
+| rejection records a verdict but does not advance the round (revision 5's split) | **29, 31** |
+| `advance_approval_round` increments the round but clears nothing (revision 4) | **31, 32** |
+| `advance_approval_round` clears the ack columns but not `ack_approval_round` | 33 |
+| `advance_approval_round` also clears the nonce | 31 (the next round's request cannot link) |
+| escalate *before* committing the decision row, so a mail failure rolls back the clears | **31b** |
+| allow a rejection on an already-escalated item | **31c** |
 | gate compares only the columns, not the round | **33** |
 | gate compares the round but treats NULL `ack_approval_round` as matching | 33, 36 |
 | round scoping bypasses `max_approval_rounds` | **37** |
+| keep the increment-then-`> cap` form, leaving the counter on a fictional round | **37** (the `== 3` assertion) |
+| clear the ack columns on the escalating rejection too | 37 |
+| dispatch leaves `approval_round_count` at `0` (revision 5) | **37b** |
+| trust a caller-supplied `approval_round` | **37d** |
+| silently overwrite a conflicting caller `approval_round` instead of refusing | 37d |
 
 Tests 17 and 18 are the pair to write **first**. They are the only two written from rows that exist in production today, and revision 3's design passes both. A design change whose regression test is drawn from real refusals is the strongest evidence available here that the new guard bites.
 
@@ -1121,9 +1287,28 @@ GET /repos/{owner}/{repo}/installation   ->  installation id     (App JWT auth)
 POST /app/installations/{id}/access_tokens  ->  token            (App JWT auth)
 ```
 
-The first call is the App-level endpoint for exactly this question, so no configuration is needed and no assumption about account layout is baked in. A repo the App is not installed on returns `404`, which becomes a clear `app_not_installed` refusal naming the repo — not a confusing auth error at push time.
+The first call is the App-level endpoint for exactly this question, so no configuration is needed and no assumption about account layout is baked in. A repo the App is not installed on returns `404` — and **what a `404` means depends on which of the two calls returned it**, which revision 5 left contradictory. §5.3a settles it.
 
-**`github_app_bot_login` is a setting, not a discovery.** §5.6's author check needs the login. It is discoverable (`GET /app` returns the App slug, and the bot login is `<slug>[bot]`), but deriving it means one more call whose failure mode is "skip the check" — and a security check that disables itself on a network error is not a check. A setting fails loudly when wrong: the first PR report refuses with the mismatch in the message. When it is empty, the author check is skipped, which is the same explicit fallback as the rest of §5.3.
+#### 5.3a A `404` from the lookup and a `404` from the mint are different facts
+
+Revision 5 said two opposite things about the same status code, and the fifth review is right that both cannot stand:
+
+- §5.3: a repo the App is not installed on returns `404`, "which becomes a clear `app_not_installed` refusal naming the repo."
+- §5.6a: a `404` from `GET /repos/{o}/{r}/installation` writes mode `ambient` and **proceeds** with the ambient credential — today's behavior, which §5.3 elsewhere promises not to break.
+
+Neither sentence is wrong about its own case; they are about **different moments**, and revision 5 wrote them as though there were one rule. The discriminator is *where* the `404` occurs:
+
+| Where | What a `404` proves | Behaviour |
+|---|---|---|
+| `GET /repos/{o}/{r}/installation` during **mode resolution** at lease time (§5.6a) | the App is not installed on this repo, which is a legitimate configuration and the majority case for a fresh install | write mode `ambient`, leave `github_app_installation_id` NULL, configure identity only, **proceed** |
+| `POST /app/installations/{id}/access_tokens` during a **mint**, on a scope already stored `app` with an id | the installation the id names is gone — uninstalled or suspended *after* this scope resolved | **refuse.** `app_not_installed` naming the repo and the id. The helper returns nothing and the push fails hard (§5.5.6), which is the intended outcome by §5.6a's stale-`app` rule |
+| `GET /repos/{o}/{r}/installation` on a scope already stored `app` | not reached — resolution does not re-run for a resolved scope (§5.6a, test 34) | n/a |
+
+So `app_not_installed` is a **mint-time** refusal, not a resolution-time one. Revision 5's §5.3 sentence described it as the outcome of the lookup, which is the one place it must never be: refusing there would break every repo the App is legitimately not installed on, which is exactly the path §5.3 promises to preserve.
+
+The asymmetry is not arbitrary. At resolution time Deck is *asking* whether App auth applies, and "no" is an answer it can act on. At mint time Deck has already **acted** on a previous yes — the worktree carries Deck's credential lines and the ambient helper has been evicted (§5.5.6) — so there is no ambient credential left to fall back to, and silently downgrading would change PR authorship mid-dispatch on a repo whose whole point is bot authorship.
+
+**`github_app_bot_login` is a setting, not a discovery.** §5.6's author check needs the login. It is discoverable (`GET /app` returns the App slug, and the bot login is `<slug>[bot]`), but deriving it means one more call whose failure mode is "skip the check" — and a security check that disables itself on a network error is not a check. A setting fails loudly when wrong: the first PR report refuses with the mismatch in the message. When it is empty, the author check is skipped **on `ambient` and `unknown` scopes only** — where there is no bot to expect. On an `app`-mode scope an empty login is a configuration error and `pr_opened` refuses (§5.6's table, row 2): otherwise installing the App without setting the login would silently disable attribution on exactly the repos that require it.
 
 **Dependencies.** App auth needs a JWT signed with RS256, which needs `pyjwt` and `cryptography`. Both are importable in the current venv (2.13.0 / 49.0.0) but **neither is in `requirements.txt`** — PyJWT is a transitive dependency of `mcp`. Relying on that is a latent break: a legitimate `mcp` release could drop it. Both must be added as explicit direct dependencies, with the extra spelled `pyjwt[crypto]`.
 
@@ -1131,9 +1316,9 @@ The first call is the App-level endpoint for exactly this question, so no config
 
 **Caching, keyed properly.** Revision 2 said "one cached token," which contradicts per-repo installations. The cache is a dict keyed by `(installation_id, repo_full_name)` — installation because that is what the token belongs to, repo because the `repositories` narrowing below makes two tokens from one installation non-interchangeable. Each entry holds the token and its `expires_at`, and is refreshed when `expires_at - now < refresh_margin`.
 
-Locking: **one `asyncio.Lock` per cache key**, not one global lock. A global lock would serialize dispatches across unrelated repos behind a single network round trip; a per-key lock still prevents the thundering herd that matters (concurrent dispatches on the same repo). Installation-id lookups are cached the same way, keyed by repo.
+Locking: **one `asyncio.Lock` per cache key**, not one global lock. A global lock would serialize dispatches across unrelated repos behind a single network round trip; a per-key lock still prevents the thundering herd that matters (concurrent dispatches on the same repo).
 
-Not persisted — a backend restart mints fresh tokens, which is cheap and avoids storing live credentials at rest.
+**Tokens are not persisted; the installation id is.** A backend restart mints fresh tokens, which is cheap and avoids storing live credentials at rest. The **installation id** is a different kind of value — a stable non-secret integer naming which installation to mint from — and revision 5's decision to keep it in memory alongside the tokens is blocker 4. It is persisted on the scope as `github_app_installation_id`, in the same commit as the mode; §5.6a has the trace and the reasoning. The in-memory id cache remains as a cache, keyed by repo, but it is no longer the only copy.
 
 **Scoping.** Installation tokens are otherwise scoped to *every* repository in the installation. The optional `repositories` parameter narrows to one; use it, keyed on the scope's repo, so a token minted for one scope cannot write to another. This is what makes the per-repo cache key load-bearing rather than decorative.
 
@@ -1195,6 +1380,8 @@ Without this, the helper cannot tell which repository a push is for, so "reposit
 ### 5.5 The helper endpoint, and who creates the PR
 
 Revision 3 decided two things here. One holds; the other was **measured false** by the third review and I reproduced the measurement.
+
+**There is no §5.5.3.** Revision 5 moved that section's content to §5.5.6 and left the number unused. It is not renumbered because ~51 live `§` references point into this subtree, and renumbering to close a cosmetic gap is the kind of churn that silently breaks one of them. The gap is deliberate; nothing is missing.
 
 #### 5.5.1 `gh` does not read git's credential helper for API auth
 
@@ -1274,37 +1461,101 @@ async def list_pulls_for_head(self, owner: str, repo: str, *, head: str, base: s
     # GET /repos/{owner}/{repo}/pulls?head={owner}:{head}&base={base}&state=all
 ```
 
-This does not exist today — measured: the client has `get_pull` (`github_client.py:98`) and no by-head or list-pulls method at all (`:36-165`), so revision 4's "reconcile" had nothing to reconcile with. The `head` parameter must be qualified `owner:branch`; unqualified it silently matches nothing, which would make the reconciliation a no-op that always says "no PR exists" — a failure mode indistinguishable from the bug it fixes. `state=all` matters too: a closed PR on the same head still blocks creation with `422`, so a reconciliation that only looks at open PRs re-enters the same dead end.
+This does not exist today — measured: the client has `get_pull` (`github_client.py:98`) and no by-head or list-pulls method at all (`:36-165`), so revision 4's "reconcile" had nothing to reconcile with. The `head` parameter must be qualified `owner:branch`; unqualified it silently matches nothing, which would make the reconciliation a no-op that always says "no PR exists" — a failure mode indistinguishable from the bug it fixes.
+
+**Why `state="all"`, corrected.** Revision 5 justified it with *"a closed PR on the same head still blocks creation with `422`."* That is an **unverified empirical claim about GitHub**, and it should not be load-bearing: GitHub's REST reference documents `422` for the create endpoint only as *"Validation failed, or the endpoint has been spammed"* and says nothing about duplicate head/base, open or closed. Confirming it would mean creating PRs against a live repo, which is not something this spec's verification budget should spend. So the reason is restated from facts this design does control:
+
+1. A **merged** PR on the item's head must be found, or §5.5.4a cannot reconcile the item to `merged` — and `state="open"` hides every merged PR by definition.
+2. A **closed-unmerged** PR on the item's head must be found, because §5.5.4a escalates on it rather than creating a replacement. Not seeing it is what makes Deck re-create a PR a human deliberately closed.
+
+Both hold whether or not a closed PR blocks creation, and §5.5.4a's ladder is written so that the answer to that question changes nothing. If the claim happens to be true, step 5's post-`422` reconciliation absorbs it; if false, no branch is reached that depended on it.
 
 The `pr_ready` handler becomes:
 
 | Step | Action | On match |
 |---|---|---|
 | 1 | `item.pr_number` set? | return it — the cheap path, no network call |
-| 2 | `list_pulls_for_head(head=f"{owner}:{head_ref}", base=scope base)` | adopt the single match: record its number, run §5.6's checks against it, continue as if Deck had just created it |
-| 3 | more than one match | refuse: `409`, `status_note` naming every number found. Deck does not guess which PR is the item's. |
+| 2 | `list_pulls_for_head(head=f"{owner}:{head_ref}", base=scope base)` | **classify the match by state before doing anything with it — §5.5.4a.** Only an open, unmerged match is adopted |
+| 3 | more than one match | **§5.5.4a's rule**, not a blanket `409`: closed history alone must not make an open PR ambiguous |
 | 4 | no match ⇒ `create_pull` | record `pr_number` |
-| 5 | `create_pull` raises timeout **or** returns `422` | re-run step 2 **once**. A match means the create actually landed (or a concurrent one did) ⇒ adopt it. Still nothing ⇒ refuse and leave the item dispatched for the monitor. |
+| 5 | `create_pull` raises timeout **or** returns `422` | re-run step 2 **once**, classification included. A match means the create actually landed (or a concurrent one did) ⇒ handle it by its state. Still nothing ⇒ refuse and leave the item dispatched for the monitor. |
 
 Step 5 is the crash-safety half: the same reconciliation runs *after* an ambiguous failure, so "the request timed out but GitHub committed" converges on the next attempt instead of diverging. Step 2 is the restart half. Both are the same call, which is why this is one method and not a special case per failure mode.
 
 **Adoption re-runs §5.6's checks, and that is not redundant.** A PR found by head/base was not necessarily created by Deck — an agent could have opened one by hand. So an adopted PR goes through the repository and head-branch checks (§5.6) before its number is recorded, and on an `app`-mode repo through the author check too. Adoption is not trust; it is discovery followed by the same verification a report gets.
 
+**Revision 5 wrote steps 2 and 3 as state-blind, and that is blocker 5.** "Adopt the single match" and "more than one match ⇒ `409`" are both written as though every PR on a head were equivalent. §5.5.4a is the classification they were missing; the table above now delegates to it rather than restating half a rule.
+
 **Serialization: one item at a time.** Two concurrent `pr_ready` reports for one item can both pass step 1 and both reach `create_pull`. Deck already has the right lock for this and it needs no new mechanism: the **workspace lease token**. §3.5a requires the current lease token on `pr_ready`, and a lease is by construction exclusive to one attempt on one item (`github_workspace_service.py:127-136`). Two concurrent reports carrying the *same* token are the same agent retrying, which steps 1–5 already handle; a report carrying a stale token is refused with `409` before any GitHub call. So the exclusion is a consequence of §3.5a's authorization rule rather than an added lock.
 
 That leaves one genuine race — the same agent's two in-flight retries with the same valid token. An `asyncio.Lock` keyed on `item.id`, held across steps 1–5, closes it. Per-item, not global: a global lock would serialize PR creation across every repo behind one network round trip, the same mistake §5.3 avoided for token minting. This is single-process only, which is correct here because Deck is a single uvicorn process (measured: PID 2206652, one worker) — and if that ever changes, the reconciliation in steps 2 and 5 is what keeps the outcome correct without the lock. The lock is an optimization to avoid a wasted `422`; the reconciliation is the correctness argument.
 
+#### 5.5.4a A PR found on the head is not necessarily a PR to adopt
+
+Blocker 5. §5.5.4 widened the query to `state="all"` and then handed whatever came back to a step that only knew how to adopt. Widening a query without teaching its consumer the new cases is the same seam defect as blockers 1-4: the change is correct where it was written and wrong one line later.
+
+Three states come back, and they need three different actions.
+
+| Match state | `merged` | `state` | Action |
+|---|---|---|---|
+| open | `false` | `"open"` | **adopt** — §5.5.4's step 2 as written. Record the number after §5.6's checks; the item advances to `verifying` (code) or `awaiting_human_review` (design) |
+| merged | `true` | `"closed"` | **reconcile to `merged`** — `_mark_merged(item)` (`github_verification_service.py:415-419`) plus the `_notify_blocker_merged` broadcast, exactly as `_verify_item` does at `:164-168`. Record `pr_number` first, so the merged item carries the PR that closed it |
+| closed, unmerged | `false` | `"closed"` | **escalate `pr_closed_unmerged`**, with the number in `status_note`. No adoption, no create, `pr_number` left NULL |
+
+`merged` is the discriminator, not `state` — GitHub reports `state: "closed"` for both merged and abandoned PRs, so a classifier keyed on `state` alone collapses rows 2 and 3, which is the one distinction that matters here. Read `merged` first; `state` only separates row 1 from the other two.
+
+**Why the merged row is not just tidiness.** Measured: adopt a merged PR the way revision 5 says, on a design item, and `report_pr_opened`'s design branch (`:66-81`) sets `awaiting_human_review` and broadcasts *"Design PR #5 is ready for human review"*. The next poll reads `merged: true` and corrects the status to `merged` — but the mail row has already been sent and nothing retracts it:
+
+```
+Q5 after adoption:  status='awaiting_human_review'  mail_rows=1  ['Design PR ready for review']
+Q5 after next poll: status='merged'                 mail_rows=1  ['Design PR ready for review']
+```
+
+So the self-correction is real and the notification is not corrected with it. A human is asked to review a merged PR, and the item that asked them looks fine by the time they check. Classifying at adoption costs one `if` and removes the false ask entirely.
+
+**Why the closed-unmerged row escalates rather than recovering.** Three candidate policies, and the third is the one to take:
+
+1. **Reopen it** (`PATCH .../pulls/{n}` with `state: "open"`). Rejected: a human closed that PR, and reopening is Deck overriding a human decision with no signal that it understood why. It also needs a client method that does not exist.
+2. **Create a fresh branch and a new PR.** Rejected for the same reason plus a worse one: it produces a second PR for an issue whose first PR was deliberately abandoned, and the abandoning human gets no notification at all.
+3. **Escalate with the number in the note.** Taken. A closed-unmerged PR is a *human decision Deck cannot interpret* — could be "wrong approach," could be "superseded," could be "close it and I'll redo it myself." The operator action differs per case, so the operator is who must choose. Escalation is exactly the mechanism this codebase already uses for "Deck is stuck and a human must decide."
+
+`pr_closed_unmerged` is a new **`escalation_reason`**, not a new `dispatch_status` — `escalate()` sets `dispatch_status = "escalated"`, which already exists (`github_dispatch_service.py:1034`). It joins the eleven already in use, enumerated from the `escalate()` call sites rather than from memory: `plan_blocked` (`:256`, `:321`, `agent_teams.py:315`), `launch_outcome_unknown` (`:329`), `approval_rounds_exhausted` (`:677` — already present, and §4.2a only changes when it fires), `leader_offline` (`:752`), `owner_offline` (`:760`), `brief_unread` (`:776`), `leader_ack_timeout` (`:790`), `owner_idle_timeout` (`:803`), `retry_count_exhausted` (`github_verification_service.py:367`, `:500`), `dispatch_label_removed` (`github_watcher_service.py:113`), and `abandoned_by_operator` (`agent_teams.py:824`). So the standing "no new `dispatch_status` values" rule is respected, and the reason namespace is a flat string column with no enum to extend.
+
+It is deliberately **not** added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`). Every reason on that list means *the agent got stuck and a late PR resolves it*; this one means *a human closed the PR*, which a subsequent `pr_opened` does not resolve. Recovery is `deck_retry_work_item`, which clears `pr_number` and `escalation_reason` and re-dispatches from `pending` (`reset_for_retry:64-74`) — the operator's explicit "try again," which is the right shape for a decision only they can make.
+
+**The multiple-match rule, restated by state.** The fifth review asked that closed history not make an open PR ambiguous. Applied in order:
+
+| Matches | Action |
+|---|---|
+| exactly one open, any number of closed/merged alongside | **adopt the open one.** The closed ones are history; an item's live PR is the open one |
+| no open, exactly one merged (any number of closed alongside) | **reconcile to `merged`** on that PR |
+| no open, no merged, one or more closed-unmerged | **escalate `pr_closed_unmerged`**, `status_note` naming every closed number found |
+| **two or more open** | **`409`**, `status_note` naming both open numbers. This is the only genuinely ambiguous case, and it is what revision 5's blanket `409` was reaching for |
+
+So "more than one match" was never the right predicate — "more than one *open* match" is. An item retried three times has closed PRs on the head by construction, and revision 5's rule would `409` every one of them.
+
+**Ordering, and why it is not arbitrary:** open, then merged, then closed. Read as a precedence: a live PR outranks history; a merge outranks an abandonment; an abandonment is the only remaining fact. Two open PRs is the one state no precedence resolves, because both are live and Deck has no basis to prefer either.
+
 **Tests (offline, mocked client) in §5.8:**
 
 38. `pr_ready` with `item.pr_number` already set ⇒ returns it, and `create_pull` is **never called**. Assert the mock, not the response.
-39. `pr_number` NULL, one existing PR on the head ⇒ adopted, `create_pull` never called, `pr_number` recorded, and the item advances (`verifying` for code).
-40. `pr_number` NULL, **two** PRs on the head ⇒ `409`, `pr_number` stays NULL, both numbers appear in `status_note`.
+39. `pr_number` NULL, one existing **open** PR on the head ⇒ adopted, `create_pull` never called, `pr_number` recorded, and the item advances (`verifying` for code).
+40. `pr_number` NULL, **two open** PRs on the head ⇒ `409`, `pr_number` stays NULL, both numbers appear in `status_note`.
 41. `pr_number` NULL, no PR ⇒ `create_pull` called exactly once, number recorded.
-42. **The crash window.** `create_pull` raises a timeout, and the reconciliation call that follows returns a PR ⇒ that PR is adopted, `create_pull` is **not** retried, and the item advances. This is the blocker-7 test.
+42. **The crash window.** `create_pull` raises a timeout, and the reconciliation call that follows returns an open PR ⇒ that PR is adopted, `create_pull` is **not** retried, and the item advances. This is the blocker-7 test.
 43. `create_pull` returns `422` and reconciliation finds the PR ⇒ adopted. Same path, different trigger — an implementation can easily handle one and not the other.
 44. `create_pull` raises a timeout and reconciliation finds **nothing** ⇒ `409`, `pr_number` NULL, `dispatch_status` still `dispatched` (not escalated — the monitor owns that decision).
 45. An adopted PR whose `head.repo.full_name` is a different repo ⇒ refused by §5.6's check, `pr_number` NULL. Adoption must not bypass verification.
 46. Reconciliation is called with a **qualified** head (`owner:branch`), a **normalized** base (`master`, from a scope whose `base_ref` is `origin/master`), and `state="all"`. Assert the call arguments; all three mistakes here silently produce "no match."
+
+Classification (§5.5.4a) — the blocker-5 tests:
+
+46b. **A merged match reconciles to `merged`, and asks nobody to review it.** `pr_number` NULL, one match with `merged: true` ⇒ `dispatch_status == "merged"`, `pr_number` recorded, `create_pull` never called, and the item never passes through `verifying` or `awaiting_human_review`. Run it on a **design** item and assert **no** `github_dispatch_design_pr_ready` mail row exists — that is the false ask measured above, and a status-only assertion misses it because the next poll repairs the status.
+46c. **A closed-unmerged match escalates.** One match, `merged: false`, `state: "closed"` ⇒ `dispatch_status == "escalated"`, `escalation_reason == "pr_closed_unmerged"`, the PR number present in `status_note`, `pr_number` still **NULL**, and `create_pull` never called. Against revision 5 this PR is adopted and the item advances with a closed PR.
+46d. **The escalation is not `pr_opened`-recoverable.** On the item from 46c, `report_pr_opened` ⇒ raises (the reason is not in `_PR_OPENED_RECOVERABLE_ESCALATIONS`), then `deck_retry_work_item` ⇒ the item returns to `pending` with `pr_number` and `escalation_reason` cleared. Both halves: the wrong recovery is refused and the right one works.
+46e. **Closed history does not make an open PR ambiguous.** Three matches on one head — two closed-unmerged, one open ⇒ the **open** one is adopted, no `409`, and `create_pull` is never called. This is the retried-item shape, and revision 5's blanket "more than one match ⇒ `409`" fails it.
+46f. **Merged wins over closed when no open PR exists.** Two matches, one `merged: true` and one closed-unmerged ⇒ reconciled to `merged` on the merged number, **not** escalated. Pins the precedence order; a classifier that checks closed-unmerged first fails here.
+46g. **`state` alone is not the discriminator.** Two separate one-match cases whose `state` is identically `"closed"`, differing only in `merged` ⇒ one reconciles to `merged`, the other escalates. Written as a pair on purpose: any implementation keyed on `state` passes one and fails the other.
 
 | Mutant | Test that must fail |
 |---|---|
@@ -1313,7 +1564,16 @@ That leaves one genuine race — the same agent's two in-flight retries with the
 | `422` treated as a hard error with no reconciliation | 43 |
 | adopted PR skips §5.6's checks | **45** |
 | head passed unqualified, `state="open"`, or `base` passed as the raw refspec | **46** — and 39, which then finds nothing and creates a duplicate |
-| multiple matches ⇒ pick the lowest number | 40 |
+| two or more open matches ⇒ pick the lowest number | 40 |
+| adopt any single match without classifying it (revision 5) | **46b, 46c** |
+| classify on `state` instead of `merged` | **46g** |
+| a merged match adopted and left to the next poll to repair | **46b** (the mail-row assertion) |
+| a closed-unmerged match adopted and advanced | **46c** |
+| `pr_closed_unmerged` added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` | **46d** |
+| closed-unmerged reopened via `PATCH` instead of escalated | 46c |
+| "more than one match ⇒ `409`" kept for closed history (revision 5) | **46e** |
+| closed-unmerged checked before merged | **46f** |
+| `pr_closed_unmerged` introduced as a `dispatch_status` rather than an `escalation_reason` | §5.8 test 29 (the namespace test, whose first assertion this trips) |
 | lock global instead of per-item | — (not observable by test; review item, same as §3.7's `compare_digest` row) |
 
 #### 5.5.5 Title, body, and the draft flag are Deck's, and design PRs are not drafts
@@ -1370,7 +1630,8 @@ The credential helper survives intact: it exists for `git push`, which TEST E co
 | Auth | `workspace_token` = the workspace's existing `lease_token` (`github_workspaces.lease_token`, `github_workspace_service.py:130`). No new secret: the lease already identifies one dispatch's exclusive hold on one checkout, which is exactly the authorization question. |
 | Authorization | the lease's `scope` must own `path`. A helper asking for a repo the lease does not cover is a `403`, logged with both repos. |
 | Response | `{username: "x-access-token", password: <installation token>}`, minted per §5.3 for that repo only |
-| Refusals | lease released or expired ⇒ `403`; `path` absent ⇒ `400`; App not configured ⇒ `501`, and **no helper is configured in the first place** — see below |
+| Installation id | read from the lease's scope row (`team_github_scopes.github_app_installation_id`, §5.6a), with the in-memory dict as a cache in front of it. **Never resolved here** — the helper runs per git command and must not make a lookup call; a scope stored `app` with a NULL id is a fault, not a prompt to resolve (§5.6a's state table, row 3). This is the line that makes the helper survive a backend restart. |
+| Refusals | lease released or expired ⇒ `403`; `path` absent ⇒ `400`; App not configured ⇒ `501`, and **no helper is configured in the first place** — see below; the mint itself returning `404` ⇒ `app_not_installed`, the installation is gone (§5.3a, and the mode is **not** downgraded) |
 
 The helper is installed **into the workspace config, not the pane**, so it applies identically to spawn and reuse — the whole point of §5.4. The `lease_token` reaches the helper through the config line itself (`--worktree --add ... "deck-credential-helper --lease <token>"`), which lives in `.git/worktrees/<name>/config.worktree`: outside the working tree, uncommittable, and already proven not to leak into `git status`.
 
@@ -1442,12 +1703,20 @@ So the two facts the sentence conflated are independent, and the case revision 4
 
 Stated correctly: **the author check applies on the `pr_opened` path whenever `github_app_bot_login` is set, and it must compare against the right expectation for that repo.** For a repo with no App installation, the PR is authored by the human's ambient credential, so a bot-login mismatch is *expected* and must not refuse. The check therefore keys on the repo's auth mode, not on the global setting:
 
-| Repo auth mode (§5.6a) | `pr_opened` author check |
-|---|---|
-| `app` | require `user.login == github_app_bot_login`. An `app`-mode repo should be using `pr_ready`; a `pr_opened` report authored by anyone else means something is wrong, and refusing is right. |
-| `ambient` | **skipped.** There is no bot; the author is whoever the ambient credential is. Refusing here would break the path §5.3 promises not to break. |
+| Repo auth mode (§5.6a) | `github_app_bot_login` | `pr_opened` author check |
+|---|---|---|
+| `app` | set | require `user.login == github_app_bot_login`. An `app`-mode repo should be using `pr_ready`; a `pr_opened` report authored by anyone else means something is wrong, and refusing is right. |
+| `app` | **empty** | **refuse the report** — `409 app_mode_bot_login_unset`, `pr_number` unset. See below. |
+| `ambient` | either | **skipped.** There is no bot; the author is whoever the ambient credential is. Refusing here would break the path §5.3 promises not to break. |
+| `unknown` | either | **skipped**, and the report is accepted. An unresolved scope has never dispatched under App auth, so there is no bot expectation to check against. |
 
 That table is only writable because a per-repo auth mode exists to key on. It did not in revision 4 — which is why the sentence had to invent a relationship between a global setting and a per-repo condition.
+
+**Row 2 is new in revision 6, and it closes a partial-configuration hole the fifth review found.** Revision 5 said two things that combine badly: §5.3 said an empty `github_app_bot_login` means "the author check is skipped," and this table said App mode requires the configured bot login. An operator who installs the App but never sets the login therefore gets an `app`-mode scope on which **every `pr_opened` report bypasses attribution entirely** — the exact check this section exists to add, disabled by an unset string rather than by a decision.
+
+Fail closed instead. On an `app`-mode scope the check is not optional, so a missing expectation is a configuration error, not permission to skip: refuse with a message naming the setting. This costs nothing in the normal case (an operator configuring App auth sets the login in the same sitting, §5.3 step 3) and it converts a silent bypass into one legible refusal on the first report.
+
+§5.3's "when it is empty, the author check is skipped" is therefore scoped to the modes where there is no bot to expect — `ambient` and `unknown`. It is not a global escape hatch.
 
 A refusal is a `409` and leaves `pr_number` unset, so the item stays dispatched and the existing monitor handles it.
 
@@ -1479,14 +1748,35 @@ The brief never asks an agent to send `pr_number` with `in_progress`, so this re
 
 Two things the fourth review asked for, and both are needed for the same reason: several decisions in §5.4, §5.5.2 and §5.6 branch on "is App auth configured *here*," and revision 4 answered that question by re-running a network call and interpreting its failure inline. A network failure is not a configuration fact.
 
-**The mode, persisted on the scope.** `team_github_scopes` gains one column, on the existing ladder (`app/database.py:384-417`):
+**The mode, persisted on the scope — and the id with it.** `team_github_scopes` gains **two** columns, on the existing ladder (`app/database.py:384-417`):
 
 ```python
 if scope_columns and "github_auth_mode" not in scope_columns:
     await conn.execute(
         text("ALTER TABLE team_github_scopes ADD COLUMN github_auth_mode VARCHAR DEFAULT 'unknown' NOT NULL")
     )
+if scope_columns and "github_app_installation_id" not in scope_columns:
+    await conn.execute(
+        text("ALTER TABLE team_github_scopes ADD COLUMN github_app_installation_id INTEGER")
+    )
 ```
+
+**Why the id must be persisted, and why revision 5 got this wrong.** Revision 5 persisted the *classification* and cached the *key that classification implies* in memory only, on the reasoning that "a backend restart mints fresh tokens, which is cheap" (§5.3). That reasoning holds for the **token** and fails for the **installation id**, because the two have different sources: a token is minted from the id, and the id comes from a network lookup that §5.6a deliberately runs **once per dispatch, at lease time** — not per git command.
+
+Trace the restart: a workspace is leased, its scope resolves `app`, the id is cached, the worktree gets Deck's `credential.*` lines. The backend restarts. The lease is still live and the worktree is still configured, so the agent's next `git push` calls the helper — which needs an installation id, finds an empty cache, and may not re-resolve, because §5.6a's stale-`app` rule forbids re-resolution and the helper is explicitly the wrong place for a network lookup. So the push fails, and so does Deck's own `create_pull` (§5.5.2), on a workspace this spec describes as configured. The mode said "App auth works here" and nothing left could act on it.
+
+This is the seam again: the *fact* was made durable and the *key implied by the fact* was not. A classification that outlives the data it depends on is not a classification, it is a claim. `github_app_installation_id` is therefore written in the **same commit** as the mode, whenever a lookup returns `200`, and it is what the helper mints from.
+
+It stays nullable, and the nullability is meaningful rather than incidental:
+
+| `github_auth_mode` | `github_app_installation_id` | State |
+|---|---|---|
+| `unknown` | NULL | never resolved — resolve at the next lease |
+| `app` | an integer | resolved; the helper mints from this id |
+| `app` | NULL | **unreachable by construction**, and treated as a fault: refuse exactly as an unresolved repo does (`queued_auth_mode_unresolved`), because an `app` scope with no id can mint nothing. A pre-upgrade row cannot land here — the migration default is `unknown` — so this covers a partial write or a hand-edited row |
+| `ambient` | NULL | the App is not installed here; nothing to mint |
+
+The token cache stays in memory, unchanged and correctly so: tokens expire within the hour, they are live credentials, and §5.3's reason not to store them at rest is sound. It is only the id — a stable, non-secret integer that identifies *which* installation, not a credential — that is persisted. Stating that split explicitly is what keeps a later reader from "fixing" the inconsistency by persisting the tokens too.
 
 Three values, and the default is deliberately the one that means *no decision yet*:
 
@@ -1519,16 +1809,21 @@ Releasing the lease is safe here and *not* the mistake §5.7 dissects: this refu
 
 **A stale `app` mode is a visible refusal, not a silent fallback.** If the App is uninstalled from a repo after it resolved, the stored mode stays `app`, the helper's mint fails, and the push fails with Deck's helper returning nothing — a hard failure by §5.5.6's measurement. That is the correct outcome and the reason it is stated: the alternative, re-resolving on every mint and downgrading to `ambient` on a `404`, would let an uninstall silently change PR authorship mid-dispatch. An operator re-resolves by clearing the mode to `unknown` (a settings action, or simply re-saving the scope).
 
-**Tests (offline, mocked client):**
+**Tests (offline, mocked client).** These are numbers 30-37 of **PR2's** list, which §5.8 indexes. PR1's list (§4.8) numbers from 1 independently and has its own `31b`, `37b`, `37c` — different tests. Every cross-reference in this spec carries its `§`, and the plan must keep two separate test files rather than merging the numbering.
 
-30. Lookup returns `200` ⇒ mode `app`, worktree gets identity **and** the three `credential.*` lines.
-31. Lookup returns `404` ⇒ mode `ambient`, worktree gets identity and **no** `credential.*` line. Assert on the absence, by reading `config.worktree`.
+30. Lookup returns `200` ⇒ mode `app`, **`github_app_installation_id` persisted to the returned id**, worktree gets identity **and** the three `credential.*` lines. Assert the id by re-reading the scope row, not the in-memory cache.
+    30b. **The restart case — this is the blocker-4 test.** Resolve a scope to `app` with a live lease and a configured worktree, then **clear the in-memory installation-id cache** to simulate a backend restart (construct a fresh service instance, or clear the dict directly — the test must not restart a process). Now call the helper endpoint. It mints successfully, using the id read from the scope row, with **no** `GET /repos/{o}/{r}/installation` call — assert the lookup mock was never invoked, since re-resolving here is the behaviour §5.6a's stale-`app` rule forbids. Against revision 5 the cache is empty, there is no persisted id, and the mint has nothing to work from: the push and `create_pull` both fail on a workspace the spec calls configured.
+    30c. **An `app` scope with a NULL id refuses rather than re-resolving.** Hand-build the unreachable row (`github_auth_mode = 'app'`, `github_app_installation_id = NULL`), then dispatch ⇒ `pending_reason == "queued_auth_mode_unresolved"`, lease released, no worktree `credential.*` lines written. Proves the fault case fails closed instead of falling through to a lookup or to the ambient credential.
+31. Lookup returns `404` ⇒ mode `ambient`, **`github_app_installation_id` left NULL**, worktree gets identity and **no** `credential.*` line. Assert on the absence, by reading `config.worktree`. Assert too that this is *not* an `app_not_installed` refusal — the dispatch proceeds (§5.3a row 1).
+    31b. **`app_not_installed` is a mint-time refusal.** A scope stored `app` with an id whose `POST /app/installations/{id}/access_tokens` returns `404` ⇒ the helper refuses `app_not_installed` naming the repo and the id, the mode is **not** downgraded to `ambient`, and the id is **not** cleared. Paired with 31 this is the §5.3a test: the same status code, two behaviours, keyed on which call returned it. A single shared `404` handler passes one of the two and fails the other.
 32. **Lookup times out ⇒ mode is unchanged (`unknown`), NO worktree config is written at all, `pending_reason == "queued_auth_mode_unresolved"`, the lease is released, and `dispatch_status` is a pre-existing value.** This is the blocker-6 test.
 33. Same for `500` and for a `403` rate-limit response — three separate cases, because an implementation can easily catch one and not the others.
 34. A repo already stored as `app` whose lookup then times out ⇒ **no** lookup-driven change of mode, and the dispatch proceeds using the stored mode. Distinguishes "fail closed on an unresolved repo" from "re-resolve every time," which are different bugs.
 35. `github_app_id` empty ⇒ mode `ambient` with **no** network call at all. Assert the mock was never invoked; a spurious call here would burn rate limit on every dispatch for operators who never configured the App.
 36. `pr_opened` on an `ambient` repo with `github_app_bot_login` set ⇒ accepted, author check skipped (§5.6). This is the false-sentence test: revision 4's reasoning would refuse it or skip for the wrong reason.
 37. `pr_opened` on an `app` repo with a non-bot author ⇒ `409`, `pr_number` unset.
+    37b. **`app` mode with an empty `github_app_bot_login` refuses.** Same `app`-mode scope, `github_app_bot_login = ""`, a `pr_opened` report whose author is anyone at all ⇒ `409 app_mode_bot_login_unset`, `pr_number` **unset**, item still `dispatched`. Against revision 5 this report is accepted with the author check skipped — the partial-configuration bypass in §5.6's row 2. Assert the column, not only the status: a route that records the number and then refuses would pass a status-only assertion.
+    37c. **`unknown` mode accepts and skips.** A never-resolved scope (`github_auth_mode = 'unknown'`, id NULL) with `github_app_bot_login` set ⇒ the report is **accepted**, `pr_number` recorded, no author comparison made. Paired with 37b this pins that the refusal is keyed on `app` mode specifically and does not leak onto the unresolved scopes every pre-upgrade row starts as — which would break `pr_opened` for every existing installation on the day PR2 lands.
 
 | Mutant | Test that must fail |
 |---|---|
@@ -1538,6 +1833,70 @@ Releasing the lease is safe here and *not* the mistake §5.7 dissects: this refu
 | the lookup runs even with `github_app_id` empty | 35 |
 | author check keyed on `github_app_bot_login` being set rather than on the repo's mode | **36** |
 | worktree config written before the mode resolves | 32 (asserts the config file is absent, not just the refusal) |
+| installation id cached in memory only, not persisted (revision 5) | **30b** |
+| id persisted but the helper still reads only the cache | **30b** (the fresh-instance assertion) |
+| helper re-resolves the installation when its cache misses | **30b** (asserts the lookup mock was never called) |
+| `app` + NULL id falls through to a lookup, or to the ambient credential | **30c** |
+| a mint-time `404` downgrades the stored mode to `ambient` | **31b** |
+| one shared `404` handler for the lookup and the mint | **31, 31b** — one of the pair always fails |
+| an empty `github_app_bot_login` skips the author check on an `app` scope (revision 5) | **37b** |
+| the `app_mode_bot_login_unset` refusal applied to `unknown` scopes too | **37c** |
+
+### 5.6b The verifier has no closed-unmerged condition either, and today it loops
+
+§5.5.4a stops Deck *adopting* a closed PR. It does not help an item whose PR is open when adopted and closed by a human an hour later — the ordinary case, since that is when humans close PRs. The fifth review names the gap: *"The current verifier only special-cases `merged`; it does not reject a closed-unmerged PR."*
+
+Confirmed by reading rather than assumed: `merged` is read at exactly two places (`github_verification_service.py:164` in `_verify_item`, `:228` in `_process_review_item`) and `state` is read **nowhere** in the file — the only other `.get("state")` is the combined-status state at `:326`, a different field on a different object.
+
+**Measured, on today's code.** A closed-unmerged PR with green checks, `merge_policy="human"`:
+
+```
+Q1 human policy: status='ready_for_review'  note='PR #5 is ready for review.'
+```
+
+The item is presented as ready for review with its PR closed — the review's stated concern, reproduced. Under `merge_policy="auto"` the fake client's `merge_pull` is then called and succeeds, because a mock cannot refuse what GitHub would; against real GitHub that call fails, `405` is in `_MERGE_TRANSIENT_STATUS_CODES` (`:26`), and the item burns `max_verification_retries` before landing in `ready_for_review` with a misleading "transient merge failure" note. Measured across four polls: three `merge_pull` calls, then `'Auto-merge retry budget exhausted after transient merge failure'`. Bounded, but wrong on every line — the failure is permanent and the note says transient.
+
+**And the draft case is not bounded at all.** This is the one worth the section. Deck creates code PRs with `draft=True` (§5.5.5), so a *closed draft* PR is the default shape of this failure. It reaches `_promote_verified_item` (`:375-398`), which calls `mark_pull_ready_for_review` — and GitHub refuses that mutation on a closed PR. `github_client` raises `HTTPStatusError` for a GraphQL body carrying `errors` (`github_client.py:154-159`), and `process_scope`'s handler catches it (`:118-124`):
+
+```
+Q4 poll 1: ready_calls=1  status='verifying'  retry_count=0  note='GitHub verification failed; will retry: Pull request is closed'
+Q4 poll 2: ready_calls=2  status='verifying'  retry_count=0
+Q4 poll 3: ready_calls=3  status='verifying'  retry_count=0
+```
+
+`retry_count` never moves, so the budget that bounds every other failure on this path does not bound this one — the counter lives in `_record_failed_verification_attempt` (`:465-508`) and this exception never reaches it. The item polls the GitHub API forever, and its `status_note` says "will retry" truthfully and forever. **A bounded retry loop is only bounded on the paths that route through the counter**; an `except` block added for transient HTTP quietly created an unbounded one.
+
+**The fix: one condition, immediately after the existing `merged` check.** In `_verify_item` (`:163`), where `merged` is already read from the same `pull` dict:
+
+```python
+if pull.get("merged"):
+    ...                                     # unchanged
+if pull.get("state") == "closed":           # merged is false here by the branch above
+    await github_dispatch_service.escalate(
+        db, item, "pr_closed_unmerged",
+        f"PR #{item.pr_number} was closed without being merged.",
+    )
+    await db.commit()
+    return
+```
+
+Placement is the whole design: **after** `merged` so a merged PR never reaches it, and **before** `_head_sha`/`list_check_runs_for_ref` so no check-run call, no promotion, and no `mark_pull_ready_for_review` happens on a closed PR. One condition, one existing escalation reason (§5.5.4a's), no new `dispatch_status`.
+
+`_process_review_item` (`:219`) needs no second condition, and that is worth stating so an implementer does not add one: `_verify_item` is the only route into it (`:216-217`, via `_promote_verified_item:398`) for a `verifying` item, and `process_scope` sends `ready_for_review` / `awaiting_human_review` items to it directly (`:114-117`). Those *can* arrive with a newly-closed PR. So the honest scope is: the condition goes in **both**, at the same position relative to each function's `merged` check — `_verify_item` for the pre-promotion path and `_process_review_item` for an item already promoted whose PR is closed afterwards. Two call sites, one helper, one reason.
+
+**Test (§5.8):**
+
+29c. **A closed-unmerged PR escalates instead of promoting.** An item in `verifying` whose PR is `merged: false, state: "closed"` with **all-green checks** ⇒ `dispatch_status == "escalated"`, `escalation_reason == "pr_closed_unmerged"`, `status_note` naming the PR number, and — the assertions that make it bite — `list_check_runs_for_ref` was **never called**, `mark_pull_ready_for_review` was **never called**, and `merge_pull` was never called. Green checks are deliberate: they are what carries the item to promotion today, so a fixture with failing checks would pass against the unfixed code for the wrong reason. Run the same fixture with the PR as a **draft** and assert the item does not stay `verifying` across three polls — that is the unbounded loop above, and it is the assertion revision 5's design fails.
+    29d. **A merged PR still reconciles.** Same fixture with `merged: true, state: "closed"` ⇒ `dispatch_status == "merged"`, no escalation. The `merged`-before-`state` ordering has to be pinned here too, in the verifier and not only in §5.5.4a's classifier.
+    29e. **An open PR is unaffected.** `state: "open"` with green checks ⇒ promotes exactly as today. The regression guard: a condition written as `state != "open"` rather than `state == "closed"` would also catch GitHub's absent-field case and escalate healthy items.
+
+| Mutant | Test that must fail |
+|---|---|
+| no closed-unmerged condition at all (today's code) | **29c** |
+| condition placed **after** the check-runs call | 29c (the never-called assertions) |
+| condition placed **before** the `merged` check | **29d** |
+| condition added to `_verify_item` only | 29c, run on a `ready_for_review` item |
+| written as `state != "open"` | **29e** |
 
 ### 5.7 A primary workspace is never given an agent identity
 
@@ -1617,7 +1976,7 @@ Primary workspaces are therefore undispatchable *for identity purposes* under PR
 6. `pyjwt[crypto]` and `cryptography` are declared in `requirements.txt`.
 7. With App auth unconfigured, dispatch still works on the existing `github_token` path.
 8. `report_pr_opened` refuses a PR in a different repo (`409`, `pr_number` unset).
-9. `report_pr_opened` refuses a PR whose author is not the bot **on an `app`-mode scope** (§5.6a). Keyed on the scope's `github_auth_mode`, not on `github_app_bot_login` being non-empty — tests 36 and 37 are the pair that pin this distinction.
+9. `report_pr_opened` refuses a PR whose author is not the bot **on an `app`-mode scope** (§5.6a). Keyed on the scope's `github_auth_mode`, not on `github_app_bot_login` being non-empty — tests 36 and 37 are the pair that pin this distinction, and 37b/37c pin what happens when the expectation itself is missing.
 10. `report_pr_opened` refuses a PR whose head branch does not match the item's expected branch.
 11. `report_pr_opened` skips the author check on an **`ambient`-mode** scope even when `github_app_bot_login` is set. This is the false-sentence test; see §5.6 and test 36.
 12. Brief contains the `[Slot]` prefix, the `deck/<slot>/issue-<n>` branch instruction, and both trailers — and instructs `pr_ready` with `head_ref`, not `pr_opened` with a number, on an `app`-mode scope. It must **not** claim the agent owns the PR title (§5.5.5).
@@ -1650,7 +2009,11 @@ Owner-change and primary (§5.5.6, §5.7):
     28b. **A primary is never leased even momentarily.** Same fixture, and assert the primary row's `leased_item_id` was NULL throughout: `leased_at` and `lease_token` are still NULL after the acquire, and `released_at` is still NULL. A design that leases-then-releases leaves `released_at` and a cleared `lease_token` behind, so this distinguishes the two designs on the row state rather than on the outcome.
     28c. **Only a primary available ⇒ `queued_no_workspace`, not a loop.** With a `dispatchable` primary as the *only* workspace in scope, `acquire` returns `None`, the item takes the existing `queued_no_workspace` path, and its `status_note` names the count of skipped primaries. Then add a worktree and re-run: it dispatches. Proves the skip is not a dead end.
     28d. **`allow_primary=True` still leases it.** The opt-in door works, so a future observation caller is not silently broken — and the default remains the safe one. One line, and it is the only test that may pass a primary.
-29. No new `dispatch_status` value **and no new `pending_reason`** is introduced by §5.7 — assert the item's `dispatch_status` is one of the existing set and its `pending_reason`, when set, is one of `queued_no_workspace` / `queued_ambiguous_sessions`. Revision 4's `queued_primary_workspace` is withdrawn; this test is what stops it coming back.
+29. **No new `dispatch_status` value and no new `pending_reason` anywhere in PR2** — not only in §5.7. Written as a namespace test rather than a per-section one, because the sections that could violate it (§5.5.4a, §5.6a, §5.6b, §5.7) were each written at a different time and none of them can see the others. Three assertions, over the items left behind by every other test in this file:
+    - every observed `dispatch_status` is in the existing set;
+    - every non-NULL `pending_reason` is one of `queued_no_workspace` / `queued_ambiguous_sessions` / `queued_auth_mode_unresolved` (§5.6a's, which is a `pending_reason` and is declared here so the test does not have to be edited to admit it);
+    - every non-NULL `escalation_reason` is one of the eleven existing reasons (§5.5.4a enumerates them from the call sites) plus `pr_closed_unmerged`.
+    Revision 4's `queued_primary_workspace` is withdrawn; this test is what stops it coming back. It is also what catches `pr_closed_unmerged` being implemented as a `dispatch_status`: such an implementation trips assertion one, because `escalate()` would no longer be the thing that set the status.
     29b. **`in_progress` no longer writes `pr_number`** (§5.6). Post `status="in_progress"` with `pr_number=9999` on an item whose `pr_number` is NULL ⇒ the report succeeds (it is a liveness ping), `last_nudge_at` is cleared, and `pr_number` is **still NULL**. Then assert the consequence that made it matter: `_ack_satisfied(item)` is still `False`, so the leader-ack gate was not silenced. Against today's code this test fails on both assertions.
 
 **Mutation requirement.**
@@ -1674,13 +2037,32 @@ Owner-change and primary (§5.5.6, §5.7):
 | handoff leaves the previous owner's identity in place | 26 |
 | `GH_TOKEN` reintroduced into `extra_env` "for convenience" | 25 |
 
-**Tests 30-50 live in this file too**, and are specified where their design is argued rather than repeated here: 30-37 in §5.6a (per-repo auth mode and transient-failure refusal), 38-46 in §5.5.4 (`pr_ready` reconciliation), 47-50 plus 49b in §5.5.5 (title, body, draft, and the base-ref normalization). Their mutation tables are with them, for the same reason: a mutant list separated from the guard it describes goes stale silently.
+**Tests 29c-50 live in this file too**, and are specified where their design is argued rather than repeated here: 29c, 29d, 29e in §5.6b (the verifier's closed-unmerged condition), 30-37 plus 30b, 30c, 31b, 37b, 37c in §5.6a (per-repo auth mode, the persisted installation id, and the transient-failure refusal), 38-46 in §5.5.4 and 46b-46g in §5.5.4a (`pr_ready` reconciliation and match classification), 47-50 plus 49b in §5.5.5 (title, body, draft, and the base-ref normalization). Their mutation tables are with them, for the same reason: a mutant list separated from the guard it describes goes stale silently.
 
 Revision 4 closed this section with a paragraph defending a `release_by_token` mutation row. That row is **gone** — §5.7 no longer leases the primary at all, so there is no release call to distinguish and no untestable guard to excuse. The paragraph is deleted rather than reworded, because the honest summary is simply that the design change removed the problem.
 
 ### 5.9 Deployment (gated, manual, not part of the PR)
 
-Restoring tizonia branch protection is the hard gate the soak log records. The backup exists at `/tmp/tizonia-master-protection-backup.json` (`required_approving_review_count: 1`, `enforce_admins: true`). **Copy it somewhere durable first** — `/tmp` is not a safe home for the only copy of a gate. Restore only after PR2 is deployed and a bot-authored PR has been observed to be approvable by `juanrubio`.
+**Step 1 — reset every scope that resolved before the App was installed.** This is first because skipping it makes every later step measure the wrong thing. §5.6a's mode is sticky by design: a scope that resolved `ambient` keeps dispatching under the human's ambient credential forever, and nothing re-resolves it (§7 records the missing operator control). So an operator who installs the App and immediately tests the bot-authorship gate will see a human-authored PR and conclude the App is misconfigured — when the real cause is a cached `ambient` from before the installation existed.
+
+Before testing anything, set the affected scopes back to the state that means *resolve now*:
+
+```sql
+-- inspect first
+SELECT id, repo_owner, repo_name, github_auth_mode, github_app_installation_id
+  FROM team_github_scopes;
+
+-- then, for each scope on a repo the App was just installed on:
+UPDATE team_github_scopes
+   SET github_auth_mode = 'unknown', github_app_installation_id = NULL
+ WHERE repo_owner = ? AND repo_name = ?;
+```
+
+Both columns, not just the mode — an `unknown` mode with a stale id left behind is a row §5.6a's state table does not cover, and the next lookup overwrites the id anyway. The next dispatch re-resolves and writes `app`. `unknown` is the only value that means "ask again"; `ambient` means "already asked, the answer was no."
+
+This must happen while **no dispatch is in flight** on those scopes, since a live `app`-mode lease reads the id the `UPDATE` clears. With autonomy off (§6) that is the normal state, but check `github_workspaces` for a non-NULL `leased_item_id` first.
+
+**Step 2 — restore tizonia branch protection.** The hard gate the soak log records. The backup exists at `/tmp/tizonia-master-protection-backup.json` (`required_approving_review_count: 1`, `enforce_admins: true`). **Copy it somewhere durable first** — `/tmp` is not a safe home for the only copy of a gate. Restore only after PR2 is deployed, step 1 is done, and a bot-authored PR has been observed to be approvable by `juanrubio`.
 
 ---
 
@@ -1733,10 +2115,12 @@ Restoring tizonia branch protection is the hard gate the soak log records. The b
 11. Deploying PR0 changes no behavior until the operator enables enforcement; PR1's gate refuses to merge while enforcement is off, **and no approver evidence is recorded during that period** — so flipping the flag cannot legitimize anything written before it.
 12. A human's primary checkout is never given an agent git identity, and refusing it does not strand the item: a primary is **excluded from the dispatch scan**, so it is never leased at all, and the next dispatchable worktree is leased on the first attempt.
 13. Every new guard is shown to bite by mutation, and the guards that cannot be tested (`hmac.compare_digest`, a per-item lock's global/per-key distinction) are named as review items rather than claimed as covered.
-14. **Every `/dispatch-status` branch states who may report it.** Authentication is not authorization: an agent that is not the item's owner, leader, or handoff target is refused, the refusal happens before any state change, and the two GitHub-writing branches additionally require the current lease token (§3.5a).
-15. **A rejection has a workable next round.** After `revision_requested` the owner can open a new approval request, the previous round's approval no longer satisfies the gate, and `max_approval_rounds` still bounds the loop (§4.3a.1).
+14. **Every `/dispatch-status` branch states who may report it — including the one revision 5 added and forgot to authorize.** Authentication is not authorization: an agent that is not the item's owner, leader, or handoff target is refused, the refusal happens before any state change, and **both** GitHub-writing branches — `pr_opened` and `pr_ready` — appear as owner-only rows in §3.5a's matrix and require the current lease token, checked before any GitHub call or item mutation. A status absent from that matrix is the defect: it defaults to *allowed* in any implementation whose resolver falls through.
+15. **A rejection has a workable next round, opened by the rejection itself.** One `deck_approve_work_item(decision="rejected")` clears the previous round's approval and opens the next, in one commit and with no second call by anyone; the owner recovers by sending a fresh `deck_request_context` and nothing else; the previous round's approval no longer satisfies the gate; and `max_approval_rounds` still bounds the loop, leaving the counter on the last round that really opened (§4.2a, §4.3a.1).
 16. **A tmux pane Deck did not launch keeps working.** It registers, mints an unbound token, and can send mail; it can never approve. `bind_pending` is reserved for a pane that claims a Deck launch (§3.3a).
 17. **A transient GitHub failure never silently changes authorship.** An unresolved installation lookup refuses the dispatch and leaves the workspace unconfigured, rather than falling back to the human's ambient credential (§5.6a).
 18. **A crash between `create_pull` and the commit does not produce a second PR or an orphaned one.** The retry reconciles by head/base, adopts the existing PR through §5.6's checks, and records its number (§5.5.4).
 19. **A design PR is immediately reviewable.** It is created non-draft, because nothing in the design path would ever mark it ready, and a draft PR cannot be approved (§5.5.5).
 20. **Deck's PR calls speak GitHub's vocabulary, not git's.** `scope.base_ref` is a refspec (live value `origin/master`, column default `origin/HEAD`) and every existing consumer treats it as one. It is normalized to a branch name before it reaches `create_pull` or `list_pulls_for_head`, in one shared helper, so the base filter cannot silently match nothing (§5.5.5).
+21. **An App-mode workspace survives a backend restart.** The installation id is persisted beside the mode it implies, so a live lease whose in-memory cache was lost still mints a credential — without re-resolving, and without a lookup call from the credential helper. An `app` scope with no id refuses rather than falling through to the human's credential (§5.3a, §5.6a).
+22. **A PR Deck finds is classified before it is used, and a PR closed by a human is never presented as ready.** Reconciliation adopts only an open match, reconciles a merged match to `merged` without asking anyone to review it, and escalates `pr_closed_unmerged` on a closed-unmerged one; the verifier applies the same condition to a PR closed *after* adoption, before any check-run call or draft-to-ready mutation. Closed history does not make a live PR ambiguous, and no new `dispatch_status` value is introduced (§5.5.4a, §5.6b).
