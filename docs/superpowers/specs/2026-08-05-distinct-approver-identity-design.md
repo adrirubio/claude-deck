@@ -114,13 +114,13 @@ Revision 8 also answers a question no review raised, found while writing `prepar
 | # | Revision 8 said | Measured reality | Now |
 |---|---|---|---|
 | 1 | `prepare_attempt` commits `dispatch_nonce` + round 1 before the brief, and that is enough to make a fresh session safe | it commits the attempt's **identity** and not its **owner**. `owner_slot_id` and `routing_method` are first persisted at `:332-333`, *after* `launcher` returns — and a newly watched item starts with both NULL (`github_watcher_service.py:63`, columns nullable at `models/database.py:259`, `:262`). So the launched agent's first owner-only report hits `report.reporting_slot_id != item.owner_slot_id` with `item.owner_slot_id IS NULL` and is refused — the same class of failure blocker 1 of revision 7 set out to remove, one column over. The crash half is worse: the next poll re-runs `route_item` (`:252`) **before** the guard, so a label edit or a busy slot re-briefs the *same* nonce to a *different* slot, and since the head embeds `slot_id`, the "reused" attempt silently acquires a different expected head | `prepare_attempt` persists the attempt as **one atomic identity record** — `owner_slot_id`, `routing_method`, `dispatch_nonce`, `approval_round_count` — in one commit before any mail, prompt, or pane. A prepared item **reuses** its persisted routing instead of re-running `route_item`, and a partially prepared row **fails closed** (§4.2a). Tests 37i, 37m, 37n |
-| 2 | the expected head is composed from the **current** owner slot plus the current nonce, and handoff deliberately keeps the nonce | `accept_handoff` **changes `owner_slot_id`** (`github_dispatch_service.py:705`) and sends no new brief. So slot 3 is briefed `deck/slot-3/issue-42-<nonce>`, pushes it, the item is handed to slot 5, and `pr_ready` then recomposes the expectation as `deck/slot-5/issue-42-<nonce>` and `409`s the valid branch — forever, since no replacement brief ever names the new one. Keeping the nonce across handoff was correct and insufficient: the nonce was not the only slot-dependent half of the name | the attempt's head is **immutable for the attempt's lifetime**. A sixth column, `dispatch_head_ref`, is written by `prepare_attempt` and read by both the brief and the `pr_ready` check; `attempt_head_ref` becomes the *composer* used once at preparation rather than a function re-evaluated per call. Handoff preserves it; only `reset_for_retry` clears it (§4.2a, §5.5.4a, §5.6). Tests 11f, 37o |
+| 2 | the expected head is composed from the **current** owner slot plus the current nonce, and handoff deliberately keeps the nonce | `accept_handoff` **changes `owner_slot_id`** (`github_dispatch_service.py:705`) and sends no new brief. So slot 3 is briefed `deck/slot-3/issue-42-<nonce>`, pushes it, the item is handed to slot 5, and `pr_ready` then recomposes the expectation as `deck/slot-5/issue-42-<nonce>` and `409`s the valid branch — forever, since no replacement brief ever names the new one. Keeping the nonce across handoff was correct and insufficient: the nonce was not the only slot-dependent half of the name. Measured against the real `accept_handoff`, both designs side by side | the attempt's head is **immutable for the attempt's lifetime**. A sixth column, `dispatch_head_ref`, is written **once** by `prepare_attempt` and read everywhere else; `attempt_head_ref` becomes a *composer called once at preparation* rather than a function re-evaluated per call — because one composer called twice still gives two answers when a shared input moves. Handoff preserves it; only `reset_for_retry` clears it, and the clear lives **in that function**, since two of its three callers are not the operator (§4.2a, §5.5.4a, §5.6). Tests 11f, 37o, 37p |
 | 3 | an unclassifiable pull routes through `_record_failed_verification_attempt(head_sha=None)` in **both** `_verify_item` and `_process_review_item`, so the retry budget advances | that helper ends `dispatch_status = "dispatched"` (`:507`) unconditionally while budget remains, and `process_scope:114` routes `dispatched` to `_verify_item`. **Measured:** a design item in `awaiting_human_review` becomes `dispatched`; if the garble is **transient**, the next poll runs check-runs on it and calls `mark_pull_ready_for_review` — an unreviewed design PR taken out of draft. (A *persistent* garble does not promote, because the verify stage refuses too; it mislabels the item as unverified code for two polls and then escalates. Both sequences measured.) Broader than reported, and this is the auto-merge exposure: the helper also overwrites `status_note` at `:487`, which **is** the human-merge reservation (`_HUMAN_MERGE_NOTE_PREFIXES`, checked at `:235`). Measured on a code item parked by a policy `403`: control poll merges nothing; after one refuse path, `merge_pull` is called and `auto_merged_at` is SET | the refuse path is **stage-aware**. `_record_failed_verification_attempt` gains one **required** keyword-only `retry_status`, and the note write moves behind `_set_failure_note`, which refuses to overwrite a reservation. The review stage passes `item.dispatch_status`, so no item is moved between pipelines and no reservation is erased by a failure to classify. The review's proposed `preserve_note` flag is **withdrawn** — a caller that does not know a note is a safety control will not pass a flag protecting it (§5.6b, §5.6b.1). Tests 29f, 29g, 29h, 29h-1, 29h-2 — 29h is the auto-merge regression test |
 | 4 | test 29-a1 collects every `ast.Assign` target and every `ast.keyword` named for the three columns | keyword name alone does not distinguish an ORM write from a response field copy. `GithubWorkItemResponse(...)` at `agent_teams.py:201` passes all three. **Ran revision 8's test exactly as written against the current tree: it fails four of its own assertions** — a non-literal RHS failure on `dispatch_status=item.dispatch_status`, two non-`None` `escalation_reason` sites instead of one, and two of the three recorded baselines wrong. The reviewer's independently measured counts match mine exactly | the scan **classifies the enclosing call**, not the keyword name: keyword writes count only for ORM mutation forms (`GithubWorkItem(...)`, explicit `update()`), response/schema constructors are excluded by name, and **any unrecognized call form fails the test** rather than being skipped — an allowlist that ignores what it does not recognize has the blind spot it was built to remove. Baselines re-measured with the corrected classifier (§5.8 test 29-a1). Test 29-a2 proves the classification itself |
 
 **The lesson revision 9 adds.** Revision 8's lesson was about systems you do not own. This round's four are all inside the repository, and they share a different shape: **a fix is only as correct as the paths it was composed against.** Each blocker is a revision-8 fix that is right where it was written and wrong one call site away — the nonce is durable but its owner is not; the head is stable but the slot in it is not; the counter advances but the status it lands on belongs to another pipeline; the writer set is enumerated but the enumeration cannot tell a write from a read. So the discipline is not "measure the outside system" but **"enumerate who else touches this column, this row, this status, and run the fix down each of their paths."** Two of the four gave up a defect only when driven end-to-end rather than reasoned about — including the auto-merge, which no amount of reading the retry helper would have surfaced, because the damage is done by a `status_note` write whose significance lives 250 lines away.
 
-**Ten measurements this spec rests on, so a reviewer can re-run them rather than trust them.** The first four are throwaway pytest files against in-memory SQLite with a fake client, no network. The next three reach outside the repository, which is what revision 8's blockers required: one drives real `git` against a temporary bare repo, one is a single unauthenticated `GET` against a public repo, and one walks `app/`'s AST. The last three are revision 9's, and all three are in-repo compositions driven end-to-end:
+**Twelve measurements this spec rests on, so a reviewer can re-run them rather than trust them.** The first four are throwaway pytest files against in-memory SQLite with a fake client, no network. The next three reach outside the repository, which is what revision 8's blockers required: one drives real `git` against a temporary bare repo, one is a single unauthenticated `GET` against a public repo, and one walks `app/`'s AST. The last five are revision 9's, and all five are in-repo compositions driven end-to-end through the shipped functions rather than reasoned about:
 
 | Claim | How it was measured | Result |
 |---|---|---|
@@ -134,6 +134,8 @@ Revision 8 also answers a question no review raised, found while writing `prepar
 | the AST scan as revision 8 wrote it **fails against the current tree**, and the corrected one passes and is mutation-proof | implemented test 29-a1 literally — bare keyword-name collection, its three stated assertions, its recorded baselines — and ran it over `app/`. Then implemented the corrected classifier (enclosing-call classification, three-tier RHS, UNKNOWN-is-failure, `setattr` baseline) and ran it, then re-ran it against `app/` copied to a temp tree with one injected violation at a time | revision 8's: **4 failed assertions** — `dispatch_status=item.dispatch_status` (`agent_teams.py:211`) trips the non-literal-RHS rule; `escalation_reason` has **2** non-`None` sites, not 1, the second being `agent_teams.py:223`; two of three baselines wrong. Corrected: **passes on arrival** with `dispatch_status` 14 write sites over 9 values, `pending_reason` 11, `escalation_reason` 6 (1 `Name` + 5 `None`), response keywords **3**, unknown call forms **0**. **All 10 mutants caught by a named assertion**, and the tier-2 constant-form case correctly does *not* fire |
 | the review-stage refuse path moves a design item into the code pipeline, and a **transient** garble then promotes it | revision 8's design implemented in full (classify-refuse in **both** stages), on an `awaiting_human_review` **design** item with a draft PR; real `process_scope` polls, re-read with raw `text()` in a fresh session each time, run twice: once with the garble persisting, once with it clearing on poll 2 | persistent: `'dispatched'`, `'dispatched'`, `'escalated'` with `retry_count` 1→2→3, `mark_pull_ready_for_review` **0×** — mislabelled, not promoted. Transient: poll 1 → `'dispatched'`; poll 2 `list_check_runs_for_ref` **1×**, `mark_pull_ready_for_review` **1×**, ending `'ready_for_review'` — an unreviewed design PR taken out of draft. Under the fix both polls read `'awaiting_human_review'`, `mark_pull_ready_for_review` **0×** |
 | the same path **auto-merges a PR a human had reserved** | code item in `ready_for_review` whose `status_note` is `'Auto-merge blocked by repository policy; requires human merge.'` (a real `403` fallback), `merge_policy="auto"`; one control `_process_review_item`, then one refuse path, then one poll | control: `merge_pull` **0** calls. After the refuse path the note reads `'PR #5 returned a state Deck cannot classify.'` and the sentinel is gone; next poll: `merge_pull` **1** call, `dispatch_status='merged'`, `auto_merged_at` **SET** |
+| a handoff strands a valid branch under the composed head, and the stored head accepts it | both designs implemented side by side; a prepared attempt for slot A driven through the **real** `initiate_handoff` + `accept_handoff` to slot B, then B reports A's head — the only head anyone was briefed with. Write set read from `inspect.getsource(accept_handoff)` | composed: `409 head_ref_mismatch`, expected `deck/slot-2/issue-42-<nonce>`, briefed `deck/slot-1/issue-42-<nonce>`. Stored: **accepted**. `accept_handoff` writes `owner_slot_id`, `handoff_state`, `handoff_target_slot_id`, `routing_method`, `updated_at` — and neither `dispatch_nonce`, `dispatch_head_ref`, nor `dispatched_at` |
+| a clear written in the retry route misses two of the three callers, and the guard as first drafted refuses every retry | `reset_for_retry`'s callers enumerated from `app/`, then the **watcher's** `_upsert_item` edit path driven with the clear inside the function vs. in the route; separately, the five-field `any()` guard evaluated against the row the real reset leaves behind | callers: `agent_teams.py:783` (operator), `github_dispatch_service.py:98` (`promote_deferred_retries`), `github_watcher_service.py:79` (**an issue edit — no operator**). Clear inside: `pending`, nonce and head NULL. Clear in the route: `pending` with attempt 1's nonce and head still set. Guard: the reset leaves `(None, None, 1, 'role_match', False)` — `all()` false, `any()` **true**, so preparation raises `PartiallyPreparedAttempt` on **every** genuine retry |
 
 ---
 
@@ -863,18 +865,15 @@ The brief that must name the attempt branch (§5.5.4a consequence 2) is built at
 
 ```python
 # new, immediately after the workspace is acquired (:277) and before the brief (:290)
+_ATTEMPT_COLUMNS = ("dispatch_nonce", "dispatch_head_ref")   # exactly what reset clears
+
 async def prepare_attempt(self, db, item, *, owner_slot_id, routing_method) -> str:
     """Persist this attempt's complete identity, atomically, before anyone is told of it.
 
     Returns the head ref the brief must name and `pr_ready` will require.
     """
-    prepared = (
-        item.dispatch_nonce,
-        item.dispatch_head_ref,
-        item.owner_slot_id,
-        item.routing_method,
-        item.approval_round_count >= 1,
-    )
+    prepared = [getattr(item, c) is not None for c in _ATTEMPT_COLUMNS]
+    prepared.append(item.approval_round_count >= 1)
     if all(prepared):                       # already prepared; reuse it (crash idempotence)
         return item.dispatch_head_ref
     if any(prepared):                       # partial: a torn write, not a state to guess at
@@ -890,6 +889,21 @@ async def prepare_attempt(self, db, item, *, owner_slot_id, routing_method) -> s
 ```
 
 `dispatch_head_ref` is the sixth column, and §5.5.4a explains why the head must be stored rather than recomputed. `PartiallyPreparedAttempt` is a new exception; the caller escalates `plan_blocked` and releases the workspace, exactly as the `ValueError` path at `:317-323` already does.
+
+**The guard reads three fields, not five, and revision 9's first draft got this wrong.** It listed `owner_slot_id` and `routing_method` in the tuple, which looks right — the whole point of blocker 1 is that the owner is part of the attempt's identity — and is fatal, because `reset_for_retry` **deliberately does not clear those two** (rule 4 below, and the existing `:64-75` block, verified). So after a genuine retry the row holds `(None, None, 1, 'role_match', False)`: `all()` is false and `any()` is **true**, and preparation raises `PartiallyPreparedAttempt` on **every** retried item. Measured:
+
+```
+after §4.2a rule 4's clear, the row still holds:
+    owner_slot_id=1  routing_method='role_match'
+    nonce=None  head=None  round=0
+    prepared tuple = (None, None, 1, 'role_match', False)
+    all()=False  any()=True
+    -> prepare_attempt RAISES on a genuine retry
+```
+
+The guard's members must therefore be exactly the fields `reset_for_retry` clears, which is why they are named in a shared `_ATTEMPT_COLUMNS` constant that rule 4's clear iterates too: **a guard and the clear it depends on must read the same list, or the clear can shrink without the guard noticing.** `owner_slot_id` and `routing_method` are still *written* by preparation — blocker 1 requires that — they are just not evidence *of* preparation, because they outlive it by design. Writing a field and trusting it as evidence are different decisions, and this tuple conflated them.
+
+The round stays in the guard, and it is the one member that is a comparison rather than a presence check. It is what makes a half-prepared row fail closed in the direction that matters: `reset_for_retry` zeroes it at `:73` **today**, so a retry that somehow cleared the round but not the nonce reads as partial rather than as prepared.
 
 Six properties, each answering something a review asked for:
 
@@ -910,7 +924,41 @@ Six properties, each answering something a review asked for:
 
     `route_item` still runs, because the guards between `:252` and `:277` need a candidate slot to report against (`queued_slot_busy` at `:264`, the ambiguity note at `:272`). What changes is that its answer does not override a decision already committed. This is deliberately *not* implemented by skipping `route_item` for prepared items: the busy-slot and ambiguity guards would then run against a stale or absent slot, which trades one composition defect for another.
 3. **Partial preparation fails closed.** A row with a nonce and no owner, or an owner and no round, is not a state to interpret — it is a torn write from a crash inside the commit, or a hand-edited row. Preparation refuses it rather than filling in the blanks, because every plausible repair guesses at which half is authoritative. This is the same rule as `pr_ready` on a NULL-nonce item (§5.5.4a consequence 3): **when the evidence is incomplete, refuse and say so.**
-4. **`reset_for_retry` is the only thing that authorizes a new nonce, and the clear belongs *below* its early return.** It must *clear* `dispatch_nonce` **and `dispatch_head_ref`** — which §4.2's table already requires (`reset_for_retry:64-75`, where `approval_round_count = 0` is already set at `:73`). Clearing them is what makes the guard above fall through on a genuine retry and hold on a crash-retry of the same attempt. If the clear is missed entirely, blocker 2's fix silently reverts: the retried attempt keeps attempt 1's nonce, composes attempt 1's head, and rediscovers the closed PR. Note the existing reset block **already** clears neither `owner_slot_id` nor `routing_method` (`:64-75`, verified) — and it should not start: they are overwritten by the next preparation, and keeping them lets an operator see who last held a retried item.
+4. **`reset_for_retry` is the only thing that authorizes a new nonce, and the clear belongs *below* its early return.** It must *clear* `dispatch_nonce` **and `dispatch_head_ref`** — which §4.2's table already requires (`reset_for_retry:64-75`, where `approval_round_count = 0` is already set at `:73`). Clearing them is what makes the guard above fall through on a genuine retry and hold on a crash-retry of the same attempt. Note the existing reset block **already** clears neither `owner_slot_id` nor `routing_method` (`:64-75`, verified) — and it should not start: they are overwritten by the next preparation, and keeping them lets an operator see who last held a retried item. That decision is what fixes the guard's membership above, so the two must be read together.
+
+    **The consequence of missing the clear depends on the guard, and revision 9's first draft carried revision 8's answer.** Under a guard on `dispatch_nonce` alone the retried attempt is silently reused: attempt 1's head is recomposed, reconciliation rediscovers the closed PR, and the item escalates again. Under the three-field guard above it is **not** silent, because `reset_for_retry` already zeroes the round at `:73` — the row reads as partial and preparation refuses. Measured, both guards, same missed clear:
+
+    ```
+    after a retry with the nonce/head clear missed:
+        nonce='a3f9c1b2d4e5f607'  head='deck/slot-1/issue-42-a3f9c1b2d4e5f607'
+        status='pending'  round=0
+
+    nonce-only guard  -> returned head 'deck/slot-1/issue-42-a3f9c1b2d4e5f607'
+                         0 new nonces minted   <- attempt 1's head, reused silently
+    three-field guard -> raised PartiallyPreparedAttempt(nonce, head, round=False)
+                         0 new nonces minted   <- refuses, and says why
+    ```
+
+    Both are bugs and neither is acceptable, but they need different tests and different mutation rows: the reuse is invisible until a second escalation, and the refusal is visible on the first poll. Stating the wrong one would send an implementer looking for a silent regression that the design no longer produces. This is the same correction as revision 9's blocker-3 finding — **a consequence is a claim about the whole composed design, not about the line being changed** — and it is the second time in this revision that a sentence inherited from an earlier guard survived the guard it described.
+
+    **The clear must live in `reset_for_retry`, not in the retry route, because two of the three callers are not the operator.** Measured caller set:
+
+    ```
+    app/api/v1/agent_teams.py:783                    the operator's retry endpoint
+    app/services/github_dispatch_service.py:98       promote_deferred_retries
+    app/services/github_watcher_service.py:79        an ISSUE EDIT -- no operator at all
+    ```
+
+    The watcher's path is the instructive one: `_upsert_item` retries an `escalated`/`failed` item whenever the issue's `updated_at` advances (`github_watcher_service.py:74-79`), so an operator editing the issue text of a failed item triggers a re-dispatch nobody asked for by that name. A clear written in the route leaves that path holding attempt 1's nonce and head. Measured, driving the real `_upsert_item`:
+
+    ```
+    clear inside reset_for_retry:            status='pending' nonce=None head=None round=0
+    clear written in the retry ROUTE only:   status='pending'
+                                             nonce='a3f9c1b2d4e5f607'
+                                             head='deck/slot-1/issue-42-a3f9c1b2d4e5f607'
+    ```
+
+    Test 37p covers it. Note also that `reset_for_retry` **assigns without committing** — all three callers commit (`:97-98`, `agent_teams.py:786`, and the watcher's poll) — so a test that re-reads in a fresh session without committing first sees the *pre-reset* row and passes no matter what the function does. That cost a false green while writing this.
 
     Position matters as much as presence, because `reset_for_retry` is **two functions in one**. When the item still holds a workspace lease it takes the deferred branch (`:56-63`): it sets `retry_requested_at`, writes a status note, and **returns without resetting anything** — the `return` is at `:63`, verified. The reset block starts at `:64`. Putting the clear above that return would strip the nonce from an item whose previous attempt is *still running* — its pane holds the old nonce, so every `deck_request_context` and every ack from a live agent would refuse `no_linkage`, and the item would sit in `escalated` until `promote_deferred_retries` (`:77-101`) re-entered the function later. The nonce must survive until the lease is released and the real reset runs. Same rule as property 6, and the same reason: **while a pane may still be alive, its attempt identity must stay valid.**
 5. **Handoff preserves the whole record.** `accept_handoff` (`:697-710`) changes `owner_slot_id` and must **not** touch `dispatch_nonce` or `dispatch_head_ref` — the reason is §5.5.4a's, and it is the eighth review's second blocker: the head was minted for the *original* owner and the new owner was never briefed with a replacement. See §4.4's table row and §5.5.4a's immutability paragraph.
@@ -984,16 +1032,7 @@ So `accept_handoff` clears:
 
 **Why handoff keeps the nonce — and the head with it.** Clearing the nonce would deadlock the item. `accept_handoff` sends **no new brief**, so the new owner never learns a replacement nonce, and every subsequent ack attempt would refuse with `no_linkage` forever. Clearing the *ack* fields is what matters: the new owner must obtain their own approval, and §4.3 rule 3 requires the `context_request` to have been sent **by the current owner member**, so the previous owner's request cannot satisfy the new one even though the nonce is unchanged. Retry is different — it re-dispatches through `prepare_attempt`, which mints a fresh nonce, so clearing is both safe and necessary there.
 
-The eighth review's second blocker is that "keep the nonce" was necessary and **not sufficient**. `accept_handoff` changes `owner_slot_id` (`:705`), and revision 8 composed the expected head from the *current* owner's `slot_id`. So the surviving nonce was carried into a name the agent had never been given:
-
-```
-slot 3 briefed:      deck/slot-3/issue-42-a3f9c1b2d4e5f607     <- pushed, PR-ready
-handoff to slot 5:   nonce preserved, no new brief sent
-slot 5 reports:      pr_ready(head_ref="deck/slot-3/issue-42-a3f9c1b2d4e5f607")
-Deck recomposes:     deck/slot-5/issue-42-a3f9c1b2d4e5f607     <- 409, forever
-```
-
-Nothing recovers from that. The branch is valid, the work is real, and no future brief ever names the head Deck now expects. `dispatch_head_ref` (§4.1) closes it by making the head part of the attempt record rather than a function of mutable state: handoff changes who is working and does not change what they were told to push. The existing handoff tests could not have caught this — they assert ownership and approval state and never drive `pr_ready` afterwards, which is why test 11f exists.
+The eighth review's second blocker is that "keep the nonce" was necessary and **not sufficient**. The nonce was not the only slot-dependent half of the name: `accept_handoff` changes `owner_slot_id` (`:705`), and revision 8 composed the expected head from the *current* owner's `slot_id`, so the surviving nonce was carried into a name the agent had never been given. `dispatch_head_ref` (§4.1) closes it by making the head part of the attempt record rather than a function of mutable state: handoff changes who is working and does not change what they were told to push. §5.5.4a carries the measurement and the general rule; this rung records that handoff must keep **both** columns, and test 11f proves it by driving the real `accept_handoff`.
 
 **Why handoff keeps the round too.** A handoff is not a rejection: nobody has declined anything, so no new round should open, and the cap must not be consumed by an event the leader did not cause. Handing an item back and forth three times would otherwise exhaust `max_approval_rounds` without a single review ever happening. The *owner* changed and the *round* did not, which is exactly the state §4.3 rule 3 already handles — the request must come from the current owner member, so the new owner opens a fresh `context_request` **in the same round** and the previous owner's request in that round no longer matches. That is also why §4.3a's duplicate-request `409` is scoped to `(work item, nonce, round, owner)` and not to `(work item, nonce, round)`: two requests in one round from two different owners is the normal shape of a handoff, not a shim bug.
 
@@ -1290,6 +1329,9 @@ The owner's brief already names the leader as "Team leader / approver" (`:428-43
 11. `accept_handoff` clears all five ack fields and **keeps** the nonce; the previous owner's approval does not carry to the new owner, *and* the new owner can still be acked (proving the §4.2 deadlock is avoided).
     11b. **`_ack_satisfied` is False for the new owner after a handoff.** This is blocker 4 and it needs its own assertion, because test 11 as written in revision 2 would pass while leaving `ack_received_at` set: set `dispatched_at` in the past, record an ack, hand off, then assert `_ack_satisfied(item) is False`. Against revision 2's two-column clear this fails, since `ack_received_at > dispatched_at` still holds.
     11c. After a handoff, the monitor nudges the leader for the new owner's ack and eventually escalates `leader_ack_timeout`. This is the *consequence* of 11b — the behavior an operator would actually miss — and it is why `last_nudge_at` is cleared too (`:785` branches on `is None`).
+    11f. **A handoff does not invalidate the head the agent was briefed with — the blocker-2 test.** Prepare an attempt for slot A and record the head `prepare_attempt` returned. Drive the **real** `initiate_handoff` and `accept_handoff` to slot B (not a hand-written `owner_slot_id` assignment — the point is what the shipped function does). Re-read in a fresh session and assert `dispatch_nonce` and `dispatch_head_ref` are **both** unchanged and `owner_slot_id` is now B's. Then run `pr_ready`'s head check with **A's head** — the only head anyone was ever told — and assert it is **accepted**. Against revision 8's composed form this is a `409 head_ref_mismatch` whose expectation is `deck/slot-<B>/issue-42-<nonce>`, a name no brief ever contained; measured both ways in the same test file, parametrized over the two designs, so the comparison is in the record rather than in the commit message.
+
+    Assert the *write set* too, from `inspect.getsource(accept_handoff)`: `owner_slot_id` present, `dispatch_nonce` and `dispatch_head_ref` absent, and `dispatched_at` absent (§4.2a: the ack deadline is not re-anchored). That assertion is what makes 11f fail loudly rather than mysteriously if someone later "fixes" handoff by clearing the head.
 12. Auto-merge with CI-green + fresh head but no distinct approval ⇒ falls back to human merge, `auto_merged_at` stays NULL.
 13. Auto-merge with CI-green + fresh head + valid distinct approval ⇒ merges.
     13b. Same item, but `mail_capability_tokens_required = False` ⇒ refuses with `tokens_not_enforced` (§4.5).
@@ -1336,6 +1378,10 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
     37j. **A crash between preparation and launch reuses the attempt.** Prepare, then make `launcher` raise; the item escalates `launch_outcome_unknown` with its nonce **intact** (§4.2a property 4). Now clear the escalation to `pending` *without* `reset_for_retry` — simulating a redispatch of the same prepared attempt — and run the poll again ⇒ `prepare_attempt` **reuses** the existing nonce (assert it is unchanged and `token_hex` was called zero additional times) and the round is still `1`. Against an unguarded implementation the second poll mints nonce `B` while a possibly-live pane holds nonce `A`.
     37l. **A deferred retry does not strip a live attempt's nonce.** Prepare an attempt and leave a `GithubWorkspace` row with `leased_item_id == item.id`, then call `reset_for_retry`. It takes the deferred branch (`github_dispatch_service.py:56-63`): assert `retry_requested_at` is set, `dispatch_status` is **unchanged**, and `dispatch_nonce` **and `dispatch_head_ref`** are **still the prepared values**. Then release the lease, run `promote_deferred_retries` (the real method name — `complete_deferred_retries` does not exist), and assert both are now NULL. This is the pair to 37k: 37k proves the clear exists, 37l proves it is on the right side of the early return. A clear written at the top of the function passes 37k and fails only here.
     37k. **`reset_for_retry` clears the nonce, so a real retry gets a new one.** Prepare an attempt, note the nonce, `deck_retry_work_item` ⇒ `dispatch_nonce IS NULL` and `approval_round_count == 0` in a fresh session; then poll ⇒ a **different** nonce is minted and round 1 reopens. This is the pair to 37j and the two must be written together: 37j asserts preparation is sticky, 37k asserts retry breaks the stickiness. An implementation that gets either alone is broken — sticky-without-clearing reintroduces blocker 2's loop (attempt 2 reuses attempt 1's head), and clearing-without-stickiness reintroduces the crash race.
+
+    **`reset_for_retry` does not commit.** All three callers do (`github_dispatch_service.py:97-98`, `agent_teams.py:786`, and the watcher's poll). So 37k, 37l and 37p must `commit()` before re-reading in a fresh session, or the read returns the *pre-reset* row and the test passes against a function that clears nothing. Measured while writing these — it produced a false green.
+    37o. **The head does not move for the life of the attempt.** The positive companion to 11f, and the one that pins the *column* rather than the handoff. Prepare, hand off, and assert `dispatch_head_ref` still equals the prepared value. Then set it NULL and assert `pr_ready` refuses `stale_dispatch` rather than composing a head (§5.5.4a consequence 3). Against the composed design there is no stored head to preserve, so this test is not merely red — it is inexpressible, which is the point: the property being tested is that a record exists.
+    37p. **The clear lives in `reset_for_retry`, not in the retry route.** Two of the three callers are not the operator. Drive the **watcher's** path: an `escalated` item with a prepared attempt, then `github_watcher_service._upsert_item` with a newer `updated_at` (`github_watcher_service.py:74-79` — `_RECOVERABLE_STATUSES` plus a newer timestamp calls `reset_for_retry`) ⇒ `dispatch_status == 'pending'` **and** `dispatch_nonce` / `dispatch_head_ref` both NULL. With the clear written in the route instead, this path measures `pending` with attempt 1's nonce and head still set. Then the same for `promote_deferred_retries`, which is the third caller. Neither path has an operator in it, so neither would be found by testing the endpoint.
 
 **Mutation requirement.** Each guard must be shown to bite:
 
@@ -1391,9 +1437,16 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 | `prepare_attempt` assigns without committing | **37i** — a second session mid-dispatch sees NULL |
 | `prepare_attempt` is called after `_dispatch_brief` rather than before | **37h** |
 | preparation is unguarded, so every poll mints a new nonce | **37j** — the reused attempt's nonce changes |
-| `reset_for_retry` does not clear `dispatch_nonce` | **37k** — and blocker 2's fix silently reverts, since attempt 2 recomposes attempt 1's head |
+| `reset_for_retry` does not clear `dispatch_nonce` | **37k** — under the three-field guard this refuses `PartiallyPreparedAttempt` on the next poll rather than reusing attempt 1's head; both are bugs, and 37k asserts the fresh nonce either way |
+| `reset_for_retry` clears the nonce but not `dispatch_head_ref` | **37k, 37p** — the row is partial, so preparation refuses; a clear must cover every member of `_ATTEMPT_COLUMNS` |
 | the clear is placed **above** `reset_for_retry`'s deferred-branch return (`:62`) | **37l** — a leased item's nonce is stripped while its pane is still live |
+| the clear is written in the **retry route** instead of in `reset_for_retry` | **37p** — the watcher's issue-edit path and `promote_deferred_retries` both retry without an operator, and both keep attempt 1's head |
 | guard on `dispatch_nonce` alone, ignoring `approval_round_count` | 37j, 37k — a half-prepared row must not read as prepared |
+| the preparation guard also reads `owner_slot_id` / `routing_method` (revision 9's first draft) | **37k** — the reset deliberately keeps those two, so `any()` is true on every genuine retry and preparation raises instead of minting |
+| `accept_handoff` clears `dispatch_head_ref` along with the ack columns | **11f** — the new owner's valid push is refused with an expectation no brief ever named |
+| the `pr_ready` head check recomposes from `owner_slot_id` instead of reading `dispatch_head_ref` (revision 8) | **11f** — passes without a handoff, `409`s forever after one |
+| `attempt_head_ref` is called per request rather than once at preparation | **11f, 37o** — one composer called twice still gives two answers when a shared input moves |
+| `pr_ready` composes a head when `dispatch_head_ref` is NULL | **37o** — must refuse `stale_dispatch` |
 | `launch_outcome_unknown` clears the prepared attempt | 37j — a live pane's nonce must stay valid |
 | trust a caller-supplied `approval_round` | **37d** |
 | silently overwrite a conflicting caller `approval_round` instead of refusing | 37d |
@@ -1421,11 +1474,13 @@ Result for a Specialist-owned item:
 ```
 PR author:      claude-deck-bot[bot]        <- distinct from juanrubio; you can approve
 PR title:       [Specialist] fix: harden packaging retry path
-Branch:         deck/specialist/issue-827
+Branch:         deck/slot-6/issue-827-a3f9c1b2d4e5f607   <- §5.5.4a; numeric slot, per-attempt
 Commit author:  Specialist (Deck agent) <specialist+slot6@claude-deck.local>
 Trailers:       Deck-Agent-Slot: 6 (Specialist)
                 Deck-Work-Item: 41
 ```
+
+The branch is the one line here that is **not** a display name. The commit author, the title prefix and the trailers all carry "Specialist" because a human reads them; the ref carries `slot-6` because Git parses it, and a display name is not guaranteed to be a legal ref (§5.8 test 46q).
 
 The `.local` domain is deliberately non-routable and unverifiable, so these commits can never be mistaken for a verified human identity.
 
@@ -1577,7 +1632,8 @@ So a bot-authored PR via `gh pr create` in the pane requires `GH_TOKEN` in the p
 The agent pushes the branch; **Deck opens the PR** with the installation token it already mints:
 
 ```
-agent (in the workspace):  git push -u origin deck/specialist/issue-827
+agent (in the workspace):  git push -u origin deck/slot-6/issue-827-a3f9c1b2d4e5f607
+                           -> the branch named in its brief, and nothing else
                            -> helper supplies the installation token, per 5.5.6
 agent:                     deck_report_dispatch_status(status="pr_ready", lease_token=..., head_ref=...)
 Deck:                      POST /repos/{owner}/{repo}/pulls  (installation token)
@@ -1599,7 +1655,7 @@ The client's module docstring names its writers explicitly (`merge_pull`, `mark_
 
 **The reported status changes shape.** `pr_opened` carried a `pr_number` the agent chose. It is replaced for this flow by `pr_ready`, carrying `head_ref` — the branch the agent pushed. Deck then:
 
-1. Validates `head_ref` against the expected **attempt-scoped** `deck/slot-<slot_id>/issue-<n>-<nonce16>` name for the item, composed by the shared `attempt_head_ref` helper from the owner slot's id and the item's *current* `dispatch_nonce` (§5.5.4a). Compared as a **string equality against the composed name**, not matched as a regex — a regex over `[0-9a-f]{16}` accepts a previous attempt's nonce, which is the case this check exists to catch. A mismatch is a `409`; Deck does not open a PR from a branch it did not ask for, and a *previous* attempt's nonce is a mismatch.
+1. Validates `head_ref` against the item's **stored `dispatch_head_ref`** — the head this attempt was prepared with and briefed with (§4.2a, §5.5.4a). Compared as a **string equality against the stored value**, not recomposed and not matched as a regex: recomposing drifts when ownership changes (the eighth review's second blocker), and a regex over `[0-9a-f]{16}` accepts a previous attempt's nonce, which is the case this check exists to catch. A mismatch is a `409`; Deck does not open a PR from a branch it did not ask for, and a *previous* attempt's nonce is a mismatch. A NULL `dispatch_head_ref` is `stale_dispatch`, not an invitation to compose one.
 2. Confirms the ref exists on the remote (`GET /repos/{o}/{r}/git/ref/heads/{ref}`), so a typo fails as "branch not found" rather than as an opaque `422` from the pulls endpoint.
 3. **Reconciles before creating** — §5.5.4. A PR may already exist for this head even though `item.pr_number` is NULL.
 4. Creates the PR with the title, body and draft flag from §5.5.5 — which are Deck's to compose, not the agent's.
@@ -1771,10 +1827,39 @@ The closed PR keeps its head and stays exactly as the human left it. Deck neithe
 
 **Three consequences the plan must carry, or the fix is cosmetic:**
 
-1. **§5.6's head-pattern check** validates the attempt-scoped pattern, matching the nonce against `item.dispatch_nonce` — not against "any hex." A `head_ref` carrying a *previous* attempt's nonce is a `409`, because that is an agent pushing from a stale worktree, which is precisely the case the pattern check exists to catch.
-2. **The brief** must state the full attempt-scoped branch name, computed from the item after the attempt is prepared and committed (§4.2a). An agent cannot derive its own nonce; it has to be told. This *replaces* the `git switch -c <branch>` instruction at `github_dispatch_service.py:410` rather than sitting beside it — two branch instructions in one brief is how an agent ends up pushing a head `pr_ready` will refuse.
-3. **A pre-upgrade item with `dispatch_nonce = NULL`** has no attempt suffix. It must not silently fall back to the unsuffixed name, because that reintroduces the collision for exactly the rows most likely to have history — and, as measured above, it would also make the legacy ref unpushable. §4.1 already requires such rows to be re-dispatched before they can be acked; the same rule applies here, and `pr_ready` on a NULL-nonce item refuses `stale_dispatch` rather than guessing a head.
-4. **The ref shape is validated at the boundary, not assumed.** `slot_id` is an integer column and the nonce is `token_hex`, so the composed name is ref-safe by construction — but the composition belongs in **one** helper (`attempt_head_ref(item, slot_id)`) that both the brief and the `pr_ready` check call, for the same reason §5.6's classifier is shared: two independent copies of a name-building rule is how the brief and the validator come to disagree.
+1. **§5.6's head check reads `item.dispatch_head_ref`** and compares for equality. It does not recompose, and it does not match a pattern. A `head_ref` carrying a *previous* attempt's nonce is a `409`, because that is an agent pushing from a stale worktree, which is precisely the case this check exists to catch. The immutability paragraph below is why equality against a stored value, rather than equality against a freshly composed one, is the whole point.
+2. **The brief** must state the full attempt-scoped branch name — specifically, the value `prepare_attempt` returned and committed (§4.2a). An agent cannot derive its own nonce; it has to be told. This *replaces* the `git switch -c <branch>` instruction at `github_dispatch_service.py:410` rather than sitting beside it — two branch instructions in one brief is how an agent ends up pushing a head `pr_ready` will refuse.
+3. **A pre-upgrade item with `dispatch_nonce = NULL`** has no attempt suffix, and equally a NULL `dispatch_head_ref` means *no attempt has been prepared*. Neither may silently fall back to the unsuffixed name, because that reintroduces the collision for exactly the rows most likely to have history — and, as measured above, it would also make the legacy ref unpushable. §4.1 already requires such rows to be re-dispatched before they can be acked; the same rule applies here, and `pr_ready` on such an item refuses `stale_dispatch` rather than guessing a head.
+4. **The ref shape is validated at the boundary, not assumed.** `slot_id` is an integer column and the nonce is `token_hex`, so the composed name is ref-safe by construction — and the composition happens in **one** place, `attempt_head_ref(item, slot_id)`, called **once**, by `prepare_attempt`. Nothing else calls it in the request path. That is stronger than revision 8's "one shared helper, called by both the brief and the validator": a single composer called twice still produces two answers when its inputs diverge, which is exactly what happened. One composer called once, with its output persisted, cannot.
+
+**Why the head is stored rather than composed — the eighth review's second blocker.** `accept_handoff` writes `owner_slot_id` (`github_dispatch_service.py:705`) and sends **no new brief**. Revision 8 composed the expected head on demand from the item's *current* owner, so the moment ownership moved, the expectation moved to a name nobody had ever been given:
+
+```
+slot 3 briefed:      deck/slot-3/issue-42-a3f9c1b2d4e5f607     <- pushed, PR-ready
+handoff to slot 5:   nonce preserved, no new brief sent
+slot 5 reports:      pr_ready(head_ref="deck/slot-3/issue-42-a3f9c1b2d4e5f607")
+Deck recomposes:     deck/slot-5/issue-42-a3f9c1b2d4e5f607     <- 409, forever
+```
+
+Measured, driving the real `initiate_handoff` and `accept_handoff` against a database, with both designs implemented side by side:
+
+```
+rev8  briefed  deck/slot-1/issue-42-a3f9c1b2d4e5f607
+      expected deck/slot-2/issue-42-a3f9c1b2d4e5f607
+      -> 409 head_ref_mismatch, and no future brief ever names the expectation
+rev9  briefed  deck/slot-1/issue-42-a3f9c1b2d4e5f607  accepted after handoff
+```
+
+and the write set that causes it, read from the function rather than assumed:
+
+```
+accept_handoff writes: ['handoff_state', 'handoff_target_slot_id',
+                        'owner_slot_id', 'routing_method', 'updated_at']
+```
+
+So **the attempt's head is immutable for the attempt's lifetime.** `dispatch_head_ref` is written once by `prepare_attempt` and read by everything else; handoff preserves it for the same reason it preserves the nonce (§4.2a: the new owner was never briefed with a replacement, so changing what Deck expects strands work that was done correctly); only `reset_for_retry` clears it, because a retry *is* a new attempt and is entitled to a new head.
+
+The general shape is worth naming, because revision 8's version of this section was not careless — it was consistent, and wrong: **a value composed from mutable state is only as stable as the least stable field it reads.** `attempt_head_ref` was correct, was called in exactly one helper, and still produced two different answers, because one of its inputs was a column another code path owns. The fix is not a better composer; it is to stop composing at read time. The existing handoff tests could not have caught this — they assert ownership and approval state and never drive `pr_ready` afterwards, which is why test 11f exists and drives the real handoff.
 
 **A bound on the claim, so this is not oversold.** Attempt-scoping removes the *loop*; it does not make a closed PR recoverable without a human. The escalation still happens on attempt 1, and it still requires an operator to decide. What changes is that their decision now leads somewhere: one `deck_retry_work_item` produces a usable open PR instead of the same escalation a second time. It also does not help if the human closes *every* attempt's PR — but that is a human repeatedly saying no, which is not a state Deck should engineer around.
 
@@ -1975,7 +2060,7 @@ The verification is still required, for two remaining cases:
 | Check | Refuse if | Applies to |
 |---|---|---|
 | repository | `head.repo.full_name` != the scope's `owner/repo` | both paths |
-| head branch | `head.ref` does not equal the expected attempt-scoped `deck/slot-<slot_id>/issue-<n>-<nonce16>` name for this item, as composed by `attempt_head_ref` from the item's current `dispatch_nonce` (§5.5.4a) | both paths |
+| head branch | `head.ref` does not equal the item's stored `dispatch_head_ref` — the head this attempt was prepared with (§4.2a) and briefed with. Not recomposed per call; see §5.5.4a's immutability paragraph. A NULL `dispatch_head_ref` refuses `stale_dispatch` | both paths |
 | author | `user.login` != the configured bot login | `pr_opened` only, and only when `github_app_bot_login` is set |
 | **state** | the PR is not open — see the classification below | **both paths** |
 
