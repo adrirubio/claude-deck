@@ -122,7 +122,9 @@ Revision 9 also answers a question no review raised, found while adding blocker 
 
 **The lesson revision 9 adds.** Revision 8's lesson was about systems you do not own. This round's four are all inside the repository, and they share a different shape: **a fix is only as correct as the paths it was composed against.** Each blocker is a revision-8 fix that is right where it was written and wrong one call site away — the nonce is durable but its owner is not; the head is stable but the slot in it is not; the counter advances but the status it lands on belongs to another pipeline; the writer set is enumerated but the enumeration cannot tell a write from a read. So the discipline is not "measure the outside system" but **"enumerate who else touches this column, this row, this status, and run the fix down each of their paths."** Two of the four gave up a defect only when driven end-to-end rather than reasoned about — including the auto-merge, which no amount of reading the retry helper would have surfaced, because the damage is done by a `status_note` write whose significance lives 250 lines away.
 
-**Fifteen measurements this spec rests on, so a reviewer can re-run them rather than trust them.** The first four are throwaway pytest files against in-memory SQLite with a fake client, no network. The next three reach outside the repository, which is what revision 8's blockers required: one drives real `git` against a temporary bare repo, one is a single unauthenticated `GET` against a public repo, and one walks `app/`'s AST. The last eight are revision 9's: seven are in-repo compositions driven end-to-end through the shipped functions rather than reasoned about, and one returns to the live API to settle a question the first pass did not ask. Three of the eight found defects in this spec's **own** text rather than in code — the fourteenth and fifteenth rows each corrected a consequence that had been true of an earlier revision's design and was quietly falsified by a later fix.
+**Twenty-one measurements this spec rests on, so a reviewer can re-run them rather than trust them.** The first four are throwaway pytest files against in-memory SQLite with a fake client, no network. The next three reach outside the repository, which is what revision 8's blockers required: one drives real `git` against a temporary bare repo, one is a single unauthenticated `GET` against a public repo, and one walks `app/`'s AST. The next eight are revision 9's: seven are in-repo compositions driven end-to-end through the shipped functions rather than reasoned about, and one returns to the live API to settle a question the first pass did not ask.
+
+The **last six are revision 10's**, and they share a shape worth naming, because it is the shape of this revision's findings. Each one takes a claim that is true in isolation and puts it back where it will actually run — a fix inside a control-flow graph, a mechanism inside the API that must reach it, a lease inside the passes that bound it, a fixture inside its pragma's lifetime, a status inside the set it is compared against, a frozenset entry inside the branch two levels below it. Four of the six **changed this design** rather than confirming it: the review's own Solution 2 was measured to break its Solution 1, the mechanism this spec had claimed for the unresolvable-owner branch was measured unreachable and replaced, the fixture that proves the deleted-owner case was measured to pass wrongly under a plausible ordering, and a one-name mutation was measured to end two branches away from where it was written. Counting revision 9's, that is seven rows that corrected this spec's own text rather than code — **a claim is only as good as the position you measure it in.**
 
 | Claim | How it was measured | Result |
 |---|---|---|
@@ -141,6 +143,12 @@ Revision 9 also answers a question no review raised, found while adding blocker 
 | adding the columns to the two named serializers leaves the leader — the approver — seeing none of them | the real `deck_list_work_items` called with `_dispatch_request` stubbed to return an item payload carrying all six new columns; separately, `deck_check_inbox`'s return form read from source | the leader receives exactly `['dispatch_status', 'escalation_reason', 'issue_number', 'status_note', 'work_item_id']` — **all six dropped** by a third hand-written projection (`mcp_shim/agent_mail_server.py:667-673`). `deck_check_inbox` splats (`:269`), so the *mail* half of §4.6 needed no shim change and the *work-item* half needed one. Also `GithubWorkItemResponse`: 27 fields, no `extra=allow`, so an unlisted field is dropped rather than passed through |
 | a re-routed prepared attempt does **not** acquire a different head — the divergence is in the brief's recipient and the owner column | the real `route_item` driven twice over two slots with disjoint `area_labels`; then the dispatch ordering (route → acquire → prepare → brief → launch) driven end to end with a recording brief spy and a fake `launcher`, in both the reuse and recompute forms; then `_send_dispatch_brief_to_slot` called with **no** trailing commit and `mail_messages` read from a fresh session | `route_item` re-routes on a label edit (`(1,'label')` → `(2,'label')`) **and** on an operator disabling slot 1 (`(1,'leader_fallback')` → `(2,'leader_fallback')`) — neither needs a crash. Recompute: briefs `[1, 2]`, launched `[2]`, `owner_slot_id=2`, but `dispatch_head_ref` **still names slot 1** and exactly **1** nonce is minted. Reuse: briefs `[1, 1]`, launched `[1]`, `owner_slot_id=1`, head agrees. And the first brief is durable before the crash — **1** `mail_messages` row naming attempt 1's head, readable from a separate session with no commit from the dispatch loop, because `send_direct_message` commits (`agent_mail_service.py:899`). So the failure is that slot 1 is really told to push a branch and then loses ownership of it at `:332`, which refuses its report at `agent_teams.py:334` |
 | a clear written in the retry route misses two of the three callers, and the guard as first drafted refuses every retry | `reset_for_retry`'s callers enumerated from `app/`, then the **watcher's** `_upsert_item` edit path driven with the clear inside the function vs. in the route; separately, the five-field `any()` guard evaluated against the row the real reset leaves behind | callers: `agent_teams.py:783` (operator), `github_dispatch_service.py:98` (`promote_deferred_retries`), `github_watcher_service.py:79` (**an issue edit — no operator**). Clear inside: `pending`, nonce and head NULL. Clear in the route: `pending` with attempt 1's nonce and head still set. Guard: the reset leaves `(None, None, 1, 'role_match', False)` — `all()` false, `any()` **true**, so preparation raises `PartiallyPreparedAttempt` on **every** genuine retry |
+| the ninth review's own Solution 2 breaks its Solution 1: the raise escapes `dispatch_pending` and costs the **scope**, not the batch | the `try`'s extent taken from the AST and compared against the proposed call site; then two `pending` items (one torn, one healthy) polled with and without a per-item `try`; then the real `run_repo_once` driven with a raising `dispatch_pending`, recording which passes ran | `try covers 286-316`; the call site at the top of the loop body is **49 lines above it**, outside. No catch: `PartiallyPreparedAttempt` propagates, **0** items reached after the torn one, both still `pending`. With a per-item catch: the torn row is `escalated` with its nonce kept and item 42 dispatches. At scheduler level the passes that ran are exactly `['poll_scope', 'dispatch_pending']` — `monitor_dispatched`, `remind_held_leases` and `process_scope` all skipped, and `run_repo_job:96-97` swallows the exception, so the stall is silent and repeats every poll |
+| reparenting a slot is **unreachable** through the API, so the unresolvable-owner branch needed a different mechanism — and `accept_handoff` is it | both update schemas' `model_fields` read from Pydantic; every `.preset_id` assignment in `agent_team_service.py` collected by AST; then a `pending`, prepared item driven through the real `initiate_handoff` + `accept_handoff` to a slot in another preset; separately `report_dispatch_status`'s preamble read for a status gate | `preset_id` absent from `AgentTeamSlotUpdate` (13 fields) and `TeamGithubScopeUpdate` (15), and **0** post-construction assignments — reparenting is raw SQL only. The handoff lands: `dispatch_status='pending'`, `owner_slot_id=2`, `routing_method='reassigned'`, head still `deck/slot-1/…`, `preset_slots=[1]`, resolvable **False** — no crash and no operator SQL, because the route has no `item.dispatch_status` gate and `accept_handoff` checks no preset, scope or `enabled` |
+| escalating without releasing the lease is **bounded**, but two holes weaken the bound | an escalated item holding a real lease driven through `remind_held_leases` and `reclaim_stale`, with `_owner_process_is_alive` forced both ways; then repeated with `kind='primary'`; then with the owner slot having no `MailTeamMember` | `'escalated'` is in both status tuples, so the reminder fires (**1**, subject `Release needed: issue #42`) and the backstop reclaims **only** when the pane is dead (alive → 0, dead → 1, nonce untouched). Hole 1: `kind='primary'` → **0** reclaimed even when aged and dead (`reclaim_stale:292-293`) — reminder plus operator force-release is the entire bound. Hole 2: with no mail member, `remind_held_leases` returns **1** and **0** messages are sent (`notify_owner:1052-1053`), so the count is not evidence of delivery |
+| the deleted-owner row is torn by the **FK**, and the fixture that proves it has an ordering trap | a prepared item's owner deleted through the real `agent_team_service.delete_slot`, with the `foreign_keys` pragma listener registered before `create_all` and again after; both classifiers evaluated on the resulting row | with the pragma on: `owner_slot_id=None` while `routing_method`, nonce, head and round all survive — revision 9's three-field guard reads **PREPARED**, the asymmetric model reads **PARTIAL**. With it off (SQLite's default, or a listener registered after `create_all` — `StaticPool` opens its one connection there): the slot is deleted and `owner_slot_id` is left **dangling at 1**, which reads PREPARED under *both* classifiers and silently reroutes the test into the not-in-preset branch |
+| a disabled owner is not refused anywhere downstream, and `skipped_disabled` is recorded as a **successful dispatch** | the real `agent_team_service.launch` called with the exact `AgentTeamLaunchRequest` the dispatch loop builds at `:306-316`, against a disabled slot; the result status compared to `_LAUNCH_FAILED_STATUSES` | `action='skip' status='skipped_disabled' tmux_target=None`, and `'skipped_disabled' in _LAUNCH_FAILED_STATUSES` is **False** — so `:338` misses, `:342` runs, and the item is recorded `dispatched` with `dispatched_at` set, a held lease and no pane. `_selected_slots:1244-1250` drops disabled slots only when `slot_ids is None`, and the loop always passes an explicit list, so nothing below the dispatch loop will refuse the owner on its behalf |
+| adding this reason to the `pr_opened` recovery list is not a lost escalation but a **promotion into the auto-merge pipeline** | an item escalated `prepared_owner_unavailable` with a disabled owner, `report_pr_opened` called as designed and then with one name added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` | as designed: `ValueError`, row unchanged (`escalated` / reason kept / `pr_number` NULL). Mutant: `escalation_reason=None`, `pr_number=7`, and `dispatch_status='verifying'` — §5.6's auto-merge input — with `owner_slot_id` still the disabled slot and `team notified=[]`. The effect is two branches below the mutated line, which is why the row is measured rather than reasoned |
 
 ---
 
@@ -869,20 +877,63 @@ The brief that must name the attempt branch (§5.5.4a consequence 2) is built at
 **The record is the whole attempt, not just its name.**
 
 ```python
-# new, immediately after the workspace is acquired (:277) and before the brief (:290)
-_ATTEMPT_COLUMNS = ("dispatch_nonce", "dispatch_head_ref")   # exactly what reset clears
+# `_ATTEMPT_MARKERS` is exactly what reset_for_retry clears (rule 4).
+_ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref")
 
-async def prepare_attempt(self, db, item, *, owner_slot_id, routing_method) -> str:
+
+class AttemptState(enum.Enum):
+    UNPREPARED = "unprepared"
+    PREPARED = "prepared"
+
+
+class PartiallyPreparedAttempt(ValueError):     # see "the exception's base class" below
+    def __init__(self, item_id: int, detail: str):
+        super().__init__(f"work item {item_id} is partially prepared: {detail}")
+        self.item_id, self.detail = item_id, detail
+
+
+def attempt_state(item) -> AttemptState:
+    """Classify the row. Raises rather than returning a third value: a torn
+    attempt is not a state the dispatch loop may branch on."""
+    markers = [getattr(item, c) for c in _ATTEMPT_MARKERS]
+    if all(m is None for m in markers) and item.approval_round_count == 0:
+        return AttemptState.UNPREPARED       # stale owner/routing may remain; see rule 4
+    markers_complete = all(m is not None for m in markers) and item.approval_round_count >= 1
+    identity_complete = item.owner_slot_id is not None and bool(item.routing_method)
+    if markers_complete and identity_complete:
+        return AttemptState.PREPARED
+    raise PartiallyPreparedAttempt(
+        item.id,
+        f"nonce={markers[0] is not None} head={markers[1] is not None} "
+        f"round={item.approval_round_count} owner={item.owner_slot_id} "
+        f"routing={item.routing_method!r}",
+    )
+
+
+@dataclass(frozen=True)
+class PreparedAttempt:
+    """Returned whole, so no caller can mix a persisted field with a stale local."""
+    owner_slot_id: int
+    routing_method: str
+    dispatch_nonce: str
+    dispatch_head_ref: str
+    approval_round: int
+
+
+def prepared_attempt_from_row(item) -> PreparedAttempt:
+    return PreparedAttempt(item.owner_slot_id, item.routing_method,
+                           item.dispatch_nonce, item.dispatch_head_ref,
+                           item.approval_round_count)
+
+
+async def prepare_attempt(self, db, item, *, owner_slot_id, routing_method) -> PreparedAttempt:
     """Persist this attempt's complete identity, atomically, before anyone is told of it.
 
-    Returns the head ref the brief must name and `pr_ready` will require.
+    Accepts only an UNPREPARED row. A PREPARED one is returned by the caller's
+    own `attempt_state` call, which happens before any routing (§4.2b).
     """
-    prepared = [getattr(item, c) is not None for c in _ATTEMPT_COLUMNS]
-    prepared.append(item.approval_round_count >= 1)
-    if all(prepared):                       # already prepared; reuse it (crash idempotence)
-        return item.dispatch_head_ref
-    if any(prepared):                       # partial: a torn write, not a state to guess at
-        raise PartiallyPreparedAttempt(item.id, prepared)
+    if attempt_state(item) is not AttemptState.UNPREPARED:   # raises on partial
+        return prepared_attempt_from_row(item)
     item.owner_slot_id = owner_slot_id      # the owner is part of the identity, not a result
     item.routing_method = routing_method
     item.dispatch_nonce = secrets.token_hex(8)
@@ -890,32 +941,55 @@ async def prepare_attempt(self, db, item, *, owner_slot_id, routing_method) -> s
     item.approval_round_count = 1
     item.updated_at = datetime.utcnow()
     await db.commit()                       # durable BEFORE any brief, mail, or pane
-    return item.dispatch_head_ref
+    return prepared_attempt_from_row(item)
 ```
 
-`dispatch_head_ref` is the sixth column, and §5.5.4a explains why the head must be stored rather than recomputed. `PartiallyPreparedAttempt` is a new exception; the caller escalates `plan_blocked` and releases the workspace, exactly as the `ValueError` path at `:317-323` already does.
+`dispatch_head_ref` is the sixth column, and §5.5.4a explains why the head must be stored rather than recomputed.
 
-**The guard reads three fields, not five, and revision 9's first draft got this wrong.** It listed `owner_slot_id` and `routing_method` in the tuple, which looks right — the whole point of blocker 1 is that the owner is part of the attempt's identity — and is fatal, because `reset_for_retry` **deliberately does not clear those two** (rule 4 below, and the existing `:64-75` block, verified). So after a genuine retry the row holds `(None, None, 1, 'role_match', False)`: `all()` is false and `any()` is **true**, and preparation raises `PartiallyPreparedAttempt` on **every** retried item. Measured:
+**The classification is asymmetric, and neither a single `all()` nor a single `any()` can express it.** Two earlier revisions each got one half right and shipped the other half wrong, which is why this is a state function rather than a tuple:
+
+- Revision 9's **first draft** put all five fields in one tuple. That is fatal, because `reset_for_retry` **deliberately does not clear** `owner_slot_id` or `routing_method` (rule 4 below, and the existing `:64-75` block, verified). After a genuine retry the row holds `(None, None, 1, 'role_match', False)`: `all()` false, `any()` **true**, so preparation raises on **every** retried item.
+- Revision 9 as **committed** then dropped those two fields entirely and guarded on the three markers. That admits the opposite defect, which this review found: a row can hold every marker and **no owner**. `GithubWorkItem.owner_slot_id` is `ForeignKey("agent_team_slots.id", ondelete="SET NULL")` (`models/database.py:259-261`), so **deleting the owner slot nulls the column and leaves the nonce, head, round and routing string intact.** Measured through a real `DELETE`:
 
 ```
-after §4.2a rule 4's clear, the row still holds:
-    owner_slot_id=1  routing_method='role_match'
-    nonce=None  head=None  round=0
-    prepared tuple = (None, None, 1, 'role_match', False)
-    all()=False  any()=True
-    -> prepare_attempt RAISES on a genuine retry
+after DELETE of the owner slot (ondelete='SET NULL'):
+    owner_slot_id  = None
+    routing_method = 'label'
+    dispatch_nonce = '629877f7d9855057'
+    head           = 'deck/slot-1/issue-42-629877f7d9855057'
+    round          = 1
+    revision 9's three-field guard -> PREPARED     <- returns the head, owner NULL
+    the asymmetric model           -> PARTIAL      <- refuses
 ```
 
-The guard's members must therefore be exactly the fields `reset_for_retry` clears, which is why they are named in a shared `_ATTEMPT_COLUMNS` constant that rule 4's clear iterates too: **a guard and the clear it depends on must read the same list, or the clear can shrink without the guard noticing.** `owner_slot_id` and `routing_method` are still *written* by preparation — blocker 1 requires that — they are just not evidence *of* preparation, because they outlive it by design. Writing a field and trusting it as evidence are different decisions, and this tuple conflated them.
+So the correct rule is not "which fields are in the guard" but **which fields are mandatory in which state**: owner and routing may be *stale* on an unprepared row and must be *present* on a prepared one. `attempt_state` above tests `markers_empty` first, which is what preserves the auditability decision rule 4 makes — the same retried row that the five-field tuple rejected still classifies `UNPREPARED`, measured:
 
-The round stays in the guard, and it is the one member that is a comparison rather than a presence check. It is what makes a half-prepared row fail closed in the direction that matters: `reset_for_retry` zeroes it at `:73` **today**, so a retry that somehow cleared the round but not the nonce reads as partial rather than as prepared.
+```
+after a genuine retry (reset keeps owner/routing):
+    owner=1 routing='label' nonce=None round=0
+    revision 9's three-field guard -> UNPREPARED
+    the asymmetric model           -> UNPREPARED
+```
+
+The round is the one member that is a comparison rather than a presence check, and it is what makes a torn row fail closed in the direction that matters: `reset_for_retry` zeroes it at `:73` **today**, so a retry that cleared the round but not the nonce reads as partial rather than as prepared.
+
+**`attempt_state` raises rather than returning a third enum member.** A `PARTIAL` return value would be a state the dispatch loop could branch on, and every branch it could take is a guess about which half of the row is authoritative. Raising forces the decision to one place. The exception derives from **`ValueError`** so it lands in the existing `except ValueError` cleanup at `:317-323` — but that inheritance is load-bearing and must be stated, not assumed: the review is right that the previous revision claimed the `ValueError` path without making the exception a `ValueError`. An implementer who writes `class PartiallyPreparedAttempt(Exception)` gets the `except Exception` branch at `:325` instead, which escalates `launch_outcome_unknown` and **re-raises**, aborting the whole poll for every later item in the batch. One base class, two very different blast radii. Note also that the `:317` branch releases the workspace, which is correct here and *not* correct for the unavailable-owner case in §4.2b — see that section for why the two paths differ.
+
+**Why a torn row is reachable at all, since no code writes half an attempt.** Three ways, none hypothetical: the FK `SET NULL` above; a hand-edited row (an operator repairing a stuck item, which this project's own history contains); and a future clear that adds a column to `_ATTEMPT_MARKERS` without adding it to rule 4's reset, or the reverse. The third is why the markers live in a shared constant that the reset iterates: **a guard and the clear it depends on must read the same list, or the clear can shrink without the guard noticing.**
 
 Six properties, each answering something a review asked for:
 
 1. **Committed, not just assigned.** The launched agent can call `deck_request_context` before the dispatch loop reaches `:344`, and a route in another request reads a different session. An in-memory nonce is invisible to that read, so the agent's first legitimate call would refuse `stale_nonce`. The commit is the fix, and it is why this is a step rather than two lines moved upward.
 2. **Idempotent on the poll.** Preparation is guarded on the whole record being present. A crash between preparation and launch leaves the item `pending` with a prepared attempt; the next poll **reuses** it rather than minting a second nonce. Without the guard, an agent relaunched after a crash would be briefed with nonce B while its first (possibly still-live) pane holds nonce A.
 
-    **The guard is not enough on its own, because `route_item` runs above it.** `route_item` is called at `:252`, before the workspace is acquired at `:277` and therefore before preparation. It is a pure function of the slot list, the issue's labels, and the classifier (`:103-128`) — every one of which can change between polls. Measured against the real function, two ordinary events re-route the same item: an edit to the issue's area labels (`route_item:120-123` matches `slot.area_labels & issue_label_set`), and an operator disabling the first slot (`:113-117` filters on `slot.enabled`, then sorts by `position`). Neither requires a crash, a race, or a non-deterministic classifier.
+    **The guard is not enough on its own, because `route_item` runs above it.** `route_item` is called at `:252`, before the workspace is acquired at `:277` and therefore before preparation. It is a pure function of the slot list, the issue's labels, and the classifier (`:103-128`) — every one of which can change between polls. Measured against the real function, two ordinary events re-route the same item: an edit to the issue's area labels (`route_item:120-123` matches `slot.area_labels & issue_label_set`), and an operator disabling the first slot (`:113-117` filters on `slot.enabled`, then sorts by `position`). Neither requires a non-deterministic classifier.
+
+    **A re-poll does require something, though, and revision 9 named the wrong thing.** That draft said an operator disabling a slot "needs no crash at all," which conflated *calling `route_item` twice* — which the measurement did — with *re-polling a prepared item*, which it did not. `dispatch_pending` selects `dispatch_status == "pending"` (`:227-234`), so a **successfully dispatched item is never re-polled**: measured, 0 pending rows after a successful dispatch. The ninth review is right about that, and about my having overstated it. But its conclusion — that only a crash reaches this path — is also incomplete, and the gap matters because it is the same gap as blocker 2. **Two lifecycles leave a prepared item `pending`:**
+
+    - the crash paths of property 6, where `launcher` raises after preparation; and
+    - an **early-exit `continue`** at `:259-284`. A prepared item that finds its owner busy, its sessions ambiguous, or no workspace free is left `pending` deliberately — that is the queue working — and the *next* poll re-routes it. Measured: with no dispatchable workspace row, `acquire()` returns `None`, the `:279` branch commits, and the row is still `pending`.
+
+    The second is the one worth stating, because it is not a failure at all. It is the ordinary queueing path, it happens on every poll while a slot is busy, and it is the *same branch* that overwrites `owner_slot_id` with the fresh candidate. So the re-route hazard does not need a crash and does not need an operator error: it needs a busy slot.
 
     **The consequence is not the one revision 9's first draft wrote, and measuring it moved the fix's justification.** That draft said the reused attempt "quietly acquires a different expected head." It does not: blocker 2 made the head a **stored column**, and the guard returns early, so `prepare_attempt` never reassigns it. What actually diverges is everything the loop derives from the *local* `owner_slot_id` variable rather than from the row — the brief's recipient (`:299`), the launch target (`:306`, `slot_ids=[owner_slot_id]` and `slot_prompt_overrides`), and the owner column itself at `:332`, which overwrites the persisted decision *after* the launch. Driven through the real dispatch ordering with a recording launcher:
 
@@ -934,19 +1008,7 @@ Six properties, each answering something a review asked for:
 
     So the row ends up self-contradictory in a way no single field reveals: `owner_slot_id` is 2 and the head it is expected to push names slot 1. And the first brief is already durable when this happens — `_send_dispatch_brief_to_slot` calls `send_direct_message`, which **commits** (`agent_mail_service.py:899`), so it survives the crash in `launcher` regardless of what the dispatch loop does afterward. Measured: one `mail_messages` row naming `deck/slot-1/issue-42-<nonce>`, readable from a separate session, before the loop's own commit at `:333`. Two slots therefore hold a committed brief for the same branch, and `:332` makes the *second* one the owner — so slot 1's report, from the slot that was told first and may already have pushed, is refused by `report.reporting_slot_id != item.owner_slot_id` (`agent_teams.py:334`). That is blocker 1's own failure mode arriving through a different cause: not a NULL owner, but a *reassigned* one.
 
-    The fix is the same either way — the dispatch loop must **read the persisted routing decision instead of the freshly computed one** whenever the item is already prepared — but it is worth stating precisely what it buys, because "the head moves" would send an implementer to guard the wrong field:
-
-    ```python
-    owner_slot_id, method = await self.route_item(...)     # unchanged, :252
-    ...                                                    # unchanged guards through :277
-    if item.dispatch_nonce is not None:                    # a prepared attempt owns its routing
-        owner_slot_id, method = item.owner_slot_id, item.routing_method
-    head_ref = await self.prepare_attempt(
-        db, item, owner_slot_id=owner_slot_id, routing_method=method
-    )
-    ```
-
-    `route_item` still runs, because the guards between `:252` and `:277` need a candidate slot to report against (`queued_slot_busy` at `:264`, the ambiguity note at `:272`). What changes is that its answer does not override a decision already committed. This is deliberately *not* implemented by skipping `route_item` for prepared items: the busy-slot and ambiguity guards would then run against a stale or absent slot, which trades one composition defect for another.
+    The fix is that the dispatch loop must **read the persisted routing decision instead of the freshly computed one** whenever the item is already prepared. Revision 9 wrote that fix as an override placed after the existing guards, and kept `route_item` running for prepared items on the grounds that "the guards between `:252` and `:277` need a candidate slot to report against." **Both halves of that were wrong, and the ninth review's second blocker is exactly this.** An override at `:277` protects nothing, because `:262`, `:270` and `:279` have each already written the fresh candidate into `item.owner_slot_id` and **committed**; and the guards do not need a *fresh* candidate, they need *the* candidate — which for a prepared item is the persisted owner. Running `route_item` and then checking its answer means the guards clear slot B while the override launches slot A. Both directions are measured in §4.2b, which replaces the sketch revision 9 put here with the ordering the whole loop must have.
 3. **Partial preparation fails closed.** A row with a nonce and no owner, or an owner and no round, is not a state to interpret — it is a torn write from a crash inside the commit, or a hand-edited row. Preparation refuses it rather than filling in the blanks, because every plausible repair guesses at which half is authoritative. This is the same rule as `pr_ready` on a NULL-nonce item (§5.5.4a consequence 3): **when the evidence is incomplete, refuse and say so.**
 4. **`reset_for_retry` is the only thing that authorizes a new nonce, and the clear belongs *below* its early return.** It must *clear* `dispatch_nonce` **and `dispatch_head_ref`** — which §4.2's table already requires (`reset_for_retry:64-75`, where `approval_round_count = 0` is already set at `:73`). Clearing them is what makes the guard above fall through on a genuine retry and hold on a crash-retry of the same attempt. Note the existing reset block **already** clears neither `owner_slot_id` nor `routing_method` (`:64-75`, verified) — and it should not start: they are overwritten by the next preparation, and keeping them lets an operator see who last held a retried item. That decision is what fixes the guard's membership above, so the two must be read together.
 
@@ -1061,6 +1123,246 @@ The eighth review's second blocker is that "keep the nonce" was necessary and **
 **Why handoff keeps the round too.** A handoff is not a rejection: nobody has declined anything, so no new round should open, and the cap must not be consumed by an event the leader did not cause. Handing an item back and forth three times would otherwise exhaust `max_approval_rounds` without a single review ever happening. The *owner* changed and the *round* did not, which is exactly the state §4.3 rule 3 already handles — the request must come from the current owner member, so the new owner opens a fresh `context_request` **in the same round** and the previous owner's request in that round no longer matches. That is also why §4.3a's duplicate-request `409` is scoped to `(work item, nonce, round, owner)` and not to `(work item, nonce, round)`: two requests in one round from two different owners is the normal shape of a handoff, not a shim bug.
 
 **The deferred-retry path is already covered.** `reset_for_retry` returns early at `:56-63` when the item still holds a lease, setting only `retry_requested_at`. `promote_deferred_retries` (`:77-101`) later re-selects those items — `escalated`/`failed`, non-NULL `retry_requested_at`, no lease row — and calls `reset_for_retry` **again** once the lease is gone, and that second call reaches the clearing block. So the deferred path clears the columns too, with no extra work — but a test must prove it, because "the early return skips the clear" is exactly the kind of thing that looks broken and is not (test 10b).
+
+### 4.2b The loop classifies before it routes, and a prepared item is never re-routed
+
+Revision 9 put the fix for §4.2a property 2 in the wrong place: an override at `:277` that ran *after* `route_item`, kept the fresh candidate for the guards, and swapped it back only for the launch. The ninth review's second blocker is that this protects nothing, and both failure directions are measurable.
+
+**Direction 1 — the guards clear one slot and the launch takes another.** Prepared for slot A; slot A is now busy; `route_item` returns slot B, which is free. The busy check at `:259` tests B, passes, and the override at `:277` then hands A to the launcher:
+
+```
+slot_is_busy(A=1) = True   slot_is_busy(B=2) = False
+poll outcome: through:1
+    -> guards cleared B; the override launches A, which IS busy.
+```
+
+That is the exact hazard `slot_is_busy` exists to prevent, reintroduced by the fix meant to preserve routing. **A guard is only meaningful if it tests the value the code afterwards uses.**
+
+**Direction 2 — every early exit commits the fresh candidate before the override is reached.** `:262-263`, `:270-271` and `:279-280` each assign `item.owner_slot_id = owner_slot_id` and `item.routing_method = method` and then `await db.commit()`, and every one of them ends in `continue`. The override at `:277` is downstream of two of the three and is skipped by all three:
+
+```
+prepared for slot 1; poll under labels ['area:ui'] -> queued_no_workspace
+    owner_slot_id now = 2   (prepared for 1)
+    routing_method    = 'label'
+    head still        = 'deck/slot-1/issue-42-eb1df1d1ca287cab'
+    -> owner=2 but head names slot 1. No crash, no launch.
+```
+
+No exception, no launch, no log line: the row is simply self-contradictory afterwards, and the next poll starts from the corrupted owner. This is the queueing path, not an error path — measured, `acquire()` returning `None` is enough — so it runs on every poll while a slot is busy.
+
+**Decision: classification is the first thing the loop does with an item, and routing is conditional on it.** The ordering, stated as the sequence a plan must produce:
+
+```python
+# once, above the loop: the list the scheduler handed us, indexed. NOT a db.get --
+# a slot outside this preset must read as absent, not be fetched. See below.
+slots_by_id = {s.id: s for s in preset_slots}
+
+for item in pending:
+    # 1. scope-wide gates first: they are properties of the scope and the host,
+    #    not of this item's owner. Order unchanged (:237-250).
+    #      repo cap        -> pending_reason = "queued_repo_cap";  continue
+    #      available memory-> pending_reason = "queued_low_memory"; continue
+
+    # 2. classify THIS row before anything reads or writes an owner.
+    try:
+        state = attempt_state(item)                      # §4.2a
+    except PartiallyPreparedAttempt as exc:
+        await self.escalate(db, item, "plan_blocked", str(exc))
+        await db.commit()
+        continue                                         # per-item, see below
+
+    # 3. establish the authoritative owner/routing for this poll.
+    if state is AttemptState.PREPARED:
+        attempt = prepared_attempt_from_row(item)        # route_item NOT called
+        owner_slot_id, method = attempt.owner_slot_id, attempt.routing_method
+        if (owner_slot := slots_by_id.get(owner_slot_id)) is None or not owner_slot.enabled:
+            await self._escalate_prepared_owner_unavailable(db, item, owner_slot)
+            continue                                     # no release; see below
+    else:
+        issue_labels = issue_labels_by_number.get(item.issue_number, [])
+        owner_slot_id, method = await self.route_item(
+            db, item, preset_slots, issue_labels, classify=classify
+        )
+        if owner_slot_id is None:
+            await self.escalate(db, item, "plan_blocked")
+            await db.commit()
+            continue
+
+    # 4. the owner-dependent guards, unchanged in content, now reading the
+    #    authoritative owner: busy (:259), ambiguity (:268), workspace (:277).
+    #    Their `item.owner_slot_id = owner_slot_id` writes become no-ops for a
+    #    prepared item, which is the point: nothing can diverge.
+
+    # 5. prepare (UNPREPARED only) or reuse, then brief, then launch.
+    attempt = await self.prepare_attempt(
+        db, item, owner_slot_id=owner_slot_id, routing_method=method
+    )
+```
+
+Four things about that shape are load-bearing, and each of them is a correction to revision 9.
+
+**`route_item` is not called for a prepared item at all.** Revision 9 kept calling it "because the guards need a candidate slot to report against." They need *the* candidate, and for a prepared item the persisted owner is it. Calling `route_item` and then discarding its answer is worse than not calling it: it is a decision the code makes and then throws away, so any future reader sees a routing call and reasonably assumes routing happened. It also spends a classifier call — `route_item` invokes `classify` for an unlabelled issue (`:103-128`) — on an answer that is discarded, which for the real classifier is a model call. Not calling it is the simpler code *and* the honest one.
+
+**Steps 1 and 2 are in that order deliberately, and swapping them is tempting.** The scope gates could go after classification, and putting them first means a torn row in a capped scope is not noticed until the cap clears. That is the right trade: the cap and the memory gate are refusals to start *any* work, and spending a classification — which can raise, escalate and broadcast — on an item the loop was never going to dispatch this poll turns a queue-full condition into a burst of escalations. The scope gates write only `pending_reason`, never an owner, so they cannot corrupt the attempt record. Both orderings are safe; this one is quieter.
+
+**The `attempt_state` call must be caught per item, and the exception's base class does not do that for it.** §4.2a chose `ValueError` so a partial row would land in the existing cleanup at `:317-323`. That reasoning is correct about the *class* and wrong about the *position*, because the try block does not open until `:285`:
+
+```
+dispatch_pending's for-loop body: lines 237-368
+Try statements DIRECTLY in the loop body: 1
+    try covers 286-316, handlers=['ValueError', 'Exception']
+
+first statement of the loop body : line 237
+first line INSIDE the try        : line 286
+-> 49 lines of the loop body run OUTSIDE the try
+```
+
+An `attempt_state` call at the top of the loop body is 49 lines above the handler that was chosen for it. **An exception's catch site is a property of where it is raised, not of its base class.** Uncaught, it propagates out of `dispatch_pending` — and the blast radius is not the batch, it is the scope. `run_repo_once` calls the passes in sequence and `run_repo_job` wraps the whole thing in `except Exception: logger.exception` (`github_dispatch_scheduler.py:96-97`), so one torn row silences four later passes:
+
+```
+run_repo_once with a raising dispatch_pending:
+    calls that ran : ['poll_scope', 'dispatch_pending']
+    propagated out : PartiallyPreparedAttempt
+```
+
+`monitor_dispatched`, `remind_held_leases` and `process_scope` never run — so for as long as that row sits in `pending`, no ack timeout fires, no held lease is reminded, no PR is verified and nothing is merged, for **every item in the scope**, on **every poll**. A per-item catch confines it, measured both ways:
+
+```
+Solution 2 verbatim (no per-item catch):
+    raised out of the poll: PartiallyPreparedAttempt
+    items reached after the torn one: 0
+    still pending: [41, 42]  <- 42 never examined
+
+with a per-item catch around attempt_state:
+    items reached after the torn one: [42]
+    torn row: status='escalated' reason='plan_blocked' nonce kept=True
+```
+
+So the `ValueError` base class stays — §4.2a's reason for it is still valid for a partial row discovered *inside* the try, and a future reader who moves the call inherits a working handler — but it is **not** the mechanism here. The per-item `try` in step 2 is, and a plan that omits it ships the scope-wide stall.
+
+**The torn row escalates `plan_blocked` and does not release the workspace.** `plan_blocked` because the item genuinely cannot be planned and the reason namespace should not grow for a case an operator handles identically; the exception's `detail` string carries which halves were present, through `escalate`'s `note` parameter, which lands in both `status_note` and the broadcast. No release, for the reason below — the same reason as the unavailable-owner case, and the one place §4.2a's `:317` cleanup would be actively wrong if it were reached.
+
+#### 4.2b.1 `prepared_owner_unavailable`, and why it is not one condition
+
+The review's Solution 2 wrote the availability check as `owner_slot is None or not owner_slot.enabled` with a single `status_note` saying "missing or disabled." Those are two mechanisms with different states and different operator actions, and the more obvious of the two never reaches this branch at all.
+
+**Deletion does not arrive here.** `GithubWorkItem.owner_slot_id` is `ForeignKey("agent_team_slots.id", ondelete="SET NULL")` (`models/database.py:259-261`), `PRAGMA foreign_keys=ON` is set on every connect (`database.py:28-34`), and the deployed database really carries the constraint — read out of the live schema, not the ORM. So deleting the owner slot nulls the column, `attempt_state` classifies the row **PARTIAL**, and step 2 escalates before step 3 runs. Measured side by side:
+
+```
+owner slot DELETED : owner_slot_id=None attempt_state -> PARTIAL(raised)
+owner slot DISABLED: owner_slot_id=1    attempt_state -> PREPARED
+                     resolvable=True enabled=False
+```
+
+**Disabling does arrive here, because the slot list is unfiltered.** `run_repo_once` selects `AgentTeamSlot.preset_id == scope.preset_id` with no `enabled` predicate (`github_dispatch_scheduler.py:125-131`, verified), so a disabled slot is still in `preset_slots` and still resolvable by id. That is what makes "disabled" distinguishable from "gone" — and it is why the check must be `slots_by_id.get(...)`, a lookup in the list the loop was actually handed, rather than a `db.get(AgentTeamSlot, ...)`, which would find a slot that this scope no longer contains.
+
+**The `is None` half is reachable, and not by the mechanism the review implied.** I first measured it with a reparent (`slot.preset_id = other`) and then checked whether reparenting is reachable at all: `AgentTeamSlotUpdate` exposes 13 fields and none is `preset_id`, `TeamGithubScopeUpdate` exposes 15 and none is either, and `agent_team_service.py` contains **zero** `.preset_id = ` assignments outside construction. Reparenting is an operator-SQL act — real, but not a mechanism to design a branch around. The reachable one is `accept_handoff`:
+
+```
+after handoff of a PENDING, PREPARED item to slot 2 (preset 2):
+    dispatch_status = 'pending'   <- still pending, still polled
+    owner_slot_id   = 2     (was 1)
+    routing_method  = 'reassigned'
+    nonce / head    = 'd2fb1f4216212745'
+                      'deck/slot-1/issue-42-d2fb1f4216212745'   <- still names slot 1
+    round           = 1
+    preset_slots for this scope: [1]
+    owner resolvable in preset_slots: False
+```
+
+`accept_handoff` (`:697-710`) checks only that the accepter equals `handoff_target_slot_id`; it validates no preset, no scope and no `enabled` flag. `POST /dispatch-status` reads `item.dispatch_status` only in the `workspace_released` branch (`agent_teams.py:341`), so there is no gate stopping a handoff from landing on a `pending` row. The result is a prepared item whose owner is a slot the dispatch loop was never handed — reached with no operator SQL and no crash. §4.2b's `slots_by_id.get(...) is None` branch is the thing that catches it. **The looser writer decides which states the reader must handle**, and this is the third time in this spec that `initiate_handoff`/`accept_handoff`'s missing validation sets the requirements for code elsewhere (see also §4.2a rule 5 and blocker 3's authorization discussion below).
+
+**Two conditions, one reason, two notes.** The escalation reason is `prepared_owner_unavailable` for both, because the operator's next action is the same shape — re-enable the slot, or retry the item deliberately — but the note must say which, and must name the owner:
+
+| Row shape | `attempt_state` | Where it is caught | `status_note` must say |
+|---|---|---|---|
+| owner deleted (FK nulled the column) | **PARTIAL** (raises) | step 2, `plan_blocked` | which markers survived and that the owner is NULL — the exception's `detail` |
+| owner disabled | PREPARED | step 3, `prepared_owner_unavailable` | slot *N* (`display_name`) is disabled; the attempt's head; re-enable or retry |
+| owner not in this preset's slots | PREPARED | step 3, `prepared_owner_unavailable` | slot *N* is not a slot of this scope's preset (a handoff, or a reparent); the attempt's head |
+
+**The escalation keeps the nonce, the head, the round, the owner id and the workspace lease.** The nonce and head for §4.2a property 6's reason: a hard death after `launcher` returned but before `:333` leaves a **live pane** with a `pending` row, so the attempt identity must stay valid or that pane's every `deck_request_context` and every ack refuses `no_linkage`. The owner id because it is the only record of who was told, and the operator needs it to decide whether the pane is theirs. The **lease** because releasing it is how a second agent gets handed a worktree the first one may still be writing in. §4.2a's `:317` `except ValueError` branch releases the workspace — correct there, because the exception means `launcher` refused and no pane exists — and wrong here, because here the pane may be exactly what is holding the tree.
+
+**Not releasing is only defensible if something else bounds the hold, and something already does.** `"escalated"` is a member of both `_RELEASABLE_STATUSES` (`github_dispatch_service.py:29`) and `_RECLAIMABLE_STATUSES` (`github_workspace_service.py:28`), so both existing lease passes already cover an escalated item that still holds one. Measured end to end:
+
+```
+after escalate() with no release: lease held by item 1, status='escalated'
+remind_held_leases -> 1 reminder(s); subjects=['Release needed: issue #42']
+
+escalated item, lease aged past the backstop:
+    pane reported ALIVE -> reclaimed 0, leased_item_id=1
+    pane reported DEAD  -> reclaimed 1, leased_item_id=None
+    item's nonce after reclaim: '4463ca302d1d6004'  <- untouched
+```
+
+The pane-live guard (`reclaim_stale:296`) is doing the discrimination the dispatch loop cannot do, and `release` touches the workspace row only, so the attempt record survives for whoever investigates. **Two caveats a plan must carry, both measured, because both make the bound weaker than it looks:**
+
+- **A `primary` workspace is never reclaimed.** `reclaim_stale:292-293` skips `kind == "primary"` unconditionally, so under identical aged-and-dead conditions it releases nothing: `reclaimed 0, leased_item_id=1`. For a primary workspace the reminder is the only automatic bound and an operator force-release (`agent_teams.py:693-697`) is the only exit. That is consistent with §5.7 — a primary workspace is never given an agent identity — but it means "the backstop covers it" is true for worktrees and false for the primary.
+- **The reminder is counted even when nobody receives it.** `notify_owner` resolves the recipient through `_owner_member` → `owner_slot_id` and returns silently when there is no member (`:1051-1053`). With the owner slot's member missing, `remind_held_leases` returns `1` and **zero** messages are sent. So for precisely the population this section is about — items whose owner is unavailable — the mail channel may be empty, and §4.6's operator visibility is the only place the escalation can be seen. That is why the visibility rows are part of this section's work and not a nicety.
+
+**The broadcast's "do not retry" warning does not fire for anything the dispatch loop escalates, and it must not be reused.** `escalate` computes `owner_may_be_active = item.dispatch_status == "dispatched" and item.owner_slot_id is not None` (`:996-998`), and `_send_escalation_broadcast` gates the "this item's owner session may still be working. Do NOT retry it" paragraph on that flag (`:1101-1109`). Every escalation raised from inside `dispatch_pending` is on a row whose status is `pending` **by construction** — that is the query the loop selects on (`:227-234`) — so the flag is always `False` there:
+
+```
+pending  + owner set    : owner_may_be_active=False warning present=False
+dispatched + owner set  : owner_may_be_active=True  warning present=True
+pending  + owner NULL   : owner_may_be_active=False warning present=False
+```
+
+This is inherited, not new — the existing `:321` `plan_blocked` escalation has the same blind spot — but it matters more here, because a `pending` prepared item is exactly the shape that can have a live pane, and retrying it mints a fresh nonce, which §4.2a rule 4 and property 6 both forbid while a pane may be alive. **Do not widen `owner_may_be_active`**: it is read by other escalation sites whose semantics would change, and `pending` items with no prepared attempt genuinely have no pane. Put the caution in the `note` instead, which `_send_escalation_broadcast` appends with no gate (`:1110-1111`) and `_apply_escalation` also writes to `status_note` (`:1037-1038`) — one string, both channels, no new flag. Widening the flag is listed as a mutation in §5.8.
+
+So the whole branch is one helper, and every line of it is a decision made above:
+
+```python
+async def _escalate_prepared_owner_unavailable(
+    self, db, item, owner_slot: AgentTeamSlot | None
+) -> None:
+    """A prepared item's owner is disabled or no longer a slot of this preset.
+
+    Keeps the attempt record AND the workspace lease: the previous attempt's pane
+    may still be alive in that worktree (§4.2a property 6). The lease is bounded
+    by remind_held_leases and reclaim_stale, both of which already select
+    'escalated' — except for a primary workspace, which only an operator releases.
+    """
+    if owner_slot is None:
+        what = (f"slot {item.owner_slot_id} is not a slot of this scope's preset "
+                f"(handed off, or moved)")
+    else:
+        what = f"slot {owner_slot.id} ({owner_slot.display_name}) is disabled"
+    note = (
+        f"{what}. This attempt is prepared and its pane may still be live: "
+        f"head {item.dispatch_head_ref}, round {item.approval_round_count}. "
+        f"Do NOT retry it until you have confirmed the session is gone — a retry "
+        f"mints a new attempt identity and orphans the old one. Re-enable the "
+        f"slot to let the next poll continue this attempt unchanged."
+    )
+    await self.escalate(db, item, "prepared_owner_unavailable", note)
+    await db.commit()          # escalate() does not commit; §4.3a.1's rule
+```
+
+The trailing commit is not decoration. `escalate` assigns and notifies and does **not** commit (measured in §1.3's table and relied on by §4.3a.1), so a caller that omits it leaves the escalation in memory only — and here the caller's next statement is `continue`, which reaches the loop's next item and its next `commit()`, at which point the escalation would be committed by *something else's* transaction. Explicit is the difference between "escalated" and "escalated, unless the next iteration rolls back." Driven through the real `escalate` with the broadcast raising, and re-read in a **fresh session** — the whole helper, all three claims at once:
+
+```
+broadcast RAISED, caller committed -- read in a fresh session:
+    dispatch_status    = 'escalated'
+    escalation_reason  = 'prepared_owner_unavailable'
+    dispatch_nonce     = '2c2bb39d1c9261bf'
+    dispatch_head_ref  = 'deck/slot-1/issue-42-2c2bb39d1c9261bf'
+    owner_slot_id      = 1   round=1
+    status_note starts = 'slot 1 (Alpha) is disabled. This attempt is prepared'...
+    workspace lease    : leased_item_id=1 token_present=True
+
+broadcast fine, caller did NOT commit -- fresh session:
+    dispatch_status   = 'pending'   <- unchanged
+    escalation_reason = None
+    workspace lease   : leased_item_id=1
+```
+
+Three things that had to be measured rather than reasoned about. First, `escalate`'s failure path calls `await db.rollback()` and then re-applies the escalated state with `preserve_existing_reason=False` (`:1013-1018`) — so a dead mail server does not cost the escalation, but only because the caller commits afterwards. Second, that rollback does **not** release the lease: `acquire` committed it at `github_workspace_service.py:136`, so it is already durable and outside the transaction being rolled back. Third, the no-commit control is the one that shows why this is load-bearing rather than tidy: the row stays `pending`, so the next poll re-runs the same classification, hits the same disabled slot, and escalates again — forever, because nothing about the slot changed. An escalation that does not persist is not an escalation; it is a busy loop with a log line.
+
+**Recovery is not a retry, and this is the one escalation where that distinction is inverted.** Every other reason on the list recovers through `deck_retry_work_item`; this one must not. A retry runs `reset_for_retry`, which clears the attempt columns and lets the next dispatch mint a fresh nonce (§4.2a rule 4) — and the entire premise of this branch is that the previous pane **may still be alive** in the leased worktree. Retrying is therefore the one action that turns a recoverable pause into an orphaned attempt plus a second agent pushing a different head for the same issue. The recovery is to remove the cause: re-enable the slot, or hand the item back to a slot inside the preset, and let the next poll continue the same attempt unchanged. That is what the note tells the operator, and 37n-3's second half is what proves the path works.
+
+For the same reason the reason is **not** added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`). Its six members all mean *the agent got stuck and a late PR resolves it*; this one means *the owner is gone while its attempt may still be running*, which a PR report does not resolve — and the most likely sender of that report is the departed owner's own pane. Measured, adding it is not a lost escalation but a promotion: `escalation_reason` cleared and `dispatch_status = 'verifying'`, the auto-merge pipeline's input, with the owner still unavailable and no notification sent. Test 37n-8 covers both halves; §5.8's mutation table carries the row.
+
+**What this does not change.** The guards' content is untouched: `slot_is_busy`, `_session_ambiguity_note` and `acquire` are called in the same order with the same arguments, and their `pending_reason` values are unchanged. Their `item.owner_slot_id = owner_slot_id` / `item.routing_method = method` writes stay as written and simply become no-ops on a prepared item — deleting them would be the more elegant change and the riskier one, because those same lines are the *only* owner write on the unprepared early-exit paths, which is how a queued item gets an owner recorded before it is ever dispatched. `:332-333` is different: §4.2a already deletes it, because there preparation is the authoritative writer and the line is a second one.
 
 ### 4.3 Structured evidence
 
@@ -1347,6 +1649,10 @@ So the shim's projection is a **third** enumeration, and the leader-facing half 
 
 An unaudited safety gate is a claim, not a control. The rule this section is really about: **a field is visible only as far as the last hand-written projection between the column and the reader.** Two tools in one shim file, both nominally "read Deck state," differ in whether they pass a new field through — because one splats and one re-projects. Counting the layers means reading each reader's own code, not assuming a house style; test 37q asserts all three projections, and a mutation row covers the shim.
 
+**§4.2b.1's escalation needs no new column, and that is a conclusion, not an assumption.** `prepared_owner_unavailable` travels in `escalation_reason` and its diagnosis in `status_note`, and the transcript above shows both are already in all three projections — including the shim's five-key dict, which carries exactly these two. So the operator sees it in the UI and the leader sees it in `deck_list_work_items` with no plumbing added. This is the practical argument for making it a *reason* rather than a distinguishing note on `plan_blocked`: the visibility already exists, and the reason is what an operator can filter and act on.
+
+That coverage matters more here than elsewhere, because for this population the UI may be the **only** channel. Measured in 37n-6: when the unavailable owner slot has no `MailTeamMember`, `remind_held_leases` returns `1` and sends **zero** messages, because `notify_owner` returns silently on an unresolvable member (`:1052-1053`). A deleted or handed-off owner is exactly the case most likely to have no resolvable member — so "the owner was reminded" cannot be read off that return value, and the escalation row is what remains. §4.6 is load-bearing for §4.2b.1, not decorative.
+
 ### 4.7 Brief wording
 
 The owner's brief already names the leader as "Team leader / approver" (`:428-432`). It gains one line: approval comes only from the leader calling `deck_approve_work_item` on the thread the owner opened with `work_item_id` and `dispatch_nonce`; a prose reply, however positive, is not approval; and self-approval is rejected. The leader's own brief gains the matching line, since the leader is the one who must call the tool. Wording carries no enforcement weight — §4.3 and §4.3a do.
@@ -1432,11 +1738,147 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 
     **Assert on the brief's recipient and the launch target, not only on the row.** This is the whole point of the test, and a version that checks only the columns passes against the defect. Measured against the real dispatch ordering: with the recompute the row's head still names slot 1 (blocker 2's stored column protects it) while the brief goes to slot 2, the launcher is asked to launch slot 2, and `:332` sets `owner_slot_id = 2`. So the negative control is `briefs_sent_to == [1, 1]` and `launched == [1]`; against revision 8 they measure `[1, 2]` and `[2]`. Record both with a spy on `_send_dispatch_brief_to_slot` and a fake `launcher`.
 
-    Pair it with the durability half, because it is what makes the mis-brief permanent rather than merely wasteful: assert that after the first poll's crash a `mail_messages` row naming attempt 1's head is readable **from a separate session**. It is — `send_direct_message` commits (`agent_mail_service.py:899`) — so slot 1 was really told to push that branch, and under the recompute `:332` then makes slot 2 the owner, which refuses slot 1's report at `agent_teams.py:334`. Add the second trigger too, since it needs no crash at all: with both slots on `leader_fallback`, disabling slot 1 between polls re-routes to slot 2 through `route_item:113-117`. An implementation that special-cases label edits passes the first and fails this one.
+    Pair it with the durability half, because it is what makes the mis-brief permanent rather than merely wasteful: assert that after the first poll's crash a `mail_messages` row naming attempt 1's head is readable **from a separate session**. It is — `send_direct_message` commits (`agent_mail_service.py:899`) — so slot 1 was really told to push that branch, and under the recompute `:332` then makes slot 2 the owner, which refuses slot 1's report at `agent_teams.py:334`.
 
-    37n. **A partially prepared row fails closed.** Prepare an attempt, then tear exactly one member of the record — `dispatch_nonce = NULL`, or `dispatch_head_ref = NULL`, or `approval_round_count = 0` — and poll. Each case raises `PartiallyPreparedAttempt` naming which members were present, and mints **no** replacement nonce. Parametrize over all three: a guard written as `if item.dispatch_nonce is None: prepare(...)` passes the nonce case and silently repairs the other two, which is the failure mode the guard exists to prevent. Do not assert on the exception's message text; assert on the raised type and on the nonce being unchanged, so the test survives a reworded error.
+    37m-1. **The early-exit paths do not re-route either — four cases, and none of them needs a crash.** 37m as written reaches the re-poll through a crash, which is the rarer trigger. §4.2b's measurement is that the *ordinary queueing paths* corrupt the owner too, because each one writes the fresh candidate and commits before any override could run. Parametrize a prepared item's second poll over all four early exits and assert in every case that `owner_slot_id`, `routing_method` and `dispatch_head_ref` are **unchanged** and that the expected `pending_reason` was still recorded — the guard must still do its job, on the right slot:
 
-    Note what 37n does **not** cover: `owner_slot_id` and `routing_method` are deliberately outside the guard, because `reset_for_retry` keeps them (§4.2a rule 4). A version of 37n that also tears those two would demand a refusal the design specifically rejects — and revision 9's first draft of the guard included them, which made preparation raise on every genuine retry. That draft was caught by measurement, not review; the mutation row below keeps it caught.
+    | Case | How to arrange it | `pending_reason` |
+    |---|---|---|
+    | fresh route returns `None` | remove the prepared owner's `area_labels` match and give the classifier no answer | *n/a* — must **not** escalate `plan_blocked`, because a prepared item's routing is not in question |
+    | fresh candidate is busy | `slot_is_busy(B)` false, `slot_is_busy(A)` true | `queued_slot_busy` — on **A**, the real owner |
+    | fresh candidate is ambiguous | two live sessions on B, none on A | must **not** fire; the note is about B, who is not the owner |
+    | no workspace free | no dispatchable `GithubWorkspace` row | `queued_no_workspace` |
+
+    The first row is the one that catches the most tempting wrong implementation: keeping `route_item` and merely overriding its result leaves the `owner_slot_id is None` check at `:255` in the path, so an item whose labels no longer match anything escalates `plan_blocked` **even though it is already routed, prepared and possibly running**. Measured negative controls, both from §4.2b: the busy case reports `through:1` (guards cleared B, the launch takes busy A), and the no-workspace case ends with `owner_slot_id = 2` while `dispatch_head_ref` still names slot 1.
+
+    37n. **A partially prepared row fails closed.** Prepare an attempt, then tear exactly one member of the record — `dispatch_nonce = NULL`, or `dispatch_head_ref = NULL`, or `approval_round_count = 0`, or **`owner_slot_id = NULL`**, or **`routing_method = NULL`** — and poll. Each case raises `PartiallyPreparedAttempt` naming which members were present, and mints **no** replacement nonce, sends **no** brief and calls the launcher **zero** times. Parametrize over all five: a guard written as `if item.dispatch_nonce is None: prepare(...)` passes the nonce case and silently repairs the rest, which is the failure mode the guard exists to prevent. Do not assert on the exception's message text; assert on the raised type and on the nonce being unchanged, so the test survives a reworded error.
+
+    The last two cases are the ninth review's first blocker and must be torn the way production tears them, not with an `UPDATE`. Add a sixth case that **deletes the owner slot** through the real `agent_team_service.delete_slot` and asserts the FK did the tearing: `owner_slot_id IS NULL` with the nonce, head, round and `routing_method` all intact, and `attempt_state` raising. Measured:
+
+    ```
+    [fixture] PRAGMA foreign_keys = 1
+    delete_slot(1) -> preset response, slots=[]
+    after DELETE of the owner slot (ondelete='SET NULL'):
+        slot rows remaining = 0
+        owner_slot_id  = None
+        routing_method = 'label'
+        dispatch_nonce = '5afdad59045a4edb'
+        head           = 'deck/slot-1/issue-42-5afdad59045a4edb'
+        round          = 1
+        revision 9's three-field guard -> PREPARED
+        the asymmetric model           -> PARTIAL
+    ```
+
+    A hand-written `owner_slot_id = None` proves the classifier; the real `DELETE` proves the *mechanism*, and it is the mechanism the review disputed. The column carries `ForeignKey("agent_team_slots.id", ondelete="SET NULL")` (`models/database.py:259-261`) and `delete_slot` is a plain `await db.delete(slot)` (`agent_team_service.py:384-392`) — it never touches the work item, so the FK is the entire mechanism.
+
+    **The fixture has a trap, and it is an ordering trap, not a missing-line trap.** SQLite's `foreign_keys` default is **off** and the pragma is per-*connection*. Production sets it from a `"connect"` event listener (`app/database.py:28-34`), so it fires for every connection. An in-memory test engine uses `StaticPool` — exactly **one** connection, opened on first use — so a listener registered *after* `create_all` attaches to an engine whose only connection already exists and never runs. Measured, that is not a test that fails; it is a test that passes wrongly:
+
+    ```
+    [fixture] PRAGMA foreign_keys = 0     (the default, or a late-registered listener)
+    same delete: slot rows remaining = 0   <- still deleted
+                 owner_slot_id       = 1   <- DANGLING, not NULL
+    ```
+
+    A dangling `owner_slot_id` reads as `PREPARED` under **both** classifiers and then fails the `slots_by_id` lookup, so the test would exercise §4.2b.1's not-in-preset branch while claiming to exercise the deleted-owner one. Assert the pragma's value inside the fixture rather than trusting that the listener was wired.
+
+    37n-1. **One torn row does not stop the batch — the blast-radius test.** Two `pending` items in one scope: item 41 torn, item 42 healthy and unprepared, ordered so 41 is examined first (`:232` orders by `created_at, id`). Poll once and assert **all** of: 41 is `escalated` with its nonce **kept**, 42 is `dispatched`, and `dispatch_pending` **returned normally** rather than raising. Then the negative control in the same test, with the per-item `try` removed: the call raises, 42 is **still `pending`** and was never examined. Measured both ways:
+
+    ```
+    Solution 2 verbatim (no per-item catch):
+        raised out of the poll: PartiallyPreparedAttempt
+        items reached after the torn one: 0
+        still pending: [41, 42]  <- 42 never examined
+
+    with a per-item catch around attempt_state:
+        items reached after the torn one: [42]
+        torn row: status='escalated' reason='plan_blocked' nonce kept=True
+    ```
+
+    37n-2. **The blast radius is the scope, not the batch — the scheduler-level test.** The one above bounds the damage inside `dispatch_pending`; this one measures what an escape costs, and it is the reason the per-item catch is a requirement rather than a nicety. Drive the **real `run_repo_once`** with `dispatch_pending` replaced by a stub that raises `PartiallyPreparedAttempt`, and record which passes ran:
+
+    ```
+    run_repo_once with a raising dispatch_pending:
+        calls that ran : ['poll_scope', 'dispatch_pending']
+        propagated out : PartiallyPreparedAttempt
+    ```
+
+    Assert the recorded call list equals exactly `['poll_scope', 'dispatch_pending']` — so `monitor_dispatched`, `remind_held_leases` and `process_scope` are all provably skipped — and assert that `run_repo_job` swallows the exception (`github_dispatch_scheduler.py:96-97`), which is what makes the stall silent. Write it as a **regression guard on the scheduler**, not on the dispatch service: it stays valid for any future raise out of any pass, and it is the test that would have caught this design if the per-item catch were ever removed.
+
+    37n-3. **A prepared item whose owner is disabled is neither re-routed nor launched.** Prepare for slot 1, disable slot 1 through the real `update_slot`, and poll. Assert: `dispatch_status == 'escalated'`, `escalation_reason == 'prepared_owner_unavailable'`, `status_note` naming slot 1 by `display_name` **and** containing the attempt's head, `owner_slot_id` still 1, nonce/head/round unchanged, the launcher called **zero** times, no brief sent, and — the assertion that separates this from a release-and-escalate implementation — the workspace row still has `leased_item_id == item.id` with a non-NULL `lease_token`. Then re-enable the slot and poll again: the item must dispatch on the **same** attempt, with `secrets.token_hex` never called a second time. The re-enable half is what proves the escalation is recoverable without a retry, which is the whole reason for keeping the record.
+
+    Two negative controls belong in this test, because both wrong implementations look right:
+
+    - **`skipped_disabled` is not a launch failure.** Without this branch, the loop launches a disabled slot and the real launcher answers, measured with the exact request the loop builds at `:306-316`:
+
+      ```
+      real launch() on a DISABLED slot -> 1 result item(s)
+          slot=1 action='skip' status='skipped_disabled' tmux_target=None
+                 message='Slot is disabled'
+      _LAUNCH_FAILED_STATUSES = ['blocked', 'blocked_agent_mail_not_configured',
+                                 'blocked_provider_unavailable', 'failed']
+      'skipped_disabled' in it? False
+      -> the loop would record dispatch_status = 'dispatched' with tmux_target=None
+      ```
+
+      So the check at `:338` does not match, the loop takes the `else` at `:342`, and the item is recorded `dispatched` with `dispatched_at` set, a held lease and **no pane** — a state nothing else in the system can distinguish from a real dispatch. Assert that outcome does **not** occur. It is only reachable through the **real** launcher path (`launch:473` → `_selected_slots:1235` → `_plan_slot:677`'s `if not slot.enabled` at `:686` producing `action="skip"` at `:694` → `_execute_plan_item:544`'s `status="skipped_disabled"` at `:582`); a fake launcher returning a plausible object cannot produce it, so the test must use the real one with tmux stubbed.
+    - **The disabled slot is still in `preset_slots`, and the launcher accepts it too.** `run_repo_once`'s slot query has no `enabled` filter (`:125-131`), so the fixture must build the slot list the same way — unfiltered. A fixture that filters disabled slots out turns this case into 37n-4's `owner_slot is None` case and tests the wrong branch. The same asymmetry is why the launcher never rejects the request: `_selected_slots:1244-1250` drops disabled slots only when `slot_ids is None`, and the loop always passes an explicit `slot_ids=[owner_slot_id]`, so `include_disabled` is never consulted. Nothing downstream of the dispatch loop will refuse a disabled owner on its behalf.
+
+    37n-4. **A prepared item whose owner left the preset escalates the same reason with a different note.** The `owner_slot is None` half, reached the way production reaches it: drive the real `initiate_handoff` and `accept_handoff` to a slot in **another preset** on a `pending`, prepared item, then poll with this scope's `preset_slots`. Assert `escalation_reason == 'prepared_owner_unavailable'`, `status_note` containing "not a slot of this scope's preset" and **not** the word "disabled", the launcher called zero times, and the lease still held. Measured setup:
+
+    ```
+    after handoff of a PENDING, PREPARED item to slot 2 (preset 2):
+        dispatch_status = 'pending'   <- still pending, still polled
+        owner_slot_id   = 2     (was 1)
+        routing_method  = 'reassigned'
+        head            = 'deck/slot-1/issue-42-d2fb1f4216212745'
+        preset_slots for this scope: [1]
+        owner resolvable in preset_slots: False
+    ```
+
+    Do **not** write this test by reparenting a slot (`slot.preset_id = other`). Measured: neither `AgentTeamSlotUpdate` nor `TeamGithubScopeUpdate` exposes `preset_id` and `agent_team_service.py` never assigns it post-construction, so reparenting is raw SQL only — a test built on it would pin a state the API cannot produce, while the handoff path that *can* produce it went untested.
+
+    37n-5. **The escalation is durable when the broadcast fails, and the lease survives it.** `_send_escalation_broadcast` monkeypatched to raise; re-read in a **fresh session** and assert `dispatch_status == 'escalated'`, `escalation_reason == 'prepared_owner_unavailable'`, the note in `status_note`, the nonce and head intact, and `leased_item_id` still the item's. Then the control that makes the trailing commit load-bearing: with the helper's `await db.commit()` removed, the same fresh session reads `dispatch_status == 'pending'` and `escalation_reason IS NULL`, and the next poll repeats the whole cycle. Both transcripts are in §4.2b.1. The mail-failure half matters because `escalate` calls `db.rollback()` on that path (`:1013-1018`) — a rollback in the middle of an escalation is exactly the kind of thing that quietly takes a neighbouring write with it, and here it must not.
+
+    37n-6. **The lease is bounded even though the dispatch loop does not release it.** The claim §4.2b.1 rests on, tested rather than asserted. On an item escalated `prepared_owner_unavailable` with its lease held: (i) `remind_held_leases` returns `1` and sends a `Release needed` message — `'escalated'` is in `_RELEASABLE_STATUSES` (`:29`); (ii) `reclaim_stale` with the lease aged past `github_stale_lease_backstop_seconds` releases it **only** when `_owner_process_is_alive` is false, and the item's nonce is untouched afterwards; (iii) with `_owner_process_is_alive` true it releases nothing. Then the two caveats, both of which are the test's real value because both weaken the bound:
+
+    - **`kind='primary'` is never reclaimed.** Identical aged-and-dead conditions, `kind='primary'` ⇒ `reclaimed 0`, lease still held (`reclaim_stale:292-293`). Assert it, and assert the reminder still fires — for a primary workspace the reminder plus an operator force-release is the entire bound.
+    - **The reminder is counted even when nobody receives it.** With the owner slot having no `MailTeamMember`, `remind_held_leases` returns `1` and **zero** messages are sent, because `notify_owner` returns silently when `_owner_member` is `None` (`:1052-1053`). Assert the count and the empty outbox together. This is the population the whole section is about, so "the owner was reminded" is not a safe reading of that return value — and it is why §4.6's operator visibility is part of this work.
+
+    37n-7. **The do-not-retry caution reaches the operator through `note`, not through `owner_may_be_active`.** Assert that a `prepared_owner_unavailable` escalation's broadcast body contains the caution **and** that `payload['owner_may_be_active']` is `False`. The second assertion is the interesting one: it pins that the caution arrived through the ungated `note` append (`:1110-1111`) rather than through the flag, so a later change to the flag's definition cannot silently remove it. Measured, the flag cannot fire here at all — `escalate` requires `dispatch_status == "dispatched"` (`:996-998`) and every escalation from inside the dispatch loop is on a `pending` row by construction:
+
+    ```
+    pending  + owner set    : owner_may_be_active=False warning present=False
+    dispatched + owner set  : owner_may_be_active=True  warning present=True
+    pending  + owner NULL   : owner_may_be_active=False warning present=False
+    ```
+
+    37n-8. **A `pr_opened` report does not clear this escalation.** The recovery-path test, modelled on 46d, and it matters more here than there because the plausible sender is the *previous owner's still-live pane* — the exact thing §4.2b.1 keeps the attempt for. On an item escalated `prepared_owner_unavailable`, `report_pr_opened` must **raise**, with `dispatch_status` still `escalated`, `escalation_reason` still set and `pr_number` still NULL. Measured as designed:
+
+    ```
+    _PR_OPENED_RECOVERABLE_ESCALATIONS = ['brief_unread', 'leader_ack_timeout',
+        'leader_offline', 'owner_idle_timeout', 'owner_offline', 'plan_blocked']
+    'prepared_owner_unavailable' on the list? False
+    report_pr_opened -> refused: "pr_opened is only valid for dispatched work items,
+                                  or escalated items with a recoverable reason..."
+    on disk afterwards: status='escalated' reason='prepared_owner_unavailable'
+                        pr_number=None
+    ```
+
+    Write the mutant half in the same test, because the consequence of one name added to a frozenset is not guessable from reading `report_pr_opened`:
+
+    ```
+    MUTANT (prepared_owner_unavailable added to the recoverable set):
+        dispatch_status   = 'verifying'      <- left 'escalated'
+        escalation_reason = None             <- CLEARED
+        pr_number         = 7
+        owner_slot_id     = 1   (slot enabled=False)
+        dispatch_nonce    = 'c7fa4db8a2eaa573'
+        team notified     = []
+    ```
+
+    `verifying` is not a parking state — it is the **auto-merge pipeline's** input (§5.6). So the mutant does not merely lose an escalation: it silently promotes an item whose owner is gone into the path that can merge it, on the word of a pane nobody has confirmed is authorized to speak for it, and notifies no one (`team notified = []`). Assert `escalation_reason is None` and `dispatch_status == 'verifying'` against the mutant and the refusal against the design, so the test states both what must happen and what it is preventing.
+
+    Note what 37n does **not** cover on the unprepared side: `owner_slot_id` and `routing_method` may be **stale** on an `UNPREPARED` row, because `reset_for_retry` keeps them (§4.2a rule 4). A version of 37n that demanded a refusal for a retried row with a surviving owner would contradict the design — and revision 9's first draft of the guard did exactly that, making preparation raise on every genuine retry. That draft was caught by measurement, not review; the mutation rows below keep it caught. The asymmetry is the property: **torn on a prepared row, tolerated on an unprepared one.**
 
 **Mutation requirement.** Each guard must be shown to bite:
 
@@ -1493,7 +1935,7 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 | `prepare_attempt` commits the nonce and round but leaves `owner_slot_id` to `:332` (revision 8) | **37i** — the context lookup still succeeds; the owner-only report is refused at `agent_teams.py:334` with a NULL owner. The first assertion alone cannot see this |
 | the dispatch loop uses `route_item`'s fresh answer for a prepared item | **37m** — the brief goes to the newly routed slot while the stored head names the original, and `:332` reassigns the owner away from the slot that was already briefed |
 | the reuse rule is applied to `owner_slot_id` but the brief and `launcher` still take the local variable | **37m** — assert on the brief's recipient and `slot_ids`, not only on the row; the columns are already protected by the stored head |
-| the reuse rule special-cases label edits | **37m** — the disabled-slot trigger re-routes through `route_item:113-117` with no label change and no crash |
+| the reuse rule special-cases label edits | **37m-1** — the busy-slot trigger needs no label change, no operator error and no crash: it needs a second slot that happens to be free, and it reports `through:1` |
 | guard written as `if item.dispatch_nonce is None: prepare(...)` | **37n** — a row torn at `dispatch_head_ref` or `approval_round_count` is silently repaired instead of refused |
 | `prepare_attempt` is called after `_dispatch_brief` rather than before | **37h** |
 | preparation is unguarded, so every poll mints a new nonce | **37j** — the reused attempt's nonce changes |
@@ -1514,6 +1956,21 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
 | add `dispatch_head_ref` to the schema but not to `_work_item_response` | **37q** — Pydantic drops what the serializer does not pass |
 | declare `model_config = ConfigDict(extra="allow")` instead of listing the fields | **37q** — assert the config's absence; an allow-extras model makes the enumeration stop being a filter and hides which fields are contract |
 | expose only five new columns, omitting `dispatch_head_ref` | **37q** — a `head_ref_mismatch` becomes undiagnosable, since the expectation is invisible |
+| the prepared-routing override is placed **after** the guards instead of before them (revision 9's proposal) | **37m-1** — the busy row reports `through:1`: the guards clear the fresh slot and the launch goes to the busy owner. The no-workspace row is the second witness: `owner_slot_id = 2` with the head still naming slot 1 |
+| `route_item` is still called for a prepared item and its answer discarded | **37m-1**'s first row — the discarded answer still costs a classifier call, and the `owner_slot_id is None` check at `:255` stays in the path, so a prepared, possibly-running item escalates `plan_blocked` when its labels stop matching |
+| `attempt_state` is called at the top of the loop body, above the `try` at `:285`, with no per-item catch (Solution 2 verbatim) | **37n-1** and **37n-2** — the raise is 49 lines above the try, so it leaves `dispatch_pending` entirely: no item after the torn one is examined, and `run_repo_once` skips `monitor_dispatched`, `remind_held_leases` and `process_scope` for the whole scope, every poll, silently |
+| the per-item handler is `except ValueError` relying on `PartiallyPreparedAttempt`'s base class instead of a `try` that encloses the classification | **37n-1** — the base class decides nothing; the enclosing `try`'s extent does. Measured: `try covers 286-316`, the call site is at `237` |
+| `attempt_state` collapsed to `all(...)` / `any(...)` over five fields | **37n** — `any()` is true on every genuine retry, because `reset_for_retry` keeps `owner_slot_id` and `routing_method`; `all()` never sees a torn deleted-owner row as partial |
+| the deleted-owner case is tested with `UPDATE ... SET owner_slot_id = NULL` rather than the real `delete_slot` | **37n**'s sixth case — pins the classifier while leaving the disputed *mechanism* (`ondelete='SET NULL'`) unmeasured |
+| the FK pragma listener is registered **after** `create_all`, or omitted | **37n**'s sixth case — `StaticPool` opens its one connection during `create_all`, so a late listener never fires; the delete then leaves `owner_slot_id` **dangling** rather than NULL, which reads as `PREPARED` under both classifiers and silently reroutes the test into §4.2b.1's not-in-preset branch. Assert the pragma's value in the fixture |
+| `owner_slot is None or not owner_slot.enabled` collapsed into one note | **37n-3** / **37n-4** — the two notes must differ; an operator told "disabled" for a handed-off owner goes looking for a toggle that is not the problem |
+| the disabled-owner branch is omitted, letting the loop launch a disabled slot | **37n-3** — `launch` returns `skipped_disabled`, which is **not** in `_LAUNCH_FAILED_STATUSES`, so the item is recorded `dispatched` with a held lease and no pane. Only the real launcher path exposes this |
+| the fixture filters disabled slots out of `preset_slots` | **37n-3** — `run_repo_once:125-131` has no `enabled` filter, so the filtered fixture silently converts this into the not-in-preset case and the disabled branch goes untested |
+| release the workspace on `prepared_owner_unavailable` (copying §4.2a's `ValueError` branch) | **37n-3** — a live pane's worktree is handed to another item. §4.2a releases because that path has already failed to launch; this one may not have |
+| the helper omits its trailing `await db.commit()` | **37n-5** — `escalate` does not commit, so a fresh session still reads `pending` and the next poll re-escalates forever: a busy loop with a log line |
+| the do-not-retry caution is carried by widening `owner_may_be_active` instead of by `note` | **37n-7** — the flag requires `dispatch_status == "dispatched"` (`:996-998`) and the dispatch loop only ever holds `pending` rows, so the caution disappears; widening the flag instead makes every torn-row escalation claim a live pane |
+| the owner is resolved with `await db.get(AgentTeamSlot, item.owner_slot_id)` instead of `slots_by_id` | **37n-4** — a slot in another preset is *fetched successfully*, so the unresolvable case reads as available and the loop briefs and launches a stranger slot outside this scope |
+| the not-in-preset case is arranged by reparenting a slot (`slot.preset_id = other`) | **37n-4** — measured unreachable through the API: no `preset_id` on either update schema, zero post-construction assignments in the service. The test would pin a state the API cannot produce while the handoff path that can goes untested |
 
 Tests 17 and 18 are the pair to write **first**. They are the only two written from rows that exist in production today, and revision 3's design passes both. A design change whose regression test is drawn from real refusals is the strongest evidence available here that the new guard bites.
 
@@ -2734,7 +3191,9 @@ Owner-change and primary (§5.5.6, §5.7):
       ```
 
       Two of these are easy to omit from a hand-written list and both are real: **`"failed"`** (`github_dispatch_service.py:339`, a launch that came back in `_LAUNCH_FAILED_STATUSES`) and **`"completed"`** (`github_watcher_service.py:170`, `_complete_and_notify`). Verified `"cancelled"` appears **nowhere** in `app/` — do not include it because it sounds like it belongs. The set is also closed in the other direction: every literal compared against `dispatch_status` anywhere in `app/` is one of these nine, and none is read-only. `ready_for_review` reads as write-only under a naive scan for `_STATUSES`-named constants — its only reader is the inline `.in_()` tuple at `github_verification_service.py:99-107`. This is the assertion that carries the standing "no new `dispatch_status` values" rule, and it is the one that fails if `pr_closed_unmerged` is implemented as a status.
-    - `ESCALATION_REASONS` — **equality**. The eleven enumerated in §5.5.4a plus `pr_closed_unmerged`. Note this column has **zero** string literals written to it anywhere in `app/` today; every value arrives through `_apply_escalation`'s `reason` parameter, which is precisely why equality is enforceable here and why the runtime funnel is the other half of the enforcement.
+    - `ESCALATION_REASONS` — **equality**. The eleven enumerated in §5.5.4a, plus the two this design adds: `pr_closed_unmerged` (PR2, §5.5.4a) and **`prepared_owner_unavailable`** (PR1, §4.2b.1) — thirteen. Note this column has **zero** string literals written to it anywhere in `app/` today; every value arrives through `_apply_escalation`'s `reason` parameter, which is precisely why equality is enforceable here and why the runtime funnel is the other half of the enforcement.
+
+      `prepared_owner_unavailable` is an `escalation_reason` for the same reason `pr_closed_unmerged` is: `_apply_escalation` sets `dispatch_status = "escalated"` (`:1034`), a value that already exists, so the standing **no new `dispatch_status` values** rule is respected. It is likewise **not** added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` (`github_verification_service.py:29-37`) — that list means *the agent got stuck and a late PR resolves it*, and this reason means *the owner is gone while its attempt may still be live*, which a `pr_opened` report does not resolve. Its recovery is not `deck_retry_work_item` either, and this is the one reason on the list where retry is the **wrong** answer: a retry mints a fresh nonce and orphans an attempt whose pane may still be running (§4.2a property 6). The recovery is to re-enable the slot, or to hand the item back into the preset, and let the next poll continue the same attempt — which is why 37n-3's second half asserts the re-enable path dispatches without minting.
     - **`PENDING_REASONS` — membership only, not equality.** The test asserts `queued_auth_mode_unresolved` is a member and that PR2's other reasons are members, and it does **not** assert equality. A comment names `agent_teams.py:785` as the reason, so the next person does not "tighten" it into a failing test. Measured: 5 literals written today, plus that one f-string.
 
     Spelling the expected sets as literals is the point: the test fails when someone *adds* a value, which is when a human should look, rather than tautologically re-deriving whatever the code contains. Note these are conventions, not database constraints — both columns are plain nullable `String` (`models/database.py:255`, `:278`), verified.
@@ -2847,6 +3306,9 @@ Owner-change and primary (§5.5.6, §5.7):
 | two-or-more-merged treated as a `409` | **46k** |
 | `queued_auth_mode_unresolved` declared in `DISPATCH_STATUSES` rather than as a `pending_reason` | **29-a** — the status set no longer equals its expected literal |
 | `pr_closed_unmerged` added to `DISPATCH_STATUSES` | **29-a** |
+| `prepared_owner_unavailable` implemented as a new `dispatch_status` | **29-a** — the status set no longer equals its expected literal, which is how the standing no-new-status rule is carried |
+| `prepared_owner_unavailable` omitted from `ESCALATION_REASONS` | **29-a** (the set no longer equals thirteen) **and 37n-3/37n-4 at runtime** — `_apply_escalation`'s validation rejects the reason, so the escalation raises and the torn item stays `pending`, re-escalating every poll |
+| `prepared_owner_unavailable` added to `_PR_OPENED_RECOVERABLE_ESCALATIONS` | **37n-8** — a `pr_opened` report from the previous owner's still-live pane clears the reason and lands the item in **`verifying`**, the auto-merge pipeline's input, with the owner still gone and no notification sent |
 | a PR2 path writes an **undeclared** `dispatch_status` literal | **29-a1** — the AST scan sees the literal wherever it is written |
 | a PR2 path assigns `escalation_reason` directly, bypassing `_apply_escalation` | **29-a1** — asserts exactly one non-`None` assignment site |
 | `_apply_escalation` accepts an undeclared reason | **29-a1**'s runtime validation at the funnel |
