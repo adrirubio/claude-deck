@@ -1,7 +1,7 @@
 # Distinct Approver Identity — Design (Findings #1 and #6)
 
 **Date:** 2026-08-05
-**Status:** Design, revision 8 — revised after a seventh implementer review of `f652c39` found four further blockers, all confirmed against source or measurement, three of them broader than reported. **Not yet approved for implementation planning.**
+**Status:** Design, revision 9 — revised after an eighth implementer review of `df91886` found four cross-path blockers, all confirmed against source or measurement, two of them broader than reported. One is an **auto-merge exposure** the review did not name. **Not yet approved for implementation planning.**
 **Closes:** Finding #1 (Leader self-ack), Finding #6 (agent commit identity collides with human reviewer identity)
 **Both are Window 2 gates** — `merge_policy=auto` must not be enabled until PR0 and PR1 land.
 
@@ -109,7 +109,18 @@ Revision 8 also answers a question no review raised, found while writing `prepar
 
 **The lesson, updated.** Revision 7 said the defect lives in the existing mechanism's undocumented properties. Revision 8 pushes past the repository boundary: **when a design rests on a system you do not own — an interpreter's execution order, Git's ref storage, an API's response schema, a fixture's power of observation — a confident sentence is worth nothing and a five-line probe settles it.** All four blockers were sentences of that kind; three were wrong in the direction that disables a check. The fourth is the same error aimed inward, at testing itself: revision 7's test 12 asserted the brief's *content* given an item that already had a nonce, so it could never observe *when* the nonce arrived — which is precisely how blocker 1 shipped. A test that pre-populates its own fixture cannot observe ordering, and a test that cannot fail is not evidence.
 
-**Seven measurements this spec rests on, so a reviewer can re-run them rather than trust them.** The first four are throwaway pytest files against in-memory SQLite with a fake client, no network. The last three reach outside the repository, which is what revision 8's blockers required: one drives real `git` against a temporary bare repo, one is a single unauthenticated `GET` against a public repo, and one walks `app/`'s AST:
+**What revision 9 changed.** The eighth review confirmed revision 8's four fixes correct *in isolation* and found four blockers in how they **compose with paths revision 8 did not visit** — dispatch's post-launch commit, handoff, the review stage, and response serialization. All four confirmed; **none refuted**. Two are broader than reported, and one of those is the most severe class of defect in this spec: an **auto-merge of a PR a human had reserved.**
+
+| # | Revision 8 said | Measured reality | Now |
+|---|---|---|---|
+| 1 | `prepare_attempt` commits `dispatch_nonce` + round 1 before the brief, and that is enough to make a fresh session safe | it commits the attempt's **identity** and not its **owner**. `owner_slot_id` and `routing_method` are first persisted at `:332-333`, *after* `launcher` returns — and a newly watched item starts with both NULL (`github_watcher_service.py:63`, columns nullable at `models/database.py:259`, `:262`). So the launched agent's first owner-only report hits `report.reporting_slot_id != item.owner_slot_id` with `item.owner_slot_id IS NULL` and is refused — the same class of failure blocker 1 of revision 7 set out to remove, one column over. The crash half is worse: the next poll re-runs `route_item` (`:252`) **before** the guard, so a label edit or a busy slot re-briefs the *same* nonce to a *different* slot, and since the head embeds `slot_id`, the "reused" attempt silently acquires a different expected head | `prepare_attempt` persists the attempt as **one atomic identity record** — `owner_slot_id`, `routing_method`, `dispatch_nonce`, `approval_round_count` — in one commit before any mail, prompt, or pane. A prepared item **reuses** its persisted routing instead of re-running `route_item`, and a partially prepared row **fails closed** (§4.2a). Tests 37i, 37m, 37n |
+| 2 | the expected head is composed from the **current** owner slot plus the current nonce, and handoff deliberately keeps the nonce | `accept_handoff` **changes `owner_slot_id`** (`github_dispatch_service.py:705`) and sends no new brief. So slot 3 is briefed `deck/slot-3/issue-42-<nonce>`, pushes it, the item is handed to slot 5, and `pr_ready` then recomposes the expectation as `deck/slot-5/issue-42-<nonce>` and `409`s the valid branch — forever, since no replacement brief ever names the new one. Keeping the nonce across handoff was correct and insufficient: the nonce was not the only slot-dependent half of the name | the attempt's head is **immutable for the attempt's lifetime**. A sixth column, `dispatch_head_ref`, is written by `prepare_attempt` and read by both the brief and the `pr_ready` check; `attempt_head_ref` becomes the *composer* used once at preparation rather than a function re-evaluated per call. Handoff preserves it; only `reset_for_retry` clears it (§4.2a, §5.5.4a, §5.6). Tests 11f, 37o |
+| 3 | an unclassifiable pull routes through `_record_failed_verification_attempt(head_sha=None)` in **both** `_verify_item` and `_process_review_item`, so the retry budget advances | that helper ends `dispatch_status = "dispatched"` (`:507`) unconditionally while budget remains, and `process_scope:114` routes `dispatched` to `_verify_item`. **Measured:** a design item in `awaiting_human_review` becomes `dispatched`; if the garble is **transient**, the next poll runs check-runs on it and calls `mark_pull_ready_for_review` — an unreviewed design PR taken out of draft. (A *persistent* garble does not promote, because the verify stage refuses too; it mislabels the item as unverified code for two polls and then escalates. Both sequences measured.) Broader than reported, and this is the auto-merge exposure: the helper also overwrites `status_note` at `:487`, which **is** the human-merge reservation (`_HUMAN_MERGE_NOTE_PREFIXES`, checked at `:235`). Measured on a code item parked by a policy `403`: control poll merges nothing; after one refuse path, `merge_pull` is called and `auto_merged_at` is SET | the refuse path is **stage-aware**. `_record_failed_verification_attempt` gains one **required** keyword-only `retry_status`, and the note write moves behind `_set_failure_note`, which refuses to overwrite a reservation. The review stage passes `item.dispatch_status`, so no item is moved between pipelines and no reservation is erased by a failure to classify. The review's proposed `preserve_note` flag is **withdrawn** — a caller that does not know a note is a safety control will not pass a flag protecting it (§5.6b, §5.6b.1). Tests 29f, 29g, 29h, 29h-1, 29h-2 — 29h is the auto-merge regression test |
+| 4 | test 29-a1 collects every `ast.Assign` target and every `ast.keyword` named for the three columns | keyword name alone does not distinguish an ORM write from a response field copy. `GithubWorkItemResponse(...)` at `agent_teams.py:201` passes all three. **Ran revision 8's test exactly as written against the current tree: it fails four of its own assertions** — a non-literal RHS failure on `dispatch_status=item.dispatch_status`, two non-`None` `escalation_reason` sites instead of one, and two of the three recorded baselines wrong. The reviewer's independently measured counts match mine exactly | the scan **classifies the enclosing call**, not the keyword name: keyword writes count only for ORM mutation forms (`GithubWorkItem(...)`, explicit `update()`), response/schema constructors are excluded by name, and **any unrecognized call form fails the test** rather than being skipped — an allowlist that ignores what it does not recognize has the blind spot it was built to remove. Baselines re-measured with the corrected classifier (§5.8 test 29-a1). Test 29-a2 proves the classification itself |
+
+**The lesson revision 9 adds.** Revision 8's lesson was about systems you do not own. This round's four are all inside the repository, and they share a different shape: **a fix is only as correct as the paths it was composed against.** Each blocker is a revision-8 fix that is right where it was written and wrong one call site away — the nonce is durable but its owner is not; the head is stable but the slot in it is not; the counter advances but the status it lands on belongs to another pipeline; the writer set is enumerated but the enumeration cannot tell a write from a read. So the discipline is not "measure the outside system" but **"enumerate who else touches this column, this row, this status, and run the fix down each of their paths."** Two of the four gave up a defect only when driven end-to-end rather than reasoned about — including the auto-merge, which no amount of reading the retry helper would have surfaced, because the damage is done by a `status_note` write whose significance lives 250 lines away.
+
+**Ten measurements this spec rests on, so a reviewer can re-run them rather than trust them.** The first four are throwaway pytest files against in-memory SQLite with a fake client, no network. The next three reach outside the repository, which is what revision 8's blockers required: one drives real `git` against a temporary bare repo, one is a single unauthenticated `GET` against a public repo, and one walks `app/`'s AST. The last three are revision 9's, and all three are in-repo compositions driven end-to-end:
 
 | Claim | How it was measured | Result |
 |---|---|---|
@@ -119,7 +130,10 @@ Revision 8 also answers a question no review raised, found while writing `prepar
 | an escalation whose broadcast fails is **not** durable unless the caller commits | item at the approval cap, `_send_escalation_broadcast` monkeypatched to raise, `escalate` called with no trailing commit; row re-read in a **fresh session** | in memory `status='escalated'`; **on disk** `dispatch_status='dispatched'`, `escalation_reason=None`, `ack_received_at` **SET**. Adding one `await db.commit()` after `escalate` returns makes it `'escalated'` |
 | a ref and a directory cannot share a path, **in either order** | a bare repo plus a work clone; `git branch deck/leader/issue-42` then `.../a3f9c1b2`, then the reverse order, then `git push` for each | both directions rejected. Parent-first: `fatal: cannot lock ref … 'refs/heads/deck/leader/issue-42' exists`. Child-first: the push of the **parent** is `! [remote rejected]`. The sibling form `deck/slot-3/issue-42-<16 hex>` coexists with the legacy name in both orders |
 | `GET /pulls` does not return `merged` | one unauthenticated `GET /repos/pallets/flask/pulls?state=closed&per_page=100`, then `GET /pulls/6095`; key sets compared | `'merged' in obj == False` for all 100; `merged_at` present and correct in both shapes; `merged` appears only in the single-pull response. Also `#6118`: `merge_commit_sha='9d0293cb…'` with `merged_at=None` — non-null on a PR that never merged |
-| a runtime membership test cannot enforce the namespace, and an AST scan can | `ast.walk` over `app/`, collecting every `Assign`/`AnnAssign`/keyword whose target is `dispatch_status`, `pending_reason`, or `escalation_reason` | 30 assignment sites + 4 keyword sites across 4 files. `escalation_reason`: exactly **1** non-`None` write (`github_dispatch_service.py:1035`). `pending_reason`: 5 literals + **1 `JoinedStr`** (`agent_teams.py:785`, operator free text) — which is why that column cannot be a closed set |
+| a runtime membership test cannot enforce the namespace, and an AST scan can | `ast.walk` over `app/`, collecting every `Assign`/`AnnAssign`/keyword whose target is `dispatch_status`, `pending_reason`, or `escalation_reason` | 30 assignment sites + 4 keyword sites across 4 files, **before** classification. `escalation_reason`: exactly **1** non-`None` write (`github_dispatch_service.py:1035`, a function parameter). `pending_reason`: 5 literals + **1 `JoinedStr`** (`agent_teams.py:785`, operator free text) — which is why that column cannot be a closed set. Also: `"cancelled"` appears **nowhere** in `app/`, while `"failed"` and `"completed"` are real written statuses — the nine-value set is measured, not recalled |
+| the AST scan as revision 8 wrote it **fails against the current tree**, and the corrected one passes and is mutation-proof | implemented test 29-a1 literally — bare keyword-name collection, its three stated assertions, its recorded baselines — and ran it over `app/`. Then implemented the corrected classifier (enclosing-call classification, three-tier RHS, UNKNOWN-is-failure, `setattr` baseline) and ran it, then re-ran it against `app/` copied to a temp tree with one injected violation at a time | revision 8's: **4 failed assertions** — `dispatch_status=item.dispatch_status` (`agent_teams.py:211`) trips the non-literal-RHS rule; `escalation_reason` has **2** non-`None` sites, not 1, the second being `agent_teams.py:223`; two of three baselines wrong. Corrected: **passes on arrival** with `dispatch_status` 14 write sites over 9 values, `pending_reason` 11, `escalation_reason` 6 (1 `Name` + 5 `None`), response keywords **3**, unknown call forms **0**. **All 10 mutants caught by a named assertion**, and the tier-2 constant-form case correctly does *not* fire |
+| the review-stage refuse path moves a design item into the code pipeline, and a **transient** garble then promotes it | revision 8's design implemented in full (classify-refuse in **both** stages), on an `awaiting_human_review` **design** item with a draft PR; real `process_scope` polls, re-read with raw `text()` in a fresh session each time, run twice: once with the garble persisting, once with it clearing on poll 2 | persistent: `'dispatched'`, `'dispatched'`, `'escalated'` with `retry_count` 1→2→3, `mark_pull_ready_for_review` **0×** — mislabelled, not promoted. Transient: poll 1 → `'dispatched'`; poll 2 `list_check_runs_for_ref` **1×**, `mark_pull_ready_for_review` **1×**, ending `'ready_for_review'` — an unreviewed design PR taken out of draft. Under the fix both polls read `'awaiting_human_review'`, `mark_pull_ready_for_review` **0×** |
+| the same path **auto-merges a PR a human had reserved** | code item in `ready_for_review` whose `status_note` is `'Auto-merge blocked by repository policy; requires human merge.'` (a real `403` fallback), `merge_policy="auto"`; one control `_process_review_item`, then one refuse path, then one poll | control: `merge_pull` **0** calls. After the refuse path the note reads `'PR #5 returned a state Deck cannot classify.'` and the sentinel is gone; next poll: `merge_pull` **1** call, `dispatch_status='merged'`, `auto_merged_at` **SET** |
 
 ---
 
@@ -767,16 +781,20 @@ if work_item_columns and "dispatch_nonce" not in work_item_columns:
     await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_nonce TEXT"))
 ```
 
-…plus two more rungs: the epoch §3.4a requires, and the round §4.3a.1 requires. Both belong here with the others rather than in the chapters that motivate them:
+…plus three more rungs: the epoch §3.4a requires, the round §4.3a.1 requires, and the immutable head §5.5.4a requires. All belong here with the others rather than in the chapters that motivate them:
 
 ```python
 if work_item_columns and "ack_enforcement_epoch" not in work_item_columns:
     await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_enforcement_epoch INTEGER"))
 if work_item_columns and "ack_approval_round" not in work_item_columns:
     await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approval_round INTEGER"))
+if work_item_columns and "dispatch_head_ref" not in work_item_columns:
+    await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_head_ref TEXT"))
 ```
 
-All five nullable, so existing rows migrate silently — and a pre-upgrade row with `dispatch_nonce = NULL` cannot be acked until re-dispatched, which §4.3 rule 3 makes explicit and correct.
+All six nullable, so existing rows migrate silently — and a pre-upgrade row with `dispatch_nonce = NULL` cannot be acked until re-dispatched, which §4.3 rule 3 makes explicit and correct. The same is true of `dispatch_head_ref`: a NULL head means *no attempt has been prepared*, and `pr_ready` refuses rather than composing one (§5.5.4a consequence 3).
+
+**Why `dispatch_head_ref` is a column and not a function of the other two.** Revision 8 composed the expected head on demand from the item's *current* `owner_slot_id` plus its nonce. `accept_handoff` changes `owner_slot_id` (`github_dispatch_service.py:705`) and sends no new brief, so the composed expectation drifts away from the branch the agent was actually told to push — the eighth review's second blocker, and a permanent `409` because nothing ever re-briefs the new name. Storing the head makes the attempt's branch immutable for the attempt's lifetime, which is the property the design needs and the composed form cannot provide. §5.5.4a carries the reasoning; this rung carries the column.
 
 `ack_approval_round` records which round's approval is on file. It is **not** redundant with `approval_round_count`: the counter says which round the item is *in*, and this column says which round the evidence *came from*. The gate compares them (§4.5), which is what makes a stale approval visible instead of merely absent — the same reasoning that made `ack_enforcement_epoch` a column rather than an inference.
 
@@ -797,9 +815,9 @@ Minted in the **prepare-attempt step**, which runs *before* the brief is compose
 
 | Event | Site | Action |
 |---|---|---|
-| dispatch | prepare-attempt, before `:290` | mint a fresh nonce, **open round 1**, and **commit** — both readable by the brief (§4.2a) |
-| retry | `reset_for_retry:64-73` | clear nonce + the four new ack columns alongside the existing `ack_received_at = None`; `approval_round_count` is already set to `0` here (`:73`) |
-| handoff accepted | `accept_handoff:705` | clear **all five** ack fields + `last_nudge_at`; **keep the nonce** and **keep the round** — see below |
+| dispatch | prepare-attempt, before `:290` | mint a fresh nonce **and head ref**, record **owner + routing method**, **open round 1**, and **commit** — all readable by the brief (§4.2a) |
+| retry | `reset_for_retry:64-75` | clear nonce **+ head ref** + the four new ack columns alongside the existing `ack_received_at = None`; `approval_round_count` is already set to `0` here (`:73`) |
+| handoff accepted | `accept_handoff:705` | clear **all five** ack fields + `last_nudge_at`; **keep the nonce**, **keep the head ref**, and **keep the round** — see below |
 | rejection **below the cap** | `advance_approval_round` branch A (replacing `record_approval_round:672-679`) | increment the round, clear **all five** ack fields + `last_nudge_at`, **keep the nonce** — one commit, no escalation (§4.3a.1) |
 | rejection **at the cap** | `advance_approval_round` branch B | counter unchanged, ack fields **kept** for the operator, `dispatch_status = escalated` / `approval_rounds_exhausted` in the *same* commit as the decision row (§4.3a.1) |
 
@@ -839,29 +857,66 @@ Setting the round to `1` rather than leaving it `0` is what makes "which round i
 
 The brief that must name the attempt branch (§5.5.4a consequence 2) is built at `:290` and *delivered twice* — by mail at `:299` and as the launch prompt at `:306` — before `:344` runs. A nonce minted at `:344` is NULL at `:290`. Worse, this is invisible to a unit test that hands `_dispatch_brief` a pre-populated item: the test passes and every real dispatch sends a brief naming the wrong branch, which `pr_ready` then refuses with a `409`. Confirmed the line numbers directly, and confirmed `dispatch_nonce` appears nowhere in `app/` today, so there is no existing behaviour to preserve.
 
-**Decision: an explicit `prepare_attempt` step, committed before the brief is composed.**
+**Decision: an explicit `prepare_attempt` step, committed before the brief is composed.** Revision 8 committed the attempt's *identity* here and left its *owner* at `:332`. The eighth review's first blocker is that gap, and it is confirmed: `owner_slot_id` and `routing_method` are first persisted after `launcher` returns (`:332-333`), a newly watched item is created with neither (`github_watcher_service.py:63`), and both columns are nullable (`models/database.py:259`, `:262`). So the fresh-session scenario revision 8 set out to make safe still fails one column over — the launched agent's first owner-only report meets `report.reporting_slot_id != item.owner_slot_id` with `item.owner_slot_id IS NULL` (`agent_teams.py:334`) and is refused.
+
+**The record is the whole attempt, not just its name.**
 
 ```python
 # new, immediately after the workspace is acquired (:277) and before the brief (:290)
-async def prepare_attempt(self, db, item) -> None:
-    if item.dispatch_nonce is not None and item.approval_round_count >= 1:
-        return                              # already prepared; reuse it (crash idempotence)
+async def prepare_attempt(self, db, item, *, owner_slot_id, routing_method) -> str:
+    """Persist this attempt's complete identity, atomically, before anyone is told of it.
+
+    Returns the head ref the brief must name and `pr_ready` will require.
+    """
+    prepared = (
+        item.dispatch_nonce,
+        item.dispatch_head_ref,
+        item.owner_slot_id,
+        item.routing_method,
+        item.approval_round_count >= 1,
+    )
+    if all(prepared):                       # already prepared; reuse it (crash idempotence)
+        return item.dispatch_head_ref
+    if any(prepared):                       # partial: a torn write, not a state to guess at
+        raise PartiallyPreparedAttempt(item.id, prepared)
+    item.owner_slot_id = owner_slot_id      # the owner is part of the identity, not a result
+    item.routing_method = routing_method
     item.dispatch_nonce = secrets.token_hex(8)
+    item.dispatch_head_ref = attempt_head_ref(item, owner_slot_id)   # composed ONCE, §5.5.4a
     item.approval_round_count = 1
     item.updated_at = datetime.utcnow()
     await db.commit()                       # durable BEFORE any brief, mail, or pane
+    return item.dispatch_head_ref
 ```
 
-Four properties, each answering something the review asked for:
+`dispatch_head_ref` is the sixth column, and §5.5.4a explains why the head must be stored rather than recomputed. `PartiallyPreparedAttempt` is a new exception; the caller escalates `plan_blocked` and releases the workspace, exactly as the `ValueError` path at `:317-323` already does.
+
+Six properties, each answering something a review asked for:
 
 1. **Committed, not just assigned.** The launched agent can call `deck_request_context` before the dispatch loop reaches `:344`, and a route in another request reads a different session. An in-memory nonce is invisible to that read, so the agent's first legitimate call would refuse `stale_nonce`. The commit is the fix, and it is why this is a step rather than two lines moved upward.
-2. **Idempotent on the poll.** Preparation is guarded on `dispatch_nonce IS NOT NULL AND approval_round_count >= 1`. A crash between preparation and launch leaves the item `pending` with a prepared attempt; the next poll **reuses** it rather than minting a second nonce. Without the guard, an agent relaunched after a crash would be briefed with nonce B while its first (possibly still-live) pane holds nonce A.
-3. **`reset_for_retry` is the only thing that authorizes a new nonce, and the clear belongs *below* its early return.** It must *clear* `dispatch_nonce` — which §4.2's table already requires (`reset_for_retry:64-73`, where `approval_round_count = 0` is already set at `:73`). Clearing both is what makes the guard above fall through on a genuine retry and hold on a crash-retry of the same attempt. If the clear is missed entirely, blocker 2's fix silently reverts: the retried attempt keeps attempt 1's nonce, composes attempt 1's head, and rediscovers the closed PR.
+2. **Idempotent on the poll.** Preparation is guarded on the whole record being present. A crash between preparation and launch leaves the item `pending` with a prepared attempt; the next poll **reuses** it rather than minting a second nonce. Without the guard, an agent relaunched after a crash would be briefed with nonce B while its first (possibly still-live) pane holds nonce A.
 
-    Position matters as much as presence, because `reset_for_retry` is **two functions in one**. When the item still holds a workspace lease it takes the deferred branch (`:56-62`): it sets `retry_requested_at`, writes a status note, and **returns without resetting anything**. The reset block starts at `:63`. Putting the clear above that return would strip the nonce from an item whose previous attempt is *still running* — its pane holds the old nonce, so every `deck_request_context` and every ack from a live agent would refuse `no_linkage`, and the item would sit in `escalated` until `complete_deferred_retries` (`:78-101`) re-entered the function later. The nonce must survive until the lease is released and the real reset runs. Same rule as property 4, and the same reason: **while a pane may still be alive, its attempt identity must stay valid.**
-4. **Launch failure keeps the prepared attempt.** Both the `_LAUNCH_FAILED_STATUSES` path (`:341`, `dispatch_status = "failed"`) and the `launch_outcome_unknown` path (`:325-330`) leave the nonce and round in place. For `launch_outcome_unknown` this is required, not merely convenient: the pane may be live, so its nonce must stay valid — clearing it would make a running agent's evidence unmatchable while telling nobody. Recovery from either goes through `deck_retry_work_item`, which clears the nonce as rule 3 requires. `plan_blocked` (`:317-323`) is the same: escalate, release, keep the prepared attempt.
+    **The guard is not enough on its own, because `route_item` runs above it.** `route_item` is called at `:252`, before the workspace is acquired at `:277` and therefore before preparation. It is a pure function of the slot list, the issue's labels, and the classifier (`:103-128`) — every one of which can change between polls. A label edit, a newly busy slot, or a non-deterministic classifier therefore re-routes a *prepared* attempt to a different slot, and because the head embeds `slot_id`, the attempt revision 8 called "reused" quietly acquires a different expected head. So the dispatch loop must **read the persisted routing decision instead of the freshly computed one** whenever the item is already prepared:
 
-`:344` keeps `dispatched_at` and `dispatch_status`, and nothing else moves. The split is deliberate: `dispatched_at` records **when the pane started**, which is only knowable after `launcher` returns, while the nonce records **which attempt this is**, which must be knowable before anyone is told about it. Revisions 5-7 conflated the two because they are set two lines apart today.
+    ```python
+    owner_slot_id, method = await self.route_item(...)     # unchanged, :252
+    ...                                                    # unchanged guards through :277
+    if item.dispatch_nonce is not None:                    # a prepared attempt owns its routing
+        owner_slot_id, method = item.owner_slot_id, item.routing_method
+    head_ref = await self.prepare_attempt(
+        db, item, owner_slot_id=owner_slot_id, routing_method=method
+    )
+    ```
+
+    `route_item` still runs, because the guards between `:252` and `:277` need a candidate slot to report against (`queued_slot_busy` at `:264`, the ambiguity note at `:272`). What changes is that its answer does not override a decision already committed. This is deliberately *not* implemented by skipping `route_item` for prepared items: the busy-slot and ambiguity guards would then run against a stale or absent slot, which trades one composition defect for another.
+3. **Partial preparation fails closed.** A row with a nonce and no owner, or an owner and no round, is not a state to interpret — it is a torn write from a crash inside the commit, or a hand-edited row. Preparation refuses it rather than filling in the blanks, because every plausible repair guesses at which half is authoritative. This is the same rule as `pr_ready` on a NULL-nonce item (§5.5.4a consequence 3): **when the evidence is incomplete, refuse and say so.**
+4. **`reset_for_retry` is the only thing that authorizes a new nonce, and the clear belongs *below* its early return.** It must *clear* `dispatch_nonce` **and `dispatch_head_ref`** — which §4.2's table already requires (`reset_for_retry:64-75`, where `approval_round_count = 0` is already set at `:73`). Clearing them is what makes the guard above fall through on a genuine retry and hold on a crash-retry of the same attempt. If the clear is missed entirely, blocker 2's fix silently reverts: the retried attempt keeps attempt 1's nonce, composes attempt 1's head, and rediscovers the closed PR. Note the existing reset block **already** clears neither `owner_slot_id` nor `routing_method` (`:64-75`, verified) — and it should not start: they are overwritten by the next preparation, and keeping them lets an operator see who last held a retried item.
+
+    Position matters as much as presence, because `reset_for_retry` is **two functions in one**. When the item still holds a workspace lease it takes the deferred branch (`:56-63`): it sets `retry_requested_at`, writes a status note, and **returns without resetting anything** — the `return` is at `:63`, verified. The reset block starts at `:64`. Putting the clear above that return would strip the nonce from an item whose previous attempt is *still running* — its pane holds the old nonce, so every `deck_request_context` and every ack from a live agent would refuse `no_linkage`, and the item would sit in `escalated` until `promote_deferred_retries` (`:77-101`) re-entered the function later. The nonce must survive until the lease is released and the real reset runs. Same rule as property 6, and the same reason: **while a pane may still be alive, its attempt identity must stay valid.**
+5. **Handoff preserves the whole record.** `accept_handoff` (`:697-710`) changes `owner_slot_id` and must **not** touch `dispatch_nonce` or `dispatch_head_ref` — the reason is §5.5.4a's, and it is the eighth review's second blocker: the head was minted for the *original* owner and the new owner was never briefed with a replacement. See §4.4's table row and §5.5.4a's immutability paragraph.
+6. **Launch failure keeps the prepared attempt.** Both the `_LAUNCH_FAILED_STATUSES` path (`:338-341`, `dispatch_status = "failed"`) and the `launch_outcome_unknown` path (`:325-331`) leave the record in place. For `launch_outcome_unknown` this is required, not merely convenient: the pane may be live, so its nonce must stay valid — clearing it would make a running agent's evidence unmatchable while telling nobody. Recovery from either goes through `deck_retry_work_item`, which clears the nonce as rule 4 requires. `plan_blocked` (`:317-324`) is the same: escalate, release, keep the prepared attempt.
+
+`:344` keeps `dispatched_at` and `dispatch_status`, and the `owner_slot_id` / `routing_method` writes at `:332-333` become **redundant** rather than merely late — preparation already committed them, and the lines may stay as harmless re-assignments or be deleted, but a plan must say which. Delete them: leaving a second writer for a column that now has an authoritative one is how the two come to disagree, and 29-a1's baseline counts them. The split of *what stays* at `:344` is deliberate: `dispatched_at` records **when the pane started**, which is only knowable after `launcher` returns, while the attempt record says **which attempt this is and who owns it**, which must be knowable before anyone is told about it. Revisions 5-7 conflated the two because they are set twelve lines apart today.
 
 **The cap, restated for a 1-based counter.** `advance_approval_round` (§4.3a.1) checks *before* it increments, so the counter never holds a round that did not happen:
 
@@ -927,11 +982,22 @@ So `accept_handoff` clears:
 
 `dispatched_at` is deliberately **not** reset: it anchors the ack deadline, and re-anchoring it on handoff would silently extend the timeout every time an item changes hands. The new owner inherits the original deadline, which is the existing behavior for every other field and is #280's territory, not this spec's.
 
-**Why handoff keeps the nonce.** Clearing it would deadlock the item. `accept_handoff` sends **no new brief**, so the new owner never learns a replacement nonce, and every subsequent ack attempt would refuse with `no_linkage` forever. Clearing the *ack* fields is what matters: the new owner must obtain their own approval, and §4.3 rule 3 requires the `context_request` to have been sent **by the current owner member**, so the previous owner's request cannot satisfy the new one even though the nonce is unchanged. Retry is different — it re-dispatches through `:344`, which mints a fresh nonce, so clearing is both safe and necessary there.
+**Why handoff keeps the nonce — and the head with it.** Clearing the nonce would deadlock the item. `accept_handoff` sends **no new brief**, so the new owner never learns a replacement nonce, and every subsequent ack attempt would refuse with `no_linkage` forever. Clearing the *ack* fields is what matters: the new owner must obtain their own approval, and §4.3 rule 3 requires the `context_request` to have been sent **by the current owner member**, so the previous owner's request cannot satisfy the new one even though the nonce is unchanged. Retry is different — it re-dispatches through `prepare_attempt`, which mints a fresh nonce, so clearing is both safe and necessary there.
+
+The eighth review's second blocker is that "keep the nonce" was necessary and **not sufficient**. `accept_handoff` changes `owner_slot_id` (`:705`), and revision 8 composed the expected head from the *current* owner's `slot_id`. So the surviving nonce was carried into a name the agent had never been given:
+
+```
+slot 3 briefed:      deck/slot-3/issue-42-a3f9c1b2d4e5f607     <- pushed, PR-ready
+handoff to slot 5:   nonce preserved, no new brief sent
+slot 5 reports:      pr_ready(head_ref="deck/slot-3/issue-42-a3f9c1b2d4e5f607")
+Deck recomposes:     deck/slot-5/issue-42-a3f9c1b2d4e5f607     <- 409, forever
+```
+
+Nothing recovers from that. The branch is valid, the work is real, and no future brief ever names the head Deck now expects. `dispatch_head_ref` (§4.1) closes it by making the head part of the attempt record rather than a function of mutable state: handoff changes who is working and does not change what they were told to push. The existing handoff tests could not have caught this — they assert ownership and approval state and never drive `pr_ready` afterwards, which is why test 11f exists.
 
 **Why handoff keeps the round too.** A handoff is not a rejection: nobody has declined anything, so no new round should open, and the cap must not be consumed by an event the leader did not cause. Handing an item back and forth three times would otherwise exhaust `max_approval_rounds` without a single review ever happening. The *owner* changed and the *round* did not, which is exactly the state §4.3 rule 3 already handles — the request must come from the current owner member, so the new owner opens a fresh `context_request` **in the same round** and the previous owner's request in that round no longer matches. That is also why §4.3a's duplicate-request `409` is scoped to `(work item, nonce, round, owner)` and not to `(work item, nonce, round)`: two requests in one round from two different owners is the normal shape of a handoff, not a shim bug.
 
-**The deferred-retry path is already covered.** `reset_for_retry` returns early at `:56-63` when the item still holds a lease, setting only `retry_requested_at`. The monitor at `:84-98` later re-selects those items and calls `reset_for_retry` **again** once the lease is gone, and that second call reaches the clearing block. So the deferred path clears the columns too, with no extra work — but a test must prove it, because "the early return skips the clear" is exactly the kind of thing that looks broken and is not (test 10b).
+**The deferred-retry path is already covered.** `reset_for_retry` returns early at `:56-63` when the item still holds a lease, setting only `retry_requested_at`. `promote_deferred_retries` (`:77-101`) later re-selects those items — `escalated`/`failed`, non-NULL `retry_requested_at`, no lease row — and calls `reset_for_retry` **again** once the lease is gone, and that second call reaches the clearing block. So the deferred path clears the columns too, with no extra work — but a test must prove it, because "the early return skips the clear" is exactly the kind of thing that looks broken and is not (test 10b).
 
 ### 4.3 Structured evidence
 
@@ -1268,7 +1334,7 @@ Round scoping (§4.3a.1) — the rejection-recovery lifecycle revision 4 had non
     Do **not** satisfy this by constructing an item that already has a nonce and calling `_dispatch_brief` on it. That test passes against the broken ordering, which is exactly how revision 7 shipped this defect: test 12 asserts brief *content* given an item, and can never observe *when* the nonce arrived.
     37i. **Preparation is committed before delivery, not merely assigned.** Same fixture, but the mocked `_send_dispatch_brief_to_slot` opens a **second session** on the same database mid-dispatch and reads the item by id ⇒ it sees the nonce and `approval_round_count == 1`. This is the visibility property the review named: the launched agent's first `deck_request_context` runs in a different request and session, so an uncommitted nonce would refuse `stale_nonce` on a legitimate first call. A design that assigns without committing passes 37h and fails this.
     37j. **A crash between preparation and launch reuses the attempt.** Prepare, then make `launcher` raise; the item escalates `launch_outcome_unknown` with its nonce **intact** (§4.2a property 4). Now clear the escalation to `pending` *without* `reset_for_retry` — simulating a redispatch of the same prepared attempt — and run the poll again ⇒ `prepare_attempt` **reuses** the existing nonce (assert it is unchanged and `token_hex` was called zero additional times) and the round is still `1`. Against an unguarded implementation the second poll mints nonce `B` while a possibly-live pane holds nonce `A`.
-    37l. **A deferred retry does not strip a live attempt's nonce.** Prepare an attempt and leave a `GithubWorkspace` row with `leased_item_id == item.id`, then call `reset_for_retry`. It takes the deferred branch (`github_dispatch_service.py:56-62`): assert `retry_requested_at` is set, `dispatch_status` is **unchanged**, and `dispatch_nonce` is **still the prepared value**. Then release the lease, run `complete_deferred_retries`, and assert the nonce is now NULL. This is the pair to 37k: 37k proves the clear exists, 37l proves it is on the right side of the early return. A clear written at the top of the function passes 37k and fails only here.
+    37l. **A deferred retry does not strip a live attempt's nonce.** Prepare an attempt and leave a `GithubWorkspace` row with `leased_item_id == item.id`, then call `reset_for_retry`. It takes the deferred branch (`github_dispatch_service.py:56-63`): assert `retry_requested_at` is set, `dispatch_status` is **unchanged**, and `dispatch_nonce` **and `dispatch_head_ref`** are **still the prepared values**. Then release the lease, run `promote_deferred_retries` (the real method name — `complete_deferred_retries` does not exist), and assert both are now NULL. This is the pair to 37k: 37k proves the clear exists, 37l proves it is on the right side of the early return. A clear written at the top of the function passes 37k and fails only here.
     37k. **`reset_for_retry` clears the nonce, so a real retry gets a new one.** Prepare an attempt, note the nonce, `deck_retry_work_item` ⇒ `dispatch_nonce IS NULL` and `approval_round_count == 0` in a fresh session; then poll ⇒ a **different** nonce is minted and round 1 reopens. This is the pair to 37j and the two must be written together: 37j asserts preparation is sticky, 37k asserts retry breaks the stickiness. An implementation that gets either alone is broken — sticky-without-clearing reintroduces blocker 2's loop (attempt 2 reuses attempt 1's head), and clearing-without-stickiness reintroduces the crash race.
 
 **Mutation requirement.** Each guard must be shown to bite:
@@ -2147,8 +2213,10 @@ if verdict is None:                         # unrecognized or missing state
         subject="GitHub verification could not classify the PR",
         body_markdown="...",
         payload={"pull_state": pull.get("state")},
-    )
-    return                                  # fail closed, and consume the retry budget
+        retry_status="dispatched",           # this stage's own status -- see §5.6b.1;
+    )                                        # _process_review_item passes
+    return                                  # item.dispatch_status instead
+                                            # fail closed, consume the retry budget
 if verdict == "merged":
     ...                                     # today's :164-168 block, unchanged
 if verdict == "closed_unmerged":
@@ -2167,9 +2235,145 @@ Four things are load-bearing here, and only the second was in revision 7.
 3. **The classification comes from the helper, not from an inline field read.** Revision 7 wrote this condition as `pull.get("merged")` then `pull.get("state") == "closed"`, which happens to work here — `_verify_item` holds a `get_pull` response, where `merged` exists — and is still wrong, for the reason §5.6 gives: two copies of a three-way branch is how the `pr_ready` path came to be classified while `pr_opened` was not. A local read that works on this shape is exactly what makes the next copy on the *other* shape look safe. It also removes the ordering question entirely: `merged`-before-`state` cannot be got wrong in a caller that does not compare either field.
 4. **`head_sha=None` is the argument that makes the counter move, and it costs one column.** `_record_failed_verification_attempt` opens with `if head_sha and item.last_verified_sha == head_sha: ... return` (`:477-483`) — a same-sha early return that **does not increment**. Passing the item's real head sha would therefore reproduce the unbounded loop on the second poll onward, which is the whole defect. Passing `None` makes the guard falsy and the increment unconditional. The price is the next line, `item.last_verified_sha = head_sha` (`:485`): the recorded sha is wiped. That is acceptable and deliberate — a NULL `last_verified_sha` makes the auto-merge head-freshness check treat the next verification as new work, which is the conservative direction — but it must be *stated*, because an implementer who "tidies" this by passing the real sha silently restores the loop, and the test suite stays green unless test 29f asserts the counter across three polls.
 
-The `None` branch consumes the retry budget deliberately rather than escalating at once. An unclassifiable response is either a schema change or a transient garbled reply; escalating on the first one is too eager, and returning without touching the counter would recreate the unbounded loop this section exists to remove — the defect measured above is precisely a failure path that never reaches the counter. When the budget does run out, the existing `retry_count_exhausted` escalation fires (`:499-504`); no new reason and no new status.
+The `None` branch consumes the retry budget deliberately rather than escalating at once. An unclassifiable response is either a schema change or a transient garbled reply; escalating on the first one is too eager, and returning without touching the counter would recreate the unbounded loop this section exists to remove — the defect measured above is precisely a failure path that never reaches the counter. When the budget does run out, the existing `retry_count_exhausted` escalation fires (`:499-505`); no new reason and no new status.
 
-`_process_review_item` (`:219`) needs no second condition, and that is worth stating so an implementer does not add one: `_verify_item` is the only route into it (`:216-217`, via `_promote_verified_item:398`) for a `verifying` item, and `process_scope` sends `ready_for_review` / `awaiting_human_review` items to it directly (`:114-117`). Those *can* arrive with a newly-closed PR. So the honest scope is: the condition goes in **both**, at the same position relative to each function's `merged` check — `_verify_item` for the pre-promotion path and `_process_review_item` for an item already promoted whose PR is closed afterwards. Two call sites, one helper, one reason.
+`_process_review_item` (`:219`) needs the same condition, and that is worth stating so an implementer does not assume `_verify_item` covers it: `_verify_item` is the only route into it for a `verifying` item (`:216-217`, via `_promote_verified_item:398`), but `process_scope` sends `ready_for_review` / `awaiting_human_review` items to it **directly** (`:114-117`). Those can arrive with a newly-closed or newly-unclassifiable PR. So the condition goes in **both**, at the same position relative to each function's `merged` check — `_verify_item` for the pre-promotion path, `_process_review_item` for an item already promoted whose PR changes afterwards. Two call sites, one helper, one reason.
+
+#### 5.6b.1 The refuse path must be stage-aware, and revision 8's was not
+
+That second call site is where revision 8 broke, and the eighth review is right about it. `_record_failed_verification_attempt` does not merely count — it **parks the item somewhere**, and where it parks it is hardcoded for one pipeline:
+
+```python
+# github_verification_service.py:506-508, today
+else:
+    item.dispatch_status = "dispatched"
+    item.updated_at = datetime.utcnow()
+```
+
+`process_scope:112-115` routes `dispatched` to `_verify_item`. So calling this helper from the *review* stage relabels the item as unverified code and hands it to the code verifier.
+
+**Which garble reaches the promotion, measured.** Revision 8 puts the classify-refuse in **both** stages, so the two failure shapes do not end the same way, and only one of them promotes. Both measured through real `process_scope` polls, re-read with raw `text()` in a fresh session each time:
+
+```
+issue_type='design', dispatch_status='awaiting_human_review', draft PR, retries=2
+
+(a) PERSISTENTLY unclassifiable
+    poll 1  review stage refuses    'awaiting_human_review' -> 'dispatched'   retry 1
+    poll 2  verify stage refuses too                          'dispatched'    retry 2
+    poll 3                                                    'escalated'     retry 3
+            list_check_runs_for_ref 0x   mark_pull_ready_for_review 0x
+            -> no promotion. The item is merely mislabelled as unverified code
+               for two polls while it waits for a human, then escalates.
+
+(b) TRANSIENTLY unclassifiable  <- this is the one that promotes
+    poll 1  review stage refuses    'awaiting_human_review' -> 'dispatched'   retry 1
+    poll 2  GitHub answers normally; process_scope routes 'dispatched' to
+            _verify_item, which finds green checks:
+            list_check_runs_for_ref      1x
+            mark_pull_ready_for_review   1x        <- draft flag removed
+            ends dispatch_status='ready_for_review'
+```
+
+A design PR nobody reviewed is taken out of draft because GitHub returned one garbled response and then recovered. §5.5.5 makes design PRs non-draft deliberately so a human can approve them; this makes Deck do it on the code path's behalf, and the human-review request has already been sent. Under the fix, (b) reads `awaiting_human_review` on both polls with `mark_pull_ready_for_review` **0×**.
+
+That distinction is worth stating precisely rather than reporting the worst case flatly, because a persistent garble looks *safer* than it is and a transient one looks *milder* than it is. The mislabelling in (a) is not harmless either: for two polls the row claims the design item is unverified code, which is what any operator, dashboard, or supervising agent reading `dispatch_status` will believe.
+
+**The second half is worse, and the review did not name it.** The same helper overwrites `status_note` at `:487`. On a `ready_for_review` code item that note is not a message — it is **the only thing standing between the item and auto-merge**. `_HUMAN_MERGE_NOTE_PREFIXES` (`:20-25`) is checked at `:235`, and every path that reserves a PR for a human writes one of those four prefixes through `_fallback_to_human_merge:429`. Measured end-to-end on a code item parked by a real repository-policy `403`, `merge_policy="auto"`:
+
+```
+control poll, sentinel intact:  merge_pull  0 calls        <- :235 returns early
+one refuse path:                status_note = 'PR #5 returned a state Deck cannot classify.'
+                                dispatch_status 'ready_for_review' -> 'dispatched'
+next poll:                      merge_pull  1 call
+                                dispatch_status='merged'   auto_merged_at SET
+```
+
+Deck merged a pull request a human had explicitly reserved, because a classification failure erased the reservation. This is the most severe defect class in this spec, and it was invisible from the retry helper: the helper's own code is correct, and the write's significance lives 250 lines away in a constant it never mentions.
+
+**The fix.** `_record_failed_verification_attempt` learns the item's stage, and the note write learns what a note can mean:
+
+```python
+# github_verification_service.py:465 -- signature
+async def _record_failed_verification_attempt(
+    self, db, scope, item, head_sha, note, *,
+    subject, body_markdown, payload,
+    retry_status: str,                    # REQUIRED, no default: where this item parks
+) -> None:
+    if head_sha and item.last_verified_sha == head_sha:       # :477, guard unchanged
+        if item.dispatch_status != retry_status:              # was: == "verifying"
+            item.dispatch_status = retry_status
+            self._set_failure_note(item, note)
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+        return
+
+    item.last_verified_sha = head_sha                          # :485, unchanged
+    item.retry_count += 1                                      # :486, unchanged
+    self._set_failure_note(item, note)                         # was: item.status_note = note
+    await github_dispatch_service.notify_owner(...)            # :488-498, unchanged
+    if item.retry_count > scope.max_verification_retries:
+        await github_dispatch_service.escalate(
+            db, item, "retry_count_exhausted", note,           # was: item.status_note
+        )
+    else:
+        item.dispatch_status = retry_status                    # was: "dispatched"
+        item.updated_at = datetime.utcnow()
+    await db.commit()
+
+def _set_failure_note(self, item, note: str) -> None:
+    """A human-merge reservation outranks a failure note. See :20-25 and :235."""
+    if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
+        return
+    item.status_note = note
+```
+
+Four call sites, each stating its own stage:
+
+```python
+item.status_note = note                       # NOT this, anywhere -- use the helper
+                                              # (illustrative: the mutant 29h kills)
+
+retry_status="dispatched",                     # :193  failed check runs  (verify stage)
+retry_status="dispatched",                     # :332  failed commit status (verify stage)
+retry_status="dispatched",                     # new, _verify_item's classify-refuse
+retry_status=item.dispatch_status,             # new, _process_review_item's classify-refuse
+```
+
+Six things are load-bearing, and an implementer who drops any of them restores a measured defect:
+
+1. **`retry_status` has no default.** A default is what made this blocker possible: `"dispatched"` was right for the two callers that existed and silently wrong for the third. A required keyword-only parameter makes an omission a `TypeError` at the call, which no reviewer and no fixture can miss — enforcement by the interpreter rather than by discipline. Test 29g asserts the absence of the default with `inspect.signature`, so a later "tidy-up" that adds one fails.
+2. **The review stage passes `item.dispatch_status`, not a literal.** `_process_review_item` serves `ready_for_review` (code) and `awaiting_human_review` (design), and both routes into it — `process_scope:117` and `_promote_verified_item:398` — leave the correct value on the row. Hardcoding `"ready_for_review"` would move a design item into the code review stage, which is blocker 3 one step smaller.
+3. **The note guard lives in the helper, keyed on the same constant the reader at `:235` uses — not in a caller-passed flag.** The review proposed `preserve_note`; that is withdrawn, and the reason matters. A caller that does not know a note is a safety control will not pass a flag protecting it — which is exactly how `:487` came to erase the reservation. Two readers of one constant, side by side in one file, is checkable; a convention every future caller must remember is not. Test 29h-1 drives the helper with the *pre-existing* callers' arguments and asserts the note still survives, which a flag design fails.
+4. **The failure is still reported, just not through `status_note`.** `notify_owner` (`:488-498`) already carries `subject`, `body_markdown`, and the `payload` with `retry_count` and `head_sha`. Preserving the reservation costs the operator nothing: they get the mail, and the column keeps saying the more important of the two true things — *this PR needs a human to merge it*.
+5. **`escalate` is passed `note`, not `item.status_note`.** Today those are the same string, because `:487` had just assigned it; with the guard they can differ, and passing the row's value would escalate a reserved item under the reservation's own text instead of the real reason. This also makes escalation a safe terminal for a reserved item: `_apply_escalation:1037-1038` does overwrite the note, but `escalated` is not in `process_scope`'s status filter (`:98-105`), so the item stops being selectable at the same moment its reservation stops being read.
+6. **The early return generalizes with it, and this one is a consistency change with no behaviour behind it — measured, and stated so nobody claims otherwise.** `:478`'s `if item.dispatch_status == "verifying"` becomes `!= retry_status`. For the two existing callers it is behaviour-identical (`verifying → dispatched`; no write when already `dispatched`), and the two classify-refuse callers pass `head_sha=None`, so they never reach this branch at all. I mutated it back to the literal and **all three tests still passed** — because the only state where the two forms differ is `dispatch_status == "verifying"` reaching the *review* stage, and `process_scope:112-115` sends every `verifying` item to `_verify_item`. So the change is made for one reason only: leaving the literal leaves a second place that decides which pipeline owns the item, and the first future caller to pass a real sha from the review stage would find the two branches disagreeing. It is guarded by 29h-2 below, which drives the helper directly on that unreachable pair; the mutation table records it as unkillable by the behavioural tests rather than pretending otherwise.
+
+**Mutation requirement for this section.** Every row below was run: the fix applied, then the single mutation, then 29g / 29h / 29h-1 executed against it.
+
+| Mutant | Test that must fail | Measured |
+|---|---|---|
+| `retry_status` given a default of `"dispatched"`, so the review-stage caller omits it | **29g, 29h** | 29g: design item at `'dispatched'` on polls 1-2, and the `inspect.signature` assertion trips. 29h: reserved item at `'dispatched'`, **`merge_pull` 1 call, `auto_merged_at` SET** |
+| review stage passes the literal `"ready_for_review"` instead of `item.dispatch_status` | **29g** | design item parked in `'ready_for_review'` — the code review stage |
+| the whole stage-aware fix reverted, checked by the promotion rather than the status | **29g-1, not 29g** | 29g's persistent garble is `mark_pull_ready_for_review` **0×** under the defect too, because the verify stage also refuses; only 29g-1's recovering client reaches the promotion — **1×**, ending `'ready_for_review'` |
+| no note guard: `item.status_note = note` as today | **29h, 29h-1** | 29h: reservation replaced by `'PR #5 returned a state Deck cannot classify.'`, then `merge_pull` **1** call and `auto_merged_at` SET. 29h-1: the failed-check caller erases it too |
+| `escalate(…, item.status_note)` instead of `escalate(…, note)` | **29h** | the escalation is filed under `'Auto-merge blocked by repository policy; requires human merge.'` — the reservation's text, not the reason |
+| same-sha early return keeps the `"verifying"` literal | **none — unkillable, deliberately recorded** | all three pass. Both forms agree on every state `process_scope` can produce; 29h-2 is a direct-call unit assertion, not a behavioural one |
+| classify-refuse omitted from `_process_review_item`, on the theory `_verify_item` covers it | **29g** | the design item is never polled by `_verify_item` at all, so nothing consumes the budget: `retry_count` stays `0` |
+
+**One cost, stated so nobody "fixes" it.** `head_sha=None` still wipes `last_verified_sha` (`:485`), on the review stage as well, and §5.6b point 4 explains why passing the real sha is not available. For a design item this is inert: `_process_review_item` returns at `:231-232` before reading the column. For an unreserved `auto`-policy code item it costs exactly one extra cycle — the next review poll finds `current_head != item.last_verified_sha` at `:252`, sets `verifying`, and the item re-verifies from green checks before becoming mergeable again. That is the conservative direction and it is bounded. For a **reserved** code item it is inert too, because `:235` returns before `:252` is reached.
+
+**Tests (§5.8):**
+
+**One fixture requirement for all three, and it is not ceremony.** The item's `owner_slot_id` must point at an `AgentTeamSlot` that has a `MailTeamMember` row, because `notify_owner` returns silently when `_owner_member` is `None` (`github_dispatch_service.py:1051-1053`, via `_slot_member:1224` selecting on `MailTeamMember.team_slot_id`). Without both rows the "one mail row" assertion passes vacuously against every implementation, including ones that send nothing. Measured: my first run of 29h reported `mail=0` under the fix *and* under revision 8, and the cause was the missing member row, not the code. A fixture that cannot produce the effect cannot assert its absence either.
+
+29g. **A design item's refuse path does not enter the code pipeline.** `issue_type="design"`, `dispatch_status="awaiting_human_review"`, `pr_number=5`, a **draft** PR whose `state` is absent so `_classify_pull` returns `None`, `max_verification_retries=2`. Across three `process_scope` polls, re-reading with raw `text()` in a **fresh session** each time: `retry_count` reads `1`, `2`, `3`; `dispatch_status` is `"awaiting_human_review"` on the first two and `"escalated"` / `retry_count_exhausted` on the third; `list_check_runs_for_ref` was called **0** times and `mark_pull_ready_for_review` **0** times over the whole run. Plus one static assertion in the same test: `inspect.signature(GithubVerificationService._record_failed_verification_attempt).parameters["retry_status"].default is inspect.Parameter.empty`. Measured against revision 8: polls 1 and 2 read `'dispatched'`. The fresh session is not ceremony — the identity map returns the in-memory value, and the whole question is what the *next poll's* query will select.
+    29g-1. **The garble must clear, or the promotion assertion proves nothing.** A second fixture, identical except that the client returns a normal `state: "open"` from poll 2 onward: poll 1 refuses, poll 2 finds a healthy PR. Assert `mark_pull_ready_for_review` **0** calls and `dispatch_status == "awaiting_human_review"` after poll 2. **This is the test that sees the promotion, and 29g is not.** Measured: under revision 8, 29g's persistent garble ends `escalated` with `mark_pull_ready_for_review` **0×** — because the verify stage refuses too, the item never reaches the promotion it was mislabelled into, so 29g's `0×` assertion is satisfied by the *defect* as well as the fix and bites only through its status assertions. Flip the garble off on poll 2 and revision 8 calls `list_check_runs_for_ref` **1×** and `mark_pull_ready_for_review` **1×**, ending `ready_for_review`. Two fixtures, because the transition out of `dispatched` needs a poll in which the code pipeline can actually run: an always-failing dependency hides what a recovering one exposes.
+    29h. **A reserved PR is not auto-merged by a classification failure.** The regression test for the measurement above, in three phases. Fixture: code item, `merge_policy="auto"`, `dispatch_status="ready_for_review"`, `status_note="Auto-merge blocked by repository policy; requires human merge."`, `last_verified_sha` equal to the PR's head, PR open with all-green checks and `max_auto_merges_per_day` not exhausted.
+    **Control** — one `_process_review_item`: `merge_pull` **0** calls. This assertion is mandatory and comes first; without it a later phase asserting "0 calls" could be passing because the fixture was never mergeable.
+    **Phase 2** — one classify-refuse: `status_note` still `.startswith(_HUMAN_MERGE_NOTE_PREFIXES)`, `dispatch_status` still `"ready_for_review"`, `retry_count == 1`, and **one** mail row whose body names the classification failure (so the guard is not hiding the failure, only keeping it out of that column). Then two more `process_scope` polls: `merge_pull` **0** calls total, `auto_merged_at` **NULL**.
+    **Phase 3** — run to exhaustion: `dispatch_status == "escalated"`, `escalation_reason == "retry_count_exhausted"`, `status_note` naming the **classification failure** and not the reservation (that is the `escalate(…, note)` assertion), and one final `process_scope` making **zero** client calls of any kind, proving `escalated` leaves the auto-merge filter. Assert on `merge_pull`'s call count throughout rather than on `dispatch_status != "merged"`: merging is a legitimate outcome for this item once a human does it, so the status is not the invariant — *Deck not merging it* is.
+    29h-1. **The reservation guard protects callers that do not know about it.** Call `_record_failed_verification_attempt` directly with the *failed-check* caller's arguments (`retry_status="dispatched"`, a real `head_sha`, `last_verified_sha` set to something else so the early return does not fire) on an item whose `status_note` is a reservation ⇒ the note survives. This is the test that distinguishes the guard-in-helper design from the withdrawn `preserve_note` flag: under the flag, this call site passes nothing and the note dies. One assertion, and it is the only one that pins *where* the guard lives. Measured: survives under the fix, replaced by `'GitHub check failed: ci'` without it.
+    29h-2. **The same-sha branch honours `retry_status` too.** A direct call, because no reachable state distinguishes the two forms (point 6). Item `verifying`, `last_verified_sha` **equal** to the passed `head_sha`, `retry_status="awaiting_human_review"` ⇒ `dispatch_status == "awaiting_human_review"`. Against the `"verifying"` literal it reads `'dispatched'` — measured both ways. Label this test as pinning a *consistency* rule rather than a behaviour, so a future reader does not go looking for the scenario it protects.
 
 **Test (§5.8):**
 
@@ -2319,33 +2523,115 @@ Owner-change and primary (§5.5.6, §5.7):
 
     Revision 6 also specified this as a scan over "items left behind by every other test in this file," which **cannot run**. Confirmed against the fixtures: `tests/agent_teams/conftest.py:15-23` builds a fresh `sqlite+aiosqlite:///:memory:` engine per test, and `test_github_dispatch_service.py:32-40` and `test_github_verification_service.py:26-34` each define their own identical local `db` fixture. No test observes another test's rows, and making the fixture session-scoped would trade a missing assertion for order dependence across ~90 tests. Withdrawn.
 
-    **Revision 7's replacement was still overclaiming, and the seventh review is right.** It said three frozensets plus a runtime membership test were "the whole of the enforcement," and asserted a mutation row for *"a path writes a string literal instead of drawing from the frozensets."* No runtime test can kill that mutant: `item.pending_reason = "queued_repo_cap"` and `item.pending_reason = PENDING_REASONS.QUEUED_REPO_CAP` write the identical row. A membership assertion passes either way. And a writer omitted from 29-b's table is never executed, so the table cannot reveal its own omissions. A frozenset that nothing is forced to select through is documentation, not enforcement.
+    **Revision 7's replacement was still overclaiming, and the seventh review is right.** It said three frozensets plus a runtime membership test were "the whole of the enforcement," and asserted a mutation row for *"a path writes a string literal instead of drawing from the frozensets."*
 
-    **What is actually enforceable differs per column, so the promise is now stated per column.** Measured by walking `app/`'s AST for assignments to the three attributes — 30 assignment sites plus 4 keyword-argument sites, across `api/v1/agent_teams.py`, `services/github_dispatch_service.py`, `services/github_verification_service.py`, and `services/github_watcher_service.py`:
+    That mutation row is **withdrawn rather than reassigned to the AST scan**, and the distinction matters because revision 8 half-implied the scan kills it. It does not. `item.pending_reason = "queued_repo_cap"` and `item.pending_reason = QUEUED_REPO_CAP` write the identical row, so no *runtime* test can tell them apart — and 29-a1 deliberately accepts **both** (tier 1 and tier 2 of the RHS rule), because failing the constant form would punish the tidier code. Measured: rewriting an existing literal as a same-file module constant produces **no** failure in 29-a1, by design.
 
-    | Column | Sites today | Enforceable? | What PR2 promises |
+    So the accurate statement is narrower than either revision: **nothing enforces that a writer selects *through* the frozenset, and nothing needs to.** What is enforced is that the *value* is declared, wherever it comes from and however it is spelled — which is the property the invariant actually cares about. Style is not the invariant; the set of reachable values is. And a writer omitted from 29-b's table is never executed, so the table cannot reveal its own omissions either. A frozenset that nothing is forced to select through is documentation — and that is fine, provided the enforcement lives somewhere that does not depend on the selection.
+
+    **What is actually enforceable differs per column, so the promise is now stated per column.** Counts below are **write** sites under 29-a1's classifier, not raw name matches — the raw counts revision 8 quoted (30 assignments + 4 keywords) included the three serializer keywords at `agent_teams.py:201` and were wrong for two of the three columns as a result. Writers live in four files: `api/v1/agent_teams.py`, `services/github_dispatch_service.py`, `services/github_verification_service.py`, `services/github_watcher_service.py`.
+
+    | Column | Write sites today | Enforceable? | What PR2 promises |
     |---|---|---|---|
-    | `escalation_reason` | 1 write (`_apply_escalation:1035`, `reason` parameter) + 6 `= None` clears | **yes, fully.** One funnel already exists | validated at the funnel **and** an AST test that no other site assigns it |
-    | `dispatch_status` | 13 string literals + 1 keyword arg | **yes, for growth.** An AST test can collect every literal | the set of literals assigned anywhere in `app/` is unchanged by PR2 |
-    | `pending_reason` | 5 literals + 5 clears + **1 f-string** + 1 keyword arg | **no.** `agent_teams.py:785` writes `f"retry requested: {request.reason}"` — operator free text | PR2's own reasons are declared; the column is **not** a closed set, and this is pre-existing |
+    | `escalation_reason` | **6** = 1 non-`None` (`_apply_escalation:1035`, the `reason` **parameter**) + 5 `= None` clears. **Zero** string literals anywhere | **yes, fully.** One funnel already exists, and no literal competes with it | validated at the funnel **and** an AST test that no other site writes it |
+    | `dispatch_status` | **14** = 13 `Assign` literals + 1 ORM-constructor keyword (`github_watcher_service.py:63`, the `GithubWorkItem(` call; the keyword itself is on `:70`), over **9** distinct values | **yes, for growth.** Every value is a resolvable literal | the set of values written anywhere in `app/` is unchanged by PR2 |
+    | `pending_reason` | **11** = 5 literals + 5 clears + **1 f-string** | **no.** `agent_teams.py:785` writes `f"retry requested: {request.reason}"` — operator free text | PR2's own reasons are declared; the column is **not** a closed set, and this is pre-existing |
+
+    Two of these numbers moved from revision 8 for the same reason: `escalation_reason` reads **6** total and not 7, and the `= None` clears are 5 and not 6, because the serializer keyword no longer inflates the count. The `dispatch_status` keyword count stays 1 — `github_watcher_service.py:63` really is an ORM constructor — which is the case that shows why the answer is "classify the call", not "drop keywords".
 
     That f-string is the finding the review did not reach, and it is the one that decides the design: `pending_reason` **already** carries arbitrary operator text on the retry path. A frozenset over that column can never be exhaustive, so revision 7's `PENDING_REASONS` equality assertion was unsatisfiable as written — it would fail on the first operator who retried an item with a reason. Narrowing the promise is not a concession; it is the only true statement available.
 
     Replaced with three tests, needing no cross-test residue and no impossible mutant:
 
-    29-a. **The declared-values test.** PR2 introduces two module-level frozensets next to the code that uses them — `DISPATCH_STATUSES` and `ESCALATION_REASONS` — and asserts each equals its expected literal, spelled out in the test itself:
-    - `DISPATCH_STATUSES` — the existing set, **unchanged by PR2**. This is the assertion that carries the standing "no new `dispatch_status` values" rule, and it is the one that fails if `pr_closed_unmerged` is implemented as a status.
-    - `ESCALATION_REASONS` — the eleven enumerated in §5.5.4a plus `pr_closed_unmerged`.
-    - **`PENDING_REASONS` is a documented subset, not a closed set**, and the test says so: it asserts `queued_auth_mode_unresolved` is a member and that PR2's other reasons are members, and it does **not** assert equality. A comment names `agent_teams.py:785` as the reason, so the next person does not "tighten" it into a failing test.
+    29-a. **The declared-values test — three sets, two of them closed.** PR2 introduces three module-level frozensets next to the code that uses them, and asserts **equality** for two and **membership only** for the third. Say "three sets, two closed" rather than "three frozensets", because the asymmetry is the design and a reader who skims it will write the unsatisfiable version:
+    - `DISPATCH_STATUSES` — **equality**, and the set is the existing one, unchanged by PR2. Spelled out, because "the existing set" is not a test. Measured over `app/` today, exactly **nine** literals are written to the column:
+
+      ```python
+      DISPATCH_STATUSES = frozenset({
+          "pending", "dispatched", "verifying", "ready_for_review",
+          "awaiting_human_review", "merged", "completed", "escalated", "failed",
+      })
+      ```
+
+      Two of these are easy to omit from a hand-written list and both are real: **`"failed"`** (`github_dispatch_service.py:339`, a launch that came back in `_LAUNCH_FAILED_STATUSES`) and **`"completed"`** (`github_watcher_service.py:170`, `_complete_and_notify`). Verified `"cancelled"` appears **nowhere** in `app/` — do not include it because it sounds like it belongs. The set is also closed in the other direction: every literal compared against `dispatch_status` anywhere in `app/` is one of these nine, and none is read-only. `ready_for_review` reads as write-only under a naive scan for `_STATUSES`-named constants — its only reader is the inline `.in_()` tuple at `github_verification_service.py:99-107`. This is the assertion that carries the standing "no new `dispatch_status` values" rule, and it is the one that fails if `pr_closed_unmerged` is implemented as a status.
+    - `ESCALATION_REASONS` — **equality**. The eleven enumerated in §5.5.4a plus `pr_closed_unmerged`. Note this column has **zero** string literals written to it anywhere in `app/` today; every value arrives through `_apply_escalation`'s `reason` parameter, which is precisely why equality is enforceable here and why the runtime funnel is the other half of the enforcement.
+    - **`PENDING_REASONS` — membership only, not equality.** The test asserts `queued_auth_mode_unresolved` is a member and that PR2's other reasons are members, and it does **not** assert equality. A comment names `agent_teams.py:785` as the reason, so the next person does not "tighten" it into a failing test. Measured: 5 literals written today, plus that one f-string.
 
     Spelling the expected sets as literals is the point: the test fails when someone *adds* a value, which is when a human should look, rather than tautologically re-deriving whatever the code contains. Note these are conventions, not database constraints — both columns are plain nullable `String` (`models/database.py:255`, `:278`), verified.
 
-    29-a1. **The static assignment-site test — this is the enforcement.** Parse every module under `app/` with `ast` and collect all `ast.Assign` nodes whose target is an attribute named `dispatch_status`, `pending_reason`, or `escalation_reason`, plus `ast.keyword` nodes with those names. Then assert:
-    - every `dispatch_status` value assigned anywhere is a member of `DISPATCH_STATUSES` (constant-folded string literals resolved directly; a `Name` or other non-literal RHS is a **failure** unless listed in an explicit, commented allowlist);
-    - `escalation_reason` is assigned at **exactly one** non-`None` site, `_apply_escalation`, whose parameter is validated against `ESCALATION_REASONS` at runtime;
-    - the file×column site counts match a recorded baseline, so a **new** writer in a new file fails the test even if its value happens to be declared.
+    29-a1. **The static assignment-site test — this is the enforcement.** Parse every module under `app/` with `ast`. Revision 8 collected "every `ast.Assign` target and every `ast.keyword` with those names", and the eighth review is right that this does not work: **a keyword's name does not tell you whether it writes the column or reads it.** `GithubWorkItemResponse(...)` at `agent_teams.py:201` passes all three names, and it is a serializer. Revision 8's test, implemented literally and run against the current tree, **fails four of its own assertions** — measured, table in §1.
 
-    This is what kills the string-literal mutant that 29-b cannot: the AST sees the literal whether or not it came through a constant. It also derives the writer set **from code** rather than from the same hand-maintained table whose omissions it is meant to catch, which is the review's requirement. Baseline measured today: `dispatch_status` 13 literal assignments + 1 keyword; `escalation_reason` 1 `Name` + 6 `None`; `pending_reason` 5 literals + 1 `JoinedStr` + 5 `None` + 1 keyword. The `JoinedStr` at `agent_teams.py:785` is the one allowlisted entry, with the operator-free-text reason in the comment beside it.
+    So the scan classifies the **enclosing call**, not the keyword name. Three-way, and the third way is the important one:
+
+    | Form | Classified | Why |
+    |---|---|---|
+    | `item.<col> = …` (`Assign`, `AnnAssign` on an `Attribute`) | **write** | direct ORM mutation, no call to classify |
+    | keyword to a call whose base name is in `ORM_WRITE_CALLS` (`{"GithubWorkItem"}`) | **write** | constructing a mapped row |
+    | keyword to a call whose base name is in `NOT_WRITE_CALLS` (`{"GithubWorkItemResponse"}`) | **not a write** | copying a column out to a caller |
+    | **any other call form** | **test failure** | see below |
+
+    **UNKNOWN is a failure, not a skip.** An allowlist that silently ignores what it does not recognize has exactly the blind spot it was built to remove — the same defect as revision 7's frozenset, one layer up. So `update(GithubWorkItem).values(dispatch_status=…)`, a helper like `set_state(item, dispatch_status=…)`, and an aliased `SomeOtherResponse(dispatch_status=…)` all **fail the test** until a human classifies them into one of the two sets. Measured: all three land in UNKNOWN, and the current tree has **0** unknowns, so the test passes today and fails the moment a new call form appears.
+
+    Then assert:
+    - every `dispatch_status` value written anywhere is a member of `DISPATCH_STATUSES`, under the RHS resolution rule below;
+    - `escalation_reason` is written at **exactly one** non-`None` site, `_apply_escalation`, whose parameter is validated against `ESCALATION_REASONS` at runtime;
+    - the file×column write-site counts match a recorded baseline, so a **new** writer in a new file fails the test even if its value happens to be declared;
+    - the UNKNOWN list is **empty**.
+
+    **The RHS rule needs three tiers, not two, and revision 8's two-tier version was backwards.** Revision 8 said "string literals resolved directly; a `Name` or other non-literal RHS is a **failure**." Measured against the forms an implementer would actually write, that rule **rewards the bare literal and punishes the named constant** — the opposite of what `DISPATCH_STATUSES` exists to encourage:
+
+    ```
+    item.pending_reason = "queued_repo_cap"              ast Constant   -> checkable, PASS
+    item.pending_reason = QUEUED_REPO_CAP                ast Name       -> FAILURE
+    item.pending_reason = PendingReason.QUEUED_REPO_CAP  ast Attribute  -> FAILURE
+    ```
+
+    So the rule is:
+
+    - **Tier 1 — `ast.Constant` string.** Check membership directly.
+    - **Tier 2 — `ast.Name` bound to a module-level `X = "…"` string in the same file.** Resolve it by a single pass over the module body, then check membership. Measured: a same-file constant resolves cleanly (`QUEUED_REPO_CAP` → `'queued_repo_cap'`); a cross-module or class-attribute reference does not, because `ast` has no interpreter.
+    - **Tier 3 — anything else.** A **failure**, unless in an explicit, commented allowlist.
+
+    The allowlist has exactly two entries today, and both are *deliberately* unresolvable:
+    - `github_dispatch_service.py:1035`, `item.escalation_reason = reason` — a **function parameter**, which no static pass can resolve. This is not a gap in the scan; it is the design. That line is the single validated funnel, and the runtime check inside `_apply_escalation` is what constrains it. A static scan and a runtime funnel are covering different halves of one column, and the allowlist entry is where that division is recorded.
+    - `agent_teams.py:785`, the `JoinedStr` operator free text, with the reason in the comment beside it.
+
+    Tier 2 matters because without it the test would fire on the first implementer who does the tidier thing. That is the failure mode where a test teaches the wrong lesson: it would be read as "the scan wants literals", and the frozensets would quietly become decoration.
+
+    **29-a1 was implemented as specified above and run against the current tree: it passes, with every assertion live** — 0 unknown call forms, 0 tier-3 failures outside the two-entry allowlist, 0 undeclared `dispatch_status` values, exactly 1 non-`None` `escalation_reason` site, and the `setattr` baseline matching. A green scan proves nothing on its own, so it was then mutation-tested by copying `app/` to a temp tree and injecting one violation at a time. **All ten mutants are caught by a named assertion**, and the two that must *not* fire do not:
+
+    | Mutant | Caught by |
+    |---|---|
+    | an undeclared `dispatch_status` literal added | `undeclared-dispatch_status`, **and** the site-count baseline |
+    | a second `escalation_reason` write, bypassing the funnel | `escalation_reason-funnel` (2 sites ≠ 1) |
+    | a new writer via `update(GithubWorkItem).values(...)` | `UNKNOWN-call-form` |
+    | a new writer via a helper keyword, `set_state(item, dispatch_status=…)` | `UNKNOWN-call-form` |
+    | a new write via `setattr(item, "dispatch_status", v)` | the `setattr` baseline — nothing else can see this form |
+    | a new ORM-constructor writer whose value **is** declared | the site-count baseline alone (this is why that baseline exists) |
+    | an unresolvable cross-module constant RHS | `RHS-tier-3` |
+    | an existing literal changed to an undeclared value | `undeclared-dispatch_status` |
+    | an existing literal **rewritten as a same-file module constant** | **nothing — correct.** Tier 2 resolved it and membership held |
+    | *(control)* the unmutated tree | nothing — the test passes on arrival |
+
+    One methodological note for whoever implements this, because it cost a wrong result here: the last two rows must **replace** an existing write rather than add one. Any *added* site moves the site-count baseline, which fires regardless of the RHS rule and therefore masks whether tier 2 accepted the constant or rejected it. My first attempt added the tier-2 case as a new function and read the resulting failure as a tier-2 defect; it was the count guard doing its job. Hold the count constant when the RHS rule is what you are testing.
+
+    **Baselines, re-measured with the corrected classifier** (revision 8's were wrong in two of three columns):
+
+    | Column | Write sites | Breakdown |
+    |---|---|---|
+    | `dispatch_status` | **14** | 13 `Assign` string literals + **1** ORM keyword (`github_watcher_service.py:63`, the call node; the keyword is on `:70`) |
+    | `pending_reason` | **11** | 5 literals + 5 `None` + **1 `JoinedStr`** (`agent_teams.py:785`) |
+    | `escalation_reason` | **6** | **1 `Name`** (`github_dispatch_service.py:1035`) + 5 `None` |
+
+    Plus **3** response-constructor keywords at `agent_teams.py:201`, all classified *not a write*, and **0** unknown call forms. The `JoinedStr` is the one allowlisted entry, with the operator-free-text reason in the comment beside it. Note `escalation_reason` is 5 `None` writes and not 6 — revision 8 said 6, and the count moved because response keywords no longer inflate it.
+
+    This is what kills the undeclared-**value** mutant that 29-b cannot, and the wording matters: the scan checks the value, resolving it through tier 1 or tier 2, so a literal and a same-file constant are treated identically and neither can name something undeclared. It does **not** kill "wrote a literal instead of selecting from the frozenset" — that mutation row is withdrawn, not relocated here. It also derives the writer set **from code** rather than from the same hand-maintained table whose omissions it is meant to catch, which is the review's requirement.
+
+    29-a2. **The classifier is itself tested, on synthetic sources.** 29-a1's value rests entirely on the claim that it can tell a write from a read. That claim gets its own test rather than being asserted in prose: parse ten one-line synthetic sources and assert each classification. Measured, all ten as specified — `GithubWorkItemResponse(dispatch_status=item.dispatch_status)` → *not a write*; `GithubWorkItem(dispatch_status="brand_new_status")` → *write*; `item.dispatch_status = "x"` and the `AnnAssign` form → *write*; `update(...).values(...)`, a bare `set_state(...)` helper, and an aliased response model → **UNKNOWN, i.e. failure**. This is the test that would have caught revision 8's design, and it needs no fixture and no database.
+
+    **What the scan cannot see, named rather than left implicit.** Three forms are invisible to any name-based AST scan, measured as invisible: `setattr(item, "dispatch_status", v)`, `GithubWorkItem(**{"dispatch_status": …})`, and a loop doing `setattr(item, col, val)` over pairs. The first is not hypothetical — **`setattr` in a loop is already an idiom in this codebase**, at `agent_team_service.py:377` (`setattr(slot, key, value)`) and `mcp_service.py:307` (`setattr(cache_entry, key, value)`). Neither touches a work item, but an implementer following the local idiom would write a namespace mutation this scan reports as absent.
+
+    So 29-a2 carries a third assertion: **the set of `(file, first-argument)` pairs for every `setattr` call in `app/` equals a recorded baseline** of exactly those two sites. Measured: the baseline matches today, and adding `setattr(item, "dispatch_status", v)` to the verifier breaks it. This does not make the invisible forms visible — it makes *introducing* one fail a test, which is the enforceable version of the claim. The `**` -splat form has **0** occurrences and stays out of the baseline, so its first use also fails on the UNKNOWN rule at the constructor. State the limit plainly in the test's docstring: a determined writer can still evade the scan, and the guard is that they cannot do so *quietly*.
 
     29-b. **The behavioural path test, narrowed to what it can prove.** A table-driven test, one fresh database per case, executing each PR2 path capable of writing one of the three columns and asserting the written value is declared: `pr_ready` (open / merged / closed-unmerged / no-match / two-open / unclassifiable), `pr_opened` (open / merged / closed-unmerged), the verifier's closed-unmerged condition (§5.6b), the auth-mode refusal (§5.6a), and the no-dispatchable-workspace refusal (§5.7). Each case runs in its own `db` fixture and asserts on rows it created itself. It promises **"these paths produce declared values"** — not exhaustiveness, which 29-a1 supplies instead. The claim that an omission from this table is self-revealing is withdrawn; it was false.
 
@@ -2385,6 +2671,9 @@ Owner-change and primary (§5.5.6, §5.7):
 | a PR2 path assigns `escalation_reason` directly, bypassing `_apply_escalation` | **29-a1** — asserts exactly one non-`None` assignment site |
 | `_apply_escalation` accepts an undeclared reason | **29-a1**'s runtime validation at the funnel |
 | a new writer added in a new module, with a declared value | **29-a1** — the per-file site-count baseline moves |
+| the scan collects keywords **by name**, so `GithubWorkItemResponse(...)` counts as three writes (revision 8's design) | **29-a2** — the response constructor must classify as *not a write*; and 29-a1's `escalation_reason` count reads 6 non-`None` sites instead of 1 |
+| an unrecognized call form is **skipped** rather than failing | **29-a2** — `update(...).values(...)`, a bare helper, and an aliased response model must all land in UNKNOWN |
+| a new namespace write introduced via `setattr(item, "dispatch_status", v)`, following the existing idiom at `agent_team_service.py:377` | **29-a2**'s `setattr` baseline — the AST scan itself cannot see this form, which is why the baseline exists |
 | `PENDING_REASONS` asserted as a closed set | **29-a** — `agent_teams.py:785`'s operator free text makes equality unsatisfiable; the test asserts membership only |
 | leave `in_progress`'s `pr_number` write in place (today's code) | **29b** |
 | route `in_progress`'s `pr_number` through verification instead of dropping it | 29b — the report must succeed *and* leave the column NULL |
@@ -2481,6 +2770,6 @@ This must happen while **no dispatch is in flight** on those scopes, since a liv
 22. **A PR is classified before it is used on *every* path, and a PR closed by a human is never presented as ready.** Reconciliation adopts only an open match, reconciles a merged match to `merged` without asking anyone to review it, and escalates `pr_closed_unmerged` on a closed-unmerged one; the verifier applies the same condition to a PR closed *after* adoption, before any check-run call or draft-to-ready mutation; and the **legacy `pr_opened` path** classifies the reported PR too, so an `ambient`-mode repo cannot produce the false design-review broadcast either. All three call the **same** `_classify_pull` helper — the criterion is not met by three correct copies, because revision 6 had two correct copies and one missing one. That helper classifies on **`(state, merged_at)`**, the only pair present in both the list and single-pull response shapes: `GET /pulls` omits `merged` entirely (measured), so a helper keyed on it is broken on the very path reconciliation uses. An unrecognized state refuses rather than defaulting to open, and the refusal **consumes the verification retry budget** — a fail-closed branch that returns without incrementing is the unbounded loop of §5.6b wearing a safety label. Closed history does not make a live PR ambiguous, and no new `dispatch_status` value is introduced (§5.5.4a, §5.6, §5.6b).
 23. **An escalation that is reported is an escalation that is durable.** A rejection at the approval cap persists the leader's decision and the escalated state in one commit, so a failed notification loses the notification and nothing else. Measured against the alternative: the item stays `dispatched` with a live `ack_received_at`, which the monitor reads as an approved plan (§4.3a.1).
 24. **A closed PR does not trap a work item.** One operator `deck_retry_work_item` after a `pr_closed_unmerged` escalation produces a usable open PR, because the retried attempt pushes an attempt-scoped head that no closed PR is attached to. Deck neither reopens a PR a human closed nor opens a second PR on that PR's branch (§5.5.4a).
-25. **Namespace growth is caught statically, per column, with an honest promise for each.** `dispatch_status`'s set of assigned literals is unchanged by PR2 and `escalation_reason` has exactly one validated write funnel — both asserted by an AST scan over every assignment site in `app/`, which is what catches a *new* writer in a *new* file (§5.8 test 29-a1). `pending_reason` is explicitly **not** a closed set, because `agent_teams.py:785` already writes operator free text; the criterion for that column is that PR2's own reasons are declared, not that the column is exhaustive. Not enforced by a runtime membership test, which cannot distinguish a constant from the identical literal, and not by a scan over other tests' leftover rows, which the per-test database fixtures make impossible.
+25. **Namespace growth is caught statically, per column, with an honest promise for each — and the scan can tell a write from a read.** `dispatch_status`'s set of written literals is unchanged by PR2 and `escalation_reason` has exactly one validated write funnel, both asserted by an AST scan over `app/` that classifies the **enclosing call** rather than the keyword name, treats any unrecognized call form as a **failure**, and pins a `setattr` baseline for the one mutation form no name-based scan can see (§5.8 tests 29-a1, 29-a2). Keyword-name collection alone does not meet this criterion: measured, it counts `GithubWorkItemResponse(...)`'s three serializer fields as writes and fails four of its own assertions against the current tree. `pending_reason` is explicitly **not** a closed set, because `agent_teams.py:785` already writes operator free text; the criterion for that column is that PR2's own reasons are declared, not that the column is exhaustive. Not enforced by a runtime membership test, which cannot distinguish a constant from the identical literal, and not by a scan over other tests' leftover rows, which the per-test database fixtures make impossible.
 26. **A dispatched agent is told the branch it must push, and that branch is durable before it is told.** The nonce and round 1 are committed by `prepare_attempt` before the brief is composed, mailed, or injected into a pane, so the name in the brief and the name `pr_ready` will accept are composed from the same committed value by the same helper (§4.2a, §5.5.4a). A crash before launch reuses the prepared attempt rather than minting a second identity; only `reset_for_retry` authorizes a new one, and the clear sits below that function's deferred-branch return so a still-leased attempt keeps its identity (§4.8 tests 37h-37l).
 27. **The attempt ref is a sibling of any legacy ref, never a descendant, and no display name reaches it.** Verified against real `git` in both orders: a child-shaped name is unstorable, and it makes the legacy name unpushable too. Slot identity in a ref is the numeric `slot_id` (§5.5.4a, §5.8 tests 46p, 46q).
