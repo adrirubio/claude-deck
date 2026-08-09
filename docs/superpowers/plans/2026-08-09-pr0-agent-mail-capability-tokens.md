@@ -1,0 +1,3698 @@
+# PR0 — Agent Mail Capability Tokens Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Give every Agent Mail writer a cryptographic identity — a per-session capability token bound to the tmux pane the session actually runs in — and harden the operator-only routes behind a shared secret, so that PR1's release protocol can trust who is talking to it.
+
+**Architecture:** Registration mints a `secrets.token_urlsafe(32)` capability token, stores only its SHA-256 hash on `mail_agent_sessions`, and returns the plaintext exactly once. The route that registers also derives the caller's tmux pane from the kernel (`/proc/net/tcp` + `/proc/net/tcp6` → peer pid → ppid walk → `agent_pane_bindings`), so a session's claimed slot is checked against where it physically runs. Mail writes and `/dispatch-status` then resolve their actor from the token instead of from a body field. A new `mail_capability_tokens_required` flag keeps the whole enforcement path backward-compatible while it is `False`; the operator-route hardening and the force-release API migration take effect immediately.
+
+**Tech Stack:** FastAPI, async SQLAlchemy + aiosqlite, pydantic-settings, pytest + pytest-asyncio + httpx `ASGITransport`, React 19 + TypeScript (two write call sites), Python `stdlib` only for the resolver (`socket.inet_pton`, `/proc`, `subprocess` for `tmux list-panes`).
+
+**Spec:** `docs/superpowers/specs/2026-08-05-distinct-approver-identity-design.md` — revision 17, HEAD `4810c1b`. This plan implements **PR0 only**: spec §3.1–§3.8 plus §4.6a requirements 1–4. PR1 (release protocol) and PR2 follow in their own plans.
+
+**Precedence, when documents disagree** — one rule, and the same rule appears in the Codex handoff prompt:
+
+| Situation | What to do |
+| --- | --- |
+| The plan and the spec disagree, **and the plan marks the difference "Correction (date, review)"** | The plan wins. The correction was verified against source; the spec text was not updated. |
+| The plan and the spec disagree, and the plan does **not** mark it | **Stop and report.** An unmarked divergence means one of us is wrong, and neither of us knows which. |
+| The plan and the **code** disagree | **Stop and report.** A moved line number is fine to adapt to; a different *shape* means the reasoning may not hold. |
+
+## Global Constraints
+
+These apply to **every** task. They are not negotiable and several are safety rules earned from live incidents.
+
+**Working environment — you are on the SAME machine as the live soak**
+
+- Work only in `/home/juan/work/repos/juanrubio/claude-deck-g1`.
+- **Never** touch `/home/juan/work/repos/juanrubio/claude-deck`. It is the live soak checkout and holds the live DB with the 28 work items that made Findings 17–20 provable. Those rows are not regenerable and the same file serves the running backend.
+- **Never** touch `/home/juan/work/repos/tizonia/`. Five live sessions hold it as their cwd. Do not `tmux send-keys`, do not kill panes, do not restart sessions. `tmux list-panes` / `list-sessions` / `show-environment` are read-only and allowed; run environment probes on a throwaway socket (`tmux -L <name>`, killed afterwards).
+- Do **not** restart, stop, or reload the running uvicorn (PID 2206652, port 8000).
+- Autonomy stays **OFF** (`autonomy_enabled = 0` on both presets). Do not enable it "to test".
+- Do not spawn or kill agent sessions. Do not hand-edit DB rows. Do not retry work item 23 or any other escalated item.
+- Live DB reads are read-only: `sqlite3.connect("file:/home/juan/work/repos/juanrubio/claude-deck/backend/claude_registry.db?mode=ro", uri=True)`.
+- `rm` is denied by the permission layer. Move files to `/tmp` with `mv`, or write to a fresh filename.
+
+**Git**
+
+- Branch from `origin/feature/autonomous-github-dispatch`, never from the local ref — the live worktree holds it.
+- g1 shares `.git` with the live checkout. Forbidden: `git worktree prune`, `git gc`, `git stash`, `git reset --hard`, `git branch -f`, any ref deletion, and checking out a branch the live worktree has.
+- **Never** `git checkout -- <file>` on uncommitted work. Reverse an edit by replacing the exact string you inserted.
+- Commit locally at the end of every task. **Do not push.** Never merge or push to `master`.
+
+**Forbidden operations** (all of these have caused incidents)
+
+- **No new `dispatch_status` values.** The vocabulary is closed.
+- Never print the PAT value or any token plaintext into logs, test output, or commit messages. `backend/.env` stays mode `0600` and gitignored.
+- Never `export` a secret into tmux's global environment — `tmux show-environment -g` is readable from every pane.
+- The migration ladder is **additive only**. No `DROP`, no table rebuild, no "delete the db and let `create_all` redo it".
+- Do not rewrite a test that was already failing before you started. Report it.
+
+**Code style**
+
+- `python3`, not `python` — `python` is not on PATH.
+- The virtualenv is `backend/venv`, not `.venv`.
+- Type hints throughout, async/await, pydantic models for validation.
+- Conditional updates use **ordinary SQL `=`**, never a null-safe operator. This is normative (spec revision 17) and deliberately untestable: `acquire` can never produce a row with a NULL `lease_token`, so the difference is invisible to every test that can exist. A shared conditional-update helper must not offer a null-safe mode. **This is an explicit code-review check, not a test.**
+
+**Testing**
+
+- `cd backend` **first**, every time. The DB path is CWD-relative.
+- Always `pytest -p no:warnings`.
+- **Baseline, measured on this machine at the start of PR0.** Two figures, because the tasks below quote the first and the risky tasks need the second:
+  - `pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings` → **`454 passed in 31.61s`**. Every "Expected: N passed" in this plan counts up from this number.
+  - `pytest tests/ -q -p no:warnings` → **`622 passed, 1 failed`**. The one failure is **pre-existing on a clean tree at `4810c1b`** and unrelated to this spec: `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` calls `agent_bridge_api.list_sessions` without awaiting it (`RuntimeWarning: coroutine 'list_sessions' was never awaited`), so its `calls` list is empty and `assert calls == [None, "codex-cli"]` fails. **Do not fix it in this PR** — report it, per the standing rule on pre-existing failures. Run the full suite at Tasks 8 and 9, which are the ones that touch `agent_teams.py`, and expect exactly this one failure and no other.
+- Any task that ends with fewer passing tests than it started with, minus the tests it deliberately re-authored, is a regression — stop and report.
+- Route probes use `app.dependency_overrides[get_db]` plus `httpx.ASGITransport`.
+- **`httpx.ASGITransport` fakes the client port** — `scope["client"]` is `("127.0.0.1", 123)`. Every binding test must inject or override the peer resolver; none of them can rely on a real socket.
+- Assert on rows **read back with raw SQL**, not on the ORM objects you just wrote.
+- `github_workspaces.path` is UNIQUE — parameterize the path in every fixture that makes more than one.
+- A WAL race needs a **file-backed** DB; the in-memory engine in `tests/agent_mail/conftest.py` cannot show it.
+- zsh eats unquoted globs. Quote every `--include="*.py"`.
+- Override a setting in a test with `monkeypatch.setattr(settings, "<name>", value)` — the in-repo idiom. Do not construct a second `Settings()`.
+
+**Stop and report**
+
+If a step's preconditions do not hold — a function has a different shape, a test asserts the opposite of what the plan says, a line number points somewhere unrecognizable — stop and report before writing code. Do not "adapt" your way past a contradiction.
+
+## File Structure
+
+Five new files — two in `app/`, three test files; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
+
+| File | Create / Modify | Responsibility |
+| --- | --- | --- |
+| `backend/app/config.py` (between `:49` and `:51`) | Modify | Two settings: `mail_capability_tokens_required: bool = False`, `operator_token: str = ""` |
+| `backend/app/database.py` (after `:359`) | Modify | Three additive ladder rungs on `mail_agent_sessions` |
+| `backend/app/models/database.py` | Modify | Three new `MailAgentSession` columns; new `AgentPaneBinding` table |
+| `backend/app/models/schemas.py` | Modify | `capability_token` on `MailAgentRegisterResponse`; force-release request rewrite; drop the `lease_token` projection |
+| `backend/app/utils/peer_process.py` | **Create** | Kernel-derived resolver: peer socket → pid → tmux pane pid + proc start |
+| `backend/app/api/v1/deps.py` | **Create** | `mail_session`, `require_session_slot`, `require_operator` |
+| `backend/app/services/agent_mail_service.py` | Modify | Mint the capability token inside `register_session`, before its existing commit |
+| `backend/app/api/v1/agent_mail.py` | Modify | Binding policy at the `register_agent` route; token dependency on the five write routes |
+| `backend/app/api/v1/agent_teams.py` | Modify | `/dispatch-status` authorization resolver; `require_operator` on operator routes; force-release migration |
+| `backend/app/services/github_workspace_service.py` | Modify | `release_by_token` predicate + the seven-column clear at one `now` |
+| `backend/mcp_shim/agent_mail_server.py` | Modify | Capture the minted token; send `X-Deck-Session-Token` on every bridge call |
+| `frontend/src/lib/api.ts` | Modify | Per-tab actor token header injection into `apiClient` |
+| `frontend/src/features/agent-mail/api.ts` | Modify | The two write calls that exist gain actor auth |
+| `README.md` (`:110-114`) | Modify | Linux prerequisite bullet under `**Prerequisites**:` |
+| `backend/tests/agent_mail/test_capability_tokens.py` | **Create** | Spec §3.7 tests 1–22 |
+| `backend/tests/agent_mail/test_peer_process.py` | **Create** | Resolver unit tests (parsers, both address families) |
+| `backend/tests/agent_mail/test_api.py` | Modify | Four existing tests gain a token |
+| `backend/tests/agent_mail/test_external_api.py` | Modify | The tokenless-legacy-post test (`:118-137`) |
+| `backend/tests/agent_mail/test_mcp_shim.py` | Modify | The exact five-key payload equality (`:13-47`) |
+| `backend/tests/agent_mail/test_dispatch_status_tool.py` | Modify | 18 call sites; 12 carry `reporting_slot_id`, 5 do not |
+| `backend/tests/agent_teams/test_operator_auth.py` | **Create** | Spec §3.7 test 20 — the eight-case matrix, for each of the two operator routes |
+| `backend/tests/agent_teams/test_github_workspace_api.py` | Modify | 8 call sites gain the operator header (Task 8); then the force-release migration — six tests, incl. inverting the disclosure assertion (Task 9) |
+
+## Task Index
+
+| Task | Deliverable | Spec |
+| --- | --- | --- |
+| 1 | Settings, ladder rungs, `AgentPaneBinding` | §3.1, §3.2, §3.3 |
+| 2 | `app/utils/peer_process.py` — the kernel resolver | §3.3 |
+| 3 | Mint-once in `register_session`; `capability_token` on the response | §3.4 |
+| 4 | Registration policy + pane binding at the `register_agent` route | §3.3, §3.3a |
+| 5 | `mail_session` / `require_session_slot`; the five write routes; grace mode | §3.5 |
+| 6 | Shim: capture the token, send the header | §3.6a |
+| 7 | `/dispatch-status` authorization resolver | §3.5a |
+| 8 | `require_operator` and the operator routes | §3.6a |
+| 9 | Force-release API migration | §4.6a req. 1–4 |
+| 10 | Frontend per-tab actor token + member-sender write routes | §3.6 |
+| 11 | README Linux prerequisite; rollout note | §3.8 |
+
+---
+
+### Task 1: Schema — two settings, three session columns, one new table
+
+**Files:**
+- Modify: `backend/app/config.py:49-51`
+- Modify: `backend/app/models/database.py:388-396` (three columns after `team_slot_id`)
+- Modify: `backend/app/models/database.py` (new `AgentPaneBinding` class, after `GithubWorkspace` ends at `:320`)
+- Modify: `backend/app/database.py:359` (three ladder rungs, inserted **after** the `team_slot_id` rung)
+- Test: `backend/tests/agent_mail/test_capability_tokens.py` (create)
+
+**Interfaces:**
+- Consumes: nothing. This is the first task.
+- Produces:
+  - `settings.mail_capability_tokens_required: bool` (default `False`) and `settings.operator_token: str` (default `""`).
+  - `MailAgentSession.capability_token_hash: str | None`, `.bound_pane_pid: int | None`, `.bound_pane_proc_start: str | None`.
+  - `AgentPaneBinding` with `id`, `pane_pid: int`, `pane_proc_start: str`, `slot_id: int | None`, `preset_id: int | None`, `tmux_target: str | None`, `created_at: datetime`, and `UniqueConstraint("pane_pid", "pane_proc_start", name="uix_pane_binding")`.
+
+**Why all of this lands in one task:** a reviewer cannot usefully accept the settings while rejecting the columns — nothing reads either one yet, and every later task consumes both. The independently testable deliverable is "the schema exists and the ladder is idempotent."
+
+**Two deliberate deltas from the spec:**
+
+1. **The spec's `AgentPaneBinding` sketch types `slot_id` and `preset_id` as `Mapped[int]`** (§3.3). The plan makes both **nullable**, because `slot_id`'s FK is `ondelete="SET NULL"` — a non-nullable column with a SET NULL cascade is a contradiction SQLite will hit the moment a slot is deleted. `preset_id` follows `MailAgentSession.team_preset_id`, which is nullable for the same reason.
+2. **`agent_pane_bindings` is created by `create_all`, not by a ladder rung.** It is a brand-new table, so `create_all` makes it on every existing database. Only the three `mail_agent_sessions` columns need rungs, because that table already exists in the live DB.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `backend/tests/agent_mail/test_capability_tokens.py`:
+
+```python
+"""Spec §3.7 — capability token tests for PR0."""
+import pytest
+from sqlalchemy import text
+
+from app.config import settings
+from app.models.database import AgentPaneBinding, MailAgentSession
+
+
+def test_capability_token_settings_default_to_grace_mode():
+    """PR0 ships enforcement off, so an unconfigured deploy behaves exactly as before."""
+    assert settings.mail_capability_tokens_required is False
+    assert settings.operator_token == ""
+
+
+def test_session_model_carries_the_three_binding_columns():
+    columns = MailAgentSession.__table__.columns
+    assert columns["capability_token_hash"].nullable is True
+    assert columns["bound_pane_pid"].nullable is True
+    assert columns["bound_pane_proc_start"].nullable is True
+
+
+def test_pane_binding_table_is_unique_on_pid_and_proc_start():
+    names = {c.name for c in AgentPaneBinding.__table__.columns}
+    assert names == {
+        "id",
+        "pane_pid",
+        "pane_proc_start",
+        "slot_id",
+        "preset_id",
+        "tmux_target",
+        "created_at",
+    }
+    unique = {
+        tuple(sorted(c.name for c in constraint.columns))
+        for constraint in AgentPaneBinding.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    assert ("pane_pid", "pane_proc_start") in unique
+
+
+@pytest.mark.asyncio
+async def test_pane_binding_round_trips(db):
+    """create_all makes the table; a row survives a raw-SQL read-back."""
+    db.add(
+        AgentPaneBinding(
+            pane_pid=4242,
+            pane_proc_start="123456",
+            slot_id=None,
+            preset_id=None,
+            tmux_target="deck-team:0.1",
+        )
+    )
+    await db.commit()
+
+    row = (
+        await db.execute(
+            text(
+                "SELECT pane_pid, pane_proc_start, tmux_target "
+                "FROM agent_pane_bindings WHERE pane_pid = 4242"
+            )
+        )
+    ).first()
+    assert row == (4242, "123456", "deck-team:0.1")
+```
+
+`db` is the existing fixture in `backend/tests/agent_mail/conftest.py`. Note its shape: it yields an **`AsyncSession`**, not a sessionmaker, from an in-memory engine with `create_all` already run and `expire_on_commit=False`. Do not add a second fixture.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
+```
+
+Expected: collection error — `ImportError: cannot import name 'AgentPaneBinding' from 'app.models.database'`.
+
+- [ ] **Step 3: Add the two settings**
+
+In `backend/app/config.py`, between `github_brief_delivery_max_nudges: int = 2` (`:49`) and the blank line before `# Server settings` (`:51`):
+
+```python
+    github_brief_delivery_max_nudges: int = 2
+
+    # Agent Mail identity settings
+    mail_capability_tokens_required: bool = False
+    operator_token: str = ""
+
+    # Server settings
+```
+
+`operator_token` is read from `backend/.env` in deployment. Never commit a value and never `export` it — the setting default stays `""` in source.
+
+- [ ] **Step 4: Add the three session columns**
+
+In `backend/app/models/database.py`, immediately after the `team_slot_id` column (`:388-390`) and before `mailbox_status`:
+
+```python
+    team_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    capability_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    bound_pane_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bound_pane_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
+    mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
+```
+
+- [ ] **Step 5: Add the `AgentPaneBinding` table**
+
+In `backend/app/models/database.py`, after `GithubWorkspace`'s `__table_args__` block ends (`:320`) and before `class BridgeSessionAttachment`:
+
+```python
+class AgentPaneBinding(Base):
+    """Which tmux pane a launched slot physically occupies.
+
+    Written by the launcher at launch time and committed on its own, ahead of
+    the slot loop's single commit, because the pane it describes can register
+    with Agent Mail before that loop finishes. A binding that is not visible
+    yet is indistinguishable from a pane that was never launched.
+    """
+
+    __tablename__ = "agent_pane_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pane_pid: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    pane_proc_start: Mapped[str] = mapped_column(String, nullable=False)
+    slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
+    )
+    tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("pane_pid", "pane_proc_start", name="uix_pane_binding"),
+    )
+```
+
+`String`, `Integer`, `DateTime`, `ForeignKey`, `UniqueConstraint`, `Mapped`, `mapped_column` and `datetime` are all already imported at `models/database.py:1-6`. Add nothing to the import line.
+
+- [ ] **Step 6: Add the three ladder rungs**
+
+In `backend/app/database.py`, immediately after the `team_slot_id` rung (`:358-359`) and before the blank line that precedes `PRAGMA table_info(agent_team_slots)`:
+
+```python
+    if session_columns and "team_slot_id" not in session_columns:
+        await conn.execute(text("ALTER TABLE mail_agent_sessions ADD COLUMN team_slot_id INTEGER"))
+    if session_columns and "capability_token_hash" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN capability_token_hash TEXT")
+        )
+    if session_columns and "bound_pane_pid" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN bound_pane_pid INTEGER")
+        )
+    if session_columns and "bound_pane_proc_start" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN bound_pane_proc_start TEXT")
+        )
+```
+
+The `session_columns and` guard is not decorative: on a fresh database `create_all` has already made the table with all its columns, and `PRAGMA table_info` on a table that does not exist returns an empty set. Copy the guard exactly as the two rungs above it use it.
+
+- [ ] **Step 7: Run the new tests to verify they pass**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
+```
+
+Expected: `4 passed`.
+
+- [ ] **Step 8: Run the full baseline suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: `458 passed` (the 454 baseline plus this task's 4). Nothing in the baseline reads the new columns yet, so any failure here is a real regression — stop and report.
+
+- [ ] **Step 9: Write the ladder regression test**
+
+The in-memory conftest engine runs `create_all`, which makes the columns directly and never exercises the ladder. The ladder needs its own test, in the file that already exists for exactly this purpose — `backend/tests/test_sqlite_compat_migrations.py`, which imports `app.database`'s private helpers by name. Append:
+
+```python
+@pytest.mark.asyncio
+async def test_compat_migrations_add_capability_columns_idempotently():
+    """A pre-PR0 mail_agent_sessions table gains the three columns, twice over."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE mail_agent_sessions (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        member_id INTEGER NOT NULL,
+                        provider VARCHAR NOT NULL,
+                        source VARCHAR NOT NULL,
+                        session_key VARCHAR NOT NULL,
+                        mailbox_status VARCHAR NOT NULL,
+                        last_seen_at DATETIME NOT NULL,
+                        created_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            expected = {"capability_token_hash", "bound_pane_pid", "bound_pane_proc_start"}
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                columns = await _sqlite_columns(conn, "mail_agent_sessions")
+                assert expected <= columns
+    finally:
+        await engine.dispose()
+```
+
+Add `_run_sqlite_compat_migrations` to the existing `from app.database import (...)` block at the top of that file. The second loop iteration is the whole point: without the `not in session_columns` guard, SQLite raises `duplicate column name` and the test fails.
+
+- [ ] **Step 10: Run the ladder test**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/test_sqlite_compat_migrations.py -q -p no:warnings
+```
+
+Expected: all pre-existing tests in that file plus the new one pass.
+
+- [ ] **Step 11: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/config.py backend/app/database.py backend/app/models/database.py backend/tests/agent_mail/test_capability_tokens.py backend/tests/test_sqlite_compat_migrations.py && git commit -m "feat(mail): add capability-token schema and grace-mode settings
+
+Three nullable columns on mail_agent_sessions (capability_token_hash,
+bound_pane_pid, bound_pane_proc_start) with additive ladder rungs, plus the
+agent_pane_bindings table created by create_all. Two settings ship enforcement
+off: mail_capability_tokens_required=False and operator_token=\"\".
+
+Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.1-3.3"
+```
+
+---
+
+### Task 2: The kernel resolver — from a TCP peer to a tmux pane
+
+**Files:**
+- Create: `backend/app/utils/peer_process.py`
+- Test: `backend/tests/agent_mail/test_peer_process.py` (create)
+
+**Interfaces:**
+- Consumes: nothing from Task 1. This task is pure `stdlib` and can be built in parallel with Task 1.
+- Produces, all in `app.utils.peer_process`:
+  - `format_endpoint(host: str, port: int) -> str | None` — a `/proc/net`-style hex endpoint, or `None` if `host` is not an IP literal.
+  - `find_socket_inode(host: str, port: int, local_port: int | None = None) -> int | None`
+  - `find_pid_for_inode(inode: int) -> int | None`
+  - `read_proc_stat(pid: int) -> tuple[int, str] | None` — `(ppid, starttime)`.
+  - `list_tmux_pane_pids() -> dict[int, str]` — `{pane_pid: tmux_target}`.
+  - `resolve_peer_pane(host: str, port: int, local_port: int | None = None) -> PeerPane | None` where `PeerPane` is a frozen dataclass with `pane_pid: int`, `pane_proc_start: str`, `tmux_target: str | None`, `peer_pid: int`.
+
+**Why this is its own file and its own task:** every function here is a thin wrapper over a kernel interface, all of them are pure, and none of them touch the database or FastAPI. That makes them the only part of PR0 that can be tested without a request, and a reviewer can accept or reject the resolver on its own merits. `app/utils/` currently holds only `path_utils` and `file_utils`; this is the third module, not an addition to either.
+
+**PR0 requires Linux.** Everything here reads `/proc`. Task 11 documents the prerequisite. Every function degrades to `None` or `{}` rather than raising, so a non-Linux host running with `mail_capability_tokens_required = False` still serves requests — it simply never binds a pane.
+
+**Measured facts this task depends on** (re-measured on this machine, 2026-08-09 — do not re-derive them, and stop and report if any turns out false):
+
+| Fact | Measured value |
+| --- | --- |
+| Hex endpoint, IPv4 `127.0.0.1:8000` | `0100007F:1F40` |
+| Hex endpoint, IPv6 `::1:8000` | `00000000000000000000000001000000:1F40` |
+| One formatter serves both families | Yes — `inet_pton` then reverse each 4-byte word |
+| Inode column in `/proc/net/tcp` and `/proc/net/tcp6` | `line.split()[9]`, identical in both files |
+| A loopback connection appears **twice** | Two rows, mirror images. For peer `127.0.0.1:34265` → backend `127.0.0.1:34280`, `/proc/net/tcp` held `local=…:85D9 rem=…:85E8` (the caller's socket, inode 39993300) **and** `local=…:85E8 rem=…:85D9` (the backend's accepted socket, inode 39993301) |
+| Therefore the caller's row is matched on **`local_address`** | `parts[1] == format_endpoint(peer_host, peer_port)`, not `parts[2]` |
+| `/proc/<pid>/stat` — one parse, two fields | `fields = raw[raw.rindex(")") + 2:].split()`; `int(fields[1])` = ppid (verified against `os.getppid()`), `fields[19]` = starttime; 50 fields total |
+| Worst-case **full** `/proc` fd scan (inode absent) | **2.0–6.3 ms** across 140 pids |
+| `tmux list-panes -a -F "#{pane_id} #{pane_pid}"` | Works; one line per pane |
+
+The 2–6 ms figure is why the resolver runs **synchronously inside the request handler**. It must: resolving after the response has been sent finds the socket in `TIME_WAIT` with inode `0` and no owning pid. That is a correctness requirement, not a latency preference.
+
+- [ ] **Step 1: Write the failing test for the endpoint formatter**
+
+Create `backend/tests/agent_mail/test_peer_process.py`:
+
+```python
+"""Kernel-derived peer resolution (spec section 3.3)."""
+import pytest
+
+from app.utils import peer_process
+
+
+def test_format_endpoint_ipv4():
+    assert peer_process.format_endpoint("127.0.0.1", 8000) == "0100007F:1F40"
+
+
+def test_format_endpoint_ipv6():
+    assert peer_process.format_endpoint("::1", 8000) == (
+        "00000000000000000000000001000000:1F40"
+    )
+
+
+def test_format_endpoint_rejects_a_hostname():
+    """A non-literal host has no /proc/net representation, and must not be guessed at."""
+    assert peer_process.format_endpoint("testclient", 123) is None
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `ModuleNotFoundError: No module named 'app.utils.peer_process'`.
+
+- [ ] **Step 3: Write the formatter**
+
+Create `backend/app/utils/peer_process.py`:
+
+```python
+"""Resolve a TCP peer to the tmux pane its process runs in.
+
+Everything here reads Linux kernel interfaces (/proc/net/tcp, /proc/net/tcp6,
+/proc/<pid>/stat) and shells out to tmux. On a host without /proc, every
+function returns None or an empty mapping rather than raising, so a deployment
+with mail_capability_tokens_required = False still serves requests.
+
+The caller MUST invoke resolve_peer_pane synchronously, inside the request
+handler. Once the response is sent the peer socket enters TIME_WAIT, its
+/proc/net inode reads 0, and no process owns it any more.
+"""
+import logging
+import os
+import socket
+import subprocess
+from dataclasses import dataclass
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+_PROC_NET_TABLES = (
+    ("/proc/net/tcp", socket.AF_INET),
+    ("/proc/net/tcp6", socket.AF_INET6),
+)
+
+# /proc/net/tcp columns: sl local_address rem_address st tx_queue:rx_queue
+# tr:tm->when retrnsmt uid timeout inode ...
+_LOCAL_ADDRESS_COLUMN = 1
+_REMOTE_ADDRESS_COLUMN = 2
+_STATE_COLUMN = 3
+_INODE_COLUMN = 9
+
+# Kernel TCP state codes, as printed in /proc/net/tcp column 4.
+_TCP_ESTABLISHED = "01"
+
+# How far up the process tree to walk before giving up on finding a pane.
+_MAX_PARENT_WALK = 32
+
+
+def format_endpoint(host: str, port: int) -> Optional[str]:
+    """Render host:port the way /proc/net/tcp does, or None if host is not an IP.
+
+    The kernel prints each 4-byte word of the address in host byte order, so a
+    single formatter serves IPv4 and IPv6 alike: pack, then reverse per word.
+    """
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            packed = socket.inet_pton(family, host)
+        except (OSError, ValueError):
+            continue
+        words = [packed[i : i + 4][::-1] for i in range(0, len(packed), 4)]
+        return f"{b''.join(words).hex().upper()}:{port:04X}"
+    return None
+```
+
+- [ ] **Step 4: Run the formatter tests to verify they pass**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `3 passed`.
+
+- [ ] **Step 5: Commit the formatter**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/utils/peer_process.py backend/tests/agent_mail/test_peer_process.py && git commit -m "feat(mail): add /proc/net hex endpoint formatter
+
+One formatter serves IPv4 and IPv6: inet_pton, then reverse each 4-byte word,
+matching how the kernel prints addresses in /proc/net/tcp and /proc/net/tcp6.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
+```
+
+- [ ] **Step 6: Write the failing test for the inode lookup and the stat parse**
+
+Append to `backend/tests/agent_mail/test_peer_process.py`:
+
+```python
+_HEADER = (
+    "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when"
+    " retrnsmt   uid  timeout inode\n"
+)
+_TAIL = "00000000:00000000 00:00000000 00000000  1000        0"
+
+# The two mirror-image rows a single loopback connection produces, plus the
+# backend's listening socket. 85D9 = 34265 (the caller), 85E8 = 34280 (us).
+_TCP_TABLE = (
+    _HEADER
+    + f"   0: 0100007F:85E8 00000000:0000 0A {_TAIL} 39993299 1 0 20 0 0 10 0\n"
+    + f"   1: 0100007F:85D9 0100007F:85E8 01 {_TAIL} 39993300 1 0 20 0 0 10 -1\n"
+    + f"   2: 0100007F:85E8 0100007F:85D9 01 {_TAIL} 39993301 1 0 20 0 0 10 -1\n"
+)
+
+_STAT = (
+    "1234 (claude with spaces) S 1200 1234 1234 0 -1 4194304 900 0 0 0 5 2 0 0"
+    " 20 0 12 0 120913170 " + " ".join(["0"] * 30) + "\n"
+)
+
+
+@pytest.fixture
+def tcp_table(tmp_path, monkeypatch):
+    table = tmp_path / "tcp"
+    table.write_text(_TCP_TABLE)
+    monkeypatch.setattr(peer_process, "_PROC_NET_TABLES", ((str(table), None),))
+    return table
+
+
+def test_find_socket_inode_matches_the_local_address_column(tcp_table):
+    """The caller's own socket has the caller's address in local_address.
+
+    Matching rem_address instead would return 39993301 -- the backend's own
+    accepted socket -- and resolve every caller to the backend's pid, binding
+    every session to whatever pane the backend happens to run in.
+    """
+    assert peer_process.find_socket_inode("127.0.0.1", 34265) == 39993300
+
+
+def test_find_socket_inode_ignores_a_listening_socket(tcp_table):
+    """Row 0 has our port in local_address but is state 0A (LISTEN)."""
+    assert peer_process.find_socket_inode("127.0.0.1", 34280, local_port=34265) == 39993301
+    assert peer_process.find_socket_inode("127.0.0.1", 9999) is None
+
+
+def test_find_socket_inode_disambiguates_on_the_local_port(tcp_table):
+    """A wrong backend port must not match, even with the right caller port."""
+    assert peer_process.find_socket_inode("127.0.0.1", 34265, local_port=34280) == 39993300
+    assert peer_process.find_socket_inode("127.0.0.1", 34265, local_port=9999) is None
+
+
+def test_read_proc_stat_survives_a_command_name_containing_spaces(tmp_path, monkeypatch):
+    """The comm field is parenthesised and may contain spaces and parens.
+
+    Splitting the whole line would misalign every field after it, so the parse
+    starts after the LAST close-paren. One parse yields both fields we need.
+    """
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(_STAT)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    assert peer_process.read_proc_stat(1234) == (1200, "120913170")
+
+
+def test_read_proc_stat_returns_none_for_a_dead_pid(tmp_path, monkeypatch):
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    assert peer_process.read_proc_stat(999999) is None
+```
+
+The space-and-paren command name is the case that matters. `raw.split()[3]` would be `"spaces)"` for this input; `raw[raw.rindex(")") + 2:].split()[1]` is `"1200"`. Assert the ppid so a regression to naive splitting fails loudly.
+
+- [ ] **Step 7: Run it to verify it fails**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `AttributeError: module 'app.utils.peer_process' has no attribute 'find_socket_inode'`.
+
+- [ ] **Step 8: Implement the inode lookup, the pid scan, and the stat parse**
+
+Append to `backend/app/utils/peer_process.py`:
+
+```python
+_PROC_ROOT = "/proc"
+
+
+def find_socket_inode(
+    host: str, port: int, local_port: Optional[int] = None
+) -> Optional[int]:
+    """Find the inode of the CALLER's socket, whose local end is host:port.
+
+    A loopback connection appears twice in /proc/net/tcp, as mirror-image rows:
+    one owned by the caller and one owned by this backend. We want the caller's,
+    so we match host:port against LOCAL_address -- matching rem_address would
+    find our own accepted socket and resolve every caller to the backend's pid.
+
+    Pass local_port (this backend's port for the connection) to disambiguate
+    when the caller reuses a source port across restarts; the pair is unique.
+    Both address families are searched: a connection to ::1 lands in
+    /proc/net/tcp6 while 127.0.0.1 lands in /proc/net/tcp.
+    """
+    wanted = format_endpoint(host, port)
+    if wanted is None:
+        return None
+    for path, _family in _PROC_NET_TABLES:
+        try:
+            with open(path) as handle:
+                next(handle, None)  # header
+                for line in handle:
+                    parts = line.split()
+                    if len(parts) <= _INODE_COLUMN:
+                        continue
+                    if parts[_LOCAL_ADDRESS_COLUMN].upper() != wanted:
+                        continue
+                    if parts[_STATE_COLUMN] != _TCP_ESTABLISHED:
+                        continue
+                    if local_port is not None:
+                        remote = parts[_REMOTE_ADDRESS_COLUMN].upper()
+                        if not remote.endswith(f":{local_port:04X}"):
+                            continue
+                    try:
+                        inode = int(parts[_INODE_COLUMN])
+                    except ValueError:
+                        continue
+                    if inode:
+                        return inode
+        except OSError:
+            continue
+    return None
+
+
+def find_pid_for_inode(inode: int) -> Optional[int]:
+    """Find the process holding the socket with this inode.
+
+    A full scan of every /proc/<pid>/fd measured 2.0-6.3 ms across 140 pids on
+    the deployment host, which is why this is safe to call inline in a request.
+    """
+    target = f"socket:[{inode}]"
+    try:
+        entries = os.listdir(_PROC_ROOT)
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        fd_dir = f"{_PROC_ROOT}/{entry}/fd"
+        try:
+            descriptors = os.listdir(fd_dir)
+        except OSError:
+            continue  # the process exited, or is not ours to read
+        for descriptor in descriptors:
+            try:
+                if os.readlink(f"{fd_dir}/{descriptor}") == target:
+                    return int(entry)
+            except OSError:
+                continue
+    return None
+
+
+def read_proc_stat(pid: int) -> Optional[tuple[int, str]]:
+    """Return (ppid, starttime) for pid, or None if it is gone.
+
+    Field 2 (comm) is parenthesised and may itself contain spaces and
+    parentheses, so the parse begins after the last close-paren. From there
+    fields[1] is ppid and fields[19] is starttime -- one read, both values.
+    """
+    try:
+        with open(f"{_PROC_ROOT}/{pid}/stat") as handle:
+            raw = handle.read()
+    except OSError:
+        return None
+    try:
+        fields = raw[raw.rindex(")") + 2 :].split()
+        return int(fields[1]), fields[19]
+    except (ValueError, IndexError):
+        return None
+```
+
+- [ ] **Step 9: Run the tests to verify they pass**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `8 passed`.
+
+Then **mutate to prove the local-address test has teeth**: temporarily change `_LOCAL_ADDRESS_COLUMN = 1` to `= 2` and re-run. `test_find_socket_inode_matches_the_local_address_column` must fail. Restore the `1` by replacing the exact string — do not `git checkout`. If the test still passes with the mutant, the fixture is wrong and the whole binding design rests on nothing; stop and report.
+
+- [ ] **Step 10: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/utils/peer_process.py backend/tests/agent_mail/test_peer_process.py && git commit -m "feat(mail): resolve a TCP peer to its pid and read its proc stat
+
+find_socket_inode matches the caller's own row on local_address -- a loopback
+connection appears twice, and the rem_address row is the backend's own accepted
+socket, which would bind every session to the backend's pane;
+find_pid_for_inode scans /proc/<pid>/fd (measured 2-6ms for a full scan);
+read_proc_stat parses after the last close-paren so a command name containing
+spaces cannot misalign ppid and starttime.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
+```
+
+- [ ] **Step 11: Write the failing test for the pane walk**
+
+Append to `backend/tests/agent_mail/test_peer_process.py`:
+
+```python
+def test_list_tmux_pane_pids_parses_the_format_string(monkeypatch):
+    output = "%3 159009 team:0.0\n%0 149168 team:0.1\n\n"
+    monkeypatch.setattr(
+        peer_process, "_run_tmux", lambda *args, **kwargs: output
+    )
+    assert peer_process.list_tmux_pane_pids() == {159009: "team:0.0", 149168: "team:0.1"}
+
+
+def test_list_tmux_pane_pids_is_empty_when_tmux_is_absent(monkeypatch):
+    monkeypatch.setattr(peer_process, "_run_tmux", lambda *args, **kwargs: None)
+    assert peer_process.list_tmux_pane_pids() == {}
+
+
+def test_resolve_peer_pane_walks_ppids_up_to_a_pane(monkeypatch):
+    """The MCP shim is a grandchild of the pane, not the pane itself."""
+    tree = {5000: (4000, "aaa"), 4000: (3000, "bbb"), 3000: (1, "ccc")}
+    monkeypatch.setattr(peer_process, "find_socket_inode", lambda h, p, local_port=None: 77)
+    monkeypatch.setattr(peer_process, "find_pid_for_inode", lambda inode: 5000)
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: tree.get(pid))
+    monkeypatch.setattr(peer_process, "list_tmux_pane_pids", lambda: {3000: "team:0.2"})
+
+    pane = peer_process.resolve_peer_pane("127.0.0.1", 36253)
+    assert pane is not None
+    assert (pane.pane_pid, pane.pane_proc_start, pane.tmux_target, pane.peer_pid) == (
+        3000,
+        "ccc",
+        "team:0.2",
+        5000,
+    )
+
+
+def test_resolve_peer_pane_is_none_when_no_ancestor_is_a_pane(monkeypatch):
+    tree = {5000: (1, "aaa")}
+    monkeypatch.setattr(peer_process, "find_socket_inode", lambda h, p, local_port=None: 77)
+    monkeypatch.setattr(peer_process, "find_pid_for_inode", lambda inode: 5000)
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: tree.get(pid))
+    monkeypatch.setattr(peer_process, "list_tmux_pane_pids", lambda: {3000: "team:0.2"})
+    assert peer_process.resolve_peer_pane("127.0.0.1", 36253) is None
+
+
+def test_resolve_peer_pane_is_none_when_the_socket_is_gone(monkeypatch):
+    """The TIME_WAIT case: no inode, therefore no pane. Never guess."""
+    monkeypatch.setattr(peer_process, "find_socket_inode", lambda h, p, local_port=None: None)
+    assert peer_process.resolve_peer_pane("127.0.0.1", 36253) is None
+```
+
+The three stubs take `local_port=None` because `resolve_peer_pane` forwards it as a keyword. A stub with the wrong signature fails with `TypeError`, not a wrong answer — but fix the stub, never the call.
+
+Note the third test's shape: the pane pid is the caller's **grandparent**, and `pane_proc_start` comes from the pane's own stat line (`"ccc"`), not the caller's. Getting that backwards is the defect this test exists to catch — a rebind check comparing the wrong process's start time would accept any restarted shim.
+
+- [ ] **Step 12: Run it to verify it fails**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `AttributeError: ... has no attribute '_run_tmux'`.
+
+- [ ] **Step 13: Implement the pane walk**
+
+Append to `backend/app/utils/peer_process.py`:
+
+```python
+@dataclass(frozen=True)
+class PeerPane:
+    """The tmux pane a caller's process tree belongs to."""
+
+    pane_pid: int
+    pane_proc_start: str
+    tmux_target: Optional[str]
+    peer_pid: int
+
+
+def _run_tmux(*args: str) -> Optional[str]:
+    """Run a read-only tmux command, or return None if tmux is unavailable."""
+    try:
+        completed = subprocess.run(
+            ["tmux", *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def list_tmux_pane_pids() -> dict[int, str]:
+    """Map every live pane's pid to its tmux target."""
+    output = _run_tmux(
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_id} #{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
+    )
+    if not output:
+        return {}
+    panes: dict[int, str] = {}
+    for line in output.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            panes[int(parts[1])] = parts[2]
+        except ValueError:
+            continue
+    return panes
+
+
+def resolve_peer_pane(
+    host: str, port: int, local_port: Optional[int] = None
+) -> Optional[PeerPane]:
+    """Resolve a TCP peer to the tmux pane it runs under, or None.
+
+    MUST be called synchronously inside the request handler -- see the module
+    docstring. Returns None rather than guessing whenever any link in the chain
+    is missing: an unresolvable caller is not a caller in some other pane.
+    """
+    inode = find_socket_inode(host, port, local_port=local_port)
+    if inode is None:
+        return None
+    peer_pid = find_pid_for_inode(inode)
+    if peer_pid is None:
+        return None
+
+    panes = list_tmux_pane_pids()
+    if not panes:
+        return None
+
+    pid = peer_pid
+    for _ in range(_MAX_PARENT_WALK):
+        stat = read_proc_stat(pid)
+        if stat is None:
+            return None
+        ppid, proc_start = stat
+        if pid in panes:
+            return PeerPane(
+                pane_pid=pid,
+                pane_proc_start=proc_start,
+                tmux_target=panes[pid],
+                peer_pid=peer_pid,
+            )
+        if ppid <= 1:
+            return None
+        pid = ppid
+    return None
+```
+
+The walk checks `pid in panes` **after** reading that pid's own stat, so `pane_proc_start` always describes the pane process. The `_MAX_PARENT_WALK` bound is a guard against a pid cycle, which should be impossible but costs nothing to rule out.
+
+- [ ] **Step 14: Run the tests to verify they pass**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `13 passed`.
+
+- [ ] **Step 15: Verify the resolver against a real socket, end to end**
+
+The unit tests all stub `/proc`. Prove the real chain works once, by hand, against a live loopback connection:
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && python3 - <<'PY'
+import socket
+from app.utils import peer_process
+
+srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
+cli = socket.socket(); cli.connect(srv.getsockname())
+conn, peer = srv.accept()
+local_port = conn.getsockname()[1]
+inode = peer_process.find_socket_inode(*peer, local_port=local_port)
+pid = peer_process.find_pid_for_inode(inode) if inode else None
+print("peer:", peer, "| our port:", local_port, "| inode:", inode, "| pid:", pid)
+print("this process:", __import__("os").getpid())
+print("pane:", peer_process.resolve_peer_pane(*peer, local_port=local_port))
+cli.close(); conn.close(); srv.close()
+PY
+```
+
+Expected: a non-zero `inode`, a `pid` **equal to `this process`** (client and server are the same process here, so that is the correct answer), and a `PeerPane` **if and only if** you run this inside tmux. Outside tmux, `pane: None` is correct, not a failure. Record which you saw.
+
+- [ ] **Step 16: Run the full baseline suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: `471 passed` (454 baseline + 4 from Task 1 + 13 here). Nothing outside these two new files has changed, so any other failure is a regression — stop and report.
+
+- [ ] **Step 17: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/utils/peer_process.py backend/tests/agent_mail/test_peer_process.py && git commit -m "feat(mail): walk a peer pid up to its tmux pane
+
+resolve_peer_pane chains inode -> pid -> ppid walk -> pane, and returns the
+PANE's proc start rather than the caller's, so a restarted shim under the same
+pane is still recognised as that pane. Returns None at every missing link:
+an unresolvable caller is never treated as a caller somewhere else.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
+```
+
+---
+
+### Task 3: Mint the capability token — once per session, never rotated
+
+**Files:**
+- Modify: `backend/app/services/agent_mail_service.py:155-218` (add a method; **do not** change `register_session`'s signature)
+- Modify: `backend/app/models/schemas.py:1994-1996` (`MailAgentRegisterResponse`)
+- Modify: `backend/app/api/v1/agent_mail.py:119-130` (the `register_agent` route)
+- Test: `backend/tests/agent_mail/test_capability_tokens.py`
+
+**Interfaces:**
+- Consumes: `MailAgentSession.capability_token_hash` (Task 1).
+- Produces:
+  - `agent_mail_service.hash_capability_token(token: str) -> str` — SHA-256 hex.
+  - `agent_mail_service.ensure_capability_token(db, session) -> str | None` — returns the plaintext **only** on the call that mints it; `None` on every later call for the same session.
+  - `MailAgentRegisterResponse.capability_token: Optional[str] = None`.
+
+**Correction (2026-08-09, source verification) — the spec says mint inside `register_session` before its `await db.commit()` at `:215`. The plan mints in a separate method that the route calls afterwards.** Two measured reasons:
+
+1. **`register_session` returns a 2-tuple and 42 call sites unpack it** — 28 in `tests/agent_mail/test_registry.py`, 14 in `tests/agent_teams/test_agent_team_service.py`. Threading a third value out of it means editing all 42 for no behavioural gain. The plaintext has to reach the route by another channel regardless; a separate method *is* that channel.
+2. **`register_session` has two callers, and the second must not mint.** `_register_from_hook` (`agent_mail.py:184-200`) is called from `hook_session_start` and `hook_user_prompt_submit`, both of which end `except Exception as exc: logger.warning(...); return {}`. A hook has nowhere to put a token — it returns `{}` — so minting there would burn the one-time plaintext into a swallowed exception path and leave a row whose hash nobody holds.
+
+**The token is minted once and never rotated.** This is the decisive constraint and it is not optional: the MCP shim's `_guard` re-registers before **every** tool call, so `register_agent` is hit continuously for the same `session_key`. Rotating on each registration would invalidate the token the shim is holding, on every call. So:
+
+| Registration | `capability_token_hash` | Response `capability_token` |
+| --- | --- | --- |
+| New `session_key`, row created | minted | the plaintext, once |
+| Same `session_key`, hash already set (the `_guard` re-register) | untouched | `None` |
+| Same `session_key`, hash is `NULL` (a row from before PR0) | minted | the plaintext, once |
+| Via `_register_from_hook` | untouched | n/a — hooks return `{}` |
+
+A dead shim's row keeps its hash forever. Do not null it on disconnect: a restarted shim gets a **new** `session_key` (`f"mcp:{uuid.uuid4().hex[:12]}"`, evaluated once at module import, `mcp_shim/agent_mail_server.py:26`) and therefore a new row and a new token, so no shim can ever be locked out by a hash it no longer holds.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `backend/tests/agent_mail/test_capability_tokens.py`:
+
+```python
+import hashlib
+
+from app.models.schemas import MailAgentRegisterRequest
+from app.services.agent_mail_service import agent_mail_service
+
+
+def _register(cwd: str, session_key: str = "mcp:abc123") -> MailAgentRegisterRequest:
+    return MailAgentRegisterRequest(
+        source="mcp",
+        provider="claude",
+        cwd=cwd,
+        session_key=session_key,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ensure_capability_token_mints_once(db, tmp_path):
+    _member, session = await agent_mail_service.register_session(db, _register(str(tmp_path)))
+    assert session.capability_token_hash is None
+
+    token = await agent_mail_service.ensure_capability_token(db, session)
+    assert token is not None
+    assert len(token) >= 32
+
+    stored = (
+        await db.execute(
+            text("SELECT capability_token_hash FROM mail_agent_sessions WHERE id = :i"),
+            {"i": session.id},
+        )
+    ).scalar_one()
+    assert stored == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert stored != token, "the plaintext must never be stored"
+
+
+@pytest.mark.asyncio
+async def test_ensure_capability_token_does_not_rotate(db, tmp_path):
+    """The shim re-registers before every tool call. Rotating would break it."""
+    _member, session = await agent_mail_service.register_session(db, _register(str(tmp_path)))
+    first = await agent_mail_service.ensure_capability_token(db, session)
+
+    # Same session_key -> same row, as the shim's _guard does on every tool.
+    _member, again = await agent_mail_service.register_session(db, _register(str(tmp_path)))
+    assert again.id == session.id
+    second = await agent_mail_service.ensure_capability_token(db, again)
+
+    assert second is None, "a re-registration must not hand out a second plaintext"
+    stored = (
+        await db.execute(
+            text("SELECT capability_token_hash FROM mail_agent_sessions WHERE id = :i"),
+            {"i": session.id},
+        )
+    ).scalar_one()
+    assert stored == hashlib.sha256(first.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_ensure_capability_token_backfills_a_pre_pr0_row(db, tmp_path):
+    """A row that predates PR0 has a NULL hash and must be mintable."""
+    _member, session = await agent_mail_service.register_session(db, _register(str(tmp_path)))
+    await agent_mail_service.ensure_capability_token(db, session)
+    await db.execute(
+        text("UPDATE mail_agent_sessions SET capability_token_hash = NULL WHERE id = :i"),
+        {"i": session.id},
+    )
+    await db.commit()
+    await db.refresh(session)
+
+    assert await agent_mail_service.ensure_capability_token(db, session) is not None
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_get_different_tokens(db, tmp_path):
+    _m, first = await agent_mail_service.register_session(
+        db, _register(str(tmp_path), session_key="mcp:one")
+    )
+    _m, second = await agent_mail_service.register_session(
+        db, _register(str(tmp_path), session_key="mcp:two")
+    )
+    a = await agent_mail_service.ensure_capability_token(db, first)
+    b = await agent_mail_service.ensure_capability_token(db, second)
+    assert a != b
+```
+
+The singleton is `agent_mail_service = AgentMailService()`, the last line of `app/services/agent_mail_service.py` — verified, import it exactly as written above.
+
+- [ ] **Step 2: Run to verify failure**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
+```
+
+Expected: `AttributeError: 'AgentMailService' object has no attribute 'ensure_capability_token'`.
+
+- [ ] **Step 3: Add the hashing helper and the mint**
+
+`agent_mail_service.py` imports `logging, os, subprocess, time` at `:2-5`. Add `hashlib` and `secrets` to that block, keeping it alphabetical:
+
+```python
+import hashlib
+import logging
+import os
+import secrets
+import subprocess
+import time
+```
+
+Then add both methods to the service class, immediately after `register_session` ends at `:218`:
+
+```python
+    @staticmethod
+    def hash_capability_token(token: str) -> str:
+        """Hash a capability token for storage.
+
+        Same construction as external_agent_mail_service._hash_token, so the
+        two credential families are verified identically.
+        """
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    async def ensure_capability_token(
+        self, db: AsyncSession, session: MailAgentSession
+    ) -> Optional[str]:
+        """Mint this session's capability token, or None if it already has one.
+
+        Called by the register_agent route, never by the hook registration path
+        (a hook returns {} and has nowhere to put the plaintext).
+
+        The token is minted once and NEVER rotated: the MCP shim re-registers
+        before every tool call, so rotating here would invalidate the token the
+        shim is holding on every single call. A row therefore keeps its hash for
+        life -- including after the shim dies -- which locks nobody out, because
+        a restarted shim generates a fresh session_key and so gets a fresh row.
+        """
+        if session.capability_token_hash is not None:
+            return None
+        token = secrets.token_urlsafe(32)
+        session.capability_token_hash = self.hash_capability_token(token)
+        await db.commit()
+        await db.refresh(session)
+        return token
+```
+
+`Optional` is already imported (`:7`), as are `MailAgentSession` (`:16`) and `AsyncSession` (`:11`).
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
+```
+
+Expected: `8 passed` (4 from Task 1 + 4 here).
+
+- [ ] **Step 5: Mutation-check the no-rotate guarantee**
+
+The rotate test is the one that matters most, so prove it has teeth. Temporarily delete the two guard lines:
+
+```python
+        if session.capability_token_hash is not None:
+            return None
+```
+
+Re-run. `test_ensure_capability_token_does_not_rotate` **must** fail, and `test_ensure_capability_token_backfills_a_pre_pr0_row` must still pass (it would pass either way — that is expected, it is not the discriminating test). Restore the two lines by retyping them exactly. If the rotate test passes without the guard, it is not testing what it claims; stop and report.
+
+- [ ] **Step 6: Add `capability_token` to the response schema**
+
+In `backend/app/models/schemas.py`, replace `MailAgentRegisterResponse` (`:1994-1996`):
+
+```python
+class MailAgentRegisterResponse(BaseModel):
+    member: MailMemberResponse
+    session: MailSessionResponse
+    capability_token: Optional[str] = None
+```
+
+`Optional` is already imported at the top of the file. The field defaults to `None` so that every existing construction of this model — and the hook path, which does not build one at all — stays valid.
+
+- [ ] **Step 7: Write the failing route test**
+
+Append to `backend/tests/agent_mail/test_capability_tokens.py`. The `client` fixture is **not** in `conftest.py` — it is defined locally in `tests/agent_mail/test_api.py:13-22`, so copy it verbatim into the new file:
+
+```python
+import httpx
+import pytest_asyncio
+
+from app.database import get_db
+from app.main import app
+
+
+@pytest_asyncio.fixture
+async def client(db):
+    async def _override():
+        yield db
+
+    app.dependency_overrides[get_db] = _override
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+```
+
+Note `base_url="http://test"` — that hostname is why `_is_loopback_request` (`external_agent_mail.py:39-41`) accepts these requests, which Task 10's test 20 depends on. Do not change it.
+
+```python
+@pytest.mark.asyncio
+async def test_register_route_returns_the_token_once(client, tmp_path):
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(tmp_path),
+        "session_key": "mcp:route1",
+    }
+    first = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert first.status_code == 200
+    token = first.json()["capability_token"]
+    assert token
+
+    second = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert second.status_code == 200
+    assert second.json()["capability_token"] is None
+```
+
+The route is `@router.post("/agent/register", response_model=MailAgentRegisterResponse)` at `agent_mail.py:119`; confirm the `/api/v1/agent-mail` prefix in `app/api/v1/router.py` — `tests/agent_mail/test_api.py` already posts to paths under it, so copy the prefix from a working call there.
+
+- [ ] **Step 8: Run to verify it fails**
+
+Expected: `assert token` fails, because the route still returns `capability_token: None` on the first call.
+
+- [ ] **Step 9: Wire the route**
+
+In `backend/app/api/v1/agent_mail.py`, replace the body of `register_agent` (`:119-130`). Note the mint goes **after** `register_session` but **before** `list_team`, because `ensure_capability_token` commits and `list_team` reads:
+
+```python
+@router.post("/agent/register", response_model=MailAgentRegisterResponse)
+async def register_agent(
+    request: MailAgentRegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    member, session = await agent_mail_service.register_session(db, request)
+    capability_token = await agent_mail_service.ensure_capability_token(db, session)
+    members = await agent_mail_service.list_team(db)
+    member_resp = next(candidate for candidate in members if candidate.id == member.id)
+    session_resp = next(
+        candidate for candidate in member_resp.sessions if candidate.session_key == session.session_key
+    )
+    return MailAgentRegisterResponse(
+        member=member_resp,
+        session=session_resp,
+        capability_token=capability_token,
+    )
+```
+
+Leave both `next(...)` lookups exactly as they are. **Do not touch `_register_from_hook` (`:184-200`)** — the hook path must not mint. Task 4 renames this handler's `request` parameter; do not do that yet.
+
+- [ ] **Step 10: Run the route test and the full suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: `9 passed` then `480 passed` (471 after Task 2 + 9 here). No existing test asserts the exact key set of the register response, so nothing should break — if something does, report it before adapting.
+
+- [ ] **Step 11: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/services/agent_mail_service.py backend/app/models/schemas.py backend/app/api/v1/agent_mail.py backend/tests/agent_mail/test_capability_tokens.py && git commit -m "feat(mail): mint a per-session capability token on registration
+
+ensure_capability_token stores only a SHA-256 hash and returns the plaintext
+exactly once. It never rotates: the MCP shim re-registers before every tool
+call, so rotating would invalidate the token the shim holds on every call.
+
+Minted from the register_agent route, not inside register_session, because
+register_session returns a 2-tuple that 42 call sites unpack, and because its
+second caller (_register_from_hook) runs under handlers that swallow
+exceptions and return {} -- nowhere to deliver a one-time secret.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.4"
+```
+
+---
+
+### Task 4: Bind the registration to the pane it came from
+
+**Files:**
+- Modify: `backend/app/api/v1/agent_mail.py:119-130` (the `register_agent` route)
+- Modify: `backend/app/utils/peer_process.py` (add `pane_is_alive`)
+- Modify: `backend/app/services/agent_mail_service.py` (add `resolve_pane_binding`)
+- Test: `backend/tests/agent_mail/test_capability_tokens.py`
+
+**Interfaces:**
+- Consumes: `peer_process.resolve_peer_pane` (Task 2); `AgentPaneBinding`, `MailAgentSession.bound_pane_pid`, `.bound_pane_proc_start` (Task 1); `ensure_capability_token` (Task 3).
+- Produces:
+  - `peer_process.pane_is_alive(pane_pid: int, pane_proc_start: str) -> bool | None` — `True` alive, `False` gone, `None` unobservable.
+  - `agent_mail_service.resolve_pane_binding(db, pane) -> AgentPaneBinding | None` — the live row for a pane, pruning stale ones.
+  - A module-level override seam on the route: `agent_mail.resolve_request_pane(request) -> PeerPane | None`.
+
+**The binding check lives at the route, not in `register_session`.** `register_session` has a second caller — `_register_from_hook` (`agent_mail.py:184-200`), reached from `hook_session_start` and `hook_user_prompt_submit`, both of which swallow every exception and return `{}`. A `409 bind_pending` raised inside `register_session` would be swallowed there and reported as success. The hook path must keep working exactly as it does today, unbound.
+
+**`register_agent`'s body parameter is already named `request`.** The ASGI `Request` therefore needs a different name. Use `http_request` and put it **first** in the signature.
+
+**The four-row policy, verbatim from §3.3a.** The body's `team_slot_id` / `team_preset_id` claim is used **only** to choose between two refusal policies, never for identity:
+
+| Binding row | Body claims team context | Result |
+| --- | --- | --- |
+| exists, `slot_id` set | either way | bound to that slot (derived; a disagreeing body claim is `403`) |
+| exists, `slot_id` NULL | either way | unbound token |
+| none | **no** | unbound token — an ordinary repo member |
+| none | **yes** | `409 bind_pending`, retryable |
+
+Why the asymmetry is safe: claiming team context you do not have yields `bind_pending`, i.e. **no token at all** — strictly worse for the liar than the unbound token they would otherwise get. There is no version of this lie that gains a slot binding.
+
+Two more rungs from §3.3:
+
+- **Peer pid underivable** ⇒ under enforcement, refuse with `bind_unverifiable`; in grace mode (`mail_capability_tokens_required = False`), mint unbound. Refusing in grace mode would break every non-Linux and every pre-upgrade caller on deploy, which is the one thing grace mode exists to prevent.
+- **No ancestor is a tmux pane** ⇒ mint unbound. Not every caller is tmux-hosted.
+
+**`bind_pending` is `409`, not `403`.** Deck may simply not have committed the binding yet. A `403` would permanently strand a correctly-launched agent that registered early. Worst case for an **idle** agent is 300s (`HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS`, `agent_mail_server.py:19`) — the shim's failing heartbeat path backs off to 300s, not 60s. An agent that calls any mail tool retries immediately, because `_guard` (`:201-203`) re-registers first. **PR0 changes neither heartbeat constant.**
+
+- [ ] **Step 1: Write the failing test for `pane_is_alive`**
+
+Append to `backend/tests/agent_mail/test_peer_process.py`:
+
+```python
+def test_pane_is_alive_distinguishes_gone_from_unobservable(tmp_path, monkeypatch):
+    """Three-valued on purpose: gone means prune, unobservable means keep."""
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(_STAT)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+
+    assert peer_process.pane_is_alive(1234, "120913170") is True
+    assert peer_process.pane_is_alive(1234, "99999999") is False  # pid reused
+    assert peer_process.pane_is_alive(4321, "120913170") is False  # process gone
+
+
+def test_pane_is_alive_is_none_when_proc_cannot_be_read(monkeypatch):
+    def _boom(pid):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(peer_process, "read_proc_stat", _boom)
+    assert peer_process.pane_is_alive(1234, "120913170") is None
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_peer_process.py -q -p no:warnings
+```
+
+Expected: `AttributeError: ... has no attribute 'pane_is_alive'`.
+
+- [ ] **Step 3: Implement `pane_is_alive`**
+
+Append to `backend/app/utils/peer_process.py`:
+
+```python
+def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
+    """Is the process at pane_pid still the one that started at pane_proc_start?
+
+    Three-valued, mirroring _owner_process_is_alive in github_workspace_service:
+      True  -- alive and the same process
+      False -- gone, or the pid was reused by a different process (prune)
+      None  -- cannot observe (keep the row; fail closed, never prune on doubt)
+
+    A start time mismatch is not "maybe" -- it is proof the original process
+    exited and something else took its number.
+    """
+    try:
+        stat = read_proc_stat(pane_pid)
+    except OSError:
+        return None
+    if stat is None:
+        return False
+    _ppid, current_start = stat
+    return current_start == pane_proc_start
+```
+
+`read_proc_stat` already swallows `OSError` and returns `None`, so the `try` here catches only a monkeypatched raiser or a future change in that function. Keep it: the three-valued contract must not silently collapse to two if `read_proc_stat` ever starts propagating.
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+Expected: `15 passed` in `test_peer_process.py`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/utils/peer_process.py backend/tests/agent_mail/test_peer_process.py && git commit -m "feat(mail): add three-valued pane liveness
+
+pane_is_alive returns True/False/None so a pane that cannot be observed is
+kept rather than pruned, matching _owner_process_is_alive's existing
+distinction between process-gone and cannot-observe.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
+```
+
+- [ ] **Step 6: Write the failing test for `resolve_pane_binding`**
+
+Append to `backend/tests/agent_mail/test_capability_tokens.py`:
+
+```python
+from app.utils.peer_process import PeerPane
+
+
+def _pane(pid: int = 3000, start: str = "111", target: str | None = "team:0.1") -> PeerPane:
+    return PeerPane(pane_pid=pid, pane_proc_start=start, tmux_target=target, peer_pid=pid + 1)
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_matches_on_pid_and_proc_start(db):
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="111", slot_id=None, preset_id=None))
+    await db.commit()
+
+    found = await agent_mail_service.resolve_pane_binding(db, _pane())
+    assert found is not None and found.pane_pid == 3000
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_ignores_a_row_with_a_stale_proc_start(db):
+    """Pid reuse: the number matches, the process does not."""
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="OLD", slot_id=None, preset_id=None))
+    await db.commit()
+
+    assert await agent_mail_service.resolve_pane_binding(db, _pane(start="111")) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_prunes_rows_for_dead_panes(db, monkeypatch):
+    """A row whose pane is gone is deleted, as session rows already are."""
+    from app.utils import peer_process
+
+    db.add(AgentPaneBinding(pane_pid=7777, pane_proc_start="OLD", slot_id=None, preset_id=None))
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="111", slot_id=None, preset_id=None))
+    await db.commit()
+
+    monkeypatch.setattr(
+        peer_process, "pane_is_alive", lambda pid, start: pid == 3000
+    )
+    await agent_mail_service.resolve_pane_binding(db, _pane())
+
+    remaining = (
+        await db.execute(text("SELECT pane_pid FROM agent_pane_bindings ORDER BY pane_pid"))
+    ).scalars().all()
+    assert remaining == [3000]
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_keeps_a_row_it_cannot_observe(db, monkeypatch):
+    """None means 'cannot observe'. Never prune on doubt."""
+    from app.utils import peer_process
+
+    db.add(AgentPaneBinding(pane_pid=7777, pane_proc_start="OLD", slot_id=None, preset_id=None))
+    await db.commit()
+
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda pid, start: None)
+    await agent_mail_service.resolve_pane_binding(db, _pane())
+
+    remaining = (
+        await db.execute(text("SELECT pane_pid FROM agent_pane_bindings"))
+    ).scalars().all()
+    assert remaining == [7777]
+```
+
+Import `AgentPaneBinding` from `app.models.database` at the top of the test file — Task 1 already did.
+
+- [ ] **Step 7: Run to verify it fails**
+
+Expected: `AttributeError: ... has no attribute 'resolve_pane_binding'`.
+
+- [ ] **Step 8: Implement `resolve_pane_binding`**
+
+Add to `agent_mail_service.py`, after `ensure_capability_token`. Add `from app.models.database import AgentPaneBinding` to the existing `from app.models.database import (...)` block (`:13-20`, keep it alphabetical — `AgentPaneBinding` sorts before `AgentTeamPreset`), and `from app.utils import peer_process` to the imports.
+
+```python
+    async def resolve_pane_binding(
+        self, db: AsyncSession, pane: "peer_process.PeerPane"
+    ) -> Optional[AgentPaneBinding]:
+        """Find the live binding row for this pane, pruning dead ones.
+
+        Rows are keyed (pane_pid, pane_proc_start): the pair is the identity,
+        because a pid alone is reusable. A row whose pane is provably gone is
+        deleted here -- the same "prune on the next registration sweep" policy
+        session rows already follow. A row we merely cannot observe is kept.
+        """
+        rows = (await db.execute(select(AgentPaneBinding))).scalars().all()
+        match: Optional[AgentPaneBinding] = None
+        pruned = False
+        for row in rows:
+            if row.pane_pid == pane.pane_pid and row.pane_proc_start == pane.pane_proc_start:
+                match = row
+                continue
+            if peer_process.pane_is_alive(row.pane_pid, row.pane_proc_start) is False:
+                await db.delete(row)
+                pruned = True
+        if pruned:
+            await db.commit()
+        return match
+```
+
+The select is deliberately unfiltered: the prune is a whole-table sweep, which is what makes it "pruned on the next registration sweep" rather than "pruned only for panes that happen to re-register." The matching row is skipped by the `continue` before the liveness check — it is alive by construction, since its pane just made this request.
+
+- [ ] **Step 9: Run to verify the tests pass**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
+```
+
+Expected: `13 passed`.
+
+- [ ] **Step 10: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/services/agent_mail_service.py backend/tests/agent_mail/test_capability_tokens.py && git commit -m "feat(mail): resolve a pane to its slot binding, pruning dead rows
+
+Keyed on (pane_pid, pane_proc_start) because a pid alone is reusable. Prunes
+rows whose pane is provably gone; keeps rows it cannot observe.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
+```
+
+- [ ] **Step 11: Write the failing route tests — all four policy rows**
+
+Append to `backend/tests/agent_mail/test_capability_tokens.py`. **Every one of these must inject the resolver**: `httpx.ASGITransport` sets `scope["client"]` to `("127.0.0.1", 123)`, a port no real socket owns, so the kernel resolver can never succeed under test.
+
+```python
+import app.api.v1.agent_mail as agent_mail_routes
+
+
+@pytest.fixture
+def pane_resolver(monkeypatch):
+    """Override the route's pane resolution. ASGITransport fakes the peer port."""
+
+    def _set(pane):
+        monkeypatch.setattr(
+            agent_mail_routes, "resolve_request_pane", lambda http_request: pane
+        )
+
+    return _set
+
+
+def _body(cwd, session_key="mcp:bind", **extra):
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(cwd),
+        "session_key": session_key,
+    }
+    body.update(extra)
+    return body
+
+
+@pytest.mark.asyncio
+async def test_row_with_a_slot_binds_the_session(client, db, tmp_path, pane_resolver, slot):
+    db.add(
+        AgentPaneBinding(
+            pane_pid=3000, pane_proc_start="111", slot_id=slot.id, preset_id=slot.preset_id
+        )
+    )
+    await db.commit()
+    pane_resolver(_pane())
+
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+
+    row = (
+        await db.execute(
+            text(
+                "SELECT team_slot_id, bound_pane_pid, bound_pane_proc_start "
+                "FROM mail_agent_sessions WHERE session_key = 'mcp:bind'"
+            )
+        )
+    ).first()
+    assert row == (slot.id, 3000, "111")
+
+
+@pytest.mark.asyncio
+async def test_row_with_a_null_slot_mints_unbound(client, db, tmp_path, pane_resolver):
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="111", slot_id=None, preset_id=None))
+    await db.commit()
+    pane_resolver(_pane())
+
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+    slot_id = (
+        await db.execute(
+            text("SELECT team_slot_id FROM mail_agent_sessions WHERE session_key = 'mcp:bind'")
+        )
+    ).scalar_one()
+    assert slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_no_row_and_no_claim_mints_unbound(client, tmp_path, pane_resolver):
+    """A hand-started pane Deck never launched is an ordinary repo member."""
+    pane_resolver(_pane())
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_no_row_but_a_team_claim_is_bind_pending(client, tmp_path, pane_resolver, slot):
+    """Retryable: Deck may not have committed the binding yet."""
+    pane_resolver(_pane())
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=slot.id, team_preset_id=slot.preset_id),
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "bind_pending"
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_slot_claim_is_403(client, db, tmp_path, pane_resolver, slot, other_slot):
+    """Derive, do not compare -- and never silently overwrite."""
+    db.add(
+        AgentPaneBinding(
+            pane_pid=3000, pane_proc_start="111", slot_id=slot.id, preset_id=slot.preset_id
+        )
+    )
+    await db.commit()
+    pane_resolver(_pane())
+
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=other_slot.id, team_preset_id=other_slot.preset_id),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_no_pane_ancestor_mints_unbound(client, tmp_path, pane_resolver):
+    """resolve_peer_pane returned None because no ancestor is a tmux pane."""
+    pane_resolver(None)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_peer_refuses_under_enforcement(
+    client, tmp_path, pane_resolver, monkeypatch
+):
+    """Grace mode mints unbound; enforcement refuses bind_unverifiable."""
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    pane_resolver(None)
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=1, team_preset_id=1),
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "bind_unverifiable"
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_peer_mints_unbound_in_grace_mode(client, tmp_path, pane_resolver):
+    """The same request, enforcement off: mint rather than strand the caller."""
+    assert settings.mail_capability_tokens_required is False
+    pane_resolver(None)
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=1, team_preset_id=1),
+    )
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+```
+
+You need `slot` and `other_slot` fixtures making two `AgentTeamSlot` rows on one preset. **Do not invent them** — `tests/agent_teams/test_agent_team_service.py` and `tests/agent_mail/test_registry.py` both already build slots; copy the shape from whichever helper is closest, and note in your report which you copied. Every required column must be set, or the insert fails with a constraint error that reads like a logic bug.
+
+**Note what the last two tests pin down.** `pane_resolver(None)` cannot distinguish "no pane ancestor" from "no peer pid" — the route sees `None` either way, so the *only* thing that separates minting unbound from refusing `bind_unverifiable` is the enforcement flag. These two tests are the same request differing only in that flag, which is exactly the discrimination the route makes. Do not merge them into one loose assertion: a test that accepts either refusal proves nothing about which branch ran.
+
+`test_no_pane_ancestor_mints_unbound` and `test_unresolvable_peer_mints_unbound_in_grace_mode` overlap by design — the first has no team claim, the second has one. Together they show the claim alone does not trigger a refusal in grace mode.
+
+- [ ] **Step 12: Run to verify they fail**
+
+Expected: the first assertion to fail is `AttributeError: module 'app.api.v1.agent_mail' has no attribute 'resolve_request_pane'`.
+
+- [ ] **Step 13: Implement the route**
+
+In `backend/app/api/v1/agent_mail.py`, add to the imports at `:7`:
+
+```python
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
+```
+
+and add, near the top of the module:
+
+```python
+from app.config import settings
+from app.utils import peer_process
+
+
+def resolve_request_pane(http_request: Request) -> Optional[peer_process.PeerPane]:
+    """Resolve the calling pane from the live connection.
+
+    A module-level function so tests can override it: httpx.ASGITransport
+    reports a synthetic client port that no real socket owns.
+
+    MUST be called inside the handler, never after the response -- see
+    app/utils/peer_process. Once the response is sent the socket is in
+    TIME_WAIT, its inode reads 0, and no process owns it.
+    """
+    client = http_request.client
+    if client is None:
+        return None
+    local_port = http_request.scope.get("server", (None, None))[1]
+    return peer_process.resolve_peer_pane(client.host, client.port, local_port=local_port)
+```
+
+Then replace `register_agent`:
+
+```python
+@router.post("/agent/register", response_model=MailAgentRegisterResponse)
+async def register_agent(
+    http_request: Request,
+    request: MailAgentRegisterRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
+    pane = resolve_request_pane(http_request)
+
+    binding = None
+    if pane is not None:
+        binding = await agent_mail_service.resolve_pane_binding(db, pane)
+    elif claims_team_context and settings.mail_capability_tokens_required:
+        # Cannot verify where this caller runs, and it claims a slot. Refuse --
+        # retryable, because the cause may be a binding that is not committed
+        # yet. In grace mode we mint unbound instead: refusing here would break
+        # every pre-upgrade and non-Linux caller the moment PR0 deploys.
+        raise HTTPException(status_code=409, detail="bind_unverifiable")
+
+    derived_slot_id = binding.slot_id if binding is not None else None
+    if binding is None and claims_team_context:
+        raise HTTPException(status_code=409, detail="bind_pending")
+    if (
+        request.team_slot_id is not None
+        and derived_slot_id is not None
+        and request.team_slot_id != derived_slot_id
+    ):
+        # Derive, do not compare -- and never silently overwrite: a silent
+        # overwrite would report a misconfigured shim as success.
+        raise HTTPException(status_code=403, detail="slot_claim_mismatch")
+
+    request = request.model_copy(
+        update={
+            "team_slot_id": derived_slot_id,
+            "team_preset_id": binding.preset_id if binding is not None else None,
+        }
+    )
+    member, session = await agent_mail_service.register_session(db, request)
+    if pane is not None:
+        session.bound_pane_pid = pane.pane_pid
+        session.bound_pane_proc_start = pane.pane_proc_start
+        await db.commit()
+    capability_token = await agent_mail_service.ensure_capability_token(db, session)
+    members = await agent_mail_service.list_team(db)
+    member_resp = next(candidate for candidate in members if candidate.id == member.id)
+    session_resp = next(
+        candidate for candidate in member_resp.sessions if candidate.session_key == session.session_key
+    )
+    return MailAgentRegisterResponse(
+        member=member_resp,
+        session=session_resp,
+        capability_token=capability_token,
+    )
+```
+
+Two things to be careful about:
+
+1. **The `model_copy` that overwrites `team_slot_id` also overwrites `team_preset_id` with `None` when there is no binding.** That is deliberate — an unbound session has neither. But `register_session` *infers* team context from the process when the body carries none (`_infer_team_context_from_process`, `:158`), so clearing both keeps that inference path live rather than short-circuiting it. Verify with the existing `tests/agent_mail/test_registry.py` inference tests: they must all still pass. If any breaks, **stop and report** — it means inference and derivation disagree, which is a design question, not an implementation detail.
+2. **`Optional` must be imported** in `agent_mail.py` for `resolve_request_pane`'s annotation. Check the existing imports; add `from typing import Optional` if absent.
+
+- [ ] **Step 14: Run the new tests and the full suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: `21 passed` in the new file. For the full suite, expect the `test_registry.py` inference tests to be the risk area — read constraint 1 above before touching anything.
+
+- [ ] **Step 15: Verify the hook path is untouched**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_hooks_api.py -q -p no:warnings
+```
+
+Expected: unchanged from baseline. The hook routes call `_register_from_hook`, which must never see the binding policy — if these fail, the check leaked out of the route.
+
+- [ ] **Step 16: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/api/v1/agent_mail.py backend/tests/agent_mail/test_capability_tokens.py && git commit -m "feat(mail): bind registration to the caller's tmux pane
+
+The slot is derived from the kernel, never from the body: a disagreeing
+team_slot_id claim is 403, not a silent overwrite. A pane with no binding row
+mints unbound if it claims no team context (an ordinary repo member) and gets
+a retryable 409 bind_pending if it does.
+
+The policy lives at the route because register_session's other caller,
+_register_from_hook, runs under handlers that swallow exceptions and return {}
+-- a refusal raised there would be reported as success.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.3, 3.3a"
+```
+
+---
+
+### Task 5: The enforcement dependency and the five write routes
+
+**Files:**
+- Create: `backend/app/api/v1/deps.py`
+- Modify: `backend/app/api/v1/agent_mail.py` (`send_message` `:65-70`, `mark_read` `:90-97`, `ack_message` `:100-107`, `agent_inbox` `:133-148`)
+- Test: `backend/tests/agent_mail/test_capability_tokens.py`
+- Modify: `backend/tests/agent_mail/test_api.py` (four tests)
+
+**Interfaces:**
+- Consumes: `agent_mail_service.hash_capability_token` (Task 3); `settings.mail_capability_tokens_required` (Task 1).
+- Produces, in `app.api.v1.deps`:
+  - `mail_session(x_deck_session_token, db) -> MailAgentSession | None` — the resolved session, or `None` in grace mode with no token. Raises `401 session_token_invalid` for a token that does not match.
+  - `require_mail_session(...) -> MailAgentSession` — the same, but `401 session_token_required` rather than `None`.
+  - `require_session_slot(session) -> int` — the session's `team_slot_id`, or `403 session_not_slot_bound`.
+  - `derive_member_id(session, claimed: int | None) -> int` — derive, do not compare.
+
+**`app/api/v1/` has no `deps.py`** — this is a new file. Put it there rather than in `agent_mail.py` because Task 7 imports `require_session_slot` from `agent_teams.py`, and a cross-import between two route modules is a cycle waiting to happen.
+
+**The grace-mode fallback is the whole of PR0's mail-write change.** With `mail_capability_tokens_required = False`:
+
+| Request | Behaviour |
+| --- | --- |
+| No token | Falls back to today's caller-supplied `member_id`; log `capability_token_missing` once per session key |
+| Token that matches a session | Member **derived** from the token. A caller-supplied `member_id` that agrees is accepted; one that disagrees is `403` |
+| Token that does not match any session | `401 session_token_invalid` — a wrong token is never treated as no token |
+
+That last row is the one to get right. "Invalid falls back to unauthenticated" would make the enforcement flag meaningless: an attacker sends garbage and gets the legacy path.
+
+**Correction (2026-08-09, source verification) — §3.5 says `member_id` "is removed from the agent route, not merely validated." PR0 cannot remove it.** Grace mode's entire purpose is that a pre-upgrade shim, whose loaded code has no idea the header exists, keeps working across the deploy. That shim sends `member_id` as a query parameter and no token (`agent_mail_server.py:191` and `:264`). Removing the parameter in PR0 breaks exactly the callers grace mode exists to protect. So in PR0 the parameter stays and is *derived-over* when a token is present; **removing it belongs in PR1**, after the operator has restarted the panes and flipped the flag. Under enforcement the parameter is ignored entirely, so it is inert rather than a trap — but it is still a parameter that outlived its purpose, and PR1's plan must delete it.
+
+**Derive, do not compare.** The server sets the member from the token. A caller-supplied value that *agrees* is accepted (which keeps the shim's current payload valid); one that *disagrees* is `403`, never a silent overwrite. A silent overwrite would report a misconfigured shim as success.
+
+- [ ] **Step 1: Write the failing tests for the dependency**
+
+Append to `backend/tests/agent_mail/test_capability_tokens.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_write_with_a_valid_token_derives_the_sender(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register", json=_body(tmp_path, session_key="mcp:send")
+    )
+    token = register.json()["capability_token"]
+    sender_id = register.json()["member"]["id"]
+    recipient = await _member(db, "other-repo", "other")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "recipient_member_id": recipient.id,
+            "subject": "hello",
+            "body_markdown": "hi",
+        },
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["sender_member_id"] == sender_id
+
+
+@pytest.mark.asyncio
+async def test_write_with_no_token_is_401_under_enforcement(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    recipient = await _member(db, "other-repo", "other")
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": recipient.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_token_never_falls_back(client, db, tmp_path, monkeypatch):
+    """Grace mode must not turn a wrong token into an unauthenticated write."""
+    assert settings.mail_capability_tokens_required is False
+    recipient = await _member(db, "other-repo", "other")
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": recipient.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+        headers={"X-Deck-Session-Token": "not-a-real-token"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_invalid"
+
+
+@pytest.mark.asyncio
+async def test_grace_mode_accepts_a_tokenless_write(client, db, tmp_path):
+    """Test 15: the whole point of PR0's mail-write path staying compatible."""
+    assert settings.mail_capability_tokens_required is False
+    sender = await _member(db, "sender-repo", "sender")
+    recipient = await _member(db, "other-repo", "other")
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": sender.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["sender_member_id"] == sender.id
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_sender_is_403(client, db, tmp_path, monkeypatch):
+    """Test 5: the forgery. The token mismatch must refuse before send_message
+    gets a chance to reject the payload for its own reasons."""
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register", json=_body(tmp_path, session_key="mcp:forge")
+    )
+    token = register.json()["capability_token"]
+    victim = await _member(db, "victim-repo", "victim")
+    recipient = await _member(db, "other-repo", "other")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": victim.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "sender_not_token_holder"
+```
+
+Copy `_member` from `tests/agent_mail/test_api.py:25-35`. **Test 5's ordering matters:** `send_message` already raises `ValueError → 400` for a payload carrying both sender fields, and for an `answer` whose sender is not the root's recipient. Use `kind="message"` with only `sender_member_id` set, so the **403 from the token check fires first**. If you see a 400, the dependency is running after the service instead of before it.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Expected: the enforcement tests return `200`, because nothing checks a token yet.
+
+- [ ] **Step 3: Write `deps.py`**
+
+Create `backend/app/api/v1/deps.py`:
+
+```python
+"""Shared route dependencies for capability-token enforcement."""
+import hmac
+import logging
+from typing import Optional
+
+from fastapi import Depends, Header, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
+from app.database import get_db
+from app.models.database import MailAgentSession
+from app.services.agent_mail_service import agent_mail_service
+
+logger = logging.getLogger(__name__)
+
+# Members we have already logged a missing token for, so grace mode does not
+# emit one line per request for the lifetime of a pre-upgrade shim. The key is
+# the CLAIMED member: a tokenless caller has no session for us to key on, which
+# is the whole reason it needs logging.
+_missing_token_logged: set[int] = set()
+
+
+async def mail_session(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[MailAgentSession]:
+    """Resolve the calling session from its capability token.
+
+    Returns None only in grace mode with NO token at all. A token that is
+    present but matches nothing is always a 401: treating an invalid token as
+    an absent one would make the enforcement flag meaningless, because any
+    caller could send garbage and get the legacy unauthenticated path.
+    """
+    if not x_deck_session_token:
+        if settings.mail_capability_tokens_required:
+            raise HTTPException(status_code=401, detail="session_token_required")
+        return None
+
+    hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
+    result = await db.execute(
+        select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
+    )
+    for session in result.scalars().all():
+        if hmac.compare_digest(session.capability_token_hash, hashed):
+            return session
+    raise HTTPException(status_code=401, detail="session_token_invalid")
+
+
+async def require_mail_session(
+    session: Optional[MailAgentSession] = Depends(mail_session),
+) -> MailAgentSession:
+    """Like mail_session, but never None."""
+    if session is None:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    return session
+
+
+def require_session_slot(session: MailAgentSession) -> int:
+    """The slot this session is bound to, or 403.
+
+    An unbound session can send mail as a repo member. It can never speak for a
+    slot, which is what every dispatch-status report claims to do.
+    """
+    if session.team_slot_id is None:
+        raise HTTPException(status_code=403, detail="session_not_slot_bound")
+    return session.team_slot_id
+
+
+def derive_member_id(
+    session: Optional[MailAgentSession],
+    claimed: Optional[int],
+    *,
+    detail: str = "sender_not_token_holder",
+) -> Optional[int]:
+    """Derive the acting member from the token; refuse a disagreeing claim.
+
+    A claim that AGREES is accepted, which keeps the existing shim payload
+    valid. A claim that DISAGREES is 403, never a silent overwrite: overwriting
+    would report a misconfigured shim as success.
+    """
+    if session is None:
+        if claimed is None:
+            raise HTTPException(status_code=400, detail="member_id_required")
+        if claimed not in _missing_token_logged:
+            _missing_token_logged.add(claimed)
+            logger.warning(
+                "capability_token_missing: unauthenticated write as member %s "
+                "accepted because mail_capability_tokens_required is False",
+                claimed,
+            )
+        return claimed
+    if claimed is not None and claimed != session.member_id:
+        raise HTTPException(status_code=403, detail=detail)
+    return session.member_id
+```
+
+The log line lives inside `derive_member_id` rather than in `mail_session` because that is the only place a tokenless caller's identity is known — `mail_session` returns `None` and has nothing to name. It fires once per claimed member, so a pre-upgrade shim polling its inbox every 60 s produces one line, not one per poll. Grace mode is meant to be visible in the log without drowning it.
+
+`hmac.compare_digest` on two hex digests of equal length is the right comparison here. Note it is reached **only** after `if not x_deck_session_token`, which is what keeps `compare_digest("", "") is True` from mattering — the same ordering trap Task 8 handles for the operator token.
+
+- [ ] **Step 4: Apply the dependency to `send_message`**
+
+In `agent_mail.py`, add `from app.api.v1.deps import derive_member_id, mail_session, require_mail_session` and replace `send_message` (`:65-70`):
+
+```python
+@router.post("/messages", response_model=MailMessageResponse)
+async def send_message(
+    request: MailMessageCreate,
+    session: Optional[MailAgentSession] = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    if session is not None:
+        request = request.model_copy(
+            update={"sender_member_id": derive_member_id(session, request.sender_member_id)}
+        )
+    try:
+        return await agent_mail_service.send_message(db, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+```
+
+`MailAgentSession` needs importing into `agent_mail.py` for the annotation. Leave the `except ValueError` mapping exactly as it is — `send_message`'s own validation order (invalid kind, both sender fields, `answer` without a root, and so on) is unchanged and still correct.
+
+- [ ] **Step 5: Apply it to `mark_read` and `ack_message`**
+
+```python
+@router.post("/messages/{message_id}/read")
+async def mark_read(
+    message_id: int,
+    body: dict[str, Any] = Body(default_factory=dict),
+    session: Optional[MailAgentSession] = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    member_id = derive_member_id(
+        session, body.get("member_id"), detail="member_not_token_holder"
+    )
+    await agent_mail_service.mark_read(db, message_id, int(member_id))
+    return {"ok": True}
+
+
+@router.post("/messages/{message_id}/ack")
+async def ack_message(
+    message_id: int,
+    body: dict[str, Any] = Body(default_factory=dict),
+    session: Optional[MailAgentSession] = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    member_id = derive_member_id(
+        session, body.get("member_id"), detail="member_not_token_holder"
+    )
+    await agent_mail_service.ack_message(db, message_id, int(member_id))
+    return {"ok": True}
+```
+
+Two changes to notice. `Body(...)` becomes `Body(default_factory=dict)`, because a tokened caller no longer needs to send a body at all. And `int(body["member_id"])` becomes `body.get("member_id")` passed through `derive_member_id`, which raises `400 member_id_required` instead of the bare `KeyError` today's code would raise.
+
+**Why these two routes matter as much as `send_message`:** `ack_message` writes `receipt.read_at` (`agent_mail_service.py:1294`), and `_brief_delivered` (`github_dispatch_service.py:806-824`) reads exactly that field on the `(brief_message_id, owner_member_id)` receipt to decide whether the `brief_unread` escalation fires. An unauthenticated ack on an arbitrary member therefore silences a dispatch escalation. That is not a hypothetical — it is why test 18 exists.
+
+- [ ] **Step 6: Apply it to `agent_inbox`**
+
+```python
+@router.get("/agent/inbox", response_model=MailInboxResponse)
+async def agent_inbox(
+    member_id: Optional[int] = None,
+    unread_only: bool = False,
+    mark_read: bool = False,
+    limit: int = 50,
+    session: Optional[MailAgentSession] = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    # member_id survives PR0 only for grace mode: a pre-upgrade shim sends it
+    # and no token. Under enforcement it is ignored -- derive_member_id refuses
+    # a disagreeing value and returns the token's member otherwise. PR1 deletes
+    # the parameter once the panes have restarted.
+    resolved = derive_member_id(session, member_id, detail="member_not_token_holder")
+    return await agent_mail_service.get_inbox(
+        db,
+        int(resolved),
+        unread_only=unread_only,
+        mark_read=mark_read,
+        limit=limit,
+        refresh_mcp_session=True,
+    )
+```
+
+`member_id` changes from a required to an optional query parameter. That is the only signature change, and it is backward-compatible: every existing caller still passes it.
+
+**Why the inbox is a write endpoint.** `refresh_mcp_session=True` is hardcoded at the route, and it calls `heartbeat_member_mcp_session`, which writes `last_seen_at` and forces `mailbox_status = "connected"`. With `mark_read=true` it also writes `receipt.read_at` and `member.last_inbox_checked_at`. `_effective_status` reads the first pair, `_brief_delivered` reads the second. So an unauthenticated `GET` forges a dead agent's liveness *and* silences an escalation.
+
+- [ ] **Step 7: Run the new tests**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
+```
+
+Expected: `26 passed`.
+
+- [ ] **Step 8: Run the full suite and expect four named failures**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Grace mode is on by default, so **most** existing tests keep passing untouched. Any that do fail should be from this list, which was measured: `test_api.py`'s `test_inbox_read_ack_endpoints`, `test_agent_inbox_refreshes_stale_mcp_session`, `test_send_and_thread_roundtrip`, `test_invalid_kind_is_400`. **If a test outside that list fails, stop and report** — it means the dependency changed behaviour in grace mode, which it must not.
+
+- [ ] **Step 9: Fix only the tests that actually broke**
+
+For each failure, the fix is one of exactly two things, and nothing else:
+
+- The test relied on `Body(...)` rejecting an empty body ⇒ it now gets `400 member_id_required` instead of `422`. Assert the new code.
+- The test relied on `member_id` being a required query parameter ⇒ same, `400` not `422`.
+
+Do **not** add tokens to these tests. They are the grace-mode regression suite: their value is precisely that they pass unauthenticated. If a test needs a token to pass, the grace-mode fallback is broken.
+
+- [ ] **Step 10: Run the full suite again**
+
+Expected: `480 + 26 = 506 passed`, no failures. Report the actual number.
+
+- [ ] **Step 11: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/api/v1/deps.py backend/app/api/v1/agent_mail.py backend/tests/agent_mail/test_capability_tokens.py backend/tests/agent_mail/test_api.py && git commit -m "feat(mail): derive the acting member from the capability token
+
+Four routes (messages, read, ack, agent/inbox) now resolve their member from
+the X-Deck-Session-Token header. A claim that agrees is accepted; one that
+disagrees is 403, never a silent overwrite.
+
+An absent token falls back to the legacy path only while
+mail_capability_tokens_required is False. An INVALID token is always 401 --
+falling back there would let any caller reach the legacy path with garbage.
+
+agent/inbox is included because it is a write endpoint: refresh_mcp_session is
+hardcoded at the route, so an unauthenticated GET forges last_seen_at and, with
+mark_read, receipt.read_at -- the two fields _effective_status and
+_brief_delivered read to make safety decisions.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.5, 3.4a"
+```
+
+---
+
+### Task 6: The shim captures the token and sends it on every call
+
+**Files:**
+- Modify: `backend/mcp_shim/agent_mail_server.py` (`_state` `:24-29`, `_deck_request` `:79-98`, `_ensure_registered` `:139-161`)
+- Test: `backend/tests/agent_mail/test_mcp_shim.py`
+
+**Interfaces:**
+- Consumes: `capability_token` on the register response (Task 3); the `X-Deck-Session-Token` header (Task 5).
+- Produces: `_state["capability_token"]`, sent as `X-Deck-Session-Token` on every Deck request the shim makes.
+
+**The header goes in `_deck_request`, the single chokepoint.** Every shim call funnels through it — `_request` (`:101`), `_team_request` (`:105`), `_bridge_request` (`:109`), `_dispatch_request` (`:113`) are all one-line wrappers, and `_bridge_request_with_token` (`:117`) layers a second header on top of `_bridge_request`. Putting the token anywhere else means auditing five call paths instead of one and getting it wrong on the sixth someone adds.
+
+**Merge, never replace, the caller's headers.** `_bridge_request_with_token` already does `headers = dict(kwargs.pop("headers", {}) or {})` and sets `X-Claude-Deck-Terminal-Token`. If `_deck_request` assigns `kwargs["headers"] = {...}` it destroys that one. Copy the same pop-and-merge idiom.
+
+**Capture on first registration only.** `ensure_capability_token` returns the plaintext exactly once, so every later `_ensure_registered` — and `_guard` calls it before every tool — sees `capability_token: None`. Overwriting `_state["capability_token"]` unconditionally would null it on the second call and 401 every subsequent request.
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/agent_mail/test_mcp_shim.py:13-47` already asserts an exact five-key payload for registration. Read it, then append:
+
+```python
+def test_registration_captures_the_capability_token(monkeypatch):
+    """The plaintext arrives once; the shim must keep it."""
+    from mcp_shim import agent_mail_server as shim
+
+    responses = [
+        {"ok": True, "data": {"member": {"id": 4}, "session": {"id": 9},
+                              "capability_token": "tok-abc"}},
+        {"ok": True, "data": {"member": {"id": 4}, "session": {"id": 9},
+                              "capability_token": None}},
+    ]
+    monkeypatch.setattr(shim, "_request", lambda *a, **k: responses.pop(0))
+    shim._state["capability_token"] = None
+    shim._state["member_id"] = None
+
+    shim._ensure_registered()
+    assert shim._state["capability_token"] == "tok-abc"
+
+    # The re-registration _guard performs before every tool returns None.
+    shim._ensure_registered()
+    assert shim._state["capability_token"] == "tok-abc", "must not be nulled"
+
+
+def test_deck_request_sends_the_session_token(monkeypatch):
+    from mcp_shim import agent_mail_server as shim
+
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {}
+
+        return _Response()
+
+    monkeypatch.setattr(shim.httpx, "request", _fake_request)
+    shim._state["capability_token"] = "tok-abc"
+    shim._state["offline_until"] = 0.0
+
+    shim._deck_request("GET", "agent-mail", "/team")
+    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+
+
+def test_deck_request_preserves_a_callers_headers(monkeypatch):
+    """_bridge_request_with_token sets its own header; do not clobber it."""
+    from mcp_shim import agent_mail_server as shim
+
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {}
+
+        return _Response()
+
+    monkeypatch.setattr(shim.httpx, "request", _fake_request)
+    shim._state["capability_token"] = "tok-abc"
+    shim._state["offline_until"] = 0.0
+
+    shim._deck_request(
+        "GET", "agent-bridge", "/x", headers={"X-Claude-Deck-Terminal-Token": "term"}
+    )
+    assert captured["headers"]["X-Claude-Deck-Terminal-Token"] == "term"
+    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+
+
+def test_deck_request_sends_no_header_without_a_token(monkeypatch):
+    """A shim that never got a token must not send an empty one -- an empty
+    header is a token that matches nothing, which is 401, not grace mode."""
+    from mcp_shim import agent_mail_server as shim
+
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {}
+
+        return _Response()
+
+    monkeypatch.setattr(shim.httpx, "request", _fake_request)
+    shim._state["capability_token"] = None
+    shim._state["offline_until"] = 0.0
+
+    shim._deck_request("GET", "agent-mail", "/team")
+    assert "X-Deck-Session-Token" not in (captured["headers"] or {})
+```
+
+The last test is the one that pairs with Task 5's `test_an_invalid_token_never_falls_back`. An empty-string header is **not** the same as no header: `deps.mail_session` treats `""` as absent via `if not x_deck_session_token`, so it would work — but relying on that couples the shim to a truthiness check three modules away. Send no header at all.
+
+These tests mutate module-level `_state`, so they leak between tests. Add a fixture that saves and restores it, or set every key each test reads. Check whether `test_mcp_shim.py` already has such a fixture before adding one.
+
+- [ ] **Step 2: Run to verify it fails**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_mcp_shim.py -q -p no:warnings
+```
+
+Expected: `KeyError: 'capability_token'` on `_state`.
+
+- [ ] **Step 3: Add the state slot**
+
+In `mcp_shim/agent_mail_server.py`, add to the `_state` dict (`:24-29`):
+
+```python
+    "capability_token": None,
+```
+
+- [ ] **Step 4: Capture the token in `_ensure_registered`**
+
+Inside `_ensure_registered`, after the `_request("POST", ...)` result is confirmed `ok` and alongside where `_state["member_id"]` is set, add:
+
+```python
+        minted = result["data"].get("capability_token")
+        if minted:
+            # Returned exactly once, on the registration that mints it. Every
+            # later call -- and _guard re-registers before every tool -- returns
+            # None, so an unconditional assignment would null this and 401 the
+            # rest of the session.
+            _state["capability_token"] = minted
+```
+
+Read the existing block first: the two `_state` writes are inside `_ensure_registered` (`:139-161`) and the surrounding code already guards on `result["ok"]`. Put this next to them, under the same guard, and do not add a second `ok` check.
+
+- [ ] **Step 5: Send the header in `_deck_request`**
+
+In `_deck_request` (`:79-98`), between the `url = ...` line (`:84`) and the `try:` (`:85`):
+
+```python
+    session_token = _state.get("capability_token")
+    if session_token:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-Deck-Session-Token"] = session_token
+        kwargs["headers"] = headers
+```
+
+The pop-and-merge is the same idiom `_bridge_request_with_token` uses at `:132`. It matters: `_bridge_request_with_token` sets `X-Claude-Deck-Terminal-Token` and then calls through here, so a plain assignment would drop the terminal token and break every bridge call.
+
+- [ ] **Step 6: Run the shim tests**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_mcp_shim.py -q -p no:warnings
+```
+
+Expected: the four new tests pass. **`test_mcp_shim.py:13-47`'s exact five-key payload assertion is expected to still pass** — the registration *payload* is unchanged; only the *response* handling and the *headers* changed. If that test fails, you modified the payload; revert that part.
+
+- [ ] **Step 7: Run the full suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: `510 passed`. Report the actual number.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/mcp_shim/agent_mail_server.py backend/tests/agent_mail/test_mcp_shim.py && git commit -m "feat(shim): capture the capability token and send it on every call
+
+The header is added in _deck_request, the single chokepoint all five request
+wrappers funnel through, using the same pop-and-merge idiom as
+_bridge_request_with_token so a caller's own headers survive.
+
+The token is captured only when the response actually carries one: it is minted
+once, so an unconditional assignment would null it on the re-registration
+_guard performs before every tool call.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6a"
+```
+
+---
+
+### Task 7: `/dispatch-status` — an authorization rule for every branch
+
+**Files:**
+- Modify: `backend/app/api/v1/agent_teams.py:1-58` (imports), `:286-385` (`report_dispatch_status`)
+- Test: `backend/tests/agent_mail/test_dispatch_status_tool.py`
+
+**Interfaces:**
+- Consumes: `app.api.v1.deps.mail_session` and `require_session_slot` (Task 5); `github_dispatch_service._leader_slot` (existing, `:533-539`).
+- Produces, in `app.api.v1.agent_teams`:
+  - `_DISPATCH_STATUS_RULES: dict[str, _StatusRule]` — one entry per accepted status. The module-level table test 7c enumerates.
+  - `_StatusRule` — a `NamedTuple` with `role: str` (`"owner"` or `"target"`), `refusal: str`, and `lease_token_required: bool`.
+  - `async def _authorize_dispatch_report(db, item, report, session) -> None` — raises, or returns having filled `report.reporting_slot_id` from the derivation.
+
+**The gap, measured.** Of the nine branches the route accepts, exactly **one** compares the reporter to the item — `workspace_released` at `:334`. Every other branch reads `report.work_item_id` and acts. Task 5's token narrows the caller population from "any process with curl" to "any registered agent," and on this route that narrowing buys almost nothing: the population that matters is the other slots on the same team, and they are all registered. Today a Specialist can mark another slot's item `blocked`, accept a handoff aimed elsewhere, or plant a `pr_number` on an item it has never touched.
+
+**The rules table, from §3.5a's matrix.** Roles: **owner** = `item.owner_slot_id`; **target** = `item.handoff_target_slot_id`.
+
+| Status | Who may report it | Lease token | Refusal |
+| --- | --- | --- | --- |
+| `triaging` | owner | not required | `403 not_item_owner` |
+| `in_progress` | owner | not required | `403 not_item_owner` |
+| `blocked` | owner | not required | `403 not_item_owner` |
+| `ack_received` | owner | not required | `403 not_item_owner` |
+| `handoff_initiated` | owner | not required | `403 not_item_owner` |
+| `handoff_accepted` | **target** | not required | `403 not_handoff_target` — *in addition to* `accept_handoff`'s existing `409` |
+| `revision_requested` | owner | not required | `403 not_item_owner` — **see the Correction below** |
+| `pr_opened` | owner | **required** | `403 not_item_owner`; `409` on token mismatch |
+| `workspace_released` | owner | **required** | unchanged — the branch already enforces both |
+| unknown status | — | — | `400 unknown status <s>` (unchanged) |
+
+**Correction (2026-08-09, source verification) — three of §3.5a's rows are not PR0's, and one of them inverts.**
+
+1. **`revision_requested` stays owner-authorized here; its retirement is PR1's.** §3.5a's matrix gives this row to *nobody*, refusing `409 use_deck_approve_work_item`. That refusal is the visible half of §4.3a.1's `advance_approval_round` — "the rejection *is* the transition" — and §4.3a.1 is squarely inside the PR1 chapter (spec `:985` opens it; §4.3a.1 is at `:1760`). By §2.1's rule, *"each artifact ships in the earliest PR that has a consumer for it"*, the refusal ships with the function that replaces it. Today the branch calls `record_approval_round` (`agent_teams.py:302`) and `test_revision_requested_increments_and_caps` (`test_dispatch_status_tool.py:165-176`) asserts `200` plus `escalated` / `approval_rounds_exhausted`. **Give this row the ordinary owner rule and leave the branch body alone.** Consequences to carry forward: spec test **7d is PR1's**, and 7b's stated exception ("a test hardcoding `403` fails on the one branch whose refusal is stronger") **does not apply in PR0** — in PR0 every authorization refusal on this route is a `403`, so 7b's table may carry one code. PR1's plan must add the per-branch expected status back when it adds the `409`.
+2. **`pr_ready` has no row, because the branch does not exist.** Grep-verified in `app/`, and §2.1 assigns `pr_ready` and its head check to **PR2**. So the table has **nine** statuses, not ten, and spec tests **7h and 7i are PR2's**. Test 7c's exhaustiveness assertion is written against whatever the route accepts, so it needs no edit when PR2 adds the tenth — which is the entire reason it is mechanical rather than a hardcoded list.
+3. **The whole-route `409 tokens_not_enforced` is PR1's**, per §2.1's grace-mode row. PR0 must not add it. In PR0 this route keeps the same grace-mode fallback the mail routes got in Task 5: **no token ⇒ legacy caller-supplied `reporting_slot_id`, unchanged behaviour; a token that resolves ⇒ derived slot and the table enforced; an invalid token ⇒ `401 session_token_invalid`.** That is what keeps the 22 existing tests in `test_dispatch_status_tool.py` green and what keeps a pre-upgrade shim working across the deploy.
+
+**What PR0's authorization is therefore worth, stated honestly.** With enforcement off, a caller who simply omits the header gets today's behaviour, so PR0's matrix is **not** a live control on the day it deploys — it is the control that becomes live when the operator flips `mail_capability_tokens_required`, which is §3.8's rollout step and Task 11's note. Two things make writing it now correct rather than theatre: the shim ships the header in the same PR (Task 6), so every *real* caller is authorized from the moment the panes restart; and PR1's `409` closes the tokenless hole in the PR that needs it closed. Do not "improve" this by refusing tokenless calls in PR0 — that breaks the shipped shim on deploy, which is the one thing grace mode exists to prevent.
+
+**Where the check lives: in the route, once, before the branch chain.** Not inside the service functions. `initiate_handoff`, `accept_handoff`, `record_approval_round`, `escalate`, and `report_pr_opened` are all also called from the monitor loop and from operator paths that have no reporting slot; pushing agent authorization down into them would either block those callers or grow an `if caller_is_agent` parameter through five signatures. The endpoint is the trust boundary.
+
+**Ordering: authorize before the first mutation, not after.** This is what tests 7b and 7f actually assert — a route that mutates and *then* refuses returns the same status code as one that refuses first, so only the row can tell them apart. The resolver goes immediately after `scope` is loaded at `:294` and before `if report.status == "triaging"` at `:296`.
+
+**`workspace_released` keeps its own checks and gains nothing.** Its `409` at `:334` and its `400 lease_token required` at `:339` both stay exactly as they are, and four existing tests assert those codes (`test_non_owner_cannot_release_workspace` expects `409`, `test_workspace_release_requires_token` expects `400 lease_token required`). The resolver's table lists the row for test 7c's benefit, and the resolver must **not** pre-empt the branch: converting that `409` to a `403` is PR1's `release_by_owner` work (§4.6a requirement 5), not PR0's. Concretely — the resolver skips its own refusal for `workspace_released` and lets the branch speak.
+
+**`handoff_accepted` keeps both refusals.** The resolver's `403 not_handoff_target` says *"you are not the target"*; `accept_handoff`'s `ValueError → 409` (`:309-313`) says *"there is no handoff to accept."* Collapsing them loses a distinction the agent needs in order to act — retry versus give up. Note the ordering consequence: with a `handoff_target_slot_id` set, the `403` fires first and the `409` becomes unreachable *for a non-target*; the `409` remains reachable for the target of a handoff that was since cleared.
+
+**`touch_owner_contact` needs no change.** Its gate in the tail (`report.status != "workspace_released" and report.reporting_slot_id == item.owner_slot_id`, `:371-377`) becomes honest once `reporting_slot_id` is derived, and because the resolver runs first, a refused report never reaches it. It stamps nudge-timing evidence only, never a merge input — a stale token is already a logged no-op (`github_workspace_service.py:255-259`).
+
+- [ ] **Step 1: Add the token plumbing to the existing test file**
+
+The tests need a session row whose `team_slot_id` is a slot the item knows about. **Do not register through `/agent-mail/agent/register` to get one.** Measured: `register_session` only honours a `team_slot_id` when `_slot_matches_registration` passes, which requires `request.provider == slot.provider` **and** `derive_repo_identity(request.cwd)["repo_id"] == slot.repo_id` (`agent_mail_service.py:295-305`). `_seed_leased_item` builds its slots with `provider="codex-cli"` and `repo_id="r"`, and a `tmp_path` hashes to a 16-hex `repo_id` that is never `"r"` — so a registration against those slots silently yields `session.team_slot_id = None` and every authorization test would refuse with `session_not_slot_bound` instead of testing the matrix. Verified by running all three shapes: only matching provider **and** `repo_id` binds.
+
+So seed the session directly. Add to `backend/tests/agent_mail/test_dispatch_status_tool.py`:
+
+```python
+import hashlib
+
+from app.models.database import MailAgentSession, MailTeamMember
+from app.services.agent_mail_service import agent_mail_service
+
+
+async def _token_for_slot(maker, slot_id: int | None, *, key: str = "mcp:auth") -> str:
+    """Mint a session bound to slot_id and return its plaintext token.
+
+    Seeded directly rather than through /agent/register: that route derives the
+    slot via _slot_matches_registration, which compares provider AND repo_id
+    against the slot row -- and _seed_leased_item's slots use provider
+    "codex-cli" with repo_id "r", which no tmp_path can hash to. Registering
+    would hand back a session with team_slot_id = None and every test below
+    would refuse with session_not_slot_bound instead of exercising the matrix.
+    """
+    token = f"tok-{key}-{slot_id}"
+    async with maker() as db:
+        member = MailTeamMember(
+            identity_key=f"slot:{key}:{slot_id}",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Reporter",
+            participant_kind="team_slot",
+            team_slot_id=slot_id,
+        )
+        db.add(member)
+        await db.flush()
+        db.add(
+            MailAgentSession(
+                member_id=member.id,
+                source="mcp",
+                session_key=key,
+                team_slot_id=slot_id,
+                capability_token_hash=agent_mail_service.hash_capability_token(token),
+            )
+        )
+        await db.commit()
+    return token
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"X-Deck-Session-Token": token}
+```
+
+`hash_capability_token` is Task 3's; `capability_token_hash` is Task 1's column. `MailTeamMember` requires `identity_key`, `repo_id`, `repo_path`, `repo_name`, `display_name`; `MailAgentSession` requires `member_id`, `source`, `session_key` — measured, so an insert missing one fails with a constraint error that reads like a logic bug.
+
+- [ ] **Step 2: Write the failing authorization tests (7b, 7e, 7f, 7g)**
+
+Append to the same file:
+
+```python
+_OWNER_ONLY_STATUSES = [
+    ("triaging", {"note": "n"}),
+    ("in_progress", {}),
+    ("blocked", {"note": "n"}),
+    ("ack_received", {}),
+    ("revision_requested", {}),
+    ("handoff_initiated", {"reassign_to_slot_id": 1}),
+    ("pr_opened", {"pr_number": 7}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,extra", _OWNER_ONLY_STATUSES)
+async def test_non_owner_is_refused_and_changes_nothing(client_and_db, status, extra):
+    """Test 7b. The columns are the assertion: a route that mutates and THEN
+    refuses returns the same 403 as one that refuses first."""
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, _, _ = await _seed_leased_item(
+        maker, dispatch_status="dispatched"
+    )
+    token = await _token_for_slot(maker, other_id, key=f"mcp:{status}")
+    async with maker() as db:
+        before = await db.get(GithubWorkItem, item_id)
+        snapshot = {
+            column.name: getattr(before, column.name)
+            for column in GithubWorkItem.__table__.columns
+        }
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": status, **extra},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "not_item_owner"
+    async with maker() as db:
+        after = await db.get(GithubWorkItem, item_id)
+        assert {
+            column.name: getattr(after, column.name)
+            for column in GithubWorkItem.__table__.columns
+        } == snapshot
+
+
+@pytest.mark.asyncio
+async def test_handoff_accepted_belongs_to_the_target(client_and_db):
+    """Test 7e. Both calls run against an item whose handoff_target_slot_id is
+    SET, so the refusal comes from the resolver and not from accept_handoff's
+    own 409 -- which is a different sentence to the agent."""
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, _, _ = await _seed_leased_item(
+        maker, dispatch_status="dispatched"
+    )
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.handoff_target_slot_id = other_id
+        item.handoff_state = "pending"
+        await db.commit()
+
+    owner_token = await _token_for_slot(maker, owner_id, key="mcp:ha-owner")
+    refused = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "handoff_accepted"},
+        headers=_auth(owner_token),
+    )
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "not_handoff_target"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.owner_slot_id == owner_id
+        assert item.handoff_state == "pending"
+
+    target_token = await _token_for_slot(maker, other_id, key="mcp:ha-target")
+    accepted = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "handoff_accepted"},
+        headers=_auth(target_token),
+    )
+    assert accepted.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.owner_slot_id == other_id
+        assert item.handoff_state == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_with_a_stale_token_leaves_pr_number_null(client_and_db):
+    """Test 7f. The NULL assertion is the point: pr_number is what admits the
+    item to process_scope's query, so setting it before the token check makes
+    the refusal cosmetic -- the merge path has already been entered."""
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    token = await _token_for_slot(maker, owner_id, key="mcp:pr")
+
+    stale = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_opened",
+            "pr_number": 7,
+            "lease_token": "lease-stale",
+        },
+        headers=_auth(token),
+    )
+    assert stale.status_code == 409
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.pr_number is None
+        assert item.dispatch_status == "dispatched"
+
+    current = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_opened",
+            "pr_number": 7,
+            "lease_token": "lease-current",
+        },
+        headers=_auth(token),
+    )
+    assert current.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.pr_number == 7
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_with_no_token_at_all_is_refused(client_and_db):
+    """The sibling 7f needs: absent is not the same as wrong, and neither is OK
+    on the one branch that opens the merge path."""
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    token = await _token_for_slot(maker, owner_id, key="mcp:pr-none")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "pr_opened", "pr_number": 7},
+        headers=_auth(token),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "lease_token required"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.pr_number is None
+
+
+@pytest.mark.asyncio
+async def test_blocked_needs_no_lease_token(client_and_db):
+    """Test 7g. Written to fail against an implementation that requires the
+    token everywhere 'for consistency'. A gate that can refuse an escalation
+    because a lease rotated is a gate that hides failures."""
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    token = await _token_for_slot(maker, owner_id, key="mcp:blocked")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "blocked", "note": "stuck"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "escalated"
+        assert item.escalation_reason == "plan_blocked"
+        assert item.status_note == "stuck"
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_slot_claim_is_refused(client_and_db):
+    """Spec test 7: the body is corroboration, never authority. Agreeing is
+    accepted, disagreeing is 403 -- never a silent overwrite, which would
+    report a misconfigured shim as success."""
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, _, _ = await _seed_leased_item(
+        maker, dispatch_status="dispatched"
+    )
+    token = await _token_for_slot(maker, owner_id, key="mcp:claim")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "reporting_slot_id": other_id,
+            "note": "n",
+        },
+        headers=_auth(token),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "slot_claim_mismatch"
+
+    agreeing = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "reporting_slot_id": owner_id,
+            "note": "n",
+        },
+        headers=_auth(token),
+    )
+    assert agreeing.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_an_unbound_session_cannot_speak_for_a_slot(client_and_db):
+    """A session with team_slot_id NULL can send mail as a repo member. It can
+    never report dispatch status, which is a claim about a slot."""
+    ac, maker = client_and_db
+    item_id, _, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    token = await _token_for_slot(maker, None, key="mcp:unbound")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "triaging", "note": "n"},
+        headers=_auth(token),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "session_not_slot_bound"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_db):
+    """Grace mode must not turn a wrong token into an unauthenticated report."""
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "reporting_slot_id": owner_id,
+            "note": "n",
+        },
+        headers=_auth("not-a-real-token"),
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_invalid"
+```
+
+Three things to note about these tests.
+
+1. **`_seed_leased_item` is the right fixture even for the non-release branches.** It is the only helper in the file that creates *two* slots and sets `owner_slot_id`, which is what an owner/non-owner test needs. `_seed_item` sets no owner at all, so every authorization test built on it would compare against `None`.
+2. **`_OWNER_ONLY_STATUSES` omits `workspace_released`** deliberately — that branch's non-owner refusal is `409` and is already covered by `test_non_owner_cannot_release_workspace`. Adding it to this parameterization would assert `403` and fail. It also omits `handoff_accepted`, whose refusal is `not_handoff_target`.
+3. **The `handoff_initiated` row passes `reassign_to_slot_id: 1`** only so the request is well-formed; the resolver refuses before the branch reads it, which the snapshot proves.
+
+- [ ] **Step 3: Run to verify they fail**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_dispatch_status_tool.py -q -p no:warnings
+```
+
+Expected: the 22 existing tests pass, and the new ones fail — the `403` tests return `200` (nothing authorizes), `test_an_unbound_session_cannot_speak_for_a_slot` returns `200`, and the invalid-token test returns `200` because no dependency reads the header yet.
+
+- [ ] **Step 4: Write test 7c — the matrix is exhaustive**
+
+This is the blocker-1 test in general form: revision 5's `pr_ready` hole was one missing row, and a per-row test would have to be rewritten for every future branch to catch the next one. Append:
+
+```python
+import ast
+import inspect
+import textwrap
+
+import app.api.v1.agent_teams as agent_teams_routes
+
+
+def _statuses_the_route_accepts() -> set[str]:
+    """Extract the accepted statuses from the branch chain itself.
+
+    Reads `report.status == "<const>"` comparisons out of the route's own AST
+    rather than trusting a hand-maintained list, so a branch added without a
+    matrix row fails this test instead of silently defaulting to allowed.
+    """
+    source = textwrap.dedent(inspect.getsource(agent_teams_routes.report_dispatch_status))
+    return {
+        node.comparators[0].value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.Eq)
+        and isinstance(node.left, ast.Attribute)
+        and node.left.attr == "status"
+        and isinstance(node.comparators[0], ast.Constant)
+        and isinstance(node.comparators[0].value, str)
+    }
+
+
+def test_every_accepted_status_has_an_authorization_rule():
+    """Test 7c. A status absent from the table is unauthorized by omission."""
+    accepted = _statuses_the_route_accepts()
+    assert len(accepted) == 9, f"branch count changed: {sorted(accepted)}"
+    missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
+    assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
+
+
+def test_the_rules_table_has_no_rule_for_a_status_the_route_rejects():
+    """The other direction: a rule for a branch that does not exist is a rule
+    nothing enforces, and reads as coverage during review."""
+    stale = set(agent_teams_routes._DISPATCH_STATUS_RULES) - _statuses_the_route_accepts()
+    assert not stale, f"rules for non-existent statuses: {sorted(stale)}"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_status_refuses_rather_than_falling_through(client_and_db):
+    """The fall-through must refuse, not proceed. Written to fail against a
+    resolver whose default is 'no rule => allowed'."""
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    token = await _token_for_slot(maker, owner_id, key="mcp:unknown")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "not_a_real_status"},
+        headers=_auth(token),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unknown status not_a_real_status"
+```
+
+**Why the `len(accepted) == 9` assertion is there and why it is not brittle.** It is a tripwire, not a spec: if a later PR adds `pr_ready` (PR2's), this line fails loudly and the implementer updates it to `10` *and* checks that the new branch has a rule. Without it, an AST helper that silently stops matching — because someone rewrote the chain as a `match` statement, say — would return an empty set and both exhaustiveness tests would pass vacuously. Measured against today's route, the helper returns exactly `{ack_received, blocked, handoff_accepted, handoff_initiated, in_progress, pr_opened, revision_requested, triaging, workspace_released}`.
+
+**The unknown-status test asserts `400`, not `403`.** The resolver has no rule for `not_a_real_status`, so it must not authorize it — but it must also not invent a new refusal. Letting an unknown status fall through the resolver *without a mutation* and reach the existing `else` at `:369` gives the caller the same `400 unknown status ...` it gets today, which is the right message. The rule is "no rule ⇒ no mutation," and `400` is how that surfaces.
+
+- [ ] **Step 5: Run to verify 7c fails**
+
+Expected: `AttributeError: module 'app.api.v1.agent_teams' has no attribute '_DISPATCH_STATUS_RULES'` on both table tests. The unknown-status test already passes — it is a regression guard on the `else` branch, and it must stay passing through the implementation step.
+
+- [ ] **Step 6: Add the rules table and the resolver**
+
+In `backend/app/api/v1/agent_teams.py`, extend the import at `:8` and add two imports:
+
+```python
+from typing import NamedTuple
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+
+from app.api.v1.deps import mail_session, require_session_slot
+from app.models.database import AgentTeamSlot, MailAgentSession
+```
+
+`AgentTeamSlot` and `MailAgentSession` are **not** currently imported here — `:15` imports only `GithubWorkItem`, `GithubWorkspace`, `TeamGithubScope`. `typing` is not imported at all today; the file uses `from __future__ import annotations` and `X | None` annotations, so **write new annotations in that style** and use `typing` only for `NamedTuple`. Verified: a `session: MailAgentSession | None = Depends(...)` parameter resolves correctly under `from __future__ import annotations` — FastAPI evaluates the string annotation, so the PEP 604 form is safe here.
+
+Then add above the route:
+
+```python
+class _StatusRule(NamedTuple):
+    """Who may report a status, and whether the current lease token is needed.
+
+    role is "owner" (item.owner_slot_id) or "target"
+    (item.handoff_target_slot_id). enforced_in_branch marks the one status whose
+    own branch already does both checks, with its own codes and its own tests.
+    """
+
+    role: str
+    refusal: str
+    lease_token_required: bool = False
+    enforced_in_branch: bool = False
+
+
+_OWNER = _StatusRule("owner", "not_item_owner")
+
+# One entry per status the branch chain accepts. A status missing from this
+# table is unauthorized by omission -- the resolver refuses to mutate rather
+# than defaulting to allowed. Tests 7b/7c pin both halves of that rule.
+_DISPATCH_STATUS_RULES: dict[str, _StatusRule] = {
+    "triaging": _OWNER,
+    "in_progress": _OWNER,
+    "blocked": _OWNER,
+    "ack_received": _OWNER,
+    "handoff_initiated": _OWNER,
+    "revision_requested": _OWNER,
+    "handoff_accepted": _StatusRule("target", "not_handoff_target"),
+    "pr_opened": _StatusRule("owner", "not_item_owner", lease_token_required=True),
+    "workspace_released": _StatusRule(
+        "owner", "not_item_owner", lease_token_required=True, enforced_in_branch=True
+    ),
+}
+
+
+async def _authorize_dispatch_report(
+    db: AsyncSession,
+    item: GithubWorkItem,
+    report: DispatchStatusReport,
+    session: MailAgentSession | None,
+) -> None:
+    """Authorize a dispatch-status report, before the branch chain mutates.
+
+    Grace mode: with no token this returns immediately and the caller's own
+    reporting_slot_id is used, exactly as before PR0. An INVALID token never
+    reaches here -- mail_session raises 401 for that, so garbage cannot buy the
+    legacy path. PR1 closes the tokenless hole for the whole route.
+    """
+    if session is None:
+        return
+
+    slot_id = require_session_slot(session)
+    if report.reporting_slot_id is not None and report.reporting_slot_id != slot_id:
+        # The body is corroboration, never authority. Agreeing is accepted so
+        # the shipped shim's payload stays valid; disagreeing is a refusal
+        # rather than a silent overwrite, which would report a misconfigured
+        # shim as success.
+        raise HTTPException(status_code=403, detail="slot_claim_mismatch")
+    report.reporting_slot_id = slot_id
+
+    rule = _DISPATCH_STATUS_RULES.get(report.status)
+    if rule is None:
+        # No rule => no mutation. Fall through to the branch chain, which ends
+        # in `400 unknown status ...`. Never default to allowed.
+        return
+    if rule.enforced_in_branch:
+        return
+
+    authorized = item.owner_slot_id if rule.role == "owner" else item.handoff_target_slot_id
+    if authorized is None or slot_id != authorized:
+        raise HTTPException(status_code=403, detail=rule.refusal)
+
+    if rule.lease_token_required:
+        if report.lease_token is None:
+            raise HTTPException(status_code=400, detail="lease_token required")
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is None or workspace.lease_token != report.lease_token:
+            raise HTTPException(
+                status_code=409,
+                detail=f"lease_token does not match the current lease for item {item.id}",
+            )
+```
+
+Then wire it into the route — two lines, immediately after `scope` is loaded:
+
+```python
+@router.post("/dispatch-status")
+async def report_dispatch_status(
+    report: DispatchStatusReport,
+    session: MailAgentSession | None = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, report.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work item not found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    await _authorize_dispatch_report(db, item, report, session)
+
+    if report.status == "triaging":
+        ...
+```
+
+Five points the implementer must not get wrong:
+
+1. **`authorized is None` refuses.** An item with `owner_slot_id = NULL` has no owner, so no slot can be its owner and every owner-only report on it must be refused. Written as an explicit clause rather than relying on `slot_id != None`, because the two happen to agree here and only one of them says what is meant — and the column *is* nullable (`models/database.py:259`), so this is a reachable state, not a hypothetical. Live: all 28 work items currently have a non-NULL owner, which is exactly why a bug here would not show up in the soak.
+2. **`report.reporting_slot_id = slot_id` mutates the Pydantic model in place.** `DispatchStatusReport` is a plain `BaseModel` with no `model_config`, so assignment is permitted and no validation runs on it. This is what makes the rest of the route — including `workspace_released`'s own owner check and the `touch_owner_contact` gate in the tail — read the *derived* slot without any further edits. Task 5's mail routes used `model_copy(update=...)` instead because they pass the request object into a service; here the route reads the fields itself.
+3. **The lease check is the resolver's own, and it deliberately duplicates `release_by_token`'s message.** `pr_opened` never touched a lease before, so there is nothing to reuse: `release_by_token` (`github_workspace_service.py:178-194`) both checks *and releases*, which is not what `pr_opened` wants. Matching its `409` detail string keeps one sentence for one failure across the route. Do **not** refactor `release_by_token` to share this code in PR0 — that function is rewritten as `release_by_owner` in PR1 (§4.6a requirement 2), and a shared helper introduced now would have to be unpicked.
+4. **`get_leased_workspace` filters on `leased_item_id` only** — no scope predicate — so it returns *this item's* lease or nothing. That is what makes the check "does this token lease **this** item" rather than "is this token current for some workspace." The distinction is the whole content of spec test 7h (PR2's): an implementation that queries by token instead of by item passes a naive test and fails that one. Keep the query keyed on `item.id`.
+5. **No `Header` import is needed in this file — not in this task and not in Task 8 either.** The header is read by `mail_session` inside `deps.py`, which already imports `Header` (Task 5, Step 3). Task 8's `require_operator` lives in that same module for the same reason, so `agent_teams.py` never grows a `Header` import in PR0: it imports the two *dependencies*, not the primitive they are built from. If you find yourself adding `Header` to `:8`, a dependency has leaked into the route module — stop and re-read Task 8's Step 3.
+
+- [ ] **Step 7: Run the file**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_dispatch_status_tool.py -q -p no:warnings
+```
+
+Expected: all pass — the 22 pre-existing tests **unchanged and untokenized**, plus the new ones. If any of the original 22 now fails, the resolver is refusing in grace mode, which it must not: those 22 tests send no header, and 5 of them (`:153`, `:169`, `:184`, `:200`, `:217`) send no `reporting_slot_id` either. Their continuing to pass *is* the backward-compatibility assertion, so **do not add tokens to them**.
+
+- [ ] **Step 8: Mutate to prove the ordering assertion has teeth**
+
+Test 7b's value is entirely in the column snapshot, and a snapshot assertion that would pass against a mutate-then-refuse implementation is worth nothing. Prove it bites: move the `await _authorize_dispatch_report(...)` call from before the branch chain to **immediately after it**, just above the `touch_owner_contact` block at `:371`, and re-run.
+
+Expected: `test_non_owner_is_refused_and_changes_nothing` fails on the **snapshot**, not the status code, for the parameterizations that write (`triaging` writes `status_note`; `revision_requested` increments `approval_round_count`; `handoff_initiated` writes `handoff_target_slot_id`). Then restore the call to its correct position **by replacing the exact string** — do not `git checkout`, there is uncommitted work in this file.
+
+If every parameterization still passes with the mutant, the snapshot is being taken or compared wrongly and 7b is decorative — **stop and report**.
+
+- [ ] **Step 9: Run the full suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: no new failures. The risk area is `tests/agent_teams/test_github_dispatch_service.py` — it calls `initiate_handoff` and `accept_handoff` **at the service level** (`:2439-2448`), which the resolver does not touch by design. If a *service* test fails, authorization leaked out of the route and into a service; that is the one outcome this task's design exists to prevent, so **stop and report**.
+
+- [ ] **Step 10: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/api/v1/agent_teams.py backend/tests/agent_mail/test_dispatch_status_tool.py && git commit -m "feat(teams): authorize every /dispatch-status branch, not just one
+
+Of the nine branches this route accepts, exactly one compared the reporter to
+the item. A resolver now runs once before the branch chain: owner-only for
+seven statuses, target-only for handoff_accepted, and the current lease token
+on pr_opened, which is the branch that admits an item to the merge path by
+setting pr_number.
+
+The rules live in a module-level table so an added branch with no rule is
+caught by a test that reads the route's own AST rather than a hand-maintained
+list. A status with no rule refuses to mutate and falls through to the existing
+400, never to allowed.
+
+The body's reporting_slot_id becomes corroboration: agreeing is accepted so the
+shipped shim keeps working, disagreeing is 403, absent is filled from the
+token. Tokenless calls keep today's behaviour while
+mail_capability_tokens_required is False -- PR1 closes that with a whole-route
+409 tokens_not_enforced, in the PR whose guarantees need it.
+
+workspace_released keeps its own two checks and its own codes; converting its
+409 to a 403 is PR1's release_by_owner work.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.5a"
+```
+
+---
+
+### Task 8: `require_operator` and the two operator routes
+
+**Files:**
+- Modify: `backend/app/api/v1/deps.py` (append `require_operator`; no new imports — `hmac`, `Header`, `HTTPException` and `settings` are all already there from Task 5)
+- Modify: `backend/app/api/v1/agent_teams.py:14` (import), `:554-557` (the listing signature), `:676-681` (the force-release signature)
+- Test: `backend/tests/agent_teams/test_operator_auth.py` (create)
+- Test: `backend/tests/agent_teams/test_github_workspace_api.py` (modify — 8 call sites need the header)
+
+**Interfaces:**
+- Consumes: `settings.operator_token` (Task 1); the `deps.py` module (Task 5).
+- Produces: `require_operator() -> None` — a value-less dependency. Raises `503 operator_token_unconfigured`, `401 operator_token_required`, or `401 operator_token_invalid`. PR1's `resume-attempt` (§4.2b.2) is its third consumer.
+
+**What this task fixes is live on `master` right now, which is why it is in PR0 rather than PR1.** Force-release is reachable by any local process with no credential at all, and its mismatch branch interpolates the *live* lease token into the response (`agent_teams.py:693-698` → `_conflict` at `:84-88` → `detail.message`, serialised verbatim). Two unauthenticated calls — guess, read the real token out of the refusal, replay it — force-release any agent's workspace. The disclosure itself is deleted in Task 9 along with the field that makes it possible; this task shuts the door.
+
+**`agent_teams.py` has no authentication at all today, so this is the file's first non-`get_db` dependency.** Measured: all 27 `Depends(...)` in the file are `Depends(get_db)`. There was no operator surface for a route to sit "on" — the spec's earlier phrase "the unauthenticated-but-human surface" named an absence, not a surface.
+
+**Why the external-actor token cannot be this credential**, since §3.6 uses it for the UI and it is the obvious candidate. Measured end to end through the real app, with no credential presented:
+
+```
+POST /api/v1/external/agent-mail/actors (no credential) -> 200, keys ['actor', 'token']
+  token length 43
+  GET /actors/me with it -> 200, kind='supervisor'
+```
+
+An agent pane *is* a loopback caller, so it mints its own "supervisor" actor in one call. An authentication scheme is only as strong as the cheapest way to obtain a credential. This is why test 20 has a row that **mints a real actor token** rather than fabricating a string.
+
+**What this credential is worth, stated honestly.** The backend and every pane run as the same uid (`juan`), `hidepid` is absent, and `backend/.env` is mode `600` owned by that same uid — so a determined pane can read the token. It is a boundary against an *opportunistic* adversary, not a co-resident one: it moves the attack from *knowing a URL*, which every agent does because this spec publishes them, to *deliberately reading a `600` file*. Do not describe it in code comments or the commit message as authenticating a human. §8's criterion is "not reachable by an agent following its brief," not "not reachable by an agent."
+
+**And the deployment prohibition that follows: the token goes in `backend/.env` and is never exported.** This is a requirement with a measurement attached, not a style preference. `spawn_session` runs `tmux new-session` with **no `env=`** (`agent_bridge/spawn.py:78-83`), so the tmux *server* inherits the backend's whole environment as its **global** environment, and any pane reads it back with `tmux show-environment -g` — one documented command, in a shell every agent has. The `-e` allowlist protects the pane's own `environ` and nothing else. Had the token been exported, the bound above would collapse from *opportunistic adversary* to *none*. Task 11 carries the runbook line.
+
+#### The four measurements that decide this task's code
+
+**1. The empty case must be checked before the comparison, and the mutant is subtler than "wrong status".** `hmac.compare_digest("", "")` returns `True` (measured). Driving the mutant — `503` branch omitted, empty setting left to the comparison — against an unconfigured install:
+
+```
+MUTANT on an UNCONFIGURED install:
+  no header        -> 200 {'workspaces': ['/tmp/ws-1', '/tmp/ws-2']}
+  empty header     -> 200 {'workspaces': ['/tmp/ws-1', '/tmp/ws-2']}
+  garbage header   -> 401 {'detail': 'operator_token_invalid'}
+```
+
+Read the third line. The mutant **does** refuse a wrong token, so a suite that only ever sends non-empty wrong headers passes an install that serves the whole workspace topology to any caller sending nothing. That is why the spec gives "empty header on an empty setting" its own row and why every unconfigured assertion checks the **code** `503`, not merely "a 4xx or 5xx".
+
+**2. `hmac.compare_digest` raises `TypeError` on non-ASCII `str`, and a header can carry one.** Measured: comparing two `str` values containing `é` raises `TypeError: comparing strings with non-ASCII characters is not supported`, and driven through a real route, a `latin-1`-encoded header produced **HTTP 500** — an unhandled exception, not a refusal. So the comparison operates on **bytes**: `x_deck_operator_token.encode("utf-8")` against `expected.encode("utf-8")`. With that one change the same input returns `401 operator_token_invalid`. **No spec row covers this**; it is a plan-level addition, and Step 1's test includes the case so it cannot regress.
+
+**3. Read `settings.operator_token` at call time, never at import time.** `settings` is constructed at import (`config.py:57`), so a module-level `EXPECTED = settings.operator_token` in `deps.py` would freeze the empty default before any test could configure it — every operator test would then see `503` and the positive control could not be written at all. Reading the attribute inside the function is also what makes `monkeypatch.setattr(settings, "operator_token", ...)` work; measured, `Settings` has neither `frozen` nor `validate_assignment`, so plain assignment is permitted, and `app.config.settings` is the same object through every import.
+
+**4. The dependency runs before body validation and before the route body.** Measured, in both the decorator and the parameter form:
+
+| Request | Status |
+|---|---|
+| no header, nonexistent scope | **401** (not 404) |
+| no header, invalid body | **401** (not 422) |
+| valid header, invalid body | 422 |
+| valid header, nonexistent scope | 404 |
+| valid header, valid request | 200 |
+
+This is the correct posture — an unauthenticated caller must not learn whether a scope exists — and it has a consequence this task owns: **the existing `422` and `404` assertions in `test_github_workspace_api.py` start returning `401` the moment the dependency lands.** Fixing them belongs here, in the task that breaks them, not in Task 9. Eight call sites need the header: the listing at `:151` and `:171`, and force-release at `:182`, `:207`, `:235`, `:257`, `:281`, `:309`.
+
+**Use the parameter form, `_operator: None = Depends(require_operator)`, not `dependencies=[...]` in the decorator.** Both were measured to enforce identically and both advertise the header in OpenAPI. The parameter form is the file's own idiom — measured, `dependencies=[` appears **zero** times in `app/`, while every one of the 27 existing dependencies is a parameter. The `_`-prefixed name says the value is unused; `external_agent_mail.py:95` already uses the sibling idiom `_ = actor`.
+
+- [ ] **Step 1: Write the failing test — the eight-case matrix, for both routes**
+
+Create `backend/tests/agent_teams/test_operator_auth.py`:
+
+```python
+"""Spec §3.7 test 20 — require_operator refuses every credential an agent can obtain."""
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.config import settings
+from app.database import Base, get_db
+from app.main import app
+from app.models.database import (
+    AgentTeamPreset,
+    GithubWorkItem,
+    GithubWorkspace,
+    MailAgentSession,
+    MailTeamMember,
+    TeamGithubScope,
+)
+from app.services.agent_mail_service import agent_mail_service
+
+OPERATOR_TOKEN = "0f3c9a71b25e4d8fa6c1e07b9d24misalign"  # >= 32 bytes of nothing in particular
+
+
+@pytest_asyncio.fixture
+async def client_and_db(tmp_path):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _override():
+        async with maker() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _override
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        yield http, maker
+    app.dependency_overrides.clear()
+    await engine.dispose()
+
+
+@pytest.fixture
+def operator_token_configured(monkeypatch):
+    """Configure the operator token for the duration of one test.
+
+    monkeypatch.setattr on the settings OBJECT, not on a module-level constant:
+    require_operator reads settings.operator_token at call time precisely so
+    this works. If a future refactor hoists the read to import time, every test
+    below starts returning 503 and this fixture is where to look.
+    """
+    monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
+    return OPERATOR_TOKEN
+
+
+@pytest.fixture
+def operator_token_unconfigured(monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "")
+
+
+async def _leased_scope_and_workspace(maker, tmp_path: Path):
+    """A scope with one leased workspace, so force-release reaches its own logic."""
+    async with maker() as db:
+        preset = AgentTeamPreset(name=f"Operator {tmp_path.name}", description="", created_by="test")
+        db.add(preset)
+        await db.flush()
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir(exist_ok=True)
+        scope = TeamGithubScope(
+            preset_id=preset.id,
+            repo_owner="o",
+            repo_name=f"r-{preset.id}",
+            repo_path=str(repo_path),
+        )
+        db.add(scope)
+        await db.flush()
+        item = GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=1,
+            issue_title="x",
+            issue_url="u",
+            github_updated_at=datetime.utcnow(),
+            dispatch_status="merged",
+        )
+        db.add(item)
+        await db.flush()
+        workspace = GithubWorkspace(
+            scope_id=scope.id,
+            path=str(tmp_path / "ws"),
+            kind="worktree",
+            leased_item_id=item.id,
+            leased_at=datetime.utcnow(),
+            lease_token="lease-current",
+        )
+        db.add(workspace)
+        await db.commit()
+        return scope.id, workspace.id, item.id
+
+
+async def _agent_session_token(maker) -> str:
+    """A REAL agent capability token -- the credential an agent legitimately holds.
+
+    Real rather than fabricated for the same reason the actor token is minted:
+    a made-up string would be refused by anything, so the test would pass
+    against a require_operator that happened to accept genuine session tokens.
+    This one resolves through deps.mail_session on the routes that take it.
+
+    No team_slot_id: this test is about the credential, not about slot binding,
+    and an unbound session is the weaker case -- if even a slot-bound token were
+    accepted the failure would be worse, but this shape is enough to show that
+    the two schemes do not cross.
+    """
+    token = "agent-session-token-for-operator-test"
+    async with maker() as db:
+        member = MailTeamMember(
+            identity_key="slot:operator-test",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Agent",
+        )
+        db.add(member)
+        await db.flush()
+        db.add(
+            MailAgentSession(
+                member_id=member.id,
+                source="mcp",
+                session_key="operator-test",
+                capability_token_hash=agent_mail_service.hash_capability_token(token),
+            )
+        )
+        await db.commit()
+    return token
+
+
+async def _external_actor_token(client: httpx.AsyncClient) -> str:
+    """Mint a real external-actor token, per the spec's instruction not to fabricate one.
+
+    If this route ever gains a credential, this call starts failing -- which is
+    the signal that §3.6a's "cheapest escalation on the host" argument needs
+    re-measuring, and is exactly why the spec says mint rather than fake.
+    """
+    response = await client.post(
+        "/api/v1/external/agent-mail/actors",
+        json={
+            "actor_key": "operator-auth-test",
+            "display_name": "Operator Auth Test",
+            "kind": "supervisor",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["token"]
+
+
+# --- The two routes under test, as (label, callable) so one matrix covers both ---
+
+
+def _routes(scope_id: int, workspace_id: int):
+    listing = (
+        "listing",
+        "get",
+        f"/api/v1/agent-teams/github-scopes/{scope_id}/workspaces",
+        None,
+    )
+    force_release = (
+        "force-release",
+        "post",
+        f"/api/v1/agent-teams/github-scopes/{scope_id}/workspaces/{workspace_id}/force-release",
+        {"force": True, "reason": "owner is unavailable"},
+    )
+    return [listing, force_release]
+
+
+async def _call(client, method, url, body, headers):
+    if method == "get":
+        return await client.get(url, headers=headers)
+    return await client.post(url, json=body, headers=headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", [None, "", "anything-at-all"])
+async def test_unconfigured_install_refuses_with_503_whatever_the_header(
+    client_and_db, tmp_path, operator_token_unconfigured, header
+):
+    """Row 1 and row 2 of test 20's table.
+
+    The empty-header case is NOT redundant with the no-header case. Measured
+    against the mutant that omits the 503 branch: no header -> 200 and empty
+    header -> 200, while "anything-at-all" -> 401. So a suite that only sends
+    non-empty wrong tokens passes an unconfigured install that serves the whole
+    workspace topology to any caller. Assert the CODE, never merely a 4xx/5xx.
+    """
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    headers = {} if header is None else {"X-Deck-Operator-Token": header}
+
+    for label, method, url, body in _routes(scope_id, workspace_id):
+        response = await _call(client, method, url, body, headers)
+        assert response.status_code == 503, f"{label}: {response.status_code} {response.text}"
+        assert response.json()["detail"] == "operator_token_unconfigured", label
+
+
+@pytest.mark.asyncio
+async def test_no_header_is_required_and_a_wrong_one_is_invalid(
+    client_and_db, tmp_path, operator_token_configured
+):
+    """Rows 3 and 4: the two 401s must be distinguishable from each other."""
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+
+    for label, method, url, body in _routes(scope_id, workspace_id):
+        absent = await _call(client, method, url, body, {})
+        assert absent.status_code == 401, label
+        assert absent.json()["detail"] == "operator_token_required", label
+
+        wrong = await _call(client, method, url, body, {"X-Deck-Operator-Token": "wrong"})
+        assert wrong.status_code == 401, label
+        assert wrong.json()["detail"] == "operator_token_invalid", label
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token,why",
+    [
+        (OPERATOR_TOKEN[:-1], "a prefix of the real token"),
+        (OPERATOR_TOKEN + "X", "the real token plus a trailing byte"),
+        (OPERATOR_TOKEN.upper(), "the real token in the wrong case"),
+    ],
+)
+async def test_near_miss_tokens_are_invalid(
+    client_and_db, tmp_path, operator_token_configured, token, why
+):
+    """Row 5: the rows a startswith, `in`, or truncating comparison fails."""
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+
+    for label, method, url, body in _routes(scope_id, workspace_id):
+        response = await _call(client, method, url, body, {"X-Deck-Operator-Token": token})
+        assert response.status_code == 401, f"{label}: {why} was accepted"
+        assert response.json()["detail"] == "operator_token_invalid", label
+
+
+@pytest.mark.asyncio
+async def test_a_non_ascii_header_is_refused_rather_than_crashing(
+    client_and_db, tmp_path, operator_token_configured
+):
+    """Not a spec row -- a plan-level addition, measured.
+
+    hmac.compare_digest raises TypeError on str values holding non-ASCII
+    characters, and driven through a real route that reached the client as
+    HTTP 500, an unhandled exception rather than a refusal. Comparing bytes
+    turns the same input into a clean 401. Without this test, a str-comparing
+    implementation passes every other row here.
+    """
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    headers = {"X-Deck-Operator-Token": "café-not-a-token".encode("latin-1")}
+
+    for label, method, url, body in _routes(scope_id, workspace_id):
+        response = await _call(client, method, url, body, headers)
+        assert response.status_code == 401, f"{label}: {response.status_code}"
+        assert response.json()["detail"] == "operator_token_invalid", label
+
+
+@pytest.mark.asyncio
+async def test_an_agent_session_token_does_not_admit_an_operator_route(
+    client_and_db, tmp_path, operator_token_configured
+):
+    """Row 6: an agent's own credential must not open an operator route.
+
+    This is the assertion that fails if someone "unifies" the two dependencies
+    on the grounds that both authenticate somebody. The token here is real --
+    it resolves through deps.mail_session on the routes that accept it.
+    """
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    session_token = await _agent_session_token(maker)
+    headers = {"X-Deck-Session-Token": session_token}
+
+    for label, method, url, body in _routes(scope_id, workspace_id):
+        response = await _call(client, method, url, body, headers)
+        assert response.status_code == 401, label
+        assert response.json()["detail"] == "operator_token_required", label
+
+
+@pytest.mark.asyncio
+async def test_a_self_minted_external_actor_token_does_not_admit_either_route(
+    client_and_db, tmp_path, operator_token_configured
+):
+    """Row 7: the cheapest escalation on the host.
+
+    Minted for real, not fabricated. Presented both as a bearer token (the way
+    external routes take it) and in the operator header (the way an implementer
+    who confused the two schemes would wire it).
+    """
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    actor_token = await _external_actor_token(client)
+
+    for label, method, url, body in _routes(scope_id, workspace_id):
+        as_bearer = await _call(
+            client, method, url, body, {"Authorization": f"Bearer {actor_token}"}
+        )
+        assert as_bearer.status_code == 401, f"{label}: bearer actor token admitted"
+        assert as_bearer.json()["detail"] == "operator_token_required", label
+
+        as_operator = await _call(
+            client, method, url, body, {"X-Deck-Operator-Token": actor_token}
+        )
+        assert as_operator.status_code == 401, f"{label}: actor token admitted as operator"
+        assert as_operator.json()["detail"] == "operator_token_invalid", label
+
+
+@pytest.mark.asyncio
+async def test_the_configured_operator_token_is_accepted(
+    client_and_db, tmp_path, operator_token_configured, monkeypatch
+):
+    """Row 8, the positive control.
+
+    Without this row, a dependency that refuses everything passes every
+    assertion above. The listing is the cheaper control (no git), so it carries
+    the 200; force-release only has to get PAST the credential, which is what
+    "not 401 and not 503" asserts -- its own success path is Task 9's business.
+    """
+    from app.services import github_workspace_service as ws_module
+
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    headers = {"X-Deck-Operator-Token": operator_token_configured}
+
+    async def _fake_runner(args):
+        return 0, ""
+
+    monkeypatch.setattr(ws_module.github_workspace_service, "_runner", _fake_runner)
+
+    listing = await client.get(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}/workspaces", headers=headers
+    )
+    assert listing.status_code == 200, listing.text
+    assert len(listing.json()["workspaces"]) == 1
+
+    forced = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}/workspaces/"
+        f"{workspace_id}/force-release",
+        json={"force": True, "reason": "owner is unavailable"},
+        headers=headers,
+    )
+    assert forced.status_code not in (401, 503), forced.text
+
+
+@pytest.mark.asyncio
+async def test_the_credential_is_checked_before_the_scope_is_looked_up(
+    client_and_db, tmp_path, operator_token_configured
+):
+    """An unauthenticated caller must not learn whether a scope exists.
+
+    Measured: the dependency runs before body validation and before the route
+    body, so a missing header yields 401 where a valid one would yield 404 or
+    422. Asserted rather than assumed, because it is the property that makes
+    this dependency an authorization boundary and not a decoration -- and
+    because it is why this task fixes the eight existing call sites in Step 6.
+    """
+    client, _ = client_and_db
+    missing_scope = "/api/v1/agent-teams/github-scopes/999999/workspaces"
+
+    assert (await client.get(missing_scope)).status_code == 401
+    assert (
+        await client.get(
+            missing_scope, headers={"X-Deck-Operator-Token": operator_token_configured}
+        )
+    ).status_code == 404
+```
+
+- [ ] **Step 2: Run it to confirm every case fails for the right reason**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && python3 -m pytest tests/agent_teams/test_operator_auth.py -q -p no:warnings
+```
+
+Expected: failures throughout, because both routes still admit everyone. Read the failure lines before continuing — the unconfigured cases should report `200 != 503` and the wrong-token cases `200 != 401`. A **collection** error instead means `settings.operator_token` is missing (Task 1) or `force`/`reason` do not match the request schema yet (Task 9) — the second is expected and Step 7 addresses it.
+
+- [ ] **Step 3: Append `require_operator` to `deps.py`**
+
+At the end of `backend/app/api/v1/deps.py`:
+
+```python
+async def require_operator(
+    x_deck_operator_token: str | None = Header(default=None),
+) -> None:
+    """Authenticate the operator by a secret no agent is given.
+
+    A sibling of require_session_slot, not a variant: that one authenticates an
+    agent by what the kernel says about it, this one authenticates the operator
+    by a shared secret. Do not merge them -- an agent's own session token must
+    never open an operator route.
+
+    Three distinguishable refusals, in this order:
+
+      settings.operator_token empty  -> 503 operator_token_unconfigured
+      no header (or an empty one)    -> 401 operator_token_required
+      a header that does not match   -> 401 operator_token_invalid
+
+    The empty check comes FIRST and that ordering is load-bearing. hmac.
+    compare_digest("", "") returns True, so an implementation that leaves the
+    empty setting to the comparison authorizes every caller who sends no header
+    -- measured: 200 with the full workspace listing -- while its source still
+    reads fail-closed. It refuses a *garbage* header, so a suite that never
+    sends an empty one would not notice.
+
+    The comparison is over BYTES because compare_digest raises TypeError on str
+    values holding non-ASCII characters, and an unhandled TypeError here is an
+    HTTP 500 rather than a refusal (measured).
+
+    settings.operator_token is read at CALL time, not captured at import: the
+    settings object is built when config.py is imported, so a module-level
+    constant would freeze the empty default and make the 503 unconditional.
+
+    What this credential is worth: the backend and every agent pane share a
+    uid, so a determined pane can read backend/.env. This is a boundary against
+    an opportunistic adversary, not a co-resident one -- it moves the attack
+    from knowing a URL to deliberately reading a 600 file. Do not describe it
+    as authenticating a human.
+    """
+    expected = settings.operator_token
+    if not expected:
+        raise HTTPException(status_code=503, detail="operator_token_unconfigured")
+    if not x_deck_operator_token:
+        raise HTTPException(status_code=401, detail="operator_token_required")
+    if not hmac.compare_digest(
+        x_deck_operator_token.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="operator_token_invalid")
+```
+
+**No new imports.** `hmac`, `Header`, `HTTPException` and `settings` all arrived in Step 3 of Task 5. If your editor wants to add one, the file you are editing is not the one Task 5 created.
+
+- [ ] **Step 4: Apply it to the workspace listing**
+
+In `agent_teams.py`, extend the import at `:14`:
+
+```python
+from app.api.v1.deps import mail_session, require_operator, require_session_slot
+```
+
+That line already exists from Task 7 with two names; add the third. Then the listing at `:554-557`:
+
+```python
+async def list_github_workspaces(
+    scope_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+**Why the listing is gated at all, since Task 9 deletes the `lease_token` it used to project.** Not for the token — after Task 9 no projection carries it, so a rule phrased "any projection carrying `lease_token`" would guard nothing. The listing is gated because it enumerates every workspace's path, lease holder and dispatchability, which is the reconnaissance step for choosing a force-release target, and **no agent workflow in this spec reads it** — agents learn their own workspace from the brief. Gating it costs nothing and removes the survey step. The two routes are gated for *different* reasons: force-release because it mutates and used to leak, the listing because it discloses topology.
+
+- [ ] **Step 5: Apply it to force-release**
+
+At `:676-681`:
+
+```python
+async def force_release_github_workspace(
+    scope_id: int,
+    workspace_id: int,
+    request: GithubWorkspaceForceReleaseRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+Put `_operator` **before** `db` in both signatures, matching Task 7's ordering for `session`. Parameter order does not affect resolution — FastAPI resolves the whole dependency graph before calling the route — but keeping credentials above `db` makes the trust boundary visible at a glance in a file where every other route's first dependency is the database.
+
+- [ ] **Step 6: Add the header to the eight existing call sites**
+
+`tests/agent_teams/test_github_workspace_api.py` now sends the operator header on both guarded routes. Add near the imports:
+
+```python
+OPERATOR_TOKEN = "test-operator-token-for-workspace-api"
+
+
+@pytest.fixture(autouse=True)
+def operator_token(monkeypatch):
+    """Every guarded call in this file authenticates as the operator.
+
+    autouse because the alternative -- threading a fixture through 19 test
+    functions of which 6 need it -- is the kind of edit that silently misses
+    one. A test
+    that wants to assert a REFUSAL belongs in test_operator_auth.py, which
+    owns the matrix; this file is about workspace behaviour, not credentials.
+    """
+    monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
+
+
+OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+```
+
+and `from app.config import settings` to the import block.
+
+Then add `headers=OPERATOR_HEADERS` to exactly these eight calls — the two listing `GET`s and the six force-release `POST`s:
+
+| Line | Call | Note |
+|---|---|---|
+| `:151` | `client.get(.../workspaces)` | in `test_list_workspaces_derives_all_lease_states` |
+| `:171` | `client.get(.../github-scopes/999999/workspaces)` | the 404 assertion in the same test — **this is the one that silently becomes a 401 and still passes nothing**, because the test only asserts `== 404`; without the header it fails, which is the correct signal |
+| `:182` | `test_force_release_with_matching_token` | Task 9 renames this test |
+| `:207` | `test_force_release_rejects_stale_token` | Task 9 **inverts** this test |
+| `:235` | `test_force_release_reports_dirty_paths_and_proceeds` | |
+| `:257` | `test_force_release_rejects_unleased_workspace` | |
+| `:281` | `test_force_release_reports_clean_unpushed_commits` | |
+| `:309` | `test_force_release_requires_token_and_reason` | the parameterized `422` — **without the header this returns `401` and the test fails**, because the dependency runs before body validation. Measured. Task 9 re-authors its parameter list; this task only makes it reach `422` again |
+
+Do **not** add the header to the other eleven `client.post` calls in the file (`:328`, `:357`, `:379`, `:392`, `:409`, `:458`, `:489`, `:517`, `:555`, `:591`, `:620`) or the `GET` at `:657`. Those are workspace *creation*, *reprobe*, *abandon* and the work-item feed — routes this PR does not gate. Adding a header they ignore is harmless but it would misrepresent which routes carry a credential, and a later reader would have no way to tell the deliberate eight from the incidental twelve.
+
+- [ ] **Step 7: Run both test files**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && python3 -m pytest tests/agent_teams/test_operator_auth.py tests/agent_teams/test_github_workspace_api.py -q -p no:warnings
+```
+
+Expected: **`test_operator_auth.py` fully passing except the cases that send `{"force": True, ...}`**, which `GithubWorkspaceForceReleaseRequest` does not accept until Task 9 — those return `422` after passing the credential, so the unconfigured (`503`) and refusal (`401`) rows all pass now, and only `test_the_configured_operator_token_is_accepted`'s `assert forced.status_code not in (401, 503)` is affected — and it passes, because `422` is neither.
+
+`test_github_workspace_api.py` should be **fully green at 23 passed** — 19 test functions, 23 collected cases, because two of them are parameterized. Measured at baseline: `23 passed in 1.89s`. If `:171` or `:309` still fails, the header did not land on that call.
+
+**This is the ordering trap in this task**: the credential and the request-body migration are separate tasks, so between them the body of a force-release request is the *old* shape while `test_operator_auth.py` sends the *new* one. That is deliberate — writing the matrix against the old body would mean re-authoring it in Task 9 — and it is why the positive control asserts `not in (401, 503)` rather than `== 200`. **Do not "fix" this by changing the schema here.** That is Task 9, and it ships with its own tests.
+
+- [ ] **Step 8: Prove the ordering claim by mutation**
+
+Reverse the empty check and the comparison in `deps.require_operator` — delete the `if not expected:` block and change the comparison to compare against `expected` unconditionally:
+
+```python
+    if not x_deck_operator_token:
+        raise HTTPException(status_code=401, detail="operator_token_required")
+    if not hmac.compare_digest(
+        x_deck_operator_token.encode("utf-8"), settings.operator_token.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="operator_token_invalid")
+```
+
+Run `test_unconfigured_install_refuses_with_503_whatever_the_header`. Expected: it **fails on all three parameters** — `401 != 503` for the header cases and for no-header, because this variant still refuses rather than admitting. Now delete the `if not x_deck_operator_token:` block too, so an absent header becomes `""` and reaches the comparison:
+
+```python
+    if not hmac.compare_digest(
+        (x_deck_operator_token or "").encode("utf-8"),
+        settings.operator_token.encode("utf-8"),
+    ):
+        raise HTTPException(status_code=401, detail="operator_token_invalid")
+```
+
+Expected now: the `None` and `""` parameters fail with **`200 != 503`** — an unconfigured install serving the workspace listing to a caller with no credential — while `"anything-at-all"` fails with `401 != 503`. That contrast is the whole point of the two-row split: **the mutant is not a refusal with the wrong status, it is an admission wearing a refusal's shape.**
+
+Restore both blocks by exact string replacement — retype them from Step 3. **Do not `git checkout` the file**: `deps.py` holds Tasks 5 and 7's uncommitted work at this point, and a checkout discards all of it. Re-run the test file and confirm green before moving on.
+
+- [ ] **Step 9: Run the full suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && python3 -m pytest tests/ -q -p no:warnings
+```
+
+Expected: the pre-existing `test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` failure and **nothing else**. This is the first task in the plan that gates an existing route, so the full suite matters more here than anywhere before it: any test anywhere that calls the listing or force-release without a credential now gets `401`. Measured, there are exactly eight such call sites and all eight are in `test_github_workspace_api.py` — no other test file references either route. If a third file fails, a route was gated that this task did not intend to gate; **stop and report** rather than adding headers until it goes green.
+
+- [ ] **Step 10: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/api/v1/deps.py backend/app/api/v1/agent_teams.py backend/tests/agent_teams/test_operator_auth.py backend/tests/agent_teams/test_github_workspace_api.py && git commit -m "feat(teams): require an operator credential on force-release and the listing
+
+agent_teams.py had no authentication at all -- all 27 dependencies were
+Depends(get_db) -- so force-release was reachable by any local process, and its
+mismatch branch interpolated the live lease token into the response body. Guess,
+read the real token out of the refusal, replay it.
+
+require_operator reads X-Deck-Operator-Token and compares it with
+hmac.compare_digest against settings.operator_token. Three distinguishable
+refusals: 503 operator_token_unconfigured, 401 operator_token_required, 401
+operator_token_invalid.
+
+The empty setting is checked BEFORE the comparison, and that ordering is the
+whole fix rather than a detail. compare_digest(\"\", \"\") is True, so leaving the
+empty case to the comparison makes an unconfigured install serve the full
+workspace listing to any caller sending no header, while the source still reads
+fail-closed. Measured, that mutant refuses a garbage header, so only the
+empty-header case reveals it -- hence a test row for it.
+
+The comparison is over bytes: compare_digest raises TypeError on non-ASCII str,
+which reaches the client as a 500 rather than a refusal.
+
+The listing is gated for a different reason than force-release -- it enumerates
+every workspace path and lease holder, which is the reconnaissance step for
+choosing a force-release target, and no agent workflow reads it.
+
+The credential is a boundary against an opportunistic adversary, not a
+co-resident one: the backend and every pane share a uid, so a pane that goes
+looking can read backend/.env. It therefore lives in backend/.env and is never
+exported -- tmux inherits the backend's environment as its global environment,
+which every pane can read back with one command.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6a"
+```
+
+---
