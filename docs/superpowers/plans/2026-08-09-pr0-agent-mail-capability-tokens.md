@@ -3696,3 +3696,1122 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6a"
 ```
 
 ---
+
+### Task 9: Force-release names an acquisition, not a token
+
+**Files:**
+- Modify: `backend/app/models/schemas.py:2255-2258` (`GithubWorkspaceForceReleaseRequest` — replace `expected_lease_token` with `force` + `expected_leased_at`), `:2245` (delete `GithubWorkspaceResponse.lease_token`)
+- Modify: `backend/app/services/github_workspace_service.py` (add `force_release_acquisition` immediately after `release`, `:148-165`)
+- Modify: `backend/app/api/v1/agent_teams.py:185` (drop the projection), `:676-724` (the force-release route body)
+- Test: `backend/tests/agent_teams/test_github_workspace_api.py` (re-author six force-release tests; fix two assertions in the listing test)
+- Test: `backend/tests/agent_teams/test_force_release_concurrency.py` (create — the five interleaving cases plus the positive path, the disclosure assertion, and the `force` validation pair)
+
+**Interfaces:**
+- Consumes: `require_operator` on the route (Task 8, already in the signature); `OPERATOR_HEADERS` in `test_github_workspace_api.py` (Task 8, Step 6).
+- Produces: `github_workspace_service.force_release_acquisition(db, *, workspace_id: int, scope_id: int, item_id: int, expected_leased_at: datetime, lease_token: str | None) -> bool` — `True` when exactly one row was cleared and committed, `False` when zero rows matched and nothing was written. PR1's §4.6a.1 `release_by_owner` is built in this shape and is its sibling, not its caller.
+- Produces: `GithubWorkspaceForceReleaseRequest{force: Literal[True], expected_leased_at: datetime, reason: str, requested_by: Optional[str]}`.
+
+**Task 8 shut the door; this task removes the key from under the mat.** Task 8's dependency stops an unauthenticated caller reaching force-release. It does not stop the route *requiring* the operator to replay the agent's live bearer credential, which is why the listing has to project `lease_token` at all, and why the `409` interpolates the current one. Authenticating the operator and then handing them the agent's secret is a password on a door that is still propped open — spec test 21 exists precisely to fail an implementation that does only Task 8.
+
+**And the replacement is not a rename.** `expected_lease_token` → `expected_leased_at` swaps *which value* is compared and leaves the real defect untouched: the comparison happens at the top of the route, the write happens at the bottom, and between them sit two `git` subprocesses. Measured against today's code, with the replacement acquisition landing at the route's own await:
+
+```
+   route status (TODAY'S code): 200
+   runner calls: ['status', 'rev-list']
+   row after: (None, None) *** REPLACEMENT DESTROYED ***
+```
+
+The `logger.warning` printed *before* that destruction, so the audit trail records a force-release of `ACQ-1-aaa` while the row that died held `ACQ-2-bbb`. A confidently wrong log is worse than no log.
+
+**So the comparison must *be* the write.** One conditional `UPDATE`, issued after the awaited inspection, whose `WHERE` names every part of what the operator confirmed: the workspace row, its scope, the item, the timestamp the operator sent, and the token the server captured. Zero rows means the world moved and nothing happened.
+
+#### The eight measurements that decide this task's code
+
+**1. The predicate must name the workspace row, because `release()` does not.** `release()` selects `WHERE leased_item_id == item_id` with no workspace and no scope predicate (`github_workspace_service.py:148-152`). The narrow-looking fix — keep `release(db, item_id)` and bolt a `leased_at` check onto it — destroys a lease on a workspace the operator never inspected. Measured, with the item's lease legitimately moving from X to Y during the suspension:
+
+```
+1. lease moved: X free, Y holds ON-Y-bbb
+2. correct predicate (names X) -> rowcount 0 | Y: (1, 'ON-Y-bbb') SURVIVED
+3. MUTANT (item id only)       -> rowcount 1 | Y: (None, None) *** DESTROYED ***
+```
+
+Note *how* the test has to set this up: the lease **moves**, it does not duplicate. `UNIQUE(leased_item_id)` (`database.py:319`) refuses a second acquisition outright — measured, `IntegrityError` — so a test that tries to lease the same item on two workspaces at once tests nothing but the constraint. X must release first.
+
+**2. The captured `lease_token` is mandatory, not "a further discriminator".** `leased_at` is a timestamp, not an acquisition identity: measured on this platform, `datetime.utcnow()` returned equal values for back-to-back calls **59 612 times in 200 000 pairs**, and the column has neither a UNIQUE constraint nor any monotonicity guarantee. Driven end to end — a replacement acquisition given the *identical* `leased_at` and a fresh token:
+
+```
+4. interleaved replacement, SAME leased_at, new token
+  status=409 block_code=lease_changed
+  X after: item=1 token=ACQ-2-bbb pid=4242
+```
+
+And the mutant that omits the token from the predicate, against the same row: `rowcount 1`, replacement destroyed. This is the one mutant that survives every other case in spec test 22, because the plain interleaving gives the replacement a *later* `leased_at` and a timestamp-only predicate refuses that one correctly.
+
+**3. `synchronize_session` must be `False`, and the default is actively wrong here.** This is the measurement that changed the code rather than confirming it. An ORM-enabled `update()` defaults to `synchronize_session="auto"`, which evaluates the `WHERE` **in memory** against the session's own attributes — and the session's attributes are the *stale* ones the operator inspected. So on the zero-row path the in-memory object is updated as though the release succeeded:
+
+```
+synchronize_session=None       rowcount=0  in-memory workspace now reads item=None token=None pid=None
+synchronize_session='auto'     rowcount=0  in-memory workspace now reads item=None token=None pid=None
+synchronize_session='evaluate' rowcount=0  in-memory workspace now reads item=None token=None pid=None
+synchronize_session='fetch'    rowcount=0  in-memory workspace now reads item=1 token='ACQ-1-aaa' pid=4242
+synchronize_session=False      rowcount=0  in-memory workspace now reads item=1 token='ACQ-1-aaa' pid=4242
+```
+
+Read the first three lines: `rowcount=0` and the object says released. Nothing is written back — measured, the row survives a subsequent `commit()` on all five settings — but any code reading `workspace` after the failed write sees a release that did not happen, and that includes `_workspace_response(workspace)`. `False` is correct because the row is re-read from the database afterwards anyway; `"fetch"` would also be safe and costs an extra `SELECT`.
+
+**4. The route must `refresh` before it responds, and there is a measurement that proves it.** With `synchronize_session=False` the ORM object is deliberately *not* updated by the write, so building the response from it reports the pre-release state. Measured, the same route with and without the refresh:
+
+| | positive-path response body |
+|---|---|
+| with `await db.refresh(workspace)` | `leased_item_id: None`, `lease_state: available` |
+| without | `leased_item_id: 1`, `lease_state: leased` |
+
+The second row is a `200` that tells the operator the workspace is still leased while the database says otherwise. This is the trade the previous measurement makes: turning synchronization off buys correctness on the `409` path and obliges an explicit re-read on the `200` path.
+
+**5. Do not call `db.rollback()` on the `409` path — and this one is about the tests, not the route.** The conditional `UPDATE` wrote nothing, so there is nothing to roll back; `get_db` rolls back on the raised exception anyway (`database.py:52-53`). Adding an explicit rollback expires the session's identity map, and every subsequent ORM attribute read from the *test* then raises:
+
+```
+A. explicit rollback:    ORM attr read after 409 RAISED: MissingGreenlet
+B. no explicit rollback: ORM attr read after 409: 1 fdcb0d7fd39d388b
+```
+
+Both leave the row untouched — the row is what matters and both are correct on that. But under `httpx.ASGITransport` the test session *is* the request session, so an explicit rollback turns `assert workspace.leased_item_id == item.id` into a `MissingGreenlet` crash rather than a passing assertion. The tests below read rows back with raw SQL for the reasons spec test 22 gives, so they survive either choice; the route omits the rollback because it is unnecessary, and this note exists so nobody adds it back "for safety" and breaks the neighbouring suite.
+
+**6. `expected_leased_at` round-trips through the wire exactly, including microseconds.** The operator's only source for the value is the listing, so the two have to agree to the microsecond. Measured, `2026-08-08 12:00:00.123456` stored → `'2026-08-08T12:00:00.123456'` on the wire → parsed by Pydantic back to `datetime(2026, 8, 8, 12, 0, 0, 123456)`, equal to the stored value. No timezone suffix is emitted, and a client that adds one still matches: SQLAlchemy's SQLite bind processor formats an aware datetime by dropping the tzinfo, so `...123456Z` and `...123456+05:00` both bind as `'2026-08-08 12:00:00.123456'`. That last part is a wart worth knowing about rather than a feature to rely on — the `+05:00` case matches a lease it arguably should not — and it is out of scope here because the only client is the listing, which emits naive values. Do not "fix" it by making the column timezone-aware; that is a migration this PR does not have.
+
+**7. `Literal[True]` refuses both `false` and omission, at validation.** Measured on the real model: `{"force": false, ...}` → `ValidationError`, `force` absent → `ValidationError`. Driven through a route, both are `422` with the lease unchanged. No route code reads the field, which is the point — a `force: bool` that the implementation ignores passes every other test in this task.
+
+**8. The `409` names both timestamps, and on one of its two paths there is no second timestamp to name.** §4.6a requires the refusal to name both — "which are not secrets" — so the message needs a *fresh* read of `leased_at`, and `synchronize_session=False` means the ORM object still holds the stale one. A `refresh` on the refusal path supplies it. But `release()` **never clears `leased_at`** (its eight assignments are `leased_item_id`, `released_at`, `lease_token`, the four liveness columns, and `updated_at` — verified by reading `:155-165`), so a workspace released during the inspection still reports the timestamp the operator confirmed. Naming it there would tell the operator their value *matched* while refusing them. Measured, all three shapes, through a route:
+
+```
+--- REACQUIRED:     409  "You confirmed leased_at 2026-08-09T17:15:58.687395, but it now
+                          reports leased_at 2026-08-09T17:17:28.718209."
+                    row after: (1, 'ACQ-2-bbb')     token leaked: False
+--- PLAIN RELEASE:  409  "You confirmed leased_at 2026-08-09T17:15:58.749400, but the
+                          workspace is no longer leased."
+                    row after: (None, None)         token leaked: False
+--- POSITIVE:       200  released_item_id=3, leased_item_id=null
+                    row after: (None, None)         token leaked: False
+```
+
+So the message branches on `leased_item_id is None` after the refresh, not on `leased_at`. And the refresh is what makes measurement 5's finding narrowly true rather than accidental: a `refresh` before the raise leaves the session usable — measured, the neighbouring ORM read returns `1` and `None` on the two refusal paths — whereas a `rollback` before the raise does not.
+
+#### What is deliberately *not* touched
+
+`lease_token` appears in eleven other places and all of them stay:
+
+- `DispatchStatusReport.lease_token` (`schemas.py:2352`) and the three shim sites (`mcp_shim/agent_mail_server.py:608`, `:616`, `:627`) are the **agent's** dispatch-status token — a different field, on a different route, serving `release_by_token` and `touch_owner_contact`. Confirmed by reading the owning model: `:2352` belongs to `DispatchStatusReport`, not to any workspace schema.
+- `agent_teams.py:339`, `:364`, `:376` are that same agent path (`/dispatch-status`). §4.6a.1 rewrites `:376`'s `release_by_token` in **PR1**, and it needs the token to keep flowing.
+- `github_dispatch_service.py:448-456` and `:878` interpolate the token into the agent's brief. That is how the owner learns its own credential; deleting it would break dispatch.
+- `test_github_workspace_service.py:121, 289-311, 413`, `test_github_watcher_service.py:270`, `test_agent_team_api.py:469` set or read the column directly rather than through the deleted projection. Verified: none of them asserts on a response body's `lease_token`.
+
+The frontend reads it nowhere — measured, zero matches for `lease_token` or `leaseToken` under `frontend/src/`. There is no UI to update in this task.
+
+- [ ] **Step 1: Write the failing concurrency test — the four interleavings**
+
+Create `backend/tests/agent_teams/test_force_release_concurrency.py`. This file is separate from `test_github_workspace_api.py` because its fixtures are different in kind: it injects a mutation at the route's own suspension point, and mixing that machinery into the HTTP-contract file makes both harder to read.
+
+```python
+"""Spec §3.7 test 22 — the force-release concurrency contract.
+
+Every case here drives a mutation at the route's real suspension point: the
+two `git` subprocesses `pending_work` awaits between the operator's inspection
+and the release. A test that seeds the replacement *before* the request passes
+against a route that compares at the top and writes at the bottom, which is
+the exact defect this file exists to catch.
+"""
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import httpx
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+
+from app.config import settings
+from app.database import get_db
+from app.main import app
+from app.models.database import (
+    AgentTeamPreset,
+    GithubWorkItem,
+    GithubWorkspace,
+    TeamGithubScope,
+)
+from app.services.github_workspace_service import github_workspace_service
+
+OPERATOR_TOKEN = "test-operator-token-for-force-release"
+OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+
+# The seven columns release() clears, plus the two timestamps that must agree.
+RELEASE_STATE_COLUMNS = (
+    "leased_item_id, lease_token, leased_owner_pid, leased_owner_proc_start,"
+    " lease_last_owner_contact_at, lease_release_reminded_at, released_at, updated_at"
+)
+
+
+@pytest.fixture(autouse=True)
+def operator_token(monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
+
+
+@pytest_asyncio.fixture
+async def client(db):
+    async def _override():
+        yield db
+
+    app.dependency_overrides[get_db] = _override
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        yield http
+    app.dependency_overrides.clear()
+
+
+class InterleavingRunner:
+    """A git runner that runs `hook` at the route's first await.
+
+    `pending_work` awaits self._runner twice for a worktree -- `status
+    --porcelain` then `rev-list --count`. Firing on the first call puts the
+    mutation strictly between the operator's inspection and the release, which
+    is where a real replacement acquisition lands.
+    """
+
+    def __init__(self, repo_path: Path, hook=None):
+        self.repo_path = repo_path
+        self.hook = hook
+        self.calls: list[list[str]] = []
+        self.status_output = ""
+        self.rev_count = "0"
+
+    async def __call__(self, args: list[str]):
+        first = not self.calls
+        self.calls.append(args)
+        if first and self.hook is not None:
+            await self.hook()
+        path = Path(args[1])
+        command = args[2]
+        common = self.repo_path / ".git"
+        if command == "rev-parse":
+            linked = path != self.repo_path
+            git_dir = common / "worktrees" / path.name if linked else common
+            return 0, f"{git_dir}\n{common}\n{path}\n"
+        if command == "status":
+            return 0, self.status_output
+        if command == "rev-list":
+            return 0, f"{self.rev_count}\n"
+        return 0, ""
+
+
+async def _scope(db, repo_path: Path):
+    repo_path.mkdir(parents=True, exist_ok=True)
+    preset = AgentTeamPreset(name=f"FR {repo_path.name}", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="owner",
+        repo_name=repo_path.name,
+        repo_path=str(repo_path),
+    )
+    db.add(scope)
+    await db.commit()
+    return scope
+
+
+async def _leased(db, scope, path: Path):
+    """A worktree workspace with every liveness column populated.
+
+    kind="worktree" is load-bearing: pending_work returns (None, None)
+    immediately for kind == "primary" with no git call at all, so a primary
+    workspace has no suspension point and none of these tests can interleave.
+    """
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=1,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+    )
+    db.add(item)
+    await db.flush()
+    inspected_at = datetime.utcnow() - timedelta(seconds=90)
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(path),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=inspected_at,
+        lease_token="ACQ-1-aaa",
+        leased_owner_pid=4242,
+        leased_owner_proc_start="991122",
+        lease_last_owner_contact_at=datetime.utcnow(),
+        lease_release_reminded_at=datetime.utcnow(),
+    )
+    db.add(workspace)
+    await db.commit()
+    # Capture ids as plain ints. After the request, ORM attribute access on
+    # these objects may hit the database from outside a greenlet context.
+    return item.id, workspace.id, inspected_at
+
+
+def _url(scope_id: int, workspace_id: int) -> str:
+    return (
+        f"/api/v1/agent-teams/github-scopes/{scope_id}/workspaces/"
+        f"{workspace_id}/force-release"
+    )
+
+
+async def _row(db, workspace_id: int, columns: str = "leased_item_id, lease_token"):
+    """Read the row back with raw SQL.
+
+    Never assert on the ORM object: with expire_on_commit=False the identity
+    map can report values the database does not hold, in both directions.
+    """
+    result = await db.execute(
+        text(f"SELECT {columns} FROM github_workspaces WHERE id = :id"),
+        {"id": workspace_id},
+    )
+    return result.one()
+
+
+@pytest.mark.asyncio
+async def test_matching_acquisition_is_released_and_state_fully_cleared(
+    client, db, tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    item_id, workspace_id, inspected_at = await _leased(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", InterleavingRunner(repo))
+
+    response = await client.post(
+        _url(scope.id, workspace_id),
+        json={
+            "force": True,
+            "expected_leased_at": inspected_at.isoformat(),
+            "reason": "owner is unavailable",
+            "requested_by": "operator",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["released_item_id"] == item_id
+    # The response must reflect the post-release row, not the object the
+    # request inspected.
+    assert body["workspace"]["leased_item_id"] is None
+    assert body["workspace"]["lease_state"] == "available"
+
+    row = await _row(db, workspace_id, RELEASE_STATE_COLUMNS)
+    (
+        leased_item_id,
+        lease_token,
+        owner_pid,
+        owner_proc_start,
+        owner_contact_at,
+        reminded_at,
+        released_at,
+        updated_at,
+    ) = row
+    # All seven columns release() clears, enumerated. The ones an implementer
+    # drops are the liveness ones, and a NULL leased_item_id beside a stale
+    # leased_owner_pid is the row shape §4.6b exists to prevent.
+    assert leased_item_id is None
+    assert lease_token is None
+    assert owner_pid is None
+    assert owner_proc_start is None
+    assert owner_contact_at is None
+    assert reminded_at is None
+    assert released_at is not None
+    assert released_at == updated_at
+
+
+@pytest.mark.asyncio
+async def test_stale_expected_leased_at_refuses_without_touching_the_lease(
+    client, db, tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    item_id, workspace_id, _ = await _leased(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", InterleavingRunner(repo))
+
+    response = await client.post(
+        _url(scope.id, workspace_id),
+        json={
+            "force": True,
+            "expected_leased_at": "2020-01-01T00:00:00",
+            "reason": "stale value",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "lease_changed"
+    assert await _row(db, workspace_id) == (item_id, "ACQ-1-aaa")
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_acquired_during_the_inspection_survives(
+    client, db, tmp_path, monkeypatch, caplog
+):
+    """The ABA case. Measured against the pre-Task-9 route: 200, replacement destroyed."""
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    item_id, workspace_id, inspected_at = await _leased(db, scope, tmp_path / "ws")
+
+    # Written explicitly rather than taken from utcnow() inside the hook: the
+    # assertion below compares against this value's isoformat(), and a
+    # microsecond of exactly 0 would make SQLite's stored '.000000' and
+    # Python's suffix-less isoformat() disagree.
+    replacement_leased_at = inspected_at + timedelta(seconds=30)
+
+    async def replace():
+        # The owner released and the item was dispatched again while the
+        # operator's request sat in `git status`.
+        await db.execute(
+            text(
+                "UPDATE github_workspaces SET leased_at = :now,"
+                " lease_token = 'ACQ-2-bbb' WHERE id = :id"
+            ),
+            {"now": replacement_leased_at, "id": workspace_id},
+        )
+        await db.commit()
+
+    monkeypatch.setattr(
+        github_workspace_service, "_runner", InterleavingRunner(repo, replace)
+    )
+
+    with caplog.at_level("WARNING", logger="app.api.v1.agent_teams"):
+        response = await client.post(
+            _url(scope.id, workspace_id),
+            json={
+                "force": True,
+                "expected_leased_at": inspected_at.isoformat(),
+                "reason": "owner is unavailable",
+            },
+            headers=OPERATOR_HEADERS,
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["block_code"] == "lease_changed"
+    # §4.6a: the refusal names both timestamps. The second one has to be the
+    # REPLACEMENT's, read fresh -- a message built from the stale ORM object
+    # names the operator's own value twice and reads as "your value matched".
+    assert inspected_at.isoformat() in detail["message"]
+    assert replacement_leased_at.isoformat() in detail["message"]
+    # The replacement acquisition is intact -- both the pointer and the token.
+    assert await _row(db, workspace_id) == (item_id, "ACQ-2-bbb")
+    # And nothing was logged as released. The success line must sit AFTER the
+    # write; before it, a force-release that did not happen is recorded as one.
+    assert "force-release workspace" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_sharing_the_leased_at_still_survives(
+    client, db, tmp_path, monkeypatch
+):
+    """The same-timestamp case: the only one that fails a token-less predicate.
+
+    utcnow() self-collides -- measured 59 612 times in 200 000 back-to-back
+    pairs -- and leased_at has neither a UNIQUE constraint nor any
+    monotonicity guarantee, so two acquisitions sharing one is not contrived.
+    The timestamp is written explicitly rather than waited for.
+    """
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    item_id, workspace_id, inspected_at = await _leased(db, scope, tmp_path / "ws")
+
+    async def replace_with_same_timestamp():
+        await db.execute(
+            text(
+                "UPDATE github_workspaces SET leased_at = :same,"
+                " lease_token = 'ACQ-2-bbb' WHERE id = :id"
+            ),
+            {"same": inspected_at, "id": workspace_id},
+        )
+        await db.commit()
+
+    monkeypatch.setattr(
+        github_workspace_service,
+        "_runner",
+        InterleavingRunner(repo, replace_with_same_timestamp),
+    )
+
+    response = await client.post(
+        _url(scope.id, workspace_id),
+        json={
+            "force": True,
+            "expected_leased_at": inspected_at.isoformat(),
+            "reason": "owner is unavailable",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "lease_changed"
+    assert await _row(db, workspace_id) == (item_id, "ACQ-2-bbb")
+    # Microseconds survive the round trip, so the refusal above is the token
+    # doing the work rather than a truncated comparison failing for its own
+    # unrelated reason.
+    (stored_leased_at,) = await _row(db, workspace_id, "leased_at")
+    assert stored_leased_at.endswith(f"{inspected_at.microsecond:06d}")
+
+
+@pytest.mark.asyncio
+async def test_an_owner_release_during_the_inspection_refuses_honestly(
+    client, db, tmp_path, monkeypatch
+):
+    """The other refusal branch: the owner released it before the operator's write.
+
+    release() does not clear leased_at, so the row still reports the exact
+    timestamp the operator confirmed. A message that names it says "your value
+    did not match" while showing a value that did. This asserts the branch.
+    """
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    _, workspace_id, inspected_at = await _leased(db, scope, tmp_path / "ws")
+
+    async def owner_releases():
+        await db.execute(
+            text(
+                "UPDATE github_workspaces SET leased_item_id = NULL,"
+                " lease_token = NULL WHERE id = :id"
+            ),
+            {"id": workspace_id},
+        )
+        await db.commit()
+
+    monkeypatch.setattr(
+        github_workspace_service, "_runner", InterleavingRunner(repo, owner_releases)
+    )
+
+    response = await client.post(
+        _url(scope.id, workspace_id),
+        json={
+            "force": True,
+            "expected_leased_at": inspected_at.isoformat(),
+            "reason": "owner is unavailable",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    message = response.json()["detail"]["message"]
+    assert response.json()["detail"]["block_code"] == "lease_changed"
+    assert "no longer leased" in message
+    # leased_at survives release(), so the honest message must NOT present it
+    # as the current state.
+    assert f"now reports leased_at {inspected_at.isoformat()}" not in message
+    (stored_leased_at,) = await _row(db, workspace_id, "leased_at")
+    assert stored_leased_at is not None  # the trap this assertion guards
+
+
+@pytest.mark.asyncio
+async def test_a_lease_that_moved_to_another_workspace_survives(
+    client, db, tmp_path, monkeypatch
+):
+    """The cross-workspace case: release()'s selector names no workspace.
+
+    The lease has to MOVE rather than duplicate -- UNIQUE(leased_item_id)
+    refuses a second acquisition of the same item outright (measured,
+    IntegrityError), so X releases before Y acquires.
+    """
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    item_id, x_id, inspected_at = await _leased(db, scope, tmp_path / "ws-x")
+    y = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws-y"), kind="worktree")
+    db.add(y)
+    await db.commit()
+    y_id = y.id
+
+    async def move_lease_to_y():
+        await db.execute(
+            text(
+                "UPDATE github_workspaces SET leased_item_id = NULL,"
+                " lease_token = NULL WHERE id = :id"
+            ),
+            {"id": x_id},
+        )
+        await db.execute(
+            text(
+                "UPDATE github_workspaces SET leased_item_id = :item,"
+                " leased_at = :now, lease_token = 'ON-Y-bbb' WHERE id = :id"
+            ),
+            {"item": item_id, "now": datetime.utcnow(), "id": y_id},
+        )
+        await db.commit()
+
+    monkeypatch.setattr(
+        github_workspace_service, "_runner", InterleavingRunner(repo, move_lease_to_y)
+    )
+
+    response = await client.post(
+        _url(scope.id, x_id),
+        json={
+            "force": True,
+            "expected_leased_at": inspected_at.isoformat(),
+            "reason": "owner is unavailable",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "lease_changed"
+    # The operator inspected X and confirmed X. Y is a lease they never saw.
+    assert await _row(db, y_id) == (item_id, "ON-Y-bbb")
+
+
+@pytest.mark.asyncio
+async def test_the_conflict_body_discloses_no_token(client, db, tmp_path, monkeypatch):
+    """Spec test 22's disclosure assertion, over the whole serialised body.
+
+    The live disclosure reaches the wire through _conflict's detail.message
+    nesting, so an assertion that reads only a top-level "message" misses it.
+    Both the stored token and the value the caller supplied are asserted: an
+    attacker's own guess echoed back confirms nothing, but an operator's
+    mistyped paste of a real token is still a secret in a log.
+    """
+    repo = tmp_path / "repo"
+    scope = await _scope(db, repo)
+    _, workspace_id, _ = await _leased(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", InterleavingRunner(repo))
+
+    response = await client.post(
+        _url(scope.id, workspace_id),
+        json={
+            "force": True,
+            "expected_leased_at": "2020-01-01T00:00:00",
+            "reason": "ACQ-3-ccc",  # a token-shaped value in a field that is echoed
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert "ACQ-1-aaa" not in response.text
+    assert "ACQ-3-ccc" not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "force_field",
+    [{"force": False}, {}],
+    ids=["force_false", "force_omitted"],
+)
+async def test_force_must_be_true_and_the_lease_is_untouched(
+    client, db, tmp_path, force_field
+):
+    """Literal[True] pins the schema, so a route that ignores `force` still fails."""
+    scope = await _scope(db, tmp_path / "repo")
+    item_id, workspace_id, inspected_at = await _leased(db, scope, tmp_path / "ws")
+
+    response = await client.post(
+        _url(scope.id, workspace_id),
+        json={
+            **force_field,
+            "expected_leased_at": inspected_at.isoformat(),
+            "reason": "unconfirmed",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert await _row(db, workspace_id) == (item_id, "ACQ-1-aaa")
+```
+
+- [ ] **Step 2: Run it and read the failures carefully**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/test_force_release_concurrency.py -q -p no:warnings
+```
+
+Expected: **9 failed** (8 test functions, 9 cases). The failures are *not* all the same, and the difference matters:
+
+- The six cases sending `force: true` fail with **`422`**, because today's schema requires `expected_lease_token` and rejects the unknown field's absence. `422` here means "the schema has not been migrated yet" — it is not the refusal Step 1's assertions are about.
+- `test_force_must_be_true_and_the_lease_is_untouched` **passes for the wrong reason** — today's schema also returns `422`, for the missing `expected_lease_token`. Treat it as red until Step 4, then confirm it still passes.
+
+Do not chase the `422`s individually. They all resolve in Step 3.
+
+- [ ] **Step 3: Migrate the request schema and delete the projection**
+
+In `backend/app/models/schemas.py`, replace `GithubWorkspaceForceReleaseRequest` (`:2255-2258`):
+
+```python
+class GithubWorkspaceForceReleaseRequest(BaseModel):
+    # Literal[True] rather than bool: an omitted or false `force` must be a
+    # validation error, not a branch the route can forget to read.
+    force: Literal[True]
+    # The acquisition the operator inspected, as shown by the workspace
+    # listing. Compared inside the release write, not before it.
+    expected_leased_at: datetime
+    reason: str
+    requested_by: Optional[str] = None
+```
+
+`Literal` is already imported (`schemas.py:3`); no import change.
+
+And delete one line from `GithubWorkspaceResponse` (`:2245`):
+
+```python
+    lease_token: Optional[str] = None
+```
+
+**Delete only that one.** Two other `lease_token: Optional[str] = None` lines exist in this file: `:2256` is the field being replaced above, and `:2352` belongs to `DispatchStatusReport` — the *agent's* dispatch-status token, a different credential on a different route, which PR1 still needs. Verified by reading the owning class.
+
+- [ ] **Step 4: Delete the projection's other half**
+
+In `backend/app/api/v1/agent_teams.py`, remove line `:185` from `_workspace_response`:
+
+```python
+        lease_token=workspace.lease_token,
+```
+
+The surrounding call keeps every other field. Nothing else in the function changes.
+
+Run the new file again:
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/test_force_release_concurrency.py -q -p no:warnings
+```
+
+Expected: **2 passed, 7 failed**. The two `force` cases now pass for the right reason (`Literal[True]` refusing at validation), and the seven `force: true` cases fail with `AttributeError: 'GithubWorkspaceForceReleaseRequest' object has no attribute 'expected_lease_token'` — measured, `httpx.ASGITransport` re-raises that rather than turning it into a `500`, so it surfaces as an error rather than an assertion failure. That is the schema and the route disagreeing, which Step 6 fixes.
+
+- [ ] **Step 5: Add the conditional release to the service**
+
+In `backend/app/services/github_workspace_service.py`, add `force_release_acquisition` immediately after `release` (which ends at `:165`) — beside it deliberately, so the two column lists can be read against each other. Add `update` to the existing SQLAlchemy import at `:11`:
+
+```python
+from sqlalchemy import select, update
+```
+
+```python
+    async def force_release_acquisition(
+        self,
+        db: AsyncSession,
+        *,
+        workspace_id: int,
+        scope_id: int,
+        item_id: int,
+        expected_leased_at: datetime,
+        lease_token: str | None,
+    ) -> bool:
+        """Clear exactly the acquisition described, or nothing at all.
+
+        `release` selects on `leased_item_id` alone, so a caller that inspects
+        a workspace, awaits, and then calls it can clear a lease on a
+        different row -- the item's lease may have moved in between. Here the
+        comparison IS the write: every part of what the caller inspected is in
+        the WHERE clause, so a lease that changed under them cannot be
+        destroyed by a confirmation of the one that is gone.
+
+        Returns True when one row was cleared and committed, False when the
+        acquisition no longer exists. Exactly-one is a guarantee rather than a
+        hope because `id` is the primary key.
+        """
+        now = datetime.utcnow()
+        result = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.id == workspace_id,
+                GithubWorkspace.scope_id == scope_id,
+                GithubWorkspace.leased_item_id == item_id,
+                GithubWorkspace.leased_at == expected_leased_at,
+                GithubWorkspace.lease_token == lease_token,
+            )
+            .values(
+                leased_item_id=None,
+                released_at=now,
+                lease_token=None,
+                leased_owner_pid=None,
+                leased_owner_proc_start=None,
+                lease_last_owner_contact_at=None,
+                lease_release_reminded_at=None,
+                updated_at=now,
+            )
+            # synchronize_session's default evaluates this WHERE in memory
+            # against the session's own -- stale -- attributes, which on the
+            # zero-row path marks the in-memory workspace released while the
+            # row is still leased. Callers re-read the row instead.
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return False
+        await db.commit()
+        return True
+```
+
+**Two review points, neither of which has a test.**
+
+1. `GithubWorkspace.lease_token == lease_token` with `lease_token=None` compiles to **`IS NULL`**, not `= NULL` — measured, SQLAlchemy rewrites the operator when the right-hand side is `None` at compile time, so it *matches* a row whose stored token is NULL. That is harmless here (`acquire` always sets a token at `:130`, so the row shape is unreachable through the normal path) but it is the opposite of what a reader who knows SQL's `NULL = NULL` will assume, and it would be a real hole for any caller that could be induced to capture `None`. Do **not** switch to `is_(None)` or a null-safe operator: leave the `==` and leave this note. §4.6a.1's `release_by_owner` in PR1 inherits the same consideration.
+2. The `where()` takes five positional criteria, which SQLAlchemy `AND`s together. Do not "simplify" any of the five away. Each has a measured mutant: dropping `id`/`scope_id` destroys another workspace's lease, dropping `leased_at` defeats the whole point, dropping `lease_token` fails only the same-timestamp case, and dropping `leased_item_id` releases an already-free row as though it had been leased.
+
+- [ ] **Step 6: Rewrite the route body**
+
+Replace the body of `force_release_github_workspace` in `backend/app/api/v1/agent_teams.py` (`:682-724`, everything after the signature Task 8 already updated). The signature itself is unchanged:
+
+```python
+async def force_release_github_workspace(
+    scope_id: int,
+    workspace_id: int,
+    request: GithubWorkspaceForceReleaseRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    workspace = await db.get(GithubWorkspace, workspace_id)
+    if workspace is None or workspace.scope_id != scope_id:
+        raise HTTPException(status_code=404, detail="GitHub workspace not found")
+    if workspace.leased_item_id is None:
+        raise _conflict(
+            "Workspace is not leased",
+            block_code="workspace_not_leased",
+        )
+
+    # Capture the acquisition being confirmed BEFORE the await. The token is
+    # captured server-side and never returned to the operator -- requiring
+    # them to replay it is what made the projection necessary in the first
+    # place.
+    released_item_id = workspace.leased_item_id
+    inspected_lease_token = workspace.lease_token
+
+    # Both risk signals. The operator override reports potential loss but
+    # deliberately does not gate on it, and after this await everything read
+    # above may be stale -- which is why the release re-checks it in its own
+    # WHERE clause rather than trusting what was read here.
+    discarded_paths, unpushed_commits = await github_workspace_service.pending_work(
+        scope, workspace
+    )
+
+    released = await github_workspace_service.force_release_acquisition(
+        db,
+        workspace_id=workspace_id,
+        scope_id=scope_id,
+        item_id=released_item_id,
+        expected_leased_at=request.expected_leased_at,
+        lease_token=inspected_lease_token,
+    )
+    if not released:
+        # A fresh read, because the conditional write deliberately does not
+        # update the identity map -- and §4.6a requires the refusal to name
+        # both timestamps, which are not secrets.
+        await db.refresh(workspace)
+        if workspace.leased_item_id is None:
+            current = "the workspace is no longer leased"
+        else:
+            # release() does not clear leased_at, so this branch is the only
+            # one where a stored timestamp means what the operator will read
+            # it to mean.
+            current = f"it now reports leased_at {workspace.leased_at.isoformat()}"
+        raise _conflict(
+            "The workspace lease changed between inspection and release, so "
+            f"nothing was released. You confirmed leased_at "
+            f"{request.expected_leased_at.isoformat()}, but {current}. "
+            "Refresh the workspace and confirm again.",
+            block_code="lease_changed",
+        )
+
+    # After the write, never before it: a log line emitted ahead of the
+    # release records a force-release that may not have happened.
+    logger.warning(
+        "force-release workspace %s (item %s) by %s: %s; discarding: %s dirty "
+        "path(s), %s unpushed commit(s)",
+        workspace_id,
+        released_item_id,
+        request.requested_by or "unknown",
+        request.reason,
+        len((discarded_paths or "").splitlines()),
+        unpushed_commits if unpushed_commits is not None else "unknown",
+    )
+    # The conditional write does not update the identity map, so the response
+    # must be built from a re-read row rather than the object inspected above.
+    await db.refresh(workspace)
+    return GithubWorkspaceForceReleaseResponse(
+        workspace=_workspace_response(workspace),
+        released_item_id=released_item_id,
+        discarded_paths=discarded_paths,
+        unpushed_commits=unpushed_commits,
+    )
+```
+
+Five things to get right, each with a measurement behind it:
+
+1. **No `await db.rollback()` on the `409` path** — a `refresh`, not a `rollback`. Nothing was written, and `get_db` rolls back on the raised exception anyway (`database.py:52-53`). An explicit rollback expires the identity map, and because the test session *is* the request session under `ASGITransport`, every later ORM attribute read in the neighbouring suite raises `MissingGreenlet`. Measured: with the `refresh` and no `rollback`, the neighbouring read returns cleanly on both refusal paths.
+2. **Both `refresh` calls are mandatory, for different reasons.** The `200`-path one: without it the body reports `leased_item_id: 1` / `lease_state: "leased"` — a success response claiming the workspace is still held. The `409`-path one: without it the message names the operator's own value twice, since the stale ORM `leased_at` *is* `expected_leased_at`.
+3. **The refusal branches on `leased_item_id`, not on `leased_at`.** `release()` leaves `leased_at` populated, so the "released during the inspection" case has no honest second timestamp to name.
+4. **`workspace_id` and `scope_id` are the path parameters**, not `workspace.id` / `workspace.scope_id`. Same values, but reading them off a possibly-stale ORM object in the predicate that exists to defeat staleness reads as a mistake even where it isn't.
+5. **The refusal names no token.** Two timestamps and nothing else; `request.reason` is not echoed either.
+
+- [ ] **Step 7: Run the concurrency file — expect green**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/test_force_release_concurrency.py -q -p no:warnings
+```
+
+Expected: **9 passed**.
+
+- [ ] **Step 8: Re-author the six force-release tests in the existing file**
+
+`backend/tests/agent_teams/test_github_workspace_api.py` still sends `expected_lease_token`. Six call sites migrate. Task 8 already added `headers=OPERATOR_HEADERS` to each of them; keep it.
+
+Replace each body's `"expected_lease_token": "lease-current"` with `"force": True, "expected_leased_at": <the workspace's leased_at>`. The helper `_leased_workspace` (`:87-107`) sets `leased_at=datetime.utcnow() - timedelta(seconds=90)` but does not return it, so **change the helper to return it** rather than recomputing an approximation in six places — a recomputed `utcnow() - 90s` will not match to the microsecond and every test would fail with `409 lease_changed`:
+
+```python
+async def _leased_workspace(db, scope, path: Path, *, token="lease-current"):
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=1,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="merged",
+    )
+    db.add(item)
+    await db.flush()
+    leased_at = datetime.utcnow() - timedelta(seconds=90)
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(path),
+        leased_item_id=item.id,
+        leased_at=leased_at,
+        lease_token=token,
+    )
+    db.add(workspace)
+    await db.commit()
+    return item, workspace, leased_at
+```
+
+Every caller of `_leased_workspace` in the file now unpacks three values. There are five call sites — `:179`, `:204`, `:230`, `:276`, `:307` — and the three that do not need the item use `_, workspace, leased_at = ...`. **Grep for them rather than trusting this list**; a missed one fails with `ValueError: too many values to unpack`, which is loud but costs a test run each:
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && grep -n "_leased_workspace(" tests/agent_teams/test_github_workspace_api.py
+```
+
+Then the six bodies. Five are a mechanical swap, e.g. `test_force_release_with_matching_token` (`:176`, and rename it — it no longer names a token):
+
+```python
+@pytest.mark.asyncio
+async def test_force_release_with_matching_acquisition(client, db, tmp_path, monkeypatch):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    item, workspace, leased_at = await _leased_workspace(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", ApiGitRunner(repo_path))
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "force": True,
+            "expected_leased_at": leased_at.isoformat(),
+            "reason": "owner is unavailable",
+            "requested_by": "operator",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["released_item_id"] == item.id
+    assert body["workspace"]["leased_item_id"] is None
+    assert "lease_token" not in body["workspace"]
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+```
+
+The `assert "lease_token" not in body["workspace"]` line is spec test 21's schema assertion; add it here and in the listing test at Step 9.
+
+**One of the five needs more than a swap.** `test_force_release_rejects_unleased_workspace` (`:251`) creates its workspace inline rather than through the helper, so it has no `leased_at` to send — and `expected_leased_at` is now required, so a body without it returns `422` and the test stops proving anything about `workspace_not_leased`. Send an arbitrary timestamp; the route refuses on the unleased check before the predicate is ever built:
+
+```python
+        json={
+            "force": True,
+            "expected_leased_at": "2026-08-08T12:00:00",
+            "reason": "nothing owns it",
+        },
+```
+
+This test also asserts the *ordering* of the two refusals — `workspace_not_leased` wins over `lease_changed` — which matters because both are `409` and only the block code distinguishes them.
+
+**The sixth is inverted, not swapped.** `test_force_release_rejects_stale_token` (`:201`) asserts that the refusal *contains* both tokens — it is the test that pins the disclosure this task deletes. Replace it wholesale:
+
+```python
+@pytest.mark.asyncio
+async def test_force_release_refusal_names_no_lease_token(
+    client, db, tmp_path, monkeypatch
+):
+    """The old version asserted the 409 echoed both tokens; that WAS the leak."""
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    item, workspace, _ = await _leased_workspace(db, scope, tmp_path / "ws")
+    monkeypatch.setattr(github_workspace_service, "_runner", ApiGitRunner(repo_path))
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "force": True,
+            "expected_leased_at": "2020-01-01T00:00:00",
+            "reason": "owner is unavailable",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "lease_changed"
+    assert "lease-current" not in response.text
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item.id
+```
+
+Finally, the parameterized `test_force_release_requires_token_and_reason` (`:305`) parameterizes over the old field. Its cases become "missing `reason`" and "missing `expected_leased_at`", and its name changes:
+
+```python
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"force": True, "expected_leased_at": "2026-08-08T12:00:00"},
+        {"force": True, "reason": "missing the acquisition"},
+    ],
+    ids=["no_reason", "no_expected_leased_at"],
+)
+async def test_force_release_requires_reason_and_acquisition(
+    client, db, tmp_path, body
+):
+    _, scope = await _scope(db, tmp_path / "repo")
+    _, workspace, _ = await _leased_workspace(db, scope, tmp_path / "ws")
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json=body,
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 422
+```
+
+The `headers=OPERATOR_HEADERS` is what lets this reach `422` at all — Task 8 measured that the dependency runs *before* body validation, so without the header both cases return `401`.
+
+- [ ] **Step 9: Fix the listing test's two `lease_token` assertions**
+
+Same file, `test_list_workspaces_derives_all_lease_states` (`:111-172`). Two assertions read the deleted key. Line `:163`:
+
+```python
+    assert rows[0]["lease_token"] is None
+```
+
+and line `:167`:
+
+```python
+    assert rows[1]["lease_token"] == "lease-visible"
+```
+
+Replace **both** with one assertion that the key is gone from every row — which is the property spec test 21 actually states, and is stronger than either:
+
+```python
+    assert all("lease_token" not in row for row in rows)
+```
+
+Put it immediately after the `lease_state` list assertion (`:159-165` region), and delete the two original lines. Keep every other assertion in the test, including the `lease_last_owner_contact_at` and `lease_age_seconds` ones on the same rows — those columns stay projected.
+
+- [ ] **Step 10: Run the workspace API file, then both files together**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/test_github_workspace_api.py tests/agent_teams/test_force_release_concurrency.py -q -p no:warnings
+```
+
+Expected: **32 passed** — 23 in the migrated file (19 test functions, 23 collected cases; this task re-authors tests without changing either count, since the parameterization stays at two cases) and 9 in the new one.
+
+- [ ] **Step 11: Mutate the predicate and the route eight ways, and watch the right test fail**
+
+This is the step that proves the tests have discriminating power rather than merely passing. Apply each mutation to `force_release_acquisition`'s `where()`, run the concurrency file, restore, and move on. **Restore by exact string replacement — never `git checkout`**, because `github_workspace_service.py` may hold uncommitted work from earlier tasks.
+
+| Mutation | Must fail |
+|---|---|
+| delete `GithubWorkspace.lease_token == lease_token` | `test_a_replacement_sharing_the_leased_at_still_survives` **only** — measured, the later-timestamp interleaving still refuses correctly, so this is the single row with power over it |
+| delete `GithubWorkspace.leased_at == expected_leased_at` | `test_stale_expected_leased_at_refuses_without_touching_the_lease` and the two interleavings |
+| delete both `GithubWorkspace.id ==` and `GithubWorkspace.scope_id ==` | `test_a_lease_that_moved_to_another_workspace_survives` |
+| replace the whole call with `await github_workspace_service.release(db, released_item_id); released = True` | all four concurrency tests |
+| move the `logger.warning` back above the release call | `test_a_replacement_acquired_during_the_inspection_survives` (its `caplog` assertion) |
+| delete the `await db.refresh(workspace)` on the **409** path | `test_a_replacement_acquired_during_the_inspection_survives` — the message then names `expected_leased_at` twice, so its `replacement_leased_at.isoformat() in message` assertion fails |
+| delete the `await db.refresh(workspace)` on the **200** path | `test_matching_acquisition_is_released_and_state_fully_cleared` (`leased_item_id is None` / `lease_state == "available"` in the body) |
+| always take the `f"it now reports leased_at …"` branch, dropping the `leased_item_id is None` check | `test_an_owner_release_during_the_inspection_refuses_honestly` — and this is the mutant a reviewer reading the branch will not see, because the value it names is present and plausible |
+
+If any mutation leaves the file green, the test is not testing what its name says. Stop and fix the test before continuing.
+
+Then the two schema mutations, which are the ones a reviewer cannot see by reading:
+
+| Mutation | Must fail |
+|---|---|
+| `force: bool` instead of `force: Literal[True]` | both `test_force_must_be_true_and_the_lease_is_untouched` cases |
+| restore `lease_token` to `GithubWorkspaceResponse` and `_workspace_response` | the listing test's `all("lease_token" not in row ...)` and the two `not in body["workspace"]` assertions |
+
+- [ ] **Step 12: Run the full agent-team and mail suites, then the whole suite**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
+```
+
+Expected: the count Task 8 reached, plus this task's 9 new cases. Nothing should have *dropped*.
+
+Then the whole suite, because this task changes a response schema that other files may read:
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/ -q -p no:warnings
+```
+
+Measured baseline on the tree this task starts from: **622 passed, 1 failed**. The one failure is `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` (`assert [] == [None, 'codex-cli']`) — pre-existing and unrelated to this spec. So expect **631 passed, 1 failed** here, and treat any *second* failure as this task's, most likely a test reading `lease_token` off a workspace response body that the enumeration above missed. Report it and fix it here; do not "fix" the smoke test.
+
+- [ ] **Step 13: Commit**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/models/schemas.py backend/app/services/github_workspace_service.py backend/app/api/v1/agent_teams.py backend/tests/agent_teams/test_github_workspace_api.py backend/tests/agent_teams/test_force_release_concurrency.py && git commit -m "feat(teams): force-release names an acquisition, and the comparison is the write
+
+Task 8 authenticated the operator. The route still required them to replay the
+agent's live lease token, which is why the workspace listing projected it and
+why the 409 interpolated the current one. A password on a door that is still
+propped open: expected_lease_token is deleted, and with it the projection on
+GithubWorkspaceResponse and _workspace_response.
+
+Its replacement is not a rename. The old route compared at the top, awaited two
+git subprocesses, then called release(db, item_id) -- so everything the check
+established was stale by the time the write happened, and release() selects on
+leased_item_id alone with no workspace or scope predicate. Measured: a
+replacement acquisition taken during the inspection was destroyed, and the
+success log line printed before the destruction, recording a force-release of a
+lease that was already gone.
+
+So the comparison IS the write. force_release_acquisition issues one
+conditional UPDATE after the awaited inspection, predicated on workspace id,
+scope id, the captured leased_item_id, the operator's expected_leased_at, and
+the server-captured lease_token. Zero rows means the world moved: 409
+lease_changed, the lease untouched, no success log. Exactly one row is a
+guarantee because id is the primary key.
+
+The captured token is mandatory rather than a further discriminator. leased_at
+is a timestamp, not an acquisition identity -- utcnow() self-collided 59 612
+times in 200 000 back-to-back pairs, and the column has neither a UNIQUE
+constraint nor any monotonicity guarantee. A predicate without the token
+refuses a later-timestamped replacement correctly and destroys a
+same-timestamped one, which is why that case is its own test.
+
+synchronize_session is False deliberately. The default evaluates the WHERE in
+memory against the session's own stale attributes, which on the zero-row path
+marks the in-memory workspace released while the row is still leased -- so the
+route re-reads the row on both paths before it answers.
+
+The refusal names both timestamps and no token, and it branches on
+leased_item_id rather than on leased_at, because release() does not clear
+leased_at: a workspace freed during the inspection still reports the exact
+value the operator confirmed, so naming it would say "your value did not
+match" while showing a value that did.
+
+force is Literal[True]: omitted or false is a validation error rather than a
+branch the route can forget to read.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 4.6a"
+```
+
+---
