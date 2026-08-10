@@ -63,6 +63,29 @@ These apply to **every** task. They are not negotiable and several are safety ru
   - `pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings` → **`454 passed in 31.61s`**. Every "Expected: N passed" in this plan counts up from this number.
   - `pytest tests/ -q -p no:warnings` → **`622 passed, 1 failed`**. The one failure is **pre-existing on a clean tree at `4810c1b`** and unrelated to this spec: `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` calls `agent_bridge_api.list_sessions` without awaiting it (`RuntimeWarning: coroutine 'list_sessions' was never awaited`), so its `calls` list is empty and `assert calls == [None, "codex-cli"]` fails. **Do not fix it in this PR** — report it, per the standing rule on pre-existing failures. Run the full suite at Tasks 8 and 9, which are the ones that touch `agent_teams.py`, and expect exactly this one failure and no other.
 - Any task that ends with fewer passing tests than it started with, minus the tests it deliberately re-authored, is a regression — stop and report.
+- **The expected counts, all of them, in one place.** Each task's own step repeats its number; this table is the cross-check. Every figure is *collected cases*, not test functions — six tests in this plan are parameterized, so the two differ.
+
+  | After task | `test_capability_tokens.py` | `test_peer_process.py` | new cases (cumulative) | `agent_teams/ + agent_mail/` | whole `tests/` |
+  | --- | --- | --- | --- | --- | --- |
+  | baseline | — | — | 0 | **454** | **622** + 1 failed |
+  | 1 | 4 | — | 5 | 458 | 627 |
+  | 2 | 4 | 13 | 18 | 471 | 640 |
+  | 3 | 13 | 13 | 27 | 480 | 649 |
+  | 4 | 25 | 15 | 46 | 497 | 668 |
+  | 5 | 33 | 15 | 54 | 505 | 676 |
+  | 6 | 33 | 15 | 58 | 509 | 680 |
+  | 7 | 33 | 15 | 75 | 526 | 697 |
+  | 8 | 33 | 15 | 87 | 538 | 709 |
+  | 9 | 33 | 15 | 96 | 547 | 718 |
+  | 10 | 35 | 15 | 106 | 557 | 728 |
+
+  `test_capability_tokens.py` is the file to watch, because five different tasks append to it and one of them (Task 3) puts both service-level and route-level tests there — Step 7 says "append to `test_capability_tokens.py`" while naming `test_api.py` only as the place to *copy the `client` fixture from*. Read that instruction carefully; creating a second file there breaks every later per-file figure in this column while leaving the suite totals correct, which is the confusing way to be wrong.
+
+  Four tasks write fewer functions than they collect cases: Tasks 7, 8 and 9 write 11, 8 and 8 functions that collect as 17, 12 and 9, because `test_non_owner_is_refused_and_changes_nothing` (7 rows), `test_unconfigured_install_refuses_with_503_whatever_the_header` (3), `test_near_miss_tokens_are_invalid` (3), `test_force_must_be_true_and_the_lease_is_untouched` (2) and `test_force_release_requires_reason_and_acquisition` (2) are parameterized. The whole-`tests/` column runs ahead of the suite column by 3 from Task 4 onward, from Task 1's one migration-ladder case in `tests/test_sqlite_compat_migrations.py` and Task 4's two in `tests/test_agent_bridge_spawn.py` — both outside these two directories.
+
+  Two mid-task figures sit *below* the table on purpose and are not errors: Task 4 Step 14's `494` (Steps 17-24 add five more cases afterwards) and Task 9's per-file `32` for the two workspace files.
+
+  Where a task's own step and this table disagree, **the measurement wins over both**. Report the number pytest actually prints; a mismatch means either a test was collected twice or one of these arithmetic chains is off, and both are worth a sentence in the handoff rather than a silent adjustment.
 - Route probes use `app.dependency_overrides[get_db]` plus `httpx.ASGITransport`.
 - **`httpx.ASGITransport` fakes the client port** — `scope["client"]` is `("127.0.0.1", 123)`. Every binding test must inject or override the peer resolver; none of them can rely on a real socket.
 - Assert on rows **read back with raw SQL**, not on the ORM objects you just wrote.
@@ -77,7 +100,7 @@ If a step's preconditions do not hold — a function has a different shape, a te
 
 ## File Structure
 
-Ten new files — two in `app/`, four test files, three in `frontend/src/`, one under `docs/deploy/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
+Nine new files — two in `app/`, four test files, two in `frontend/src/`, one under `docs/deploy/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
 
 | File | Create / Modify | Responsibility |
 | --- | --- | --- |
@@ -87,8 +110,10 @@ Ten new files — two in `app/`, four test files, three in `frontend/src/`, one 
 | `backend/app/models/schemas.py` | Modify | `capability_token` on `MailAgentRegisterResponse`; force-release request rewrite; drop the `lease_token` projection |
 | `backend/app/utils/peer_process.py` | **Create** | Kernel-derived resolver: peer socket → pid → tmux pane pid + proc start |
 | `backend/app/api/v1/deps.py` | **Create** | `mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id`, `require_operator`, `OperatorPrincipal` |
-| `backend/app/services/agent_mail_service.py` | Modify | Mint the capability token inside `register_session`, before its existing commit |
-| `backend/app/api/v1/agent_mail.py` | Modify | Binding policy at the `register_agent` route; token dependency on the five write routes |
+| `backend/app/services/agent_mail_service.py` | Modify | `hash_capability_token`, `ensure_capability_token`, `peek_session_by_key` — three new methods **beside** `register_session`, not inside it (Task 3 says why) |
+| `backend/app/services/agent_team_service.py` | Modify | Write and commit the `agent_pane_bindings` row on both launch paths (`:569` reuse, `:637` spawn) — without this every Deck-launched pane gets `409 bind_pending` forever |
+| `backend/app/services/agent_bridge/spawn.py` | Modify | Return the pane pid from `new-session -P -F '#{pane_pid}'` so the binding writer has something to key on |
+| `backend/app/api/v1/agent_mail.py` | Modify | Binding policy at the `register_agent` route; token dependency on the four write routes |
 | `backend/app/api/v1/agent_teams.py` | Modify | `/dispatch-status` authorization resolver; `require_operator` on operator routes; force-release migration |
 | `backend/app/services/github_workspace_service.py` | Modify | `release_by_token` predicate + the seven-column clear at one `now` |
 | `backend/mcp_shim/agent_mail_server.py` | Modify | Capture the minted token; send `X-Deck-Session-Token` on every bridge call |
@@ -104,6 +129,8 @@ Ten new files — two in `app/`, four test files, three in `frontend/src/`, one 
 | `backend/tests/agent_mail/test_external_api.py` | Modify | The tokenless-legacy-post test (`:118-137`) |
 | `backend/tests/agent_mail/test_mcp_shim.py` | Modify | The exact five-key payload equality (`:13-47`) |
 | `backend/tests/agent_mail/test_dispatch_status_tool.py` | Modify | 18 call sites; 12 carry `reporting_slot_id`, 5 do not |
+| `backend/tests/test_agent_bridge_spawn.py` | Modify | Three of its 13 tests re-authored for the added `-P -F` argv pair (Task 4 names them) |
+| `backend/tests/agent_teams/test_agent_team_service.py` | Modify | Binding-writer tests on both launch paths; 41 tests today |
 | `backend/tests/agent_teams/test_operator_auth.py` | **Create** | Spec §3.7 test 20 — the eight-case matrix, for each of the two operator routes |
 | `backend/tests/agent_mail/test_operator_mail_writes.py` | **Create** | Task 10 — the operator credential on the UI's three writes; §3.6 has no test today, which is why its two false claims survived |
 | `backend/tests/agent_teams/test_github_workspace_api.py` | Modify | 8 call sites gain the operator header (Task 8); then the force-release migration — six tests, incl. inverting the disclosure assertion (Task 9) |
@@ -115,14 +142,26 @@ Ten new files — two in `app/`, four test files, three in `frontend/src/`, one 
 | 1 | Settings, ladder rungs, `AgentPaneBinding` | §3.1, §3.2, §3.3 |
 | 2 | `app/utils/peer_process.py` — the kernel resolver | §3.3 |
 | 3 | Mint-once in `register_session`; `capability_token` on the response | §3.4 |
-| 4 | Registration policy + pane binding at the `register_agent` route | §3.3, §3.3a |
-| 5 | `mail_session` / `require_session_slot`; the five write routes; grace mode | §3.5 |
-| 6 | Shim: capture the token, send the header | §3.6a |
+| 4 | Registration policy + pane binding at the `register_agent` route; the launcher writes the binding row | §3.3, §3.3a, §3.8 |
+| 5 | `mail_session` / `require_session_slot`; the four write routes; grace mode | §3.5 |
+| 6 | Shim: capture the token, send the header | §3.4, §3.8 |
 | 7 | `/dispatch-status` authorization resolver | §3.5a |
 | 8 | `require_operator` and the operator routes | §3.6a |
 | 9 | Force-release API migration | §4.6a req. 1–4 |
 | 10 | The operator credential reaches the UI (no new route; §3.6's actor mechanism refuted) | §3.6, §3.6a |
 | 11 | README Linux prerequisite; the four-step rollout note | §3.8 |
+
+### Spec sections this plan deliberately does **not** implement
+
+The PR boundary rule is §2.1's: *each artifact ships in the earliest PR that has a consumer for it, and every artifact's tests ship with the artifact.* Three sections in §3 fail that test and belong to PR1. They are named here so a reviewer comparing spec to plan sees a decision rather than a gap.
+
+| Spec section | Why it is PR1, not PR0 |
+| --- | --- |
+| **§3.4a** — `record_ack_received` refuses `tokens_not_enforced` in grace mode; `ack_enforcement_epoch` stamps the regime | Both are guards over columns that **do not exist in PR0**. Verified: `grep -rn "ack_approver_member_id\|ack_evidence_message_id\|ack_enforcement_epoch" backend/app/` returns **nothing**, and the spec creates all three in §4.1 — PR1's schema ladder. Today's `record_ack_received` (`github_dispatch_service.py:681-688`) writes only `ack_received_at`, `last_nudge_at`, `updated_at`; there is no approver evidence in PR0 for a grace-mode refusal to protect. Adding the refusal here would guard nothing and would break the ack path that PR0 must leave working. Its test is spec test 27, which asserts on `ack_approver_member_id` — unwritable in PR0. |
+| **§3.5's removal of `member_id` from `agent_inbox`** | Removing it breaks the pre-upgrade shim that grace mode exists to protect (Task 5's Correction says why). The parameter stays in PR0 and is *derived-over*; **PR1 deletes it** after the panes have restarted. |
+| **§3.5a's `revision_requested` → `409 use_deck_approve_work_item`** | The replacement tool `deck_approve_work_item` is §4.3a, a PR1 artifact. Refusing the status before its replacement exists would leave an agent with neither. Task 7 implements §3.5a's *authorization* rows only and says so. |
+
+**§3.4a's mutation-table row is therefore PR1's to satisfy, not PR0's.** Task 5's commit message must not cite §3.4a — it implements §3.5 alone.
 
 ---
 
@@ -977,7 +1016,8 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
 - Consumes: `MailAgentSession.capability_token_hash` (Task 1).
 - Produces:
   - `agent_mail_service.hash_capability_token(token: str) -> str` — SHA-256 hex.
-  - `agent_mail_service.ensure_capability_token(db, session) -> str | None` — returns the plaintext **only** on the call that mints it; `None` on every later call for the same session.
+  - `agent_mail_service.ensure_capability_token(db, session) -> str | None` — returns the plaintext **only** on the call that mints it; `None` on every later call for the same session. **Mints only when `capability_token_hash` is NULL *and* the row was just created** — the caller decides that; see `peek_session_by_key`.
+  - `agent_mail_service.peek_session_by_key(db, session_key: str) -> MailAgentSession | None` — a read-only lookup by key, **no writes**. Exists because the rebind check must run *before* `register_session`, which rewrites the row in place.
   - `MailAgentRegisterResponse.capability_token: Optional[str] = None`.
 
 **Correction (2026-08-09, source verification) — the spec says mint inside `register_session` before its `await db.commit()` at `:215`. The plan mints in a separate method that the route calls afterwards.** Two measured reasons:
@@ -991,10 +1031,93 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 3.3"
 | --- | --- | --- |
 | New `session_key`, row created | minted | the plaintext, once |
 | Same `session_key`, hash already set (the `_guard` re-register) | untouched | `None` |
-| Same `session_key`, hash is `NULL` (a row from before PR0) | minted | the plaintext, once |
+| Same `session_key`, hash is `NULL`, **enforcement on** | untouched (still `NULL`) | `409 token_required_for_rebind` — see below |
+| Same `session_key`, hash is `NULL`, **grace mode** | untouched (still `NULL`) | `200`, `capability_token: None` — mint nothing, refuse nothing |
 | Via `_register_from_hook` | untouched | n/a — hooks return `{}` |
 
+The two hashless rows are the same row shape with two answers, and the flag is the only thing that separates them. Both **decline to mint**; only the enforced one refuses the request. Neither backfills. The section below is why — including why an earlier draft of this task got each of the three possible answers wrong in turn.
+
 A dead shim's row keeps its hash forever. Do not null it on disconnect: a restarted shim gets a **new** `session_key` (`f"mcp:{uuid.uuid4().hex[:12]}"`, evaluated once at module import, `mcp_shim/agent_mail_server.py:26`) and therefore a new row and a new token, so no shim can ever be locked out by a hash it no longer holds.
+
+#### The row that must refuse, and why an earlier draft of this task got it wrong
+
+**Revision note (2026-08-10, self-review — two passes, and the first fix was also wrong).** This table's hashless row went through three versions. Version 1 said *"hash is `NULL` (a row from before PR0) ⇒ minted"* — a leader-impersonation hole, and it silently dropped §3.4's row 4. Version 2 refused it `409 token_required_for_rebind` **unconditionally** — which fixes the hole and creates a deploy-day outage. Version 3, above, is the one to implement: **mint nothing in either mode; refuse only under enforcement.**
+
+Both wrong versions are recorded because each is the one that looks obviously right from where it was written. Backfilling reads as a courtesy to existing sessions. An unconditional refusal reads as the properly paranoid correction to it. The measurements below say the courtesy is a hole and the paranoia is an outage, and that the third answer — decline to mint, decline to refuse — is neither.
+
+`register_session` does **not** create a new row for a known `session_key`. It looks the row up by key (`agent_mail_service.py:175-178`) and then *rewrites it in place* — `member_id`, `provider`, `cwd`, `pid`, `team_preset_id`, `team_slot_id` (`:206-213`). So "same `session_key`" is not a new session presenting a familiar name; it is **the same row, repointed**.
+
+Measured, with `register_session` called twice for one key from two different cwds:
+
+```
+victim   member_id=1 name='alpha'    session_id=1 pid=1111 cwd='/repo/alpha'
+attacker member_id=2 name='attacker' session_id=1 pid=2222 cwd='/repo/attacker'
+same session row? True
+session rows total: 1
+  row id=1 key='mcp:victimkey01' member=2 pid=2222 cwd='/repo/attacker'
+```
+
+That alone is only a nuisance — the replaying caller lands on its own member. The escalation is the branch at `:179-189`, which **keeps the existing member** when the request claims no team context, the stored row is slot-bound, and `_session_team_context_matches_registration` passes. That predicate compares `provider` and `derive_repo_identity(cwd)["repo_id"]` (`:264-274`) — both attacker-supplied, and both readable from the **unauthenticated** `GET /agent-mail/team`, which projects `session_key` on every session (`MailSessionResponse.session_key`, `schemas.py:1817`, reached via `MailMemberResponse.sessions` at `:1854`). Measured end to end:
+
+```
+LEADER   session=1 key='mcp:leaderkey99' member=1 name='Leader' kind=team_slot slot=1
+
+readable from GET /agent-mail/team (no credential):
+  member='Leader' repo_path='/repo/tizonia' session_key='mcp:leaderkey99' cwd='/repo/tizonia'
+
+ATTACKER session=1 member=1 name='Leader' kind=team_slot slot=1 pid=2222
+  same session row as leader? True
+  resolved member IS the leader's? True
+  slot still the leader's?        True
+```
+
+So the replaying caller's registration resolves to the **leader's** member on the **leader's** slot. Under the deleted row, that registration *mints* — and Task 5's `derive_member_id` reads `session.member_id` at write time, so the minted token writes mail as the leader. PR1 §4.3 rule 4 accepts an approval from an `answer` whose `sender_member_id == leader_member.id`. That is the whole gate, handed over by a backfill.
+
+**And it is permanent, not a race.** The tempting dismissal is that the leader's next `_guard` re-register (before every tool call) re-mints and closes the window. It does not, because **no path deletes an `mcp` session row** — `_remove_stale_observed_sessions` selects `source == "observed"` (`:565-568`), which is why the live DB holds 150 `mcp` rows with 7 connected. Every one of the other 143 has a NULL hash, keeps its `session_key` in the unauthenticated roster, and never re-registers because its shim is gone. Measured with the leader's row aged 30 days past `MCP_HEARTBEAT_TTL_SECONDS` (`3600`, `agent_mail_service.py:39`):
+
+```
+dead leader session: id=1 key='mcp:deadleader01' member=1 slot=1 last_seen=2026-07-11
+GET /agent-mail/team projects:
+  member='Leader' status='offline' session_key='mcp:deadleader01' mailbox_status='offline'
+dead leader session_key readable with no credential? True
+replay -> session=1 member=1 name='Leader' kind=team_slot slot=1
+resolved to the leader's member? True
+```
+
+143 permanently-open doors, each one addressed by a string the roster hands out for free. **This is why the no-mint half of the rule below is unconditional: "backfill a pre-PR0 row" is a mutation that stays exploitable for the life of the row, so no flag may switch it back on.** Note that this case is *not* §3.4's row 4 — that row is "no token presented but a hash exists," a row that HAS a hash. The hashless row is a shape §3.4 does not tabulate, which is exactly why this task has to reason it out rather than copy an answer. What §3.4 does supply is the retention rule the argument rests on, and the withdrawn rescue rule at the end of this section. The dead-row population makes the hashless case worse than §3.4's live-key reasoning argues, not better.
+
+**What replaces the backfill.** Nothing is minted. A pre-PR0 row is never rescued — but under grace mode it is not refused either, and that asymmetry is the whole correction.
+
+- **Never mint for a hashless existing row, in either mode.** This is the non-negotiable half. A token minted in grace mode does not expire when the operator flips the flag: it is a row in `mail_agent_sessions` whose hash outlives the window, and Task 5's `derive_member_id` will resolve it to `session.member_id` — the leader's — for as long as the row exists, which by the retention rule above is forever. Backfilling "just during grace" therefore manufactures exactly the durable credential enforcement exists to prevent, and hands it out during the window nobody is watching.
+- **Under enforcement, refuse `409 token_required_for_rebind`.** Not `403`: the honest remedy is available to the legitimate caller and the code should say so. The remedy is a **shim restart**, which yields a new `session_key` (per-process UUID) and therefore row 1 — a fresh row, a fresh mint, no rebind. That is exactly the "restart the agent panes" step §3.8's rollout already requires and Task 11 documents, and it is a step the operator performs *before* flipping the flag. So by the time the refusal is live, no legitimate caller can reach it.
+- **Under grace mode, return `200` with `capability_token: None`.** The registration otherwise proceeds exactly as it does today. This is the row an earlier draft got wrong in the paranoid direction, and it is wrong for two measured reasons.
+
+**Measurement 1 — an unconditional refusal is a deploy-day outage, in the mode that exists to prevent one.** A live pre-upgrade shim's process survives the deploy. Its `session_key` was fixed at module import (`mcp_shim/agent_mail_server.py:23-28`) and its row's hash is `NULL`, because nothing ever minted one. So its very next `_guard` — which re-registers before **every** tool call (`:201-203`) — presents a known `session_key` against a hashless row: precisely the shape being refused. And a failed registration is not a warning the agent can work around, because `_guard` returns the error instead of `None`:
+
+```
+session_key is fixed at import: mcp:aaf3e35bca3a
+_ensure_registered ok?  False
+_guard returns:         an ERROR (tool blocked)
+error surfaced:         {'code': 'deck_http_error', 'status_code': 409, 'message': 'token_required_for_rebind'}
+```
+
+Every mail tool, on every live session, fails from the moment PR0 deploys until the operator restarts that pane. The rollout does restart the panes — but grace mode's contract is that *nothing breaks on deploy* and the restart happens at the operator's convenience (§3.4, "Deployment"). An unconditional refusal converts that into a hard ordering requirement with a live outage in between, for the 7 connected sessions.
+
+**Measurement 2 — in grace mode the refusal defends nothing, because the attack needs no token.** Task 5's grace-mode fallback returns the *claimed* `sender_member_id` unverified (`derive_member_id`, `session is None` branch). So the impersonation the mint would enable is already available to any caller, with no credential at all:
+
+```
+leader member_id=1 attacker member_id=2
+   (1, 2, 'context_request', 'approve?')
+   (2, 1, 'answer',          'approved')
+
+attacker's 'answer' sender_member_id = 1 | is the leader's? True
+```
+
+The attacker wrote an `answer` as the leader without registering, without a `session_key`, and without a token. Refusing their *registration* leaves that path untouched. Grace mode is a knowingly-unauthenticated window — that is its cost, stated in §3.4 — and adding a refusal inside it buys no security while costing the outage in measurement 1.
+
+**So the flag does gate the refusal, and does not gate the mint.** Put the other way: the thing that must never happen (a minted token for a row the caller cannot prove it owns) is unconditional; the thing that would break running agents (refusing them) waits until the operator has restarted the panes and flipped the flag. The 143 dead rows stay unmintable throughout, which is what closes the hole — the refusal was never what closed it.
+
+**Do not "fix" this by comparing the pane binding instead.** Task 4's binding is derived from the caller's own connection, so a co-resident pane in the same repo satisfies `_session_team_context_matches_registration` and, on this host, can be a genuine sibling pane of the same repo — §3.3's residual-risk note says pane binding defeats *claiming* another slot, not co-residency. §3.4 already withdrew precisely this rescue rule for the same reason. Refuse on the hash's absence, which is a fact about the row, not about the caller.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1057,18 +1180,33 @@ async def test_ensure_capability_token_does_not_rotate(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_ensure_capability_token_backfills_a_pre_pr0_row(db, tmp_path):
-    """A row that predates PR0 has a NULL hash and must be mintable."""
-    _member, session = await agent_mail_service.register_session(db, _register(str(tmp_path)))
-    await agent_mail_service.ensure_capability_token(db, session)
-    await db.execute(
-        text("UPDATE mail_agent_sessions SET capability_token_hash = NULL WHERE id = :i"),
-        {"i": session.id},
-    )
-    await db.commit()
-    await db.refresh(session)
+async def test_peek_session_by_key_reads_without_writing(db, tmp_path):
+    """The rebind check runs BEFORE register_session, so its lookup must not write.
 
-    assert await agent_mail_service.ensure_capability_token(db, session) is not None
+    register_session rewrites member_id/cwd/pid on a known key (:206-213). If the
+    check reused it, the row would already be repointed by the time we refused.
+    """
+    _member, session = await agent_mail_service.register_session(
+        db, _register(str(tmp_path), session_key="mcp:peek1")
+    )
+    before = (
+        await db.execute(
+            text("SELECT member_id, cwd, pid, last_seen_at FROM mail_agent_sessions WHERE id = :i"),
+            {"i": session.id},
+        )
+    ).one()
+
+    found = await agent_mail_service.peek_session_by_key(db, "mcp:peek1")
+    assert found is not None and found.id == session.id
+    assert await agent_mail_service.peek_session_by_key(db, "mcp:nosuchkey") is None
+
+    after = (
+        await db.execute(
+            text("SELECT member_id, cwd, pid, last_seen_at FROM mail_agent_sessions WHERE id = :i"),
+            {"i": session.id},
+        )
+    ).one()
+    assert tuple(after) == tuple(before), "peek must not touch the row"
 
 
 @pytest.mark.asyncio
@@ -1140,9 +1278,25 @@ Then add both methods to the service class, immediately after `register_session`
         await db.commit()
         await db.refresh(session)
         return token
+
+    async def peek_session_by_key(
+        self, db: AsyncSession, session_key: str
+    ) -> Optional[MailAgentSession]:
+        """Look up a session by key WITHOUT writing anything.
+
+        The register route's rebind check needs to know whether a row already
+        exists, and with what hash, BEFORE register_session runs -- because
+        register_session rewrites member_id, cwd and pid in place on a known key
+        (:206-213). Refusing after that call would refuse a row already
+        repointed at the caller.
+        """
+        result = await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == session_key)
+        )
+        return result.scalar_one_or_none()
 ```
 
-`Optional` is already imported (`:7`), as are `MailAgentSession` (`:16`) and `AsyncSession` (`:11`).
+`Optional` is already imported (`:7`), as are `MailAgentSession` (`:16`), `AsyncSession` (`:11`) and `select` (`:9` — confirm the exact line; `register_session` already uses it at `:175`).
 
 - [ ] **Step 4: Run to verify the tests pass**
 
@@ -1161,7 +1315,7 @@ The rotate test is the one that matters most, so prove it has teeth. Temporarily
             return None
 ```
 
-Re-run. `test_ensure_capability_token_does_not_rotate` **must** fail, and `test_ensure_capability_token_backfills_a_pre_pr0_row` must still pass (it would pass either way — that is expected, it is not the discriminating test). Restore the two lines by retyping them exactly. If the rotate test passes without the guard, it is not testing what it claims; stop and report.
+Re-run. `test_ensure_capability_token_does_not_rotate` **must** fail. `test_peek_session_by_key_reads_without_writing` must still pass — it does not touch the guard, and that is expected rather than a gap. Restore the two lines by retyping them exactly. If the rotate test passes without the guard, it is not testing what it claims; stop and report.
 
 - [ ] **Step 6: Add `capability_token` to the response schema**
 
@@ -1219,13 +1373,172 @@ async def test_register_route_returns_the_token_once(client, tmp_path):
     second = await client.post("/api/v1/agent-mail/agent/register", json=body)
     assert second.status_code == 200
     assert second.json()["capability_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_hashless_existing_row_refuses_rather_than_minting(
+    client, db, tmp_path, monkeypatch
+):
+    """Under enforcement: refuse, and mint nothing.
+
+    The mutation this kills is 'backfill a pre-PR0 row'. Measured:
+    register_session rewrites a known key's row in place, and the branch at
+    agent_mail_service.py:179-189 can KEEP the stored member when the request
+    claims no team context and provider+repo_id match -- both of which the
+    unauthenticated GET /agent-mail/team hands out. So minting here issues a
+    token that writes mail as the row's existing member.
+    """
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(tmp_path),
+        "session_key": "mcp:pre-pr0",
+    }
+    first = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert first.status_code == 200
+    assert first.json()["capability_token"]
+
+    # Age the row into the pre-PR0 shape: a live session_key, no hash. This is
+    # the shape all 150 live mcp rows have on the morning of the deploy.
+    await db.execute(
+        text("UPDATE mail_agent_sessions SET capability_token_hash = NULL WHERE session_key = :k"),
+        {"k": "mcp:pre-pr0"},
+    )
+    await db.commit()
+
+    replay = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert replay.status_code == 409
+    assert replay.json()["detail"] == "token_required_for_rebind"
+    assert "capability_token" not in replay.text
+
+    still_null = (
+        await db.execute(
+            text("SELECT capability_token_hash FROM mail_agent_sessions WHERE session_key = :k"),
+            {"k": "mcp:pre-pr0"},
+        )
+    ).scalar_one()
+    assert still_null is None, "the refusal must not mint as a side effect"
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_does_not_repoint_the_row(client, db, tmp_path, monkeypatch):
+    """The refusal must precede register_session, not follow it.
+
+    A check placed after register_session returns 409 on a row whose member_id,
+    cwd and pid have ALREADY been rewritten to the replaying caller's -- the
+    request is refused and the takeover still happened. Assert the row is
+    untouched, not merely that the status is 409.
+    """
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(tmp_path),
+        "session_key": "mcp:norepoint",
+        "pid": 1111,
+    }
+    assert (await client.post("/api/v1/agent-mail/agent/register", json=body)).status_code == 200
+    await db.execute(
+        text("UPDATE mail_agent_sessions SET capability_token_hash = NULL WHERE session_key = :k"),
+        {"k": "mcp:norepoint"},
+    )
+    await db.commit()
+    before = (
+        await db.execute(
+            text("SELECT member_id, cwd, pid FROM mail_agent_sessions WHERE session_key = :k"),
+            {"k": "mcp:norepoint"},
+        )
+    ).one()
+
+    other = dict(body, cwd=str(tmp_path / "elsewhere"), pid=2222)
+    (tmp_path / "elsewhere").mkdir()
+    replay = await client.post("/api/v1/agent-mail/agent/register", json=other)
+    assert replay.status_code == 409
+
+    after = (
+        await db.execute(
+            text("SELECT member_id, cwd, pid FROM mail_agent_sessions WHERE session_key = :k"),
+            {"k": "mcp:norepoint"},
+        )
+    ).one()
+    assert tuple(after) == tuple(before), "a refused registration must change nothing"
+
+
+@pytest.mark.asyncio
+async def test_a_hashless_row_in_grace_mode_neither_mints_nor_refuses(client, db, tmp_path):
+    """The same row shape, enforcement off: 200 with no token, hash still NULL.
+
+    Two mutants die here. (a) 'refuse unconditionally' -> 409, which is the
+    deploy-day outage: a live pre-upgrade shim's _guard re-registers before every
+    tool call and returns the error instead of None, so every mail tool fails.
+    (b) 'mint during grace, enforce later' -> a non-null hash, which is a durable
+    credential resolving to this row's member for as long as the row exists --
+    and no path deletes an mcp session row.
+    """
+    assert settings.mail_capability_tokens_required is False
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(tmp_path),
+        "session_key": "mcp:grace1",
+    }
+    assert (await client.post("/api/v1/agent-mail/agent/register", json=body)).status_code == 200
+    await db.execute(
+        text("UPDATE mail_agent_sessions SET capability_token_hash = NULL WHERE session_key = :k"),
+        {"k": "mcp:grace1"},
+    )
+    await db.commit()
+
+    replay = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert replay.status_code == 200, "grace mode must not break a running shim"
+    payload = replay.json()
+    assert payload["capability_token"] is None
+    # A normal, complete response -- not a stripped-down or warning-shaped one.
+    assert payload["member"]["id"] and payload["session"]["session_key"] == "mcp:grace1"
+
+    still_null = (
+        await db.execute(
+            text("SELECT capability_token_hash FROM mail_agent_sessions WHERE session_key = :k"),
+            {"k": "mcp:grace1"},
+        )
+    ).scalar_one()
+    assert still_null is None, "grace mode must not backfill a hash either"
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_session_key_from_the_same_pane_still_mints(client, tmp_path):
+    """§3.7 test 14c, and the reason the refusal costs the rollout nothing.
+
+    A restarted shim generates a new per-process session_key
+    (agent_mail_server.py:26), so it is a FIRST registration -- row 1, which
+    mints. Restarting the panes is already §3.8's rollout step.
+    """
+    base = {"source": "mcp", "provider": "claude", "cwd": str(tmp_path)}
+    first = await client.post(
+        "/api/v1/agent-mail/agent/register", json=dict(base, session_key="mcp:aaa")
+    )
+    assert first.status_code == 200 and first.json()["capability_token"]
+
+    restarted = await client.post(
+        "/api/v1/agent-mail/agent/register", json=dict(base, session_key="mcp:bbb")
+    )
+    assert restarted.status_code == 200
+    assert restarted.json()["capability_token"], "a restarted shim must not be locked out"
+    assert restarted.json()["capability_token"] != first.json()["capability_token"]
 ```
 
 The route is `@router.post("/agent/register", response_model=MailAgentRegisterResponse)` at `agent_mail.py:119`; confirm the `/api/v1/agent-mail` prefix in `app/api/v1/router.py` — `tests/agent_mail/test_api.py` already posts to paths under it, so copy the prefix from a working call there.
 
+**These five tests need both `client` and `db`**, and the `client` fixture already depends on `db`, so they share one session — that is why the raw-SQL `UPDATE` is visible to the route.
+
+**The three hashless tests are one experiment run twice, plus its escape hatch.** `test_a_hashless_existing_row_refuses_rather_than_minting` and `test_a_hashless_row_in_grace_mode_neither_mints_nor_refuses` build the *identical* row shape and differ only in `mail_capability_tokens_required`, which is exactly the discrimination the route makes; both assert the hash is still `NULL`, because the no-mint half is what the flag must **not** change. `test_a_fresh_session_key_from_the_same_pane_still_mints` is the remedy, and it needs no flag setting — a first registration mints in either mode.
+
+Do not collapse the pair into one parametrized test with a status list. `assert replay.status_code in (200, 409)` passes against every mutant here, including the two the pair exists to kill.
+
 - [ ] **Step 8: Run to verify it fails**
 
-Expected: `assert token` fails, because the route still returns `capability_token: None` on the first call.
+Expected: `assert token` fails in the first test, because the route still returns `capability_token: None` on the first call. The three new tests fail too — the first two because the route returns `200`, the third because no token is minted at all yet.
 
 - [ ] **Step 9: Wire the route**
 
@@ -1237,8 +1550,36 @@ async def register_agent(
     request: MailAgentRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    # The rebind check runs FIRST, before register_session, because
+    # register_session rewrites a known key's row in place (member_id, cwd, pid
+    # at agent_mail_service.py:206-213). Checking afterwards would refuse a
+    # request whose takeover had already been committed.
+    #
+    # A row exists for this key but holds no hash. Either it pre-dates PR0 or
+    # some caller is replaying a session_key read from the unauthenticated
+    # GET /agent-mail/team. We cannot tell the two apart, and minting for the
+    # second hands out a token that writes mail as the row's stored member --
+    # the leader's, when the row is slot-bound. So never mint here, in either
+    # mode: a token minted "just during grace" outlives the grace window.
+    #
+    # Refusing, though, IS flag-gated. A live pre-upgrade shim re-registers on
+    # this exact shape before every tool call, and _guard turns a 409 into a
+    # tool failure -- so refusing in grace mode is an outage in the mode that
+    # exists to prevent one. It also buys nothing: grace mode already accepts an
+    # unverified sender_member_id, so the impersonation needs no token at all.
+    existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
+    hashless_rebind = existing is not None and existing.capability_token_hash is None
+    if hashless_rebind and settings.mail_capability_tokens_required:
+        # The remedy is a shim restart: a new per-process session_key, hence a
+        # fresh row that mints cleanly. That restart is already the rollout step
+        # the operator performs BEFORE flipping this flag, so no legitimate
+        # caller can reach this refusal once it is live.
+        raise HTTPException(status_code=409, detail="token_required_for_rebind")
+
     member, session = await agent_mail_service.register_session(db, request)
-    capability_token = await agent_mail_service.ensure_capability_token(db, session)
+    capability_token = (
+        None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
+    )
     members = await agent_mail_service.list_team(db)
     member_resp = next(candidate for candidate in members if candidate.id == member.id)
     session_resp = next(
@@ -1253,13 +1594,24 @@ async def register_agent(
 
 Leave both `next(...)` lookups exactly as they are. **Do not touch `_register_from_hook` (`:184-200`)** — the hook path must not mint. Task 4 renames this handler's `request` parameter; do not do that yet.
 
+`HTTPException` must be imported in `agent_mail.py`; check the `from fastapi import ...` line and add it if absent (Task 4 needs it too). `settings` must be imported too — `from app.config import settings`; Task 4 adds the same import, so if it is already there, leave it.
+
+**Note the two conditions are deliberately different.** `hashless_rebind` gates the **mint** and is flag-independent. `hashless_rebind and settings.mail_capability_tokens_required` gates the **refusal**. Collapsing them into one condition gets one of the two wrong whichever way you collapse it: refuse always ⇒ deploy-day outage; mint when not enforcing ⇒ a durable leader-resolving credential handed out during the unwatched window. Step 7's tests pin both halves.
+
+**Four things this branch deliberately does not do.**
+
+1. **It does not read a presented token.** §3.4's row 4 is *"no token presented but a hash exists."* Its rows 2 and 3 — re-registration *with* a token — are about a row that **has** a hash, which `ensure_capability_token`'s existing guard already handles by returning `None`. So the only case needing a new branch is the hashless one, and for that case a presented token cannot help: there is no stored hash to verify it against. Accepting one would be authentication theatre. **Do not add an `X-Deck-Session-Token` header check to this route** — Task 5 adds the header to the *write* routes, and adding it here would suggest the token gates registration, which it cannot.
+2. **It does not distinguish `mcp` from `hook` or `observed` rows.** The hook path never reaches this route (`_register_from_hook` is called from the hook handlers), and hook keys live in a different namespace anyway (`cc:`/`codex:`/`copilot:`/`opencode:`, `agent_mail.py:156-171`), as do observed rows (`tmux:`, `:368`). A collision would need a caller to guess a key in another namespace and would be handled for the same reason. Keep the check namespace-agnostic; it is a fact about the row, not about the source.
+3. **In grace mode it does not fail the registration in any way.** The response is a normal `200` with `capability_token: None`. Do not add a warning status, do not omit fields, do not raise anything the shim's `raise_for_status` would catch — `_deck_request` turns any 4xx into `{"ok": False}` and `_guard` turns that into a tool failure. The *only* difference from today's behaviour is that no token is minted.
+4. **It does not null or otherwise "tidy" the existing row's hash.** There is no hash to null here (it is already `NULL`), and the general rule from §3.4 stands: a row that *has* a hash keeps it forever. See the retention discussion above — nulling a hash on disconnect is what would turn a dead row back into a mintable row 1.
+
 - [ ] **Step 10: Run the route test and the full suite**
 
 ```bash
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
 ```
 
-Expected: `9 passed` then `480 passed` (471 after Task 2 + 9 here). No existing test asserts the exact key set of the register response, so nothing should break — if something does, report it before adapting.
+Expected: `13 passed` in `test_capability_tokens.py` — the 4 from Task 1 plus this task's 9, since Step 1's four service tests and Step 7's five route tests both **append to the same file** — then `480 passed` (471 after Task 2 + this task's 9). No existing test asserts the exact key set of the register response, so nothing should break — if something does, report it before adapting.
 
 - [ ] **Step 11: Commit**
 
@@ -1275,25 +1627,53 @@ register_session returns a 2-tuple that 42 call sites unpack, and because its
 second caller (_register_from_hook) runs under handlers that swallow
 exceptions and return {} -- nowhere to deliver a one-time secret.
 
+A registration for a session_key whose row already exists with a NULL hash is
+never backfilled, in either mode. Backfilling is a leader impersonation:
+register_session rewrites a known key's row in place and can keep the stored
+member when provider and repo_id agree, both of which the unauthenticated GET
+/agent-mail/team publishes alongside the session_key. No path deletes an mcp
+session row, so a hash minted "just during grace" resolves to that member for
+as long as the row exists -- which is forever, across 150 live rows.
+
+Under enforcement the same registration is refused 409
+token_required_for_rebind; in grace mode it returns 200 with no token. The
+refusal is flag-gated and the no-mint rule is not, because the shim's _guard
+re-registers before every tool call and surfaces a failed registration as a
+failed tool -- refusing in grace mode would take every running agent's mail
+offline on deploy, which is the one thing grace mode exists to prevent. It
+would also defend nothing there: grace mode already accepts an unverified
+sender_member_id, so the impersonation needs no token at all. The legitimate
+remedy is a shim restart, which yields a new per-process session_key and a
+clean first registration -- already the rollout's pane-restart step, performed
+before the flag is flipped.
+
 Spec: 2026-08-05-distinct-approver-identity-design.md section 3.4"
 ```
 
 ---
 
-### Task 4: Bind the registration to the pane it came from
+### Task 4: Bind the registration to the pane it came from — and write the row it reads
 
 **Files:**
 - Modify: `backend/app/api/v1/agent_mail.py:119-130` (the `register_agent` route)
 - Modify: `backend/app/utils/peer_process.py` (add `pane_is_alive`)
 - Modify: `backend/app/services/agent_mail_service.py` (add `resolve_pane_binding`)
+- Modify: `backend/app/services/agent_bridge/spawn.py:75-87` (return the pane pid from `new-session`)
+- Modify: `backend/app/services/agent_team_service.py:569` and `:637` (write the binding row on both launch paths)
 - Test: `backend/tests/agent_mail/test_capability_tokens.py`
+- Modify: `backend/tests/test_agent_bridge_spawn.py` (three named tests; Steps 17–19)
+- Modify: `backend/tests/agent_teams/test_agent_team_service.py` (the binding-writer tests; Steps 20–24)
 
 **Interfaces:**
-- Consumes: `peer_process.resolve_peer_pane` (Task 2); `AgentPaneBinding`, `MailAgentSession.bound_pane_pid`, `.bound_pane_proc_start` (Task 1); `ensure_capability_token` (Task 3).
+- Consumes: `peer_process.resolve_peer_pane` and `read_proc_stat` (Task 2); `AgentPaneBinding`, `MailAgentSession.bound_pane_pid`, `.bound_pane_proc_start` (Task 1); `ensure_capability_token` (Task 3).
 - Produces:
   - `peer_process.pane_is_alive(pane_pid: int, pane_proc_start: str) -> bool | None` — `True` alive, `False` gone, `None` unobservable.
   - `agent_mail_service.resolve_pane_binding(db, pane) -> AgentPaneBinding | None` — the live row for a pane, pruning stale ones.
   - A module-level override seam on the route: `agent_mail.resolve_request_pane(request) -> PeerPane | None`.
+  - `spawn_session`'s return dict gains **`"pane_pid": int | None`**.
+  - `agent_team_service._write_pane_binding(db, *, pane_pid, slot, preset, tmux_target) -> None` — select-then-update on `(pane_pid, pane_proc_start)`, then `await db.commit()`.
+
+**Why the writer is in this task and not its own.** The reader and the writer are one policy. Steps 1–16 build the reader — a route that refuses `409 bind_pending` when a pane claims team context and has no binding row. Nothing in this repository writes that row. Shipping the reader alone is not a partial feature; it is an outage, and the section below measures it. A reviewer cannot usefully accept one half.
 
 **The binding check lives at the route, not in `register_session`.** `register_session` has a second caller — `_register_from_hook` (`agent_mail.py:184-200`), reached from `hook_session_start` and `hook_user_prompt_submit`, both of which swallow every exception and return `{}`. A `409 bind_pending` raised inside `register_session` would be swallowed there and reported as success. The hook path must keep working exactly as it does today, unbound.
 
@@ -1316,6 +1696,56 @@ Two more rungs from §3.3:
 - **No ancestor is a tmux pane** ⇒ mint unbound. Not every caller is tmux-hosted.
 
 **`bind_pending` is `409`, not `403`.** Deck may simply not have committed the binding yet. A `403` would permanently strand a correctly-launched agent that registered early. Worst case for an **idle** agent is 300s (`HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS`, `agent_mail_server.py:19`) — the shim's failing heartbeat path backs off to 300s, not 60s. An agent that calls any mail tool retries immediately, because `_guard` (`:201-203`) re-registers first. **PR0 changes neither heartbeat constant.**
+
+#### The writer half: nothing in this repository writes an `agent_pane_bindings` row
+
+**Added 2026-08-10 (self-review, Finding B).** Steps 1–16 implement the reader. Spec §3.8 (`:970`) assigns the writer to `agent_team_service.py` on both paths (`:569`, `:637`); an earlier draft of this plan named that file **nowhere**, in neither the File Structure table nor the Task Index. That omission is not a missing nicety. It reintroduces the exact defect §3.3a exists to prevent, and here is the chain, each link measured:
+
+1. `grep -rn AgentPaneBinding backend/app/` returns **only** Task 1's model and Task 4's reader. No `db.add(AgentPaneBinding(...))` anywhere.
+2. Deck-launched panes **do** claim team context. The shim sends `team_preset_id` / `team_slot_id` iff `CLAUDE_DECK_TEAM_PRESET_ID` / `_SLOT_ID` are in the pane environment (`agent_mail_server.py:148-153`), and the only writer of those variables is `_execute_plan_item`'s spawn env (`agent_team_service.py:619-626`).
+3. So every Deck-launched pane lands on **row 4** of the policy table above: no binding row, claims team context ⇒ `409 bind_pending`.
+4. `_guard` (`agent_mail_server.py:201-203`) re-registers before **every** tool call. A refusal at registration is therefore a refusal of every mail tool, for the life of the pane, with no retry that can ever succeed.
+
+Revision 4 of the spec shipped this failure for hand-started panes and §3.3a fixed it by *narrowing the refusal*. Omitting the writer re-creates it for exactly the population §3.3a left inside the refusal. **Ship the reader without the writer and Deck-launched teams lose mail entirely.**
+
+**Four measurements decide how the writer is built.** Do not re-derive them; stop and report if any turns out false.
+
+**1. The row cannot be written on a second connection — it must commit on the caller's session.** `launch` does `db.add(launch)` + `await db.flush()` (`agent_team_service.py:508-509`) **before** the slot loop, so by the time `_execute_plan_item` runs, the request's connection already holds SQLite's write lock. Measured on a file-backed WAL database with session A in exactly that state: a second session's `INSERT` into `agent_pane_bindings` **failed after 1.506 s** with `OperationalError: (sqlite3.OperationalError) database is locked` (`busy_timeout` is 5000 ms, `database.py:16-58`); the same insert on A's own session committed fine. So §3.3's phrase *"committed on its own"* means **its own commit**, not its own connection. Writing that clearly matters because "commit it independently so the launch can still roll back" is the natural reading and it does not run.
+
+**2. That mid-loop commit IS visible to the registering shim, and it carries the launch row with it.** Measured, same setup: after A commits the binding mid-loop, a **fresh** connection B reads `bindings=[(4242, 1)]` and `launches=[(1, 'running')]`, while `launch_items=[]` — still uncommitted, since `_record_launch_item` only calls `db.add`. B's reads took 0.0015 s, no lock wait; WAL lets the reader through. This is the claim the whole task rests on: the shim registers on a different connection, so a commit is the only thing that can make the row visible to it.
+
+**What else that commit carries — read [[commit-ordering-decides-what-survives-rollback]] before writing this step.** The commit is on the caller's session, so it persists every mutation pending there. Traced on the autonomous-dispatch path (`github_dispatch_service.dispatch_pending`), which reaches `launch` through `launcher` (`:306`):
+
+| Pending mutation at the moment `_write_pane_binding` commits | Consequence of committing it early |
+| --- | --- |
+| The `AgentTeamLaunch` row, `status='running'` (flushed at `:509`) | **Harmless.** `AgentTeamLaunch` is read in only two places, both `agent_team_service` preset-deletion queries (`:147`, `:153`), and nothing in the codebase reads `status == 'running'`. `launch.status` is overwritten at `:527-528` and committed at `:530` on every non-raising path. |
+| `item.brief_message_id` / `brief_delivery_nudge_at` / `_count`, set by `_send_dispatch_brief_to_slot` (`:628-630`) | **Already committed before we get here.** `send_direct_message` → `send_message` commits at `agent_mail_service.py:899`. Not our commit's doing. |
+| `workspace` lease columns from `github_workspace_service.acquire` (`:277`) | **Already committed** — `acquire` commits at `github_workspace_service.py:136`/`:145`. |
+| `item.owner_slot_id` / `routing_method` / `dispatch_status` | **Not yet set.** They are assigned *after* `launcher` returns (`:332-334`). Nothing of the item's dispatch state is pending during the loop. |
+| The `except ValueError` path: `escalate` + `release` + `commit` (`:317-324`) | **Unaffected.** Those run after `launch` has already returned or raised; a binding row committed for a pane that then failed to launch is pruned by `resolve_pane_binding`'s liveness check (Step 8), because the pane is not alive. |
+
+So the early commit is safe **on the paths that exist today**, and the reason is that everything upstream of `launch` already committed itself. Record that reasoning in the code comment, not just here: the safety is a property of the current callers, not of the design, and a future caller that holds an uncommitted mutation across `launch` breaks it.
+
+**3. The write is select-then-update, never a bare insert.** The reuse path re-binds the **same** pane on every dispatch to that slot, so `UNIQUE(pane_pid, pane_proc_start)` is hit repeatedly. Measured: the second insert raises `IntegrityError: UNIQUE constraint failed: agent_pane_bindings.pane_pid, agent_pane_bindings.pane_proc_start`, and the session is then **poisoned** — the very next statement raises `PendingRollbackError`, which inside `launch`'s loop means every remaining slot fails too. Select-then-update reslots the same row cleanly (measured slot 1 → 2 → 2, same row id throughout, no new rows).
+
+**4. The reuse path's pid is a string, and pydantic already coerces it.** Discovery types it `pid: str` (`agent_bridge/discovery.py:80`), carried into `plan_item.matching_session` by `_matching_session_payload` (`:994-1006`). Two consequences, measured separately:
+- `AgentTeamLaunchResultItem(pane_pid="4242")` yields `pane_pid=4242` as an `int` — pydantic coerces, and `pane_pid="%1"` raises `ValidationError` rather than storing garbage. So `result.pane_pid` is already a safe `int | None`. **Read the pid off the result object, not off `matching_session`.**
+- Do **not** hand a raw string to the ORM instead. Storing `pane_pid="4242"` gives SQLite `typeof='integer'`, but within the *same* session the in-memory attribute stays `'4242'` (a `str`) and `'4242' == 4242` is `False`; only a fresh session read yields `4242`. The writer and `resolve_pane_binding` can share a session, so a str would compare unequal to the reader's int. Taking the pid from the validated result object avoids this entirely — which is why that is the specified source.
+
+**Where the spawn path's pid comes from — a measured trade-off, and the plan picks one.** `spawn_session` returns no pid at all (`{provider, provider_display_name, tmux_target, session_name}`, `spawn.py:101-106`), so **`spawned.get("pid")` at `:637` is always `None` today** — the field the result object already has has never been populated on this path. Two ways to fix it, both measured:
+
+| Option | Test fallout | Race |
+| --- | --- | --- |
+| **`-P -F '#{pane_pid}'` inside `new-session`** (chosen) | Breaks exactly **3 of 13** tests in `tests/test_agent_bridge_spawn.py`, named in Steps 17–19. Placement before or after the `-e` flags makes no difference to which three. | **None.** Returns `rc=0 49769` even for a command that exits immediately. |
+| Post-hoc `tmux list-panes -t <name> -F '#{pane_pid}'` | Breaks **0** tests (13 passed). | **Racy.** For a session whose command exits at once, the tmux server is already gone: measured `rc=1 no server running`, so the pid is silently `None` and the pane never binds. |
+
+`-P -F` is chosen: three re-authored assertions are a bounded, visible cost paid once, and the race has no bound. Do not put `-P -F` **after** the shell command — measured `rc=0` with **empty stdout**; that escape from the argv assertions does not exist.
+
+**One correction to carry into the comment.** `spawn.py` hardcodes `tmux_target = f"{name}:0.0"` (`:104`). That is **correct** for the single-window session `new-session` creates, even under `base-index 1`: measured, `display-message -p -t 'alpha:0.0'` returned `48778 alpha:1.1`, matching `list-panes -a` ground truth, and stayed correct with a second session present. The `:0.0` form only misreports for a **multi-window** session, where it resolves to the *current* window's pane and returns `rc=0` even for a bogus index. So do not "fix" `tmux_target` in this task — but do not build the pid on `display-message -t <target>` either, because that form's correctness depends on a property (`one window`) that nothing enforces. `-P -F` reads the pane tmux just created, with no target string in the middle.
+
+**`agent_team_service.py` has no logger and no `subprocess` import** (checked: `:1-51`). The writer needs neither — the pid arrives on the result object and `pane_proc_start` comes from `peer_process.read_proc_stat`, which Task 2 already built and which `agent_team_service` can import without a cycle (`app.utils.peer_process` imports nothing from `app.services`).
+
+**And one consumer to be aware of.** `spawn_session`'s dict is returned straight to an HTTP client at `agent_bridge/router.py:323`, under `@router.post("/sessions")` with **no `response_model`** — so the new `pane_pid` key reaches the wire unfiltered. That is acceptable: a pane pid is not a secret, it is already exposed by `GET /agent-bridge/sessions` (discovery projects `pid` at `discovery.py:92`), and adding a `response_model` now would be an unrelated behaviour change to a route this spec does not touch. Recorded so a reviewer sees a decision.
 
 - [ ] **Step 1: Write the failing test for `pane_is_alive`**
 
@@ -1718,6 +2148,15 @@ async def register_agent(
     request: MailAgentRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    # Task 3's hashless-rebind rule stays FIRST and unchanged: mint never,
+    # refuse only under enforcement. It precedes the binding policy on purpose --
+    # a hashless existing row must be settled before anything else looks at the
+    # caller, because register_session would repoint the row.
+    existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
+    hashless_rebind = existing is not None and existing.capability_token_hash is None
+    if hashless_rebind and settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=409, detail="token_required_for_rebind")
+
     claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
     pane = resolve_request_pane(http_request)
 
@@ -1754,7 +2193,9 @@ async def register_agent(
         session.bound_pane_pid = pane.pane_pid
         session.bound_pane_proc_start = pane.pane_proc_start
         await db.commit()
-    capability_token = await agent_mail_service.ensure_capability_token(db, session)
+    capability_token = (
+        None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
+    )
     members = await agent_mail_service.list_team(db)
     member_resp = next(candidate for candidate in members if candidate.id == member.id)
     session_resp = next(
@@ -1767,8 +2208,9 @@ async def register_agent(
     )
 ```
 
-Two things to be careful about:
+Three things to be careful about:
 
+0. **`hashless_rebind` is computed once and used twice, and the two uses have different conditions.** The refusal is `hashless_rebind and settings.mail_capability_tokens_required`; the mint suppression is `hashless_rebind` alone. Task 3 argues that at length; do not simplify it here. Note also that in grace mode the flow *continues* past the refusal — so a hashless rebind still gets its pane rebound and its row rewritten, and still returns `200`. Only the mint is withheld. Task 3's `test_a_hashless_row_in_grace_mode_neither_mints_nor_refuses` covers the route as this task leaves it, so it must still pass after this step.
 1. **The `model_copy` that overwrites `team_slot_id` also overwrites `team_preset_id` with `None` when there is no binding.** That is deliberate — an unbound session has neither. But `register_session` *infers* team context from the process when the body carries none (`_infer_team_context_from_process`, `:158`), so clearing both keeps that inference path live rather than short-circuiting it. Verify with the existing `tests/agent_mail/test_registry.py` inference tests: they must all still pass. If any breaks, **stop and report** — it means inference and derivation disagree, which is a design question, not an implementation detail.
 2. **`Optional` must be imported** in `agent_mail.py` for `resolve_request_pane`'s annotation. Check the existing imports; add `from typing import Optional` if absent.
 
@@ -1778,7 +2220,7 @@ Two things to be careful about:
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
 ```
 
-Expected: `21 passed` in the new file. For the full suite, expect the `test_registry.py` inference tests to be the risk area — read constraint 1 above before touching anything.
+Expected: `25 passed` in `test_capability_tokens.py` (4 from Task 1 + 9 from Task 3 + 4 from this task's Step 6 + 8 from Step 11) and `494 passed` for the two suites. That suite figure is *mid-task* and deliberately below the table's 497: Steps 17-24 add three more `test_agent_team_service.py` cases after this point, plus two in `test_agent_bridge_spawn.py` that fall outside these two directories entirely. For the full suite, expect the `test_registry.py` inference tests to be the risk area — read constraint 1 above before touching anything.
 
 - [ ] **Step 15: Verify the hook path is untouched**
 
@@ -1805,9 +2247,580 @@ _register_from_hook, runs under handlers that swallow exceptions and return {}
 Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.3, 3.3a"
 ```
 
+The reader is now complete and the writer is not. **Until Step 24 commits, a Deck-launched team pane gets `409 bind_pending` on every mail tool.** Do not stop the task here, and do not deploy this commit alone.
+
+- [ ] **Step 17: Re-author the three spawn tests for the added argv pair**
+
+`spawn_session` is about to insert `-P -F '#{pane_pid}'` after `-c <directory>`, so the shell command moves from index 7 to index 9 and the plain-launch argv grows from 8 entries to 10. Exactly three of the 13 tests in `backend/tests/test_agent_bridge_spawn.py` assert on those positions. Measured — these three and no others.
+
+Re-index the argv prefix, and switch the command assertion to `[-1]`. In `test_claude_worktree_uses_generated_session_name_when_blank` (`:27-28`), replace:
+
+```python
+    assert calls[0][:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
+    assert "--worktree repo-abcd" in calls[0][7]
+```
+
+with:
+
+```python
+    assert calls[0][:10] == [
+        "tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path),
+        "-P", "-F", "#{pane_pid}",
+    ]
+    assert "--worktree repo-abcd" in calls[0][-1]
+```
+
+The `[-1]` is the change that matters: the shell command is always last, so the assertion stops depending on how many flags precede it. Four sites in this file already use `calls[0][-1]` / `argv[-1]` (`:141`, `:171`, `:228`, `:268`), so this is the file's own idiom, not a new one.
+
+In `test_claude_resume_resolves_directory_from_transcript_cwd` (`:68-69`), the same shape:
+
+```python
+    assert calls[0][:10] == [
+        "tmux", "new-session", "-d", "-s", "claude-deck-abcd", "-c", str(project_dir),
+        "-P", "-F", "#{pane_pid}",
+    ]
+    assert "--resume session-123" in calls[0][-1]
+```
+
+In `test_anthropic_platform_adds_no_env_flags` (`:324-325`):
+
+```python
+    assert argv[:10] == [
+        "tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path),
+        "-P", "-F", "#{pane_pid}",
+    ]
+    assert len(argv) == 11
+```
+
+`assert "-e" not in argv` (`:323`) stays exactly as it is — that is the assertion this test exists for, and `-P`/`-F` do not disturb it. Keep the length assertion rather than deleting it: it is what proves no *other* flag crept in. **8 becomes 11**, because this platform contributes no `-e` pairs and the argv is exactly `["tmux", "new-session", "-d", "-s", name, "-c", dir, "-P", "-F", "#{pane_pid}", shell_command]` — ten flags plus the command. If the run reports a different number, stop: something other than these two flags was added.
+
+The other four tests that touch argv positions — `:99`, `:135`, `:141`, and the three `shlex.split(calls[0][-1])` sites — are expected to keep passing: `:99` and `:135` assert only `argv[:7]`, which is unchanged, and every `-1` site still finds the command last. Measured: 3 failures, not 7. If a fourth test fails, stop and report; it means the flags went somewhere other than after `-c <directory>`.
+
+Also add a new test to the same file, asserting the pid actually comes back:
+
+```python
+def test_spawn_session_returns_the_pane_pid(monkeypatch, tmp_path):
+    """The binding writer keys on this; a None pid means the pane never binds."""
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        return SimpleNamespace(returncode=0, stdout="49769\n", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    result = spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+    )
+    assert result["pane_pid"] == 49769
+
+
+def test_spawn_session_pane_pid_is_none_when_tmux_prints_nothing(monkeypatch, tmp_path):
+    """Every other test in this file stubs stdout='' -- that must not raise."""
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    result = spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+    )
+    assert result["pane_pid"] is None
+```
+
+The second test is not padding. **Every existing test in this file stubs `stdout=""`** (`SimpleNamespace(returncode=0, stdout="", stderr="")`, at all 13 sites), so a parser that raises on empty output would fail all 13 rather than 3. That test pins the tolerance the other 12 silently depend on.
+
+- [ ] **Step 18: Run to verify the three fail and the two new ones fail**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/test_agent_bridge_spawn.py -q -p no:warnings
+```
+
+Expected: **5 failed, 10 passed.** The three re-authored tests fail on the missing `-P`/`-F` (`AssertionError` on the list compare); the two new ones fail with `KeyError: 'pane_pid'`. If a *sixth* test fails, stop and report.
+
+- [ ] **Step 19: Return the pane pid from `spawn_session`**
+
+In `backend/app/services/agent_bridge/spawn.py`, change the `subprocess.run` argv (`:76`) to insert the two flags after `-c directory`:
+
+```python
+        result = subprocess.run(
+            [
+                "tmux", "new-session", "-d", "-s", name, "-c", directory,
+                "-P", "-F", "#{pane_pid}",
+                *env_flags,
+                shell_command,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+```
+
+Then parse it, immediately after the existing `returncode` check (`:82-83`) and before the `except FileNotFoundError`:
+
+```python
+        pane_pid = _parse_pane_pid(result.stdout)
+```
+
+and add the parser at module level, beside `_env_flags`:
+
+```python
+def _parse_pane_pid(stdout: str) -> int | None:
+    """Read the pane pid tmux printed for -F '#{pane_pid}'.
+
+    Returns None rather than raising: a pane with no pid simply never gets an
+    agent_pane_bindings row, which the registration route already handles as
+    "no binding" (spec 3.3a). Raising here would turn an unparseable line into
+    a failed launch.
+    """
+    line = (stdout or "").strip().splitlines()
+    if not line:
+        return None
+    try:
+        return int(line[0].strip())
+    except ValueError:
+        return None
+```
+
+Finally add the key to the return dict (`:101-106`):
+
+```python
+    return {
+        "provider": provider.id,
+        "provider_display_name": provider.display_name,
+        "tmux_target": f"{name}:0.0",
+        "session_name": name,
+        "pane_pid": pane_pid,
+    }
+```
+
+`pane_pid` must be assigned on every path that reaches the return. It is set inside the `try`, and both `except` branches raise, so it is always bound — verify that when you edit, because a `NameError` here would surface as a failed launch.
+
+**Do not change `tmux_target`.** The `:0.0` form is correct for the single-window session this call creates, even under `base-index 1` — see the correction above.
+
+Run the spawn tests again:
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/test_agent_bridge_spawn.py -q -p no:warnings
+```
+
+Expected: **15 passed** (13 original + 2 new). If `test_anthropic_platform_adds_no_env_flags` still fails on `len(argv)`, read the actual length off the failure and write that number — that is the step where the count is established by measurement, not by arithmetic in this plan.
+
+Then the wider suite, because `spawn_session` has three callers:
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/ -q -p no:warnings
+```
+
+Expected: the one pre-existing failure (`test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke`) and nothing else. The third caller is `agent_bridge/router.py:323`, which returns the dict straight to the HTTP client with no `response_model` — so the new key reaches the wire, deliberately.
+
+- [ ] **Step 20: Write the failing test for the binding writer, spawn path**
+
+Append to `backend/tests/agent_teams/test_agent_team_service.py`. Read `test_launch_spawns_and_records_items` first (`:1108-1126`) — this test copies its `fake_spawn` shape and adds the pid.
+
+```python
+@pytest.mark.asyncio
+async def test_launch_writes_a_pane_binding_on_the_spawn_path(db, tmp_path, monkeypatch):
+    """Without this row every Deck-launched pane gets 409 bind_pending forever."""
+    from sqlalchemy import text
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Binding team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Dev agent",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert plan.items[0].action == "spawn"
+
+    def fake_spawn(provider_id, options, *, extra_env=None):
+        return {
+            "session_name": "repo-abcd",
+            "tmux_target": "repo-abcd:0.0",
+            "pane_pid": 4242,
+        }
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", fake_spawn)
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
+    )
+
+    result = await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+    )
+    assert result.items[0].pane_pid == 4242
+
+    rows = (
+        await db.execute(
+            text(
+                "SELECT pane_pid, pane_proc_start, slot_id, preset_id, tmux_target "
+                "FROM agent_pane_bindings"
+            )
+        )
+    ).all()
+    assert rows == [(4242, "120913170", preset.slots[0].id, preset.id, "repo-abcd:0.0")]
+
+
+@pytest.mark.asyncio
+async def test_pane_binding_is_written_before_the_slot_loop_ends(db, tmp_path, monkeypatch):
+    """The row must exist while the loop is still running, not after it.
+
+    A shim spawned for slot 1 can register while slots 2-6 are still spawning
+    (spec 3.3: "the window is the whole launch"). This asserts the row is
+    queryable from inside the loop, using a second slot's spawn as the probe
+    point. It does NOT prove the write was committed -- see the caution below.
+    """
+    from sqlalchemy import text
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Ordering team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Agent one", provider="codex-cli", repo_path=str(repo)
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Agent two", provider="codex-cli", repo_path=str(repo)
+                ),
+            ],
+        ),
+    )
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert [item.action for item in plan.items] == ["spawn", "spawn"]
+
+    spawn_calls: list[int] = []
+    observed: list[list] = []
+
+    def fake_spawn(provider_id, options, *, extra_env=None):
+        spawn_calls.append(len(spawn_calls))
+        return {
+            "session_name": f"repo-abc{len(spawn_calls)}",
+            "tmux_target": f"repo-abc{len(spawn_calls)}:0.0",
+            "pane_pid": 4240 + len(spawn_calls),
+        }
+
+    real_bootstrap = agent_team_service._bootstrap_prompt
+
+    async def spy_bootstrap(db_arg, preset_arg, slot_arg):
+        # Runs at the TOP of each spawn, so on slot 2 it sees slot 1's write.
+        observed.append(
+            (await db_arg.execute(text("SELECT pane_pid FROM agent_pane_bindings"))).all()
+        )
+        return await real_bootstrap(db_arg, preset_arg, slot_arg)
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", fake_spawn)
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
+    )
+    monkeypatch.setattr(agent_team_service, "_bootstrap_prompt", spy_bootstrap)
+
+    await agent_team_service.launch(
+        db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash)
+    )
+
+    assert observed[0] == [], "no binding exists before the first slot spawns"
+    assert observed[1] == [(4241,)], "slot 1's binding is visible during slot 2's spawn"
+    final = (await db.execute(text("SELECT pane_pid FROM agent_pane_bindings"))).all()
+    assert sorted(final) == [(4241,), (4242,)]
+```
+
+**A caution on the second test, and it is the important one in this pair.** It proves *ordering* — the row lands inside the loop rather than after it — and that is genuinely worth pinning, because writing the binding after the loop is the natural refactor and it reopens the whole race. It does **not** prove the write was *committed*. The `db` fixture in `tests/agent_teams/conftest.py` is a single **in-memory** session, and a second connection to `:memory:` is a different database, so no test in this suite can distinguish a commit from a flush. Both pass either way.
+
+**The cross-connection claim was verified by direct measurement outside the suite** — a file-backed WAL database with a reader on a fresh connection, seeing `bindings=[(4242, 1)]` while `launch_items=[]` — and that measurement is recorded in this task's design section above. Do not write a test that *claims* to prove it against the in-memory fixture: it would pass whether or not the commit is there, which is exactly the [[requirement-with-no-failing-case]] trap. If you want it under test it needs a file-backed engine, and that is a fixture this plan does not add.
+
+So the *real* guard on the commit is a **code-review check**, restated in Step 24's commit message: `_write_pane_binding` ends in `await db.commit()`, and deleting that line must be caught by a reviewer, not by a green suite.
+
+**The second test's three preconditions were measured, not assumed** — the same fixture was run as a real test in `tests/agent_teams/` before this plan was finalised, so the implementer inherits facts rather than a homework assignment:
+
+| Precondition | Measured result |
+| --- | --- |
+| Two slots on one `repo_path` both classify as `spawn` | `slot=1 action='spawn'`, `slot=2 action='spawn'`, `can_launch: True`, each with `reasons=['No matching running session found']` |
+| The `_bootstrap_prompt` spy fires once per slot with `(db, preset, slot)` | fired **2 times**; `slot_arg.display_name` was `'Agent one'` then `'Agent two'` |
+| The spy's observation point precedes that slot's own spawn | `_bootstrap_prompt` is awaited at `:608`, `spawn_session` at `:616` — so on slot 2 the spy runs **after** slot 1's writer commit and **before** slot 2's spawn |
+
+That third row is what makes `observed[0] == []` and `observed[1] == [(4241,)]` the right assertions rather than an off-by-one. If a future refactor moves the bootstrap call below the spawn, this test starts asserting the wrong iteration's state — so if it fails, re-read `:608`/`:616` before touching the expected values.
+
+The same run also confirmed the `:637` key bug from the other direction: `fake_spawn` returned `"pane_pid": 4241` and `4242`, and **both result items came back `pane_pid=None`**, because `_execute_plan_item` reads `spawned.get("pid")`. Step 23 fixes that; this is what the un-fixed code looks like.
+
+- [ ] **Step 21: Write the failing test for the reuse path**
+
+Read `_matching_session_payload` (`:994-1006`) first — the reuse path's pid is a **string**, because `discovery.py:80` types it `pid: str`.
+
+```python
+@pytest.mark.asyncio
+async def test_launch_writes_a_pane_binding_on_the_reuse_path(db, tmp_path, monkeypatch):
+    """The reuse pid arrives as a str from discovery; it must land as an int.
+
+    And re-dispatching to the same pane must UPDATE the row, not insert a
+    second one -- a duplicate insert raises IntegrityError on the UNIQUE
+    (pane_pid, pane_proc_start) constraint and then poisons the session with
+    PendingRollbackError, failing every remaining slot in the loop.
+    """
+    from sqlalchemy import text
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Reuse team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Dev agent",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "session_name": "repo-abcd",
+                "tmux_target": "repo-abcd:0.0",
+                "pid": "4242",            # a str, exactly as discovery returns it
+                "provider": "codex-cli",
+                "cwd": str(repo),
+                "wakeable": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert plan.items[0].action == "reuse", plan.items[0].reasons
+
+    await agent_team_service.launch(
+        db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash)
+    )
+    rows = (
+        await db.execute(
+            text("SELECT id, pane_pid, typeof(pane_pid), slot_id FROM agent_pane_bindings")
+        )
+    ).all()
+    assert len(rows) == 1
+    first_id = rows[0][0]
+    assert rows[0][1] == 4242
+    assert rows[0][2] == "integer"
+
+    # Dispatch to the same pane again: same row, no IntegrityError.
+    plan2 = await agent_team_service.plan_launch(db, preset.id)
+    await agent_team_service.launch(
+        db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan2.plan_hash)
+    )
+    rows2 = (
+        await db.execute(text("SELECT id, pane_pid FROM agent_pane_bindings"))
+    ).all()
+    assert rows2 == [(first_id, 4242)], "re-dispatch must update, not insert"
+```
+
+**The `plan_launch` stub shape is a precondition, and this one was measured.** The test only exercises the reuse path if `plan_launch` classifies the stubbed session as reusable, so the exact dict above was run as a real test in `tests/agent_teams/` first. Results:
+
+- `action='reuse'`, `block=None`, `reasons=['A matching running session is already available']`.
+- `_matching_session_payload` projected it to `{'source': 'bridge', 'provider': 'codex-cli', 'session_key': None, 'session_name': 'repo-abcd', 'tmux_target': 'repo-abcd:0.0', 'pane_id': None, 'cwd': <repo>, 'pid': '4242'}` — note `session_key=None`, because the stub has neither `session_key` nor `pane_id`. That is fine: nothing on the reuse binding path reads it.
+- The launch returned `action=reuse status=reused pane_pid=4242 type=int` — **pydantic already coerced the string**, which is why Step 23's writer reads `result.pane_pid` off the validated model rather than calling `int(...)` on the raw dict.
+- The **second** `plan_launch` also returned `action='reuse'` with the same reason, so the re-dispatch half of this test genuinely re-enters the reuse branch. Without that, the `rows2 == [(first_id, 4242)]` assertion would be vacuous.
+
+The reuse classification only needs `provider` and `cwd`: `_discovered_session_matches_slot` (`:965-973`) compares `session["provider"]` to `slot.provider` and `derive_repo_identity(cwd)["repo_id"]` to `slot.repo_id`, and nothing else. `wakeable` and `session_name` are carried for realism, not for the match. Note also that `plan_launch` reads discovery through `self._discover_sessions()` (`:428`), which calls the module-level `discover_agent_sessions()` inside a bare `except Exception: return []` (`:1137-1141`) — so the `monkeypatch.setattr` target above is right, but a stub that *raises* would be silently swallowed into "no sessions found" rather than failing the test.
+
+- [ ] **Step 22: Run to verify both fail**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/test_agent_team_service.py -q -p no:warnings
+```
+
+Expected: **3 failed, 41 passed** — the three new tests fail because `agent_pane_bindings` is empty (`assert [] == [(4242, ...)]`) and because `read_proc_stat` is not an attribute of `agent_team_service` yet (`AttributeError` on the `monkeypatch.setattr`). The 41 is this file's measured count today; any other number means the file changed under you.
+
+- [ ] **Step 23: Implement the writer**
+
+In `backend/app/services/agent_team_service.py`, add the import beside the existing ones (`:1-51`):
+
+```python
+from app.utils.peer_process import read_proc_stat
+```
+
+Import the *name*, not the module — the tests above monkeypatch `app.services.agent_team_service.read_proc_stat`, which only works for a name bound in this module. `app.utils.peer_process` imports nothing from `app.services`, so there is no cycle. Verified separately: `github_workspace_service` has an equivalent `_read_proc_start` (`:79-81`), and reusing *that* would work too — but it is a private method on a service object, and importing one service into another for a `/proc` read is a dependency this file does not otherwise have.
+
+Then add the writer as a method on the service:
+
+```python
+    async def _write_pane_binding(
+        self,
+        db: AsyncSession,
+        *,
+        pane_pid: int | None,
+        slot: AgentTeamSlot,
+        preset: AgentTeamPreset,
+        tmux_target: str | None,
+    ) -> None:
+        """Record which slot owns a pane, so registration can derive it.
+
+        Committed here, mid-loop, on the CALLER's session -- and both halves of
+        that are deliberate:
+
+        * Committed, because the agent's MCP shim registers over a different
+          connection and cannot see an uncommitted row. Without a visible row
+          it claims team context with no binding and gets 409 bind_pending on
+          every mail tool for the life of the pane (spec 3.3a).
+        * On the caller's session, because launch() already flushed the
+          AgentTeamLaunch row before this loop, so this request's connection
+          holds SQLite's write lock. A second session's INSERT here was
+          measured failing after 1.5s with "database is locked".
+
+        The commit therefore also persists the AgentTeamLaunch row in its
+        interim status='running'. That is safe TODAY because nothing reads that
+        status and every caller upstream of launch() has already committed its
+        own mutations (send_message commits; workspace acquire commits). A
+        future caller that holds an uncommitted mutation across launch() would
+        have it committed here -- check before adding one.
+        """
+        if pane_pid is None:
+            return
+        stat = read_proc_stat(pane_pid)
+        if stat is None:
+            return
+        _ppid, proc_start = stat
+
+        existing = (
+            await db.execute(
+                select(AgentPaneBinding).where(
+                    AgentPaneBinding.pane_pid == pane_pid,
+                    AgentPaneBinding.pane_proc_start == proc_start,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is None:
+            # Select-then-update, never a bare insert: the reuse path re-binds
+            # the same pane on every dispatch, and a duplicate insert raises
+            # IntegrityError on UNIQUE(pane_pid, pane_proc_start) and then
+            # poisons the session with PendingRollbackError, failing every
+            # remaining slot in this loop.
+            db.add(
+                AgentPaneBinding(
+                    pane_pid=pane_pid,
+                    pane_proc_start=proc_start,
+                    slot_id=slot.id,
+                    preset_id=preset.id,
+                    tmux_target=tmux_target,
+                )
+            )
+        else:
+            existing.slot_id = slot.id
+            existing.preset_id = preset.id
+            existing.tmux_target = tmux_target
+        await db.commit()
+```
+
+Add `AgentPaneBinding` to the model import block, and `select` is already imported (`:147` uses it).
+
+Now call it on both paths. **Read the pid off the result object, not off the payload** — `AgentTeamLaunchResultItem` types `pane_pid: Optional[int]`, and measured, pydantic coerces `"4242"` to `4242` and raises `ValidationError` on `"%1"`. That is where the reuse path's `str` becomes an `int`.
+
+On the **reuse** path, after the `result = AgentTeamLaunchResultItem(...)` block and before `self._record_launch_item(...)` (`:575`):
+
+```python
+            await self._write_pane_binding(
+                db,
+                pane_pid=result.pane_pid,
+                slot=slot,
+                preset=preset,
+                tmux_target=result.tmux_target,
+            )
+```
+
+On the **spawn** path, the same call goes inside the `try`, immediately after its `result = AgentTeamLaunchResultItem(...)` block (which ends at `:640`) — **not** after the `except`, and **not** after `_record_launch_item` at `:652`, which both paths share. Putting it after the shared `_record_launch_item` would run it on the `except Exception` path too, where `result` has no `tmux_target` and no pid, and on the `skip`/`blocked`/`reuse` paths that return earlier. Inside the `try` it runs only where a pane was actually created:
+
+```python
+            await self._write_pane_binding(
+                db,
+                pane_pid=result.pane_pid,
+                slot=slot,
+                preset=preset,
+                tmux_target=result.tmux_target,
+            )
+```
+
+**`spawned.get("pid")` at `:637` is wrong and stays wrong until Step 19.** `spawn_session` never returned a `pid` key, so that line has always evaluated to `None`. Step 19 adds `pane_pid`, so change `:637` to read it:
+
+```python
+                pane_pid=spawned.get("pane_pid"),
+```
+
+Leaving `"pid"` there would make the whole spawn-path binding silently dead — the row would never be written, the tests in Step 20 would fail, and the failure would look like a missing commit rather than a wrong key. This is the single most likely way to get this task wrong.
+
+- [ ] **Step 24: Run the tests and commit the writer**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/test_agent_team_service.py tests/test_agent_bridge_spawn.py -q -p no:warnings && pytest tests/ -q -p no:warnings
+```
+
+Expected: **44 passed** in `test_agent_team_service.py` (41 + 3) and **15 passed** in `test_agent_bridge_spawn.py` (13 + 2). Full suite: **`668 passed, 1 failed`** — the 622 baseline plus Tasks 1-4's 46 new cases, and the one failure is the pre-existing smoke test. Report the actual numbers.
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1 && git add backend/app/services/agent_bridge/spawn.py backend/app/services/agent_team_service.py backend/tests/test_agent_bridge_spawn.py backend/tests/agent_teams/test_agent_team_service.py && git commit -m "feat(teams): write the pane binding the registration route reads
+
+Spec 3.8 assigns this to agent_team_service on both launch paths, and without
+it every Deck-launched pane claims team context with no binding row -- 409
+bind_pending on every mail tool, for the life of the pane, since _guard
+re-registers before each one. That is the revision-4 defect 3.3a exists to
+prevent.
+
+spawn_session now returns the pane pid from new-session -P -F '#{pane_pid}',
+which is race-free where a post-hoc list-panes is not: for a command that exits
+immediately the tmux server is already gone and list-panes returns nothing. The
+cost is three re-authored argv assertions, which now key on argv[-1] for the
+shell command rather than on a fixed index.
+
+The row is committed mid-loop on the caller's own session. Not on a second
+connection: launch() flushes its AgentTeamLaunch row before the slot loop, so
+the request already holds SQLite's write lock and a second session's INSERT was
+measured failing after 1.5s with 'database is locked'. Committed rather than
+flushed because the shim registers over a different connection.
+
+Select-then-update, not insert: the reuse path re-binds the same pane on every
+dispatch, and a duplicate hits UNIQUE(pane_pid, pane_proc_start), raising
+IntegrityError and then poisoning the session for every remaining slot.
+
+CODE REVIEW CHECK, not covered by a test: _write_pane_binding must end in
+await db.commit(). The agent_teams db fixture is a single in-memory session, so
+no test in this suite can distinguish a commit from a flush -- the
+cross-connection visibility was verified by direct measurement on a file-backed
+WAL database instead.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.3, 3.3a, 3.8"
+```
+
 ---
 
-### Task 5: The enforcement dependency and the five write routes
+### Task 5: The enforcement dependency and the four write routes
+
+**Four, not five.** §3.5's endpoint table lists five token-carrying routes; the fifth is `POST /agent-teams/dispatch-status`, which lives in `agent_teams.py` and has its own authorization resolver. That one is **Task 7**. This task's Files block is the authority for which four: `send_message`, `mark_read`, `ack_message`, `agent_inbox`.
 
 **Files:**
 - Create: `backend/app/api/v1/deps.py`
@@ -1818,10 +2831,12 @@ Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.3, 3.3a"
 **Interfaces:**
 - Consumes: `agent_mail_service.hash_capability_token` (Task 3); `settings.mail_capability_tokens_required` (Task 1).
 - Produces, in `app.api.v1.deps`:
-  - `mail_session(x_deck_session_token, db) -> MailAgentSession | None` — the resolved session, or `None` in grace mode with no token. Raises `401 session_token_invalid` for a token that does not match.
-  - `require_mail_session(...) -> MailAgentSession` — the same, but `401 session_token_required` rather than `None`.
-  - `require_session_slot(session) -> int` — the session's `team_slot_id`, or `403 session_not_slot_bound`.
-  - `derive_member_id(session, claimed: int | None) -> int` — derive, do not compare.
+  - `mail_session(x_deck_session_token, db) -> MailAgentSession | None` — the resolved session, or `None` in grace mode with no token. Raises `401 session_token_invalid` for a token that does not match. **Task 10 widens this return to `MailAgentSession | OperatorPrincipal | None`**; write the two-member version here and let Task 10 add the third, since nothing in PR0 before Task 10 can produce an `OperatorPrincipal`.
+  - `require_mail_session(...) -> MailAgentSession` — the same, but `401 session_token_required` rather than `None`. The return stays `MailAgentSession` through Task 10: its whole job there is to *refuse* the widened union, so the narrowing is the point and the annotation does not move.
+  - `require_session_slot(session) -> int` — the session's `team_slot_id`, or `403 session_not_slot_bound`. **Task 10 adds an `isinstance` guard** to this function, because `/dispatch-status` reaches it with whatever `mail_session` returned and Task 10 widens that union.
+  - `derive_member_id(session, claimed: int | None, *, detail: str = "sender_not_token_holder") -> Optional[int]` — derive, do not compare. The keyword-only `detail` is what the refusal says when `claimed` disagrees with the token holder: the three `sender_member_id` routes take the default, and the inbox route passes `detail="member_not_token_holder"` (Step 6), because on that route the caller is naming *whose inbox to read*, not whose name to sign. Two codes rather than one, because an operator debugging a `403` needs to know which of the two claims was rejected.
+
+    The return is `Optional[int]`, not `int`, and it is `Optional` from Task 5 onward — **not** something Task 10 widens. Task 10 adds a third caller shape (`OperatorPrincipal`) that returns `None` on the anonymous-compose path, but the annotation already admits it. Write `Optional[int]` here in Task 5 and Task 10 changes only the `session` parameter's type. A Task 5 that writes `-> int` produces a real type error the moment Task 10's branch lands, and `mypy` is not in this repo's CI to catch it.
 
 **`app/api/v1/` has no `deps.py`** — this is a new file. Put it there rather than in `agent_mail.py` because Task 7 imports `require_session_slot` from `agent_teams.py`, and a cross-import between two route modules is a cycle waiting to happen.
 
@@ -1951,9 +2966,154 @@ async def test_a_disagreeing_sender_is_403(client, db, tmp_path, monkeypatch):
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "sender_not_token_holder"
+
+
+@pytest.mark.asyncio
+async def test_inbox_without_a_token_is_401(client, db, tmp_path, monkeypatch):
+    """Test 17. The inbox is in this task because it WRITES (see Step 6)."""
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    member = await _member(db, "inbox-repo", "inbox")
+    response = await client.get(f"/api/v1/agent-mail/agent/inbox?member_id={member.id}")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
+
+
+@pytest.mark.asyncio
+async def test_the_forged_liveness_attack_writes_nothing(client, db, tmp_path, monkeypatch):
+    """Test 18. The refusal must happen BEFORE the writes, not after.
+
+    Asserting the 401 alone would pass a route that heartbeats first and
+    refuses second -- the caller would still have forged the leader's liveness
+    and silenced the escalation, and the test would be green. So this asserts
+    on the four rows, and the seeded values are chosen so that every one of
+    them MOVES if the refusal comes too late.
+    """
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:victim"),
+    )
+    leader_id = register.json()["member"]["id"]
+
+    # Age the session past the heartbeat TTL and mark it offline, so a
+    # heartbeat would be visible as a change rather than a no-op.
+    stale = datetime.utcnow() - timedelta(days=30)
+    session_row = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.member_id == leader_id)
+        )
+    ).scalar_one()
+    session_row.last_seen_at = stale
+    session_row.mailbox_status = "offline"
+
+    # An unread brief addressed to the leader: receipt.read_at is what
+    # _brief_delivered reads, so clearing it is what silences an escalation.
+    sender = await _member(db, "sender-repo", "sender")
+    message = MailMessage(
+        kind="message",
+        sender_member_id=sender.id,
+        recipient_member_id=leader_id,
+        subject="dispatch brief",
+        body_markdown="do the thing",
+    )
+    db.add(message)
+    await db.flush()
+    receipt = MailReceipt(message_id=message.id, member_id=leader_id)
+    db.add(receipt)
+    leader = await db.get(MailTeamMember, leader_id)
+    leader.last_inbox_checked_at = None
+    await db.commit()
+
+    response = await client.get(
+        f"/api/v1/agent-mail/agent/inbox?member_id={leader_id}&mark_read=true"
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
+
+    # Now the part that matters: nothing moved.
+    message_id = message.id  # read BEFORE expire_all, or it lazy-loads
+    db.expire_all()
+    session_row = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.member_id == leader_id)
+        )
+    ).scalar_one()
+    assert session_row.last_seen_at == stale, "liveness was forged before the refusal"
+    assert session_row.mailbox_status == "offline"
+    receipt = (
+        await db.execute(select(MailReceipt).where(MailReceipt.message_id == message_id))
+    ).scalar_one()
+    assert receipt.read_at is None, "the brief was marked read before the refusal"
+    leader = await db.get(MailTeamMember, leader_id)
+    assert leader.last_inbox_checked_at is None
+
+
+@pytest.mark.asyncio
+async def test_inbox_with_a_token_ignores_a_disagreeing_member_id(
+    client, db, tmp_path, monkeypatch
+):
+    """Test 19. Assert on the member returned, not on the status code.
+
+    A route that authenticates and then still honours the query parameter
+    returns 200 either way. The status code cannot distinguish the two, so it
+    is not the assertion.
+    """
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:holder"),
+    )
+    token = register.json()["capability_token"]
+    holder_id = register.json()["member"]["id"]
+    victim = await _member(db, "victim-repo", "victim")
+
+    # No member_id at all: the token alone must resolve it.
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["member_id"] == holder_id
+
+    # A member_id that AGREES is accepted (this keeps the pre-upgrade shim's
+    # payload valid once it starts sending the token).
+    response = await client.get(
+        f"/api/v1/agent-mail/agent/inbox?member_id={holder_id}",
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["member_id"] == holder_id
+
+    # One that DISAGREES is refused, never silently derived over.
+    response = await client.get(
+        f"/api/v1/agent-mail/agent/inbox?member_id={victim.id}",
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "member_not_token_holder"
 ```
 
-Copy `_member` from `tests/agent_mail/test_api.py:25-35`. **Test 5's ordering matters:** `send_message` already raises `ValueError → 400` for a payload carrying both sender fields, and for an `answer` whose sender is not the root's recipient. Use `kind="message"` with only `sender_member_id` set, so the **403 from the token check fires first**. If you see a 400, the dependency is running after the service instead of before it.
+Copy `_member` from `tests/agent_mail/test_api.py:25-35` — note it takes **`(db, repo_id, name)`**, three arguments, because `identity_key` and `repo_id` are distinct from the display name. Test 18 needs these imports at the top of the file: `from datetime import datetime, timedelta`, `from sqlalchemy import select`, and `from app.models.database import MailAgentSession, MailMessage, MailReceipt, MailTeamMember`.
+
+**The receipt class is `MailReceipt`, not `MailMessageReceipt`.** Verified against `app/models/database.py:442` — `__tablename__ = "mail_receipts"`, with `message_id`, `member_id`, `read_at`, `acked_at`, `created_at`, and `UniqueConstraint("message_id", "member_id")`. `member.last_inbox_checked_at` is at `:364` and `session.mailbox_status`/`last_seen_at` are on `MailAgentSession` (`:369`+). Every column test 18 touches was checked against source; the plausible-sounding `MailMessageReceipt` does not exist and would fail at import.
+
+**Test 5's ordering matters:** `send_message` already raises `ValueError → 400` for a payload carrying both sender fields, and for an `answer` whose sender is not the root's recipient. Use `kind="message"` with only `sender_member_id` set, so the **403 from the token check fires first**. If you see a 400, the dependency is running after the service instead of before it.
+
+**Test 18's seeded values are load-bearing, and each was measured to move.** This exact fixture was run as a real test against the current code — no dependency in place, so the call returns `200` and every write lands. All four fields moved:
+
+| Field | Seeded | Measured after the unauthenticated call | Written by |
+| --- | --- | --- | --- |
+| `session.last_seen_at` | `2026-07-11 08:19:56` (30 days stale) | `2026-08-10 08:19:56` | `heartbeat_member_mcp_session` (`:346`), reached from `get_inbox:1082` |
+| `session.mailbox_status` | `'offline'` | `'connected'` | same, `:347` — forced, not conditional |
+| `receipt.read_at` | `None` | `2026-08-10 08:19:56` | `get_inbox:1101` |
+| `member.last_inbox_checked_at` | `None` | `2026-08-10 08:19:56` | `get_inbox:1098` |
+
+That is what makes this a real test rather than a restatement of the 401. Seed it any other way — a fresh session, an already-read receipt — and the assertions hold whether or not the refusal precedes the writes, which is the [[requirement-with-no-failing-case]] trap.
+
+Two mechanical details the probe run exposed, both of which will bite:
+
+1. **`source` must be `"mcp"`.** `heartbeat_member_mcp_session` filters on `MailAgentSession.source == "mcp"` (`:338`) and returns silently for anything else. `_body`'s `"source": "mcp"` is why the first two rows move; a `"bridge"` registration would leave them untouched and make those two assertions vacuous.
+2. **Read `message.id` into a local *before* `db.expire_all()`.** Doing it after raises `sqlalchemy.exc.MissingGreenlet: greenlet_spawn has not been called` — the expired attribute triggers a lazy refresh outside the async greenlet, and the test fails with a SQLAlchemy internals traceback that looks nothing like the bug it is. The `expire_all()` itself is not optional: the `client` fixture shares the request's session, so without it the re-reads return the identity map rather than the rows.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -2160,7 +3320,7 @@ async def agent_inbox(
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
 ```
 
-Expected: `26 passed`.
+Expected: `33 passed` in `test_capability_tokens.py` (25 after Task 4 + this task's 8).
 
 - [ ] **Step 8: Run the full suite and expect four named failures**
 
@@ -2181,7 +3341,7 @@ Do **not** add tokens to these tests. They are the grace-mode regression suite: 
 
 - [ ] **Step 10: Run the full suite again**
 
-Expected: `480 + 26 = 506 passed`, no failures. Report the actual number.
+Expected: `505 passed` (497 after Task 4 + this task's 8), no failures. Report the actual number.
 
 - [ ] **Step 11: Commit**
 
@@ -2201,7 +3361,7 @@ hardcoded at the route, so an unauthenticated GET forges last_seen_at and, with
 mark_read, receipt.read_at -- the two fields _effective_status and
 _brief_delivered read to make safety decisions.
 
-Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.5, 3.4a"
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.5"
 ```
 
 ---
@@ -2215,6 +3375,8 @@ Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.5, 3.4a"
 **Interfaces:**
 - Consumes: `capability_token` on the register response (Task 3); the `X-Deck-Session-Token` header (Task 5).
 - Produces: `_state["capability_token"]`, sent as `X-Deck-Session-Token` on every Deck request the shim makes.
+
+**Spec sections:** §3.4 (the token is stored once and never replaced) and §3.8's shim bullet (`:969`), which names the file and the two edit sites. **Not §3.6a** — that section is the *operator* credential, which the shim never holds; Task 8 implements it.
 
 **The header goes in `_deck_request`, the single chokepoint.** Every shim call funnels through it — `_request` (`:101`), `_team_request` (`:105`), `_bridge_request` (`:109`), `_dispatch_request` (`:113`) are all one-line wrappers, and `_bridge_request_with_token` (`:117`) layers a second header on top of `_bridge_request`. Putting the token anywhere else means auditing five call paths instead of one and getting it wrong on the sixth someone adds.
 
@@ -2386,7 +3548,7 @@ The pop-and-merge is the same idiom `_bridge_request_with_token` uses at `:132`.
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_mcp_shim.py -q -p no:warnings
 ```
 
-Expected: the four new tests pass. **`test_mcp_shim.py:13-47`'s exact five-key payload assertion is expected to still pass** — the registration *payload* is unchanged; only the *response* handling and the *headers* changed. If that test fails, you modified the payload; revert that part.
+Expected: `25 passed` — the file's measured 21 today plus this task's 4. **`test_mcp_shim.py:13-47`'s exact five-key payload assertion is expected to still pass** — the registration *payload* is unchanged; only the *response* handling and the *headers* changed. If that test fails, you modified the payload; revert that part.
 
 - [ ] **Step 7: Run the full suite**
 
@@ -2394,7 +3556,7 @@ Expected: the four new tests pass. **`test_mcp_shim.py:13-47`'s exact five-key p
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
 ```
 
-Expected: `510 passed`. Report the actual number.
+Expected: `509 passed` (505 after Task 5 + this task's 4). Report the actual number.
 
 - [ ] **Step 8: Commit**
 
@@ -2409,7 +3571,7 @@ The token is captured only when the response actually carries one: it is minted
 once, so an unconditional assignment would null it on the re-registration
 _guard performs before every tool call.
 
-Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6a"
+Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.4, 3.8"
 ```
 
 ---
@@ -3001,7 +4163,9 @@ If every parameterization still passes with the mutant, the snapshot is being ta
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
 ```
 
-Expected: no new failures. The risk area is `tests/agent_teams/test_github_dispatch_service.py` — it calls `initiate_handoff` and `accept_handoff` **at the service level** (`:2439-2448`), which the resolver does not touch by design. If a *service* test fails, authorization leaked out of the route and into a service; that is the one outcome this task's design exists to prevent, so **stop and report**.
+Expected: `526 passed` (509 after Task 6 + this task's 17 **collected cases** — 10 plain tests plus `test_non_owner_is_refused_and_changes_nothing`'s 7 parameterizations), no new failures. The risk area is `tests/agent_teams/test_github_dispatch_service.py` — it calls `initiate_handoff` and `accept_handoff` **at the service level** (`:2439-2448`), which the resolver does not touch by design. If a *service* test fails, authorization leaked out of the route and into a service; that is the one outcome this task's design exists to prevent, so **stop and report**.
+
+**Cases, not functions, from here on.** Tasks 7, 8 and 9 each add parametrized tests, so their `def` count and their `passed` count differ. This task writes **11 test functions** but adds **17 collected cases**, because `test_non_owner_is_refused_and_changes_nothing` is parameterized over `_OWNER_ONLY_STATUSES`' seven rows. `test_dispatch_status_tool.py` measures **22 today** and ends this task at **39**.
 
 - [ ] **Step 10: Commit**
 
@@ -3659,7 +4823,11 @@ Restore both blocks by exact string replacement — retype them from Step 3. **D
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && python3 -m pytest tests/ -q -p no:warnings
 ```
 
-Expected: the pre-existing `test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` failure and **nothing else**. This is the first task in the plan that gates an existing route, so the full suite matters more here than anywhere before it: any test anywhere that calls the listing or force-release without a credential now gets `401`. Measured, there are exactly eight such call sites and all eight are in `test_github_workspace_api.py` — no other test file references either route. If a third file fails, a route was gated that this task did not intend to gate; **stop and report** rather than adding headers until it goes green.
+Expected: **`709 passed, 1 failed`** — the 622 baseline plus Tasks 1-8's 87 new collected cases, and the one failure is the pre-existing `test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` and **nothing else**.
+
+`test_operator_auth.py` collects **12 cases from 8 test functions**: `test_unconfigured_install_refuses_with_503_whatever_the_header` is parameterized over three headers and `test_near_miss_tokens_are_invalid` over three near misses, so `-q` prints 12 where the file has 8 `def`s. Do not read that gap as duplicated collection.
+
+This is the first task in the plan that gates an existing route, so the full suite matters more here than anywhere before it: any test anywhere that calls the listing or force-release without a credential now gets `401`. Measured, there are exactly eight such call sites and all eight are in `test_github_workspace_api.py` — no other test file references either route. If a third file fails, a route was gated that this task did not intend to gate; **stop and report** rather than adding headers until it goes green.
 
 - [ ] **Step 10: Commit**
 
@@ -4726,7 +5894,7 @@ Put it immediately after the `lease_state` list assertion (`:159-165` region), a
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/test_github_workspace_api.py tests/agent_teams/test_force_release_concurrency.py -q -p no:warnings
 ```
 
-Expected: **32 passed** — 23 in the migrated file (19 test functions, 23 collected cases; this task re-authors tests without changing either count, since the parameterization stays at two cases) and 9 in the new one.
+Expected: **32 passed** — 23 in the migrated file (19 test functions, 23 collected cases; this task re-authors tests without changing either count, since the parameterization stays at two cases) and 9 in the new one (8 test functions, 9 cases — `test_force_must_be_true_and_the_lease_is_untouched` is parameterized over two).
 
 - [ ] **Step 11: Mutate the predicate and the route eight ways, and watch the right test fail**
 
@@ -4758,7 +5926,7 @@ Then the two schema mutations, which are the ones a reviewer cannot see by readi
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings
 ```
 
-Expected: the count Task 8 reached, plus this task's 9 new cases. Nothing should have *dropped*.
+Expected: `547 passed` (538 after Task 8 + this task's 9). Nothing should have *dropped* — this task re-authors six tests in `test_github_workspace_api.py` and adds none there, so that file stays at 23.
 
 Then the whole suite, because this task changes a response schema that other files may read:
 
@@ -4766,7 +5934,7 @@ Then the whole suite, because this task changes a response schema that other fil
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && venv/bin/python3 -m pytest tests/ -q -p no:warnings
 ```
 
-Measured baseline on the tree this task starts from: **622 passed, 1 failed**. The one failure is `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` (`assert [] == [None, 'codex-cli']`) — pre-existing and unrelated to this spec. So expect **631 passed, 1 failed** here, and treat any *second* failure as this task's, most likely a test reading `lease_token` off a workspace response body that the enumeration above missed. Report it and fix it here; do not "fix" the smoke test.
+Measured baseline on a clean tree at `4810c1b`: **622 passed, 1 failed**. The one failure is `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` (`assert [] == [None, 'codex-cli']`) — pre-existing and unrelated to this spec. Tasks 1-9 add 96 collected cases on top of that baseline, so expect **718 passed, 1 failed** here, and treat any *second* failure as this task's, most likely a test reading `lease_token` off a workspace response body that the enumeration above missed. Report it and fix it here; do not "fix" the smoke test.
 
 - [ ] **Step 13: Commit**
 
@@ -4823,8 +5991,9 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 4.6a"
 ### Task 10: The operator credential reaches the UI, because the actor token cannot
 
 **Files:**
-- Modify: `backend/app/api/v1/deps.py` (`mail_session`, `require_mail_session`, `derive_member_id` — all three from Task 5)
+- Modify: `backend/app/api/v1/deps.py` (`mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id` — all four from Task 5)
 - Modify: `backend/app/api/v1/agent_mail.py` (`mark_read`, `ack_message`, `agent_inbox` — a `None`-member guard each, per Step 6)
+- Modify: `backend/tests/agent_mail/test_dispatch_status_tool.py` (one case, per Step 9 — the widened union reaches this route through `mail_session`)
 - Create: `frontend/src/lib/operatorToken.ts`
 - Modify: `frontend/src/lib/api.ts` (`apiClient`, `:99-131`)
 - Modify: `frontend/src/features/agent-mail/api.ts` (`sendAgentMailMessage` `:28-33`, `ackAgentMailMessage` `:73-78`, `markAgentMailRead` `:57-62`)
@@ -4860,7 +6029,7 @@ POST /api/v1/external/agent-mail/actors (NO credential) -> 200
 
 Any pane mints a "supervisor" actor in one unauthenticated call. Today that token is harmless *because* the external schemas have no `sender_member_id` — measured, passing one is silently ignored and the row still stores `(sender_member_id=None, sender_actor_id=1)`. A new route that accepted a member sender on an actor token would convert a bounded credential into an unbounded one, and PR1 is precisely where that matters: §4.3 rule 4 accepts an approval only from an `answer` whose `sender_member_id == leader_member.id`. Gating a member-sender write on a token every agent can mint hands every agent the leader's signature. **The operator token is the only credential in this system that an agent cannot obtain**, which is the entire reason §3.6a introduced it.
 
-**So the change is one union in one dependency, not a route.** `mail_session` learns a second credential; `derive_member_id` learns a third caller shape. The five write routes Task 5 already touched need no edit — they call these two functions and nothing else.
+**So the change is one union in one dependency, not a route.** `mail_session` learns a second credential; `derive_member_id` learns a third caller shape. The four write routes Task 5 already touched need no edit — they call these two functions and nothing else.
 
 #### The five measurements that decide this task's code
 
@@ -4916,7 +6085,7 @@ This is the reason the first draft of this task's test was worthless. An asserti
 
 #### What is deliberately *not* touched
 
-- **No new backend route.** §3.6 predicted "no new route is needed" for the wrong reason and reached the right conclusion. The five routes Task 5 already guards are the five the UI uses.
+- **No new backend route.** §3.6 predicted "no new route is needed" for the wrong reason and reached the right conclusion. The UI's three writes are three of the four routes Task 5 already guards.
 - **`ComposeDialog.tsx` gains nothing.** See measurement 2.
 - **`fetchAgentMailThread` and the other read paths stay open.** Task 5 gates writes, not reads; `mail_session` is not applied to `GET /messages/{id}/thread`, so the UI's thread view keeps working with no credential. Gating reads is not in this spec.
 - **`markAgentMailRead` and `fetchAgentMailInbox` have zero callers** — grepped across `src/`. They still get the header, because leaving one write helper without it is how a future caller acquires a silent `401`.
@@ -5307,6 +6476,8 @@ OPERATOR = OperatorPrincipal()
 
 `OPERATOR` is a module-level singleton because nothing distinguishes two operator principals, and an identity check reads better at the call sites than an `isinstance`.
 
+**Widen the `typing` import in the same edit.** Task 5 wrote `from typing import Optional`; Steps 4, 5 and 6 all annotate with `Union`, so change that line to `from typing import Optional, Union`. Missing it is a `NameError` at **import** time, which surfaces as every test in the file erroring during collection rather than as one failing assertion — a confusing failure for a one-word omission.
+
 - [ ] **Step 4: Teach `mail_session` the second credential**
 
 Replace `mail_session` (added in Task 5) with the version below. Only the middle block is new; the session-token half is unchanged.
@@ -5395,9 +6566,33 @@ def derive_member_id(
 ) -> Optional[int]:
 ```
 
-The return type changes from `int` to `Optional[int]`, because the operator-compose path returns `None` deliberately. That has one consequence at the call sites Task 5 wrote, and Step 6 handles it.
+**Only the `session` parameter's annotation changes here.** The return is already `Optional[int]` — Task 5 wrote it that way, because its own grace-mode branch can return a `None` claim. So this step widens the input union and adds one branch; it does not touch the return annotation. If you find `-> int` there, Task 5 was implemented against the older Interfaces line and the operator-compose path will not type-check — fix it here and say so in the handoff.
 
-`require_session_slot` needs no change and must not get one. Its `session.team_slot_id` raises `AttributeError` on an `OperatorPrincipal` — a `500`, which is ugly but unreachable: the only routes taking `require_session_slot` are `/dispatch-status` (Task 7) and they use `require_mail_session`, which refuses a non-session principal in Step 6.
+The `None` return *reaches a new caller* now, though: the operator-compose path returns `None` deliberately, where before `None` only came back from a grace-mode path that had already raised on a missing claim. That has one consequence at the call sites Task 5 wrote, and Step 6 handles it.
+
+**`require_session_slot` needs one guard, and this is the step that must not skip it.** Its `session.team_slot_id` raises `AttributeError` on an `OperatorPrincipal`, and that path is **reachable**: `/dispatch-status` (Task 7, `agent_teams.py`) declares `session: MailAgentSession | None = Depends(mail_session)` — `mail_session`, *not* `require_mail_session` — and `_authorize_dispatch_report` calls `require_session_slot(session)` after only an `if session is None: return`. An `OperatorPrincipal` is not `None`, so it falls straight through to the attribute access and the operator gets a `500` instead of a refusal.
+
+Add the type check rather than relying on the attribute failing:
+
+```python
+def require_session_slot(session: Union[MailAgentSession, "OperatorPrincipal"]) -> int:
+    """The slot this session is bound to, or 403.
+
+    The operator is refused for the same reason an unbound agent is: it has no
+    slot, and every dispatch-status report claims to speak for one. Checked
+    explicitly rather than left to AttributeError, because the difference
+    between the two is a 403 and a 500.
+    """
+    if not isinstance(session, MailAgentSession):
+        raise HTTPException(status_code=403, detail="session_not_slot_bound")
+    if session.team_slot_id is None:
+        raise HTTPException(status_code=403, detail="session_not_slot_bound")
+    return session.team_slot_id
+```
+
+Both branches return the same code deliberately: from the reporter's side "you are not bound to a slot" is the same fact either way, and inventing a second code would be a new refusal string PR0's spec does not define.
+
+This is the one place in Task 10 where a route *outside* `agent_mail.py` sees the widened union, which is why it is easy to miss — Step 8's fifth mutation row exists to catch it.
 
 - [ ] **Step 6: Fix the two call sites the widened return type breaks**
 
@@ -5447,7 +6642,7 @@ pytest tests/agent_mail/test_operator_mail_writes.py -v -p no:warnings
 
 Expected: **7 passed**.
 
-- [ ] **Step 8: Mutate the dependency six ways**
+- [ ] **Step 8: Mutate the dependency eight ways**
 
 Each mutation must turn at least one test red. If any is silent, the test that should have caught it is wrong — fix the test, not the mutation.
 
@@ -5458,7 +6653,8 @@ Each mutation must turn at least one test red. If any is silent, the test that s
 | Widen the guard to `if x_deck_operator_token is not None:` | the same test, second case | Now an empty header does reach the comparison. Together with the row above, `compare_digest("", "")` returns `True` and an unconfigured install **authorizes every caller** — measured `200` |
 | Compare `str` instead of bytes | `test_a_non_ascii_operator_header_is_a_refusal_not_a_500` | `TypeError` → `500`. A suite that only sends ASCII garbage sees nothing wrong |
 | Return `None` instead of `OPERATOR` on a valid operator token | the three positive tests, but **not** with a useful message | Under enforcement `None` means grace mode, so the write would *succeed* while logging `capability_token_missing`. Green tests, silently wrong audit trail — check the log assertion in Step 9 |
-| Make `require_mail_session` accept `OperatorPrincipal` | Task 7's dispatch-status suite | An operator token would become a slot claim. Run `pytest tests/agent_mail/ tests/agent_teams/` to see it |
+| Delete the `isinstance` guard from `require_session_slot` (Step 6) | none in this file — **add the case** | This is the reachable `500`. `/dispatch-status` takes `Depends(mail_session)`, not `require_mail_session`, so an operator token arrives as an `OperatorPrincipal`, survives `if session is None: return`, and hits `session.team_slot_id`. Add the case to `test_operator_mail_writes.py` — see Step 9's third test |
+| Make `require_mail_session` accept `OperatorPrincipal` | **nothing today — and that is the finding** | It reads like the dangerous mutation and is currently inert, because no PR0 route depends on `require_mail_session`: `/dispatch-status` uses `mail_session` directly and the four mail routes use `derive_member_id`. Leave the narrowing in place anyway — PR1 adds routes that do depend on it — but do not record this row as "caught by Task 7's suite," because it is not |
 | In `derive_member_id`, raise on `claimed is None` for the operator instead of returning it | `test_operator_composes_anonymously` | Compose would `400`. This is the mutation that looks like tightening and is actually a regression |
 
 - [ ] **Step 9: Add the two cases to `test_capability_tokens.py`**
@@ -5536,6 +6732,42 @@ async def test_an_operator_write_does_not_log_a_missing_token(
 
 Add `import logging` to the file if Task 5 did not.
 
+**The third case goes in a different file, because the route it exercises is not a mail route.** Step 8's `require_session_slot` row describes a reachable `500` on `/dispatch-status`, and that route lives in `agent_teams.py` with its own fixtures. Append to `backend/tests/agent_mail/test_dispatch_status_tool.py`, which Task 7 already extended and which owns `client_and_db` and `_seed_item`:
+
+```python
+@pytest.mark.asyncio
+async def test_an_operator_token_is_refused_not_a_500(client_and_db, monkeypatch):
+    """The operator has no slot, so it cannot report on one -- 403, not 500.
+
+    /dispatch-status takes Depends(mail_session), NOT require_mail_session, so
+    Task 10's widened union arrives here directly. The route's only None check
+    is `if session is None: return`, and an OperatorPrincipal is not None -- so
+    without the isinstance guard in require_session_slot this reaches
+    `session.team_slot_id` on a class that has no such attribute and the client
+    sees an unhandled AttributeError. Delete that guard and this test is the
+    only thing in the suite that notices.
+    """
+    monkeypatch.setattr(settings, "operator_token", "the-real-operator-token")
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, approval_round_count=1)
+
+    resp = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        headers={"X-Deck-Operator-Token": "the-real-operator-token"},
+        json={"work_item_id": item_id, "status": "triaging"},
+    )
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "session_not_slot_bound"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "dispatched", "a refused report must change nothing"
+```
+
+This test needs `from app.config import settings` in that file — check whether Task 7 already added it; the pre-existing file does not import it. It does **not** need `mail_capability_tokens_required` set: the operator branch in `mail_session` is reached on the strength of the operator header alone, in either mode, which is itself worth knowing.
+
+That makes **three** Step 9 cases, not two: two in `test_capability_tokens.py` and one in `test_dispatch_status_tool.py`, taking that file to **40** and this task's total to **10** new cases.
+
 **`_missing_token_logged` is module-level state and `caplog` only sees the first log for a given member.** If a preceding test in the same process already logged for this member id, the assertion passes for the wrong reason. It cannot fire falsely *negative*, which is the direction that matters here, but note it: a positive control for the log line belongs with Task 5's grace-mode tests, where the set is empty.
 
 - [ ] **Step 10: Run both backend files, then the whole mail suite**
@@ -5546,7 +6778,7 @@ pytest tests/agent_mail/test_operator_mail_writes.py tests/agent_mail/test_capab
 pytest tests/agent_mail/ tests/agent_teams/ -q -p no:warnings
 ```
 
-Expected: the two files green, and the two suites at their Task 9 counts plus this task's additions. Any *other* failure is a real regression from the widened return type — most likely a call site passing the derived value into `int()` that Step 6 missed. Grep for `derive_member_id` and check each caller handles `None`.
+Expected: `7 passed` in `test_operator_mail_writes.py` and `35 passed` in `test_capability_tokens.py` (33 after Task 5 + this task's Step 9 pair), then **`557 passed`** for the two suites (547 after Task 9 + this task's 10 — Step 1's 7 plus Step 9's 3). `test_dispatch_status_tool.py` goes to **40**. Any *other* failure is a real regression from the widened return type — most likely a call site passing the derived value into `int()` that Step 6 missed. Grep for `derive_member_id` and check each caller handles `None`.
 
 - [ ] **Step 11: Commit the backend half**
 
