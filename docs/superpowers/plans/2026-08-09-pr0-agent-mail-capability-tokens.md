@@ -77,7 +77,7 @@ If a step's preconditions do not hold — a function has a different shape, a te
 
 ## File Structure
 
-Five new files — two in `app/`, three test files; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
+Nine new files — two in `app/`, four test files, three in `frontend/src/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
 
 | File | Create / Modify | Responsibility |
 | --- | --- | --- |
@@ -86,14 +86,16 @@ Five new files — two in `app/`, three test files; everything else is an edit t
 | `backend/app/models/database.py` | Modify | Three new `MailAgentSession` columns; new `AgentPaneBinding` table |
 | `backend/app/models/schemas.py` | Modify | `capability_token` on `MailAgentRegisterResponse`; force-release request rewrite; drop the `lease_token` projection |
 | `backend/app/utils/peer_process.py` | **Create** | Kernel-derived resolver: peer socket → pid → tmux pane pid + proc start |
-| `backend/app/api/v1/deps.py` | **Create** | `mail_session`, `require_session_slot`, `require_operator` |
+| `backend/app/api/v1/deps.py` | **Create** | `mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id`, `require_operator`, `OperatorPrincipal` |
 | `backend/app/services/agent_mail_service.py` | Modify | Mint the capability token inside `register_session`, before its existing commit |
 | `backend/app/api/v1/agent_mail.py` | Modify | Binding policy at the `register_agent` route; token dependency on the five write routes |
 | `backend/app/api/v1/agent_teams.py` | Modify | `/dispatch-status` authorization resolver; `require_operator` on operator routes; force-release migration |
 | `backend/app/services/github_workspace_service.py` | Modify | `release_by_token` predicate + the seven-column clear at one `now` |
 | `backend/mcp_shim/agent_mail_server.py` | Modify | Capture the minted token; send `X-Deck-Session-Token` on every bridge call |
-| `frontend/src/lib/api.ts` | Modify | Per-tab actor token header injection into `apiClient` |
-| `frontend/src/features/agent-mail/api.ts` | Modify | The two write calls that exist gain actor auth |
+| `frontend/src/lib/operatorToken.ts` | **Create** | Per-tab operator-token store, cached; `sessionStorage` so the secret dies with the tab |
+| `frontend/src/lib/api.ts` | Modify | `X-Deck-Operator-Token` injection into `apiClient` (`:99-131`) |
+| `frontend/src/features/agent-mail/api.ts` | Modify | The three write helpers gain an actionable `401` message |
+| `frontend/src/features/config/OperatorTokenCard.tsx` | **Create** | Where the operator pastes the token; never renders it back |
 | `README.md` (`:110-114`) | Modify | Linux prerequisite bullet under `**Prerequisites**:` |
 | `backend/tests/agent_mail/test_capability_tokens.py` | **Create** | Spec §3.7 tests 1–22 |
 | `backend/tests/agent_mail/test_peer_process.py` | **Create** | Resolver unit tests (parsers, both address families) |
@@ -102,6 +104,7 @@ Five new files — two in `app/`, three test files; everything else is an edit t
 | `backend/tests/agent_mail/test_mcp_shim.py` | Modify | The exact five-key payload equality (`:13-47`) |
 | `backend/tests/agent_mail/test_dispatch_status_tool.py` | Modify | 18 call sites; 12 carry `reporting_slot_id`, 5 do not |
 | `backend/tests/agent_teams/test_operator_auth.py` | **Create** | Spec §3.7 test 20 — the eight-case matrix, for each of the two operator routes |
+| `backend/tests/agent_mail/test_operator_mail_writes.py` | **Create** | Task 10 — the operator credential on the UI's three writes; §3.6 has no test today, which is why its two false claims survived |
 | `backend/tests/agent_teams/test_github_workspace_api.py` | Modify | 8 call sites gain the operator header (Task 8); then the force-release migration — six tests, incl. inverting the disclosure assertion (Task 9) |
 
 ## Task Index
@@ -117,7 +120,7 @@ Five new files — two in `app/`, three test files; everything else is an edit t
 | 7 | `/dispatch-status` authorization resolver | §3.5a |
 | 8 | `require_operator` and the operator routes | §3.6a |
 | 9 | Force-release API migration | §4.6a req. 1–4 |
-| 10 | Frontend per-tab actor token + member-sender write routes | §3.6 |
+| 10 | The operator credential reaches the UI (no new route; §3.6's actor mechanism refuted) | §3.6, §3.6a |
 | 11 | README Linux prerequisite; rollout note | §3.8 |
 
 ---
@@ -4812,6 +4815,998 @@ force is Literal[True]: omitted or false is a validation error rather than a
 branch the route can forget to read.
 
 Spec: 2026-08-05-distinct-approver-identity-design.md section 4.6a"
+```
+
+---
+
+### Task 10: The operator credential reaches the UI, because the actor token cannot
+
+**Files:**
+- Modify: `backend/app/api/v1/deps.py` (`mail_session`, `require_mail_session`, `derive_member_id` — all three from Task 5)
+- Modify: `backend/app/api/v1/agent_mail.py` (`mark_read`, `ack_message`, `agent_inbox` — a `None`-member guard each, per Step 6)
+- Create: `frontend/src/lib/operatorToken.ts`
+- Modify: `frontend/src/lib/api.ts` (`apiClient`, `:99-131`)
+- Modify: `frontend/src/features/agent-mail/api.ts` (`sendAgentMailMessage` `:28-33`, `ackAgentMailMessage` `:73-78`, `markAgentMailRead` `:57-62`)
+- Create: `frontend/src/features/config/OperatorTokenCard.tsx`
+- Modify: `frontend/src/features/config/ConfigViewerPage.tsx` (mount the card beside the three Codex cards)
+- Test: `backend/tests/agent_mail/test_operator_mail_writes.py` (**create**)
+- Modify: `backend/tests/agent_mail/test_capability_tokens.py` (Task 5's file — two added cases)
+
+**Interfaces:**
+- Consumes: `mail_session` and `derive_member_id` from Task 5; `settings.operator_token` from Task 1; the `X-Deck-Operator-Token` header name and the three refusal codes from Task 8's `require_operator`.
+- Produces:
+  - `OperatorPrincipal` — a module-level sentinel class in `deps.py`, exported so Task 5's callers can type the union. `mail_session` now returns `MailAgentSession | OperatorPrincipal | None`.
+  - `operatorToken(): string | null` and `setOperatorToken(value: string | null): void` in `frontend/src/lib/operatorToken.ts`.
+  - No new routes and no new response fields. PR1's `POST /agent-mail/decisions` (§4.3a) consumes the same `mail_session` union.
+
+**The spec is internally contradictory here, and the measured half wins.** §3.6 says the UI should authenticate as an **external actor** and that "the ack path uses the actor ack endpoint that already exists, so no new route is needed." §3.6a, written later and against measurements, says "**the external-actor token cannot be the operator credential**" because `POST /external/agent-mail/actors` gates only on `_is_loopback_request` and an agent pane is a loopback caller. Both cannot hold. §3.6a is the section with measurements behind it, and four more measurements below show §3.6's mechanism does not even reach the UI's writes. So this task implements §3.6's *requirement* — the UI writes without a session token — using §3.6a's *credential*, the operator token Task 8 already ships.
+
+**Why the external routes cannot serve this UI, in three refutations.** Each was driven through the real ASGI app; none is an inference from reading.
+
+*First, the ack route refuses.* `POST /external/agent-mail/requests/{id}/ack` reaches `acknowledge_external_request`, which opens with `if root.sender_actor_id != actor.id: raise ValueError("External actors can only acknowledge requests they created")` (`external_agent_mail_service.py:339-340`). The UI acks messages **agents** created, whose `sender_actor_id` is NULL. Measured: `400`. Spec §3.6's closing bullet is refuted by its own cited line number.
+
+*Second, the reply route refuses for the same reason.* `reply_in_thread` (`:255-256`) carries the identical check with "reply in threads they created." The UI replies in agent-created threads. Measured: `400`.
+
+*Third — and this is the one that decides the design — the UI's reply is not expressible as an actor write at all.* `ThreadDialog.tsx:152-156` chooses `kind` by comparing the operator-selected sender against the thread root: `root.recipient_member_id === senderId ? 'answer' : 'message'`. And `send_message` requires exactly that agreement — `if root.recipient_member_id != request.sender_member_id: raise ValueError("only the context request recipient can answer it")` (`agent_mail_service.py:859-860`). Measured, an `answer` posted with no `sender_member_id` returns **`400 "only the context request recipient can answer it"`**, and the root stays `pending`. An actor write lands in `sender_actor_id` and leaves `sender_member_id` NULL **by construction**, so no actor token — per-tab or otherwise — can post the UI's answer. The reply path needs a **member sender**, which is the one thing the external routes are built never to accept.
+
+**And a member-sender route gated on an actor token would be a hole, not a fix.** This is the trap to see before writing any code. Measured end to end:
+
+```
+POST /api/v1/external/agent-mail/actors (NO credential) -> 200
+  token minted: len 43
+  GET /actors/me with it -> 200, kind='supervisor'
+```
+
+Any pane mints a "supervisor" actor in one unauthenticated call. Today that token is harmless *because* the external schemas have no `sender_member_id` — measured, passing one is silently ignored and the row still stores `(sender_member_id=None, sender_actor_id=1)`. A new route that accepted a member sender on an actor token would convert a bounded credential into an unbounded one, and PR1 is precisely where that matters: §4.3 rule 4 accepts an approval only from an `answer` whose `sender_member_id == leader_member.id`. Gating a member-sender write on a token every agent can mint hands every agent the leader's signature. **The operator token is the only credential in this system that an agent cannot obtain**, which is the entire reason §3.6a introduced it.
+
+**So the change is one union in one dependency, not a route.** `mail_session` learns a second credential; `derive_member_id` learns a third caller shape. The five write routes Task 5 already touched need no edit — they call these two functions and nothing else.
+
+#### The five measurements that decide this task's code
+
+**1. One dependency serves all three UI writes, under enforcement, with no new route.** A faithful stand-in for Task 5's `mail_session` — extended exactly as Step 1 extends it — driven against the three writes `ThreadDialog` and `AgentMailPage` actually perform:
+
+```
+=== ENFORCED, WITH the operator header
+  compose  (no sender at all)   -> 200 sender=(None, None)
+  reply kind=answer as bravo    -> 200 sender_member=2
+     root request_status -> answered
+  ack the answer as alpha       -> 200
+     root status after ack -> acknowledged
+     answer receipt read_at -> [(1, 1)]
+  ack the handoff as bravo      -> 200
+     handoff status / receipt -> [('acknowledged', 1, 1)]
+
+=== ENFORCED, WITHOUT the header
+  answer as bravo, no header              -> 401 session_token_required
+  ack handoff bravo, no header            -> 401 session_token_required
+  answer as bravo, wrong operator token   -> 401 operator_token_invalid
+  ack handoff bravo, wrong operator token -> 401 operator_token_invalid
+```
+
+Both ack shapes the UI can reach are covered, and they are genuinely different rows: `answerAckMember` acks the **answer** (`ThreadDialog.tsx:132`), `handoffAckMember` acks the **root** (`:126-128`). Both flip `request_status` to `acknowledged` and both write `read_at` **and** `acked_at` on the acking member's receipt — the field `_brief_delivered` reads. That is what Task 5's own note says an unauthenticated ack must not be able to do, and it is why the operator path has to be authenticated rather than merely left open.
+
+**2. Compose stores `(NULL, NULL)` today, so the operator path is strictly more attribution — but only if the UI keeps sending no sender.** Measured against the member route with exactly the body `ComposeDialog.tsx:150-157` builds, which contains no `sender_member_id` key at all:
+
+```
+message          -> 200  row(sender_member,sender_actor)=(None, None)
+broadcast        -> 200  row(sender_member,sender_actor)=(None, None)
+context_request  -> 200  row(sender_member,sender_actor)=(None, None)
+handoff          -> 200  row(sender_member,sender_actor)=(None, None)
+```
+
+So today every operator-composed message is anonymous. Keep it that way: `ComposeDialog` must **not** gain a sender field in this task. §3.6's consequence that "an operator-authored message has `sender_member_id = NULL`, so it can never be mistaken for the leader's approval" already holds for compose, and PR1's §4.3 depends on it. The reply path is different and deliberately so — there the operator *chooses* a member, and that is a pre-existing capability this task authenticates rather than creates.
+
+**3. `settings.operator_token` must be read at call time here too, for Task 8's measured reason.** `settings` is constructed at import (`config.py:57`), so a module-level capture in `deps.py` would freeze the empty default and make every operator mail write a `503`. The same `monkeypatch.setattr(settings, "operator_token", ...)` Task 8's fixtures use is what makes this task's tests possible.
+
+**4. The empty-setting hole needs two mutations, not one, so one test cannot catch it.** `hmac.compare_digest("", "")` is `True`, and Task 8 closes that trap for `require_operator`. Here the trap has a different shape, and measuring it changed both this task's comment and its test. Driven through a real route in `mail_session`'s exact form, with `operator_token = ""` and enforcement on:
+
+| | no header | empty header | wrong header |
+|---|---|---|---|
+| correct: truthy guard + `503` check | `401 session_token_required` | `401 session_token_required` | `503 operator_token_unconfigured` |
+| **A:** the `503` check deleted | `401 session_token_required` | `401 session_token_required` | `401 operator_token_invalid` |
+| **B:** guard widened to `is not None` | `401 session_token_required` | `503 operator_token_unconfigured` | `503 operator_token_unconfigured` |
+| **A + B** | `401 session_token_required` | **`200` — authorized** | `401 operator_token_invalid` |
+
+So it is the **truthy guard**, not the `503` check, that keeps an empty header out of the comparison: `if x_deck_operator_token:` is falsy on `""`, so an empty header falls through to the enforcement refusal. Deleting the `503` check *alone opens nothing* — it only degrades the diagnosis from `operator_token_unconfigured` to `operator_token_invalid`. The hole needs both mutations together.
+
+This is the reason the first draft of this task's test was worthless. An assertion of the form `status_code in (401, 503)` passes against A, against B, and against correct code — it tests that *something* refused, and all three refuse. **The codes are what differ, so the codes are what the test must name.** Two cases pin the two mutations: a *wrong* header against an empty setting must be `503` (kills A), and an *empty* header against an empty setting must be `401 session_token_required` (kills B, and A+B with it).
+
+**5. The comparison is over bytes.** Re-measured here rather than inherited: Task 8 established that `hmac.compare_digest` raises `TypeError` on `str` values holding non-ASCII characters, and that driven through a real route this is **HTTP 500**, not a refusal. A header can carry a `latin-1` byte. `.encode("utf-8")` on both sides is not defensive styling; it is the difference between `401` and an unhandled exception.
+
+#### What is deliberately *not* touched
+
+- **No new backend route.** §3.6 predicted "no new route is needed" for the wrong reason and reached the right conclusion. The five routes Task 5 already guards are the five the UI uses.
+- **`ComposeDialog.tsx` gains nothing.** See measurement 2.
+- **`fetchAgentMailThread` and the other read paths stay open.** Task 5 gates writes, not reads; `mail_session` is not applied to `GET /messages/{id}/thread`, so the UI's thread view keeps working with no credential. Gating reads is not in this spec.
+- **`markAgentMailRead` and `fetchAgentMailInbox` have zero callers** — grepped across `src/`. They still get the header, because leaving one write helper without it is how a future caller acquires a silent `401`.
+- **Per-tab actor keys, `sessionStorage`, `crypto.randomUUID`, the `401` re-provision, the actor-row accumulation note.** All of §3.6's provisioning machinery is dropped: it exists to obtain a credential this task does not use. Recorded here so a reviewer comparing plan to spec sees a decision rather than an omission.
+- **The `deck-ui-*` actor pruning note (§3.6's "one consequence to accept")** becomes moot for the same reason. No `deck-ui-*` actors are ever created.
+
+- [ ] **Step 1: Write the failing test — the operator credential on the three UI writes**
+
+Create `backend/tests/agent_mail/test_operator_mail_writes.py`. This file exists because §3.6's write paths have **no** test today, which is exactly why its two false claims survived twelve revisions of review.
+
+```python
+"""Task 10 -- the operator credential on the UI's mail writes.
+
+Spec 3.6 requires the UI to write without a session token; spec 3.6a requires
+the credential to be one an agent cannot mint. This file pins both halves: the
+operator header works, and everything an agent can present does not.
+"""
+import httpx
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.config import settings
+from app.database import Base, get_db
+from app.main import app
+from app.models.database import MailTeamMember
+
+OPERATOR_TOKEN = "0f3c9a71b25e4d8fa6c1e07b9d24aa5b1c3d5e7f9a1b3c5d7e9f1a3b5c7d9e1f"
+OP = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+
+
+@pytest_asyncio.fixture
+async def client_and_db(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as db:
+        async def override():
+            yield db
+
+        app.dependency_overrides[get_db] = override
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, db
+        app.dependency_overrides.clear()
+    await engine.dispose()
+
+
+@pytest.fixture
+def enforced(monkeypatch):
+    """Both settings on: this is the state PR0's rollout ends in."""
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
+    return OPERATOR_TOKEN
+
+
+async def _member(db, name):
+    """No member-creation route exists; the ORM is the only way in."""
+    member = MailTeamMember(
+        identity_key=f"repo:{name}",
+        repo_id=name,
+        repo_path=f"/tmp/{name}",
+        repo_name=name,
+        display_name=name,
+    )
+    db.add(member)
+    await db.commit()
+    await db.refresh(member)
+    return member
+
+
+@pytest.mark.asyncio
+async def test_operator_composes_anonymously(client_and_db, enforced):
+    """Compose is exactly ComposeDialog's body: no sender key at all.
+
+    The stored row must keep sender_member_id NULL. PR1's section 4.3 relies on
+    an operator-composed message being unable to look like a leader approval,
+    and that property comes from this absence, not from a check.
+    """
+    client, db = client_and_db
+    recipient = await _member(db, "bravo")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=OP,
+        json={
+            "kind": "message",
+            "recipient_member_id": recipient.id,
+            "subject": "from the UI",
+            "body_markdown": "hello",
+            "payload": None,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    row = (
+        await db.execute(
+            text(
+                "SELECT sender_member_id, sender_actor_id FROM mail_messages "
+                "WHERE id = :i"
+            ),
+            {"i": response.json()["id"]},
+        )
+    ).one()
+    assert row == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_operator_answers_as_the_designated_recipient(client_and_db, enforced):
+    """The reply path, which no actor token can express.
+
+    kind='answer' is accepted only when sender_member_id equals the root's
+    recipient_member_id, so the operator must be able to name a member. This is
+    the measurement that ruled out the external routes.
+    """
+    client, db = client_and_db
+    asker = await _member(db, "alpha")
+    answerer = await _member(db, "bravo")
+
+    root = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=OP,
+        json={
+            "kind": "context_request",
+            "sender_member_id": asker.id,
+            "recipient_member_id": answerer.id,
+            "subject": "need input",
+            "body_markdown": "which branch?",
+        },
+    )
+    assert root.status_code == 200, root.text
+    root_id = root.json()["id"]
+
+    answer = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=OP,
+        json={
+            "kind": "answer",
+            "sender_member_id": answerer.id,
+            "thread_root_id": root_id,
+            "body_markdown": "the feature branch",
+        },
+    )
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["sender_member_id"] == answerer.id
+    assert (
+        await db.execute(
+            text("SELECT request_status FROM mail_messages WHERE id = :i"),
+            {"i": root_id},
+        )
+    ).one() == ("answered",)
+
+
+@pytest.mark.asyncio
+async def test_operator_acks_and_the_receipt_records_it(client_and_db, enforced):
+    """The ack path, and the field that makes it security-relevant.
+
+    ack_message writes read_at and acked_at on the acking member's receipt.
+    _brief_delivered reads read_at to decide the brief_unread escalation, so an
+    unauthenticated ack silences a dispatch escalation -- which is why this
+    route needs a credential rather than an open door.
+    """
+    client, db = client_and_db
+    sender = await _member(db, "alpha")
+    recipient = await _member(db, "bravo")
+
+    handoff = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=OP,
+        json={
+            "kind": "handoff",
+            "sender_member_id": sender.id,
+            "recipient_member_id": recipient.id,
+            "subject": "take it",
+            "body_markdown": "yours now",
+        },
+    )
+    assert handoff.status_code == 200, handoff.text
+    handoff_id = handoff.json()["id"]
+
+    ack = await client.post(
+        f"/api/v1/agent-mail/messages/{handoff_id}/ack",
+        headers=OP,
+        json={"member_id": recipient.id},
+    )
+
+    assert ack.status_code == 200, ack.text
+    assert (
+        await db.execute(
+            text(
+                "SELECT m.request_status, r.read_at IS NOT NULL, r.acked_at IS NOT NULL "
+                "FROM mail_messages m JOIN mail_receipts r ON r.message_id = m.id "
+                "WHERE m.id = :i AND r.member_id = :m"
+            ),
+            {"i": handoff_id, "m": recipient.id},
+        )
+    ).one() == ("acknowledged", 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_operator_token_is_refused_not_downgraded(client_and_db, enforced):
+    """A bad operator token must never fall through to the tokenless path.
+
+    This is the sibling of Task 5's 'invalid is not absent' rule. If a wrong
+    operator token were treated as no credential, enforcement would be advisory:
+    send garbage, get the legacy path.
+    """
+    client, db = client_and_db
+    recipient = await _member(db, "bravo")
+    body = {
+        "kind": "message",
+        "recipient_member_id": recipient.id,
+        "body_markdown": "x",
+    }
+
+    for header, expected in [
+        ({"X-Deck-Operator-Token": "i-am-guessing"}, "operator_token_invalid"),
+        ({"X-Deck-Operator-Token": OPERATOR_TOKEN[:-1]}, "operator_token_invalid"),
+        ({"X-Deck-Operator-Token": OPERATOR_TOKEN + "X"}, "operator_token_invalid"),
+        ({"X-Deck-Operator-Token": OPERATOR_TOKEN.upper()}, "operator_token_invalid"),
+        ({}, "session_token_required"),
+    ]:
+        response = await client.post(
+            "/api/v1/agent-mail/messages", headers=header, json=body
+        )
+        label = f"header={header!r}"
+        assert response.status_code == 401, f"{label}: {response.text}"
+        assert response.json()["detail"] == expected, label
+
+
+@pytest.mark.asyncio
+async def test_an_unconfigured_operator_token_refuses_with_the_right_code(
+    client_and_db, monkeypatch
+):
+    """The compare_digest("", "") trap, pinned by CODE and not merely by refusal.
+
+    Measured, this hole needs TWO mutations: deleting the 503 check and widening
+    the presence guard from truthy to `is not None`. Either one alone still
+    refuses, so `assert status in (401, 503)` passes against both and proves
+    nothing. The exact codes are the only thing that differs between the correct
+    implementation and each mutant, so the exact codes are what this asserts.
+    """
+    client, db = client_and_db
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", "")
+    recipient = await _member(db, "bravo")
+
+    for header, status, detail, kills in [
+        (
+            {"X-Deck-Operator-Token": "anything"},
+            503,
+            "operator_token_unconfigured",
+            "a deleted 503 check, which answers operator_token_invalid instead "
+            "and tells an operator who forgot the setting that their token is wrong",
+        ),
+        (
+            {"X-Deck-Operator-Token": ""},
+            401,
+            "session_token_required",
+            "an `is not None` guard, which lets an empty header reach the "
+            "comparison -- and with the 503 check also gone, compare_digest("
+            '"", "") authorizes it',
+        ),
+    ]:
+        response = await client.post(
+            "/api/v1/agent-mail/messages",
+            headers=header,
+            json={
+                "kind": "message",
+                "recipient_member_id": recipient.id,
+                "body_markdown": "x",
+            },
+        )
+        assert response.status_code == status, f"kills {kills}: {response.text}"
+        assert response.json()["detail"] == detail, f"kills {kills}"
+
+    assert (
+        await db.execute(text("SELECT COUNT(*) FROM mail_messages"))
+    ).one() == (0,), "an unconfigured install wrote a message"
+
+
+@pytest.mark.asyncio
+async def test_a_non_ascii_operator_header_is_a_refusal_not_a_500(
+    client_and_db, enforced
+):
+    """compare_digest raises TypeError on non-ASCII str; a header can carry one.
+
+    Sent as raw bytes because httpx will not encode a non-latin-1 str header.
+    """
+    client, db = client_and_db
+    recipient = await _member(db, "bravo")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Operator-Token": "café".encode("latin-1")},
+        json={
+            "kind": "message",
+            "recipient_member_id": recipient.id,
+            "body_markdown": "x",
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "operator_token_invalid"
+
+
+@pytest.mark.asyncio
+async def test_an_actor_token_does_not_open_a_member_sender_write(
+    client_and_db, enforced
+):
+    """The credential-provenance rule, as a test.
+
+    An agent pane mints an actor with no credential at all -- measured, 200 and
+    a 43-character token. If that token opened a member-sender write, PR1's
+    approval gate (section 4.3 rule 4 matches sender_member_id == leader) would
+    be forgeable by every agent on the host. The actor token authenticates a
+    caller; it does not authorize speaking as a member.
+    """
+    client, db = client_and_db
+    leader = await _member(db, "leader")
+
+    minted = await client.post(
+        "/api/v1/external/agent-mail/actors",
+        json={
+            "actor_key": "totally-not-an-agent",
+            "display_name": "Deck UI",
+            "kind": "supervisor",
+        },
+    )
+    assert minted.status_code == 200, minted.text
+    actor_token = minted.json()["token"]
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"Authorization": f"Bearer {actor_token}"},
+        json={
+            "kind": "message",
+            "sender_member_id": leader.id,
+            "recipient_member_id": leader.id,
+            "body_markdown": "signed, the leader",
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "session_token_required"
+    assert (
+        await db.execute(text("SELECT COUNT(*) FROM mail_messages"))
+    ).one() == (0,)
+```
+
+- [ ] **Step 2: Run it and read the failures**
+
+```bash
+cd backend && source venv/bin/activate
+pytest tests/agent_mail/test_operator_mail_writes.py -v -p no:warnings
+```
+
+Expected: **7 failed**. The four positive tests fail with `401 session_token_required` — under enforcement `mail_session` refuses every credential it does not yet recognise, and the operator token is one of those. `test_a_wrong_operator_token_is_refused_not_downgraded` fails only on its four operator-header rows, which currently return `session_token_required` rather than `operator_token_invalid`; its `{}` row already passes. The empty-setting and non-ASCII tests fail the same way. `test_an_actor_token_does_not_open_a_member_sender_write` **passes already** — an actor token is not an operator token and never was — and it stays in the file as a regression guard, because the mutation in Step 8 is what makes it earn its place.
+
+Read the failure of `test_operator_answers_as_the_designated_recipient` carefully. Without the extension there is **no** way to post that row under enforcement: not the external routes (measured `400`), not an actor token, not a session token the UI does not have. That absence is the requirement.
+
+- [ ] **Step 3: Add the operator principal to `deps.py`**
+
+At the top of `deps.py`, beside `_missing_token_logged`:
+
+```python
+class OperatorPrincipal:
+    """The human operator, authenticated by settings.operator_token.
+
+    A sentinel rather than a row: the operator has no MailAgentSession, no
+    member, and no slot. It exists so mail_session can return "authenticated,
+    but not as an agent" without overloading None -- None means grace mode, and
+    conflating the two would make an unconfigured install indistinguishable from
+    an authenticated operator.
+
+    Deliberately NOT a MailAgentSession subclass. require_session_slot must
+    refuse it, and it does so by the attribute access failing loudly rather
+    than by a check someone can forget to write: an operator cannot report
+    dispatch status on a slot's behalf.
+    """
+
+
+OPERATOR = OperatorPrincipal()
+```
+
+`OPERATOR` is a module-level singleton because nothing distinguishes two operator principals, and an identity check reads better at the call sites than an `isinstance`.
+
+- [ ] **Step 4: Teach `mail_session` the second credential**
+
+Replace `mail_session` (added in Task 5) with the version below. Only the middle block is new; the session-token half is unchanged.
+
+```python
+async def mail_session(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    x_deck_operator_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Union[MailAgentSession, OperatorPrincipal, None]:
+    """Resolve the caller: an agent session, the operator, or grace mode.
+
+    The two credentials are checked in order and never blended. A session token
+    is tried first because it is the common case and the more specific claim; an
+    operator token is only consulted when no session token was presented, so a
+    pane that holds both cannot escalate by adding a header.
+
+    Returns None only in grace mode with NO credential at all. A credential that
+    is present but does not match is always a refusal: treating an invalid token
+    as an absent one would make the enforcement flag meaningless, because any
+    caller could send garbage and get the legacy unauthenticated path.
+    """
+    if x_deck_session_token:
+        hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
+        result = await db.execute(
+            select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
+        )
+        for session in result.scalars().all():
+            if hmac.compare_digest(session.capability_token_hash, hashed):
+                return session
+        raise HTTPException(status_code=401, detail="session_token_invalid")
+
+    if x_deck_operator_token:
+        expected = settings.operator_token
+        # The empty check precedes the comparison, and that order is load-bearing:
+        # compare_digest("", "") is True, so leaving the empty setting to the
+        # comparison would let any caller sending an empty header write mail as
+        # any member on an unconfigured install. Same trap as require_operator,
+        # separate comparison, so it must be closed separately.
+        if not expected:
+            raise HTTPException(status_code=503, detail="operator_token_unconfigured")
+        # Bytes, because compare_digest raises TypeError on a non-ASCII str and
+        # an unhandled TypeError here is a 500 rather than a refusal.
+        if not hmac.compare_digest(
+            x_deck_operator_token.encode("utf-8"), expected.encode("utf-8")
+        ):
+            raise HTTPException(status_code=401, detail="operator_token_invalid")
+        return OPERATOR
+
+    if settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    return None
+```
+
+Add `Union` to the `typing` import. Note what moved: Task 5's version returned early on `if not x_deck_session_token`, which cannot accommodate a second credential; this version inverts that into `if x_deck_session_token:` and lets the enforcement check fall to the end, where it now guards "no credential of either kind."
+
+**Do not reuse `require_operator` as a sub-dependency here.** It raises `401 operator_token_required` when the header is absent, which is the wrong refusal for a route that also accepts a session token — a pane calling with no headers at all would be told to present an operator token. The comparison is four lines; the refusal vocabulary is what differs.
+
+- [ ] **Step 5: Teach `derive_member_id` the operator shape**
+
+In `derive_member_id`, insert one branch **before** the `session is None` branch:
+
+```python
+    if session is OPERATOR:
+        # The operator names the member it acts as, and that is the point rather
+        # than a weakness: ThreadDialog's answer path is only valid when
+        # sender_member_id equals the thread root's recipient_member_id, so a
+        # server-derived value is impossible here -- there is no session to
+        # derive from. What makes this safe is the credential, not the claim:
+        # the operator token is the one secret no agent is given.
+        #
+        # A missing claim is NOT an error. Compose sends no sender at all and
+        # must keep storing NULL, which is what stops an operator-composed
+        # message from ever resembling a leader approval (PR1 section 4.3).
+        return claimed
+```
+
+Then widen the signature and return type:
+
+```python
+def derive_member_id(
+    session: Union[MailAgentSession, OperatorPrincipal, None],
+    claimed: Optional[int],
+    *,
+    detail: str = "sender_not_token_holder",
+) -> Optional[int]:
+```
+
+The return type changes from `int` to `Optional[int]`, because the operator-compose path returns `None` deliberately. That has one consequence at the call sites Task 5 wrote, and Step 6 handles it.
+
+`require_session_slot` needs no change and must not get one. Its `session.team_slot_id` raises `AttributeError` on an `OperatorPrincipal` — a `500`, which is ugly but unreachable: the only routes taking `require_session_slot` are `/dispatch-status` (Task 7) and they use `require_mail_session`, which refuses a non-session principal in Step 6.
+
+- [ ] **Step 6: Fix the two call sites the widened return type breaks**
+
+`require_mail_session` must refuse the operator, or `/dispatch-status` would accept an operator token as an agent's slot claim:
+
+```python
+async def require_mail_session(
+    session: Union[MailAgentSession, OperatorPrincipal, None] = Depends(mail_session),
+) -> MailAgentSession:
+    """Like mail_session, but always a real agent session.
+
+    The operator is refused here rather than at each caller: a route that needs
+    a SLOT needs an agent, and the operator has none. session_token_required is
+    the right refusal -- the caller did authenticate, just not as the kind of
+    principal this route serves.
+    """
+    if not isinstance(session, MailAgentSession):
+        raise HTTPException(status_code=401, detail="session_token_required")
+    return session
+```
+
+And in `agent_mail.py`, the two routes that pass the derived value into `int(...)` — `mark_read` and `ack_message` — need the `None` case, which is now reachable for an operator who omits `member_id`:
+
+```python
+    member_id = derive_member_id(
+        session, body.get("member_id"), detail="member_not_token_holder"
+    )
+    if member_id is None:
+        # Reachable only for an operator who named no member. Compose may store
+        # a NULL sender; a receipt cannot have a NULL member, so this is a 400
+        # rather than a silent no-op -- ack_message returns quietly when no
+        # receipt matches, and that quiet is what would hide the mistake.
+        raise HTTPException(status_code=400, detail="member_id_required")
+    await agent_mail_service.mark_read(db, message_id, int(member_id))
+```
+
+Apply the same three lines to `ack_message`. `send_message` needs no such guard: it passes the value into `model_copy`, and a `None` sender is exactly what compose stores.
+
+`agent_inbox` also calls `int(resolved)`. Add the same guard there, with the same reasoning — an operator hitting the agent inbox with no `member_id` has named no inbox to read.
+
+- [ ] **Step 7: Run the file — expect green**
+
+```bash
+cd backend && source venv/bin/activate
+pytest tests/agent_mail/test_operator_mail_writes.py -v -p no:warnings
+```
+
+Expected: **7 passed**.
+
+- [ ] **Step 8: Mutate the dependency six ways**
+
+Each mutation must turn at least one test red. If any is silent, the test that should have caught it is wrong — fix the test, not the mutation.
+
+| Mutation | Test that must fail | Why it is the trap |
+| --- | --- | --- |
+| Check `x_deck_operator_token` **before** `x_deck_session_token` | none in this file — **add the case** | A pane holding a real session token plus a guessed operator token would be resolved as the operator. Add a case to `test_capability_tokens.py`: a valid session token *and* a wrong operator header must still resolve as the session, not `401` |
+| Delete the `if not expected: raise 503` line | `test_an_unconfigured_operator_token_refuses_with_the_right_code`, first case | Measured, this alone opens **nothing** — an empty header is falsy and never reaches the comparison. What it destroys is the *diagnosis*: an operator who forgot the setting is told their token is invalid. Only a code-exact assertion catches it |
+| Widen the guard to `if x_deck_operator_token is not None:` | the same test, second case | Now an empty header does reach the comparison. Together with the row above, `compare_digest("", "")` returns `True` and an unconfigured install **authorizes every caller** — measured `200` |
+| Compare `str` instead of bytes | `test_a_non_ascii_operator_header_is_a_refusal_not_a_500` | `TypeError` → `500`. A suite that only sends ASCII garbage sees nothing wrong |
+| Return `None` instead of `OPERATOR` on a valid operator token | the three positive tests, but **not** with a useful message | Under enforcement `None` means grace mode, so the write would *succeed* while logging `capability_token_missing`. Green tests, silently wrong audit trail — check the log assertion in Step 9 |
+| Make `require_mail_session` accept `OperatorPrincipal` | Task 7's dispatch-status suite | An operator token would become a slot claim. Run `pytest tests/agent_mail/ tests/agent_teams/` to see it |
+| In `derive_member_id`, raise on `claimed is None` for the operator instead of returning it | `test_operator_composes_anonymously` | Compose would `400`. This is the mutation that looks like tightening and is actually a regression |
+
+- [ ] **Step 9: Add the two cases to `test_capability_tokens.py`**
+
+The first is the credential-precedence case Step 8's first row demands. The second pins the log line, which Step 8's fourth row shows is the only observable difference between a correct operator write and a grace-mode one.
+
+```python
+@pytest.mark.asyncio
+async def test_a_session_token_wins_over_an_operator_header(
+    client, db, tmp_path, monkeypatch
+):
+    """A pane that adds a guessed operator header must not become the operator.
+
+    Precedence is the whole of this test: the session token is checked first, so
+    the bogus operator header is never consulted. Reverse the order in deps.py
+    and this returns 401 operator_token_invalid instead of 200.
+    """
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", "the-real-operator-token")
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:precedence"),
+    )
+    token = register.json()["capability_token"]
+    sender_id = register.json()["member"]["id"]
+    recipient = await _member(db, "other-repo", "other")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={
+            "X-Deck-Session-Token": token,
+            "X-Deck-Operator-Token": "i-guessed-this",
+        },
+        json={
+            "kind": "message",
+            "recipient_member_id": recipient.id,
+            "body_markdown": "hi",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["sender_member_id"] == sender_id
+
+
+@pytest.mark.asyncio
+async def test_an_operator_write_does_not_log_a_missing_token(
+    client, db, tmp_path, monkeypatch, caplog
+):
+    """An authenticated operator is not a tokenless caller.
+
+    derive_member_id logs capability_token_missing for the grace-mode path. If
+    mail_session returned None for a valid operator token instead of OPERATOR,
+    every UI write would still succeed and would be recorded as unauthenticated
+    -- green tests, false audit trail. This assertion is the difference.
+    """
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", "the-real-operator-token")
+    recipient = await _member(db, "other-repo", "other")
+
+    with caplog.at_level(logging.WARNING, logger="app.api.v1.deps"):
+        response = await client.post(
+            "/api/v1/agent-mail/messages",
+            headers={"X-Deck-Operator-Token": "the-real-operator-token"},
+            json={
+                "kind": "message",
+                "sender_member_id": recipient.id,
+                "recipient_member_id": recipient.id,
+                "body_markdown": "hi",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert "capability_token_missing" not in caplog.text
+```
+
+Add `import logging` to the file if Task 5 did not.
+
+**`_missing_token_logged` is module-level state and `caplog` only sees the first log for a given member.** If a preceding test in the same process already logged for this member id, the assertion passes for the wrong reason. It cannot fire falsely *negative*, which is the direction that matters here, but note it: a positive control for the log line belongs with Task 5's grace-mode tests, where the set is empty.
+
+- [ ] **Step 10: Run both backend files, then the whole mail suite**
+
+```bash
+cd backend && source venv/bin/activate
+pytest tests/agent_mail/test_operator_mail_writes.py tests/agent_mail/test_capability_tokens.py -v -p no:warnings
+pytest tests/agent_mail/ tests/agent_teams/ -q -p no:warnings
+```
+
+Expected: the two files green, and the two suites at their Task 9 counts plus this task's additions. Any *other* failure is a real regression from the widened return type — most likely a call site passing the derived value into `int()` that Step 6 missed. Grep for `derive_member_id` and check each caller handles `None`.
+
+- [ ] **Step 11: Commit the backend half**
+
+```bash
+git add backend/app/api/v1/deps.py backend/app/api/v1/agent_mail.py \
+        backend/tests/agent_mail/test_operator_mail_writes.py \
+        backend/tests/agent_mail/test_capability_tokens.py
+git commit -m "feat(mail): accept the operator credential on the UI's mail writes
+
+The Agent Mail UI holds no session token and its reply path requires a MEMBER
+sender: kind='answer' is valid only when sender_member_id equals the thread
+root's recipient_member_id. An external-actor write lands in sender_actor_id and
+leaves sender_member_id NULL by construction, so no actor token can post it --
+measured 400 'only the context request recipient can answer it'. The two
+external routes spec 3.6 named also refuse outright, both with 'External actors
+can only ... they created', because the UI acts in threads agents created.
+
+mail_session therefore accepts a second credential: the operator token from
+spec 3.6a, which is the only secret in this system an agent cannot mint. A
+member-sender route gated on an actor token would be a hole, not a fix -- POST
+/external/agent-mail/actors needs no credential at all, so every pane could
+then write as the leader whose answer PR1's approval gate reads.
+
+Session token is checked first, so a pane holding one cannot escalate by adding
+an operator header. The empty-setting check precedes the comparison because
+compare_digest('', '') is True. The comparison is over bytes because
+compare_digest raises TypeError on a non-ASCII str, which is a 500 not a
+refusal.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6, resolved
+against section 3.6a"
+```
+
+- [ ] **Step 12: Add the token store to the frontend**
+
+Create `frontend/src/lib/operatorToken.ts`:
+
+```ts
+const STORAGE_KEY = 'deck.operatorToken'
+
+// Cached because apiClient reads it on every request and sessionStorage access
+// is a synchronous cross-boundary call. The cache is invalidated only through
+// setOperatorToken, which is the sole writer.
+let cached: string | null | undefined
+
+export function operatorToken(): string | null {
+  if (cached === undefined) {
+    try {
+      cached = sessionStorage.getItem(STORAGE_KEY)
+    } catch {
+      // Private-mode or a hardened browser: treat as absent rather than throw.
+      cached = null
+    }
+  }
+  return cached
+}
+
+export function setOperatorToken(value: string | null): void {
+  cached = value
+  try {
+    if (value) {
+      sessionStorage.setItem(STORAGE_KEY, value)
+    } else {
+      sessionStorage.removeItem(STORAGE_KEY)
+    }
+  } catch {
+    // The in-memory cache still holds it for this tab's lifetime.
+  }
+}
+```
+
+**`sessionStorage`, not `localStorage`, and this is the one part of §3.6's provisioning advice that survives.** The token dies with the tab, so a shared machine does not leave an operator credential in a profile that outlives the session. It also means the operator pastes it once per tab, which is the cost of not storing a secret durably in the browser.
+
+- [ ] **Step 13: Send the header from `apiClient`**
+
+In `frontend/src/lib/api.ts`, import the store and add one header. The spread order matters: `...options?.headers` stays **last** so a call site can still override.
+
+```ts
+import { operatorToken } from '@/lib/operatorToken'
+```
+
+```ts
+export async function apiClient<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const url = `${API_BASE_URL}${endpoint}`
+  const token = operatorToken()
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'X-Deck-Operator-Token': token } : {}),
+        ...options?.headers,
+      },
+    })
+```
+
+Sending it on **every** request rather than only on mail writes is deliberate: the backend ignores the header on routes with no dependency reading it, and a per-call opt-in is how a future write acquires a silent `401`. It also means Task 8's operator-gated workspace routes become reachable from the UI for free, which is what makes the deferred workspace-lease UI (§7) possible without another auth change.
+
+- [ ] **Step 14: Add the settings field so the operator can supply the token**
+
+Create `frontend/src/features/config/OperatorTokenCard.tsx`.
+
+**Measured before writing: there is no `features/settings/` directory.** `ConfigViewerPage.tsx` composes sibling `*Card.tsx` files from `features/config/` directly (`CodexDiagnosticsCard`, `CodexInventoryCard`, `CodexProfileResolverCard` — imported at `:8-10`, rendered at `:297`). There *is* a `features/config/settings/` subtree, but it belongs to `SettingsEditor` and edits Claude's own settings files, not Deck's. Follow the sibling-card pattern.
+
+```tsx
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { operatorToken, setOperatorToken } from '@/lib/operatorToken'
+
+export function OperatorTokenCard() {
+  const [value, setValue] = useState('')
+  const [stored, setStored] = useState(() => operatorToken() !== null)
+
+  const save = () => {
+    const next = value.trim() || null
+    setOperatorToken(next)
+    setStored(next !== null)
+    setValue('')
+    toast.success(next ? 'Operator token stored for this tab' : 'Operator token cleared')
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Operator token</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Required to send Agent Mail and to manage workspace leases once capability
+          tokens are enforced. Must match <code>operator_token</code> in{' '}
+          <code>backend/.env</code>. Stored for this tab only — a new tab will ask
+          again.
+        </p>
+        <div className="space-y-2">
+          <Label htmlFor="operator-token">Token</Label>
+          <div className="flex gap-2">
+            <Input
+              id="operator-token"
+              type="password"
+              autoComplete="off"
+              placeholder={stored ? '•••••••• (stored for this tab)' : 'paste the token'}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+            <Button onClick={save} disabled={!value.trim() && !stored}>
+              {value.trim() ? 'Save' : 'Clear'}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+```
+
+`type="password"` and `autoComplete="off"` because this is a secret on a screen that gets shared and screenshotted. The card **never renders the stored value back** — only whether one exists — which is the same posture `CodexDiagnosticsCard` already takes with its `SENSITIVE_KEY_PATTERN` redaction (`:15`). `stored` is `useState` rather than a bare `operatorToken()` call so the placeholder updates after a save without a reload.
+
+Mount it in `ConfigViewerPage.tsx` beside the existing cards: add `import { OperatorTokenCard } from "./OperatorTokenCard";` next to the three Codex imports, and render `<OperatorTokenCard />` in the same section. **Do not add a route** — `App.tsx`'s 17 routes are enumerated in `CLAUDE.md`, and one field does not warrant an 18th.
+
+- [ ] **Step 15: Improve the `401` message on the three mail writes**
+
+A bare `401 session_token_required` in a toast tells an operator nothing actionable. In `frontend/src/features/agent-mail/api.ts`, wrap the three writes:
+
+```ts
+import { apiClient, buildEndpoint } from '@/lib/api'
+import { operatorToken } from '@/lib/operatorToken'
+```
+
+```ts
+async function operatorWrite<T>(endpoint: string, body: unknown): Promise<T> {
+  try {
+    return await apiClient<T>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('session_token_required') || message.includes('operator_token')) {
+      throw new Error(
+        operatorToken()
+          ? 'The stored operator token was rejected. Re-enter it in Config.'
+          : 'Agent Mail writes need an operator token. Add it in Config.'
+      )
+    }
+    throw error
+  }
+}
+
+export function sendAgentMailMessage(message: MailMessageCreate): Promise<MailMessageResponse> {
+  return operatorWrite<MailMessageResponse>('agent-mail/messages', message)
+}
+
+export function markAgentMailRead(messageId: number, memberId: number): Promise<{ ok: boolean }> {
+  return operatorWrite<{ ok: boolean }>(`agent-mail/messages/${messageId}/read`, {
+    member_id: memberId,
+  })
+}
+
+export function ackAgentMailMessage(messageId: number, memberId: number): Promise<{ ok: boolean }> {
+  return operatorWrite<{ ok: boolean }>(`agent-mail/messages/${messageId}/ack`, {
+    member_id: memberId,
+  })
+}
+```
+
+The two branches are distinguishable on purpose: "no token stored" and "the stored token is wrong" send the operator to different actions, and `apiClient` surfaces FastAPI's `detail` through `apiErrorMessage`, so the string match has something to match on.
+
+`markAgentMailRead` has zero callers today and still gets this treatment — see "What is deliberately not touched."
+
+- [ ] **Step 16: Verify the frontend builds and lints**
+
+```bash
+cd frontend
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+Expected: clean. `noUnusedLocals` is on, so an unused import from Step 13 or 15 is an error, not a warning.
+
+- [ ] **Step 17: Manually verify the three writes, both ways**
+
+The backend tests prove the routes; this proves the browser actually sends the header. With the backend running and `operator_token` set in `backend/.env`:
+
+1. With **no** token in Config, open Agent Mail and send a message. Expect the toast: *"Agent Mail writes need an operator token. Add it in Config."*
+2. Paste a **wrong** token in Config, retry. Expect: *"The stored operator token was rejected. Re-enter it in Config."*
+3. Paste the **real** token, retry. Expect the message to send.
+4. Open a thread on a `context_request` addressed to a member, select that member as sender, and reply. Expect *"Answer sent"* and the root's status to become `answered`.
+5. Ack a pending handoff. Expect *"Acknowledged"*.
+6. Open a **new tab**. Expect step 1's toast again — `sessionStorage` is per-tab, and confirming that is confirming the secret is not persisted.
+
+Steps 4 and 5 are the ones no automated frontend test covers (this project has none) and the ones the spec got wrong, so do not skip them.
+
+- [ ] **Step 18: Commit the frontend half**
+
+```bash
+git add frontend/src/lib/operatorToken.ts frontend/src/lib/api.ts \
+        frontend/src/features/agent-mail/api.ts \
+        frontend/src/features/config/OperatorTokenCard.tsx \
+        frontend/src/features/config/ConfigViewerPage.tsx
+git commit -m "feat(ui): send the operator token with every request
+
+apiClient adds X-Deck-Operator-Token when one is stored, so the three Agent Mail
+writes keep working once capability tokens are enforced -- and Task 8's
+operator-gated workspace routes become reachable without a second auth change.
+
+sessionStorage rather than localStorage: the token dies with the tab, so a
+shared machine does not leave an operator credential in a browser profile. The
+cost is re-entry per tab, which is the right trade for a secret.
+
+Spec 3.6 proposed a per-tab external ACTOR token instead. Dropped: that
+credential needs no secret to mint (POST /external/agent-mail/actors is
+loopback-gated only), and the UI's reply path needs a member sender, which the
+external schemas have no field for.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6"
 ```
 
 ---
