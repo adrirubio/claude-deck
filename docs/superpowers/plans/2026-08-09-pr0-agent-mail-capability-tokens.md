@@ -77,7 +77,7 @@ If a step's preconditions do not hold — a function has a different shape, a te
 
 ## File Structure
 
-Nine new files — two in `app/`, four test files, three in `frontend/src/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
+Ten new files — two in `app/`, four test files, three in `frontend/src/`, one under `docs/deploy/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
 
 | File | Create / Modify | Responsibility |
 | --- | --- | --- |
@@ -96,7 +96,8 @@ Nine new files — two in `app/`, four test files, three in `frontend/src/`; eve
 | `frontend/src/lib/api.ts` | Modify | `X-Deck-Operator-Token` injection into `apiClient` (`:99-131`) |
 | `frontend/src/features/agent-mail/api.ts` | Modify | The three write helpers gain an actionable `401` message |
 | `frontend/src/features/config/OperatorTokenCard.tsx` | **Create** | Where the operator pastes the token; never renders it back |
-| `README.md` (`:110-114`) | Modify | Linux prerequisite bullet under `**Prerequisites**:` |
+| `README.md` (after `:114`) | Modify | Linux prerequisite bullet, scoped to pane binding rather than to the app |
+| `docs/deploy/pr0-capability-tokens-rollout.md` | **Create** | The four ordered steps; two restarts for two credentials |
 | `backend/tests/agent_mail/test_capability_tokens.py` | **Create** | Spec §3.7 tests 1–22 |
 | `backend/tests/agent_mail/test_peer_process.py` | **Create** | Resolver unit tests (parsers, both address families) |
 | `backend/tests/agent_mail/test_api.py` | Modify | Four existing tests gain a token |
@@ -121,7 +122,7 @@ Nine new files — two in `app/`, four test files, three in `frontend/src/`; eve
 | 8 | `require_operator` and the operator routes | §3.6a |
 | 9 | Force-release API migration | §4.6a req. 1–4 |
 | 10 | The operator credential reaches the UI (no new route; §3.6's actor mechanism refuted) | §3.6, §3.6a |
-| 11 | README Linux prerequisite; rollout note | §3.8 |
+| 11 | README Linux prerequisite; the four-step rollout note | §3.8 |
 
 ---
 
@@ -5807,6 +5808,271 @@ loopback-gated only), and the UI's reply path needs a member sender, which the
 external schemas have no field for.
 
 Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6"
+```
+
+---
+
+### Task 11: The two things an operator must know before deploying this
+
+**Files:**
+- Modify: `README.md` (`:110-114`, the `**Prerequisites**:` list)
+- Create: `docs/deploy/pr0-capability-tokens-rollout.md`
+
+**Interfaces:**
+- Consumes: nothing. This task writes prose only and depends on no earlier task's code.
+- Produces: nothing any task imports. It is last because it *describes* Tasks 1–10, and it is not optional: two of PR0's three deployment steps are invisible in the code, and an operator who performs them in the wrong order locks themselves out of the routes Task 8 gates.
+
+**Why documentation is a task with a reviewer's gate rather than a step inside another task.** Two facts about PR0 cannot be discovered by reading the diff. First, **PR0 requires Linux** — every function in `peer_process.py` (Task 2) reads `/proc/net/tcp`, `/proc/net/tcp6`, and `/proc/<pid>/stat`, and the README's own prerequisite list currently promises only "Python 3.11+, Node.js 18+, at least one agent CLI." Second, the rollout is a **four-step ordered sequence involving two different restarts for two different credentials**, and §3.6a says in as many words that "an operator who reads 'restart the panes' and stops has provisioned nothing." Neither belongs in Task 2's or Task 8's commit, because both describe the *assembled* PR.
+
+#### The four measurements that decide this task's content
+
+**1. `backend/.env` is already gitignored, so the plan must not tell an operator to add it.** Measured:
+
+```
+$ git check-ignore -v backend/.env
+.gitignore:27:.env	backend/.env
+```
+
+`.gitignore:27` is a bare `.env`, which git matches at any depth. §3.6a's requirement that the file be "gitignored" is therefore already satisfied, and a rollout note instructing an operator to edit `.gitignore` would produce a redundant line and a confusing diff. What is *not* automatic is the mode: `600` has to be set explicitly.
+
+**2. The README's prerequisite list is lines 112–114 and mentions no platform at all.** Verified by reading:
+
+```
+110: **Prerequisites**:
+112: - Python 3.11+
+113: - Node.js 18+
+114: - At least one supported local agent CLI installed on the same host: ...
+```
+
+So the bullet is an addition, not an edit, and it goes after `:114` — a platform requirement is a stronger constraint than a CLI requirement and belongs adjacent to it, not above the language runtimes.
+
+**3. The README already says Deck must run on the host where the agents live, which is the sentence the new bullet must not contradict.** `README.md:108` reads: *"Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Use the native install path below; Docker is not supported because containers cannot see host-installed CLIs, tmux sessions, native agent credentials, or your real repository environment."* And `:150`: *"Remote use should still be native."* The Linux bullet is consistent with both and should be phrased as sharpening them rather than as a new restriction.
+
+**4. Non-Linux does not crash — it silently never binds a pane, and that is the fact a prerequisite bullet must convey without overclaiming.** Task 2's design is that every resolver function returns `None` or `{}` rather than raising, so on macOS a Deck with `mail_capability_tokens_required = False` serves every request and simply mints unbound sessions. Under enforcement the same host refuses registration with `bind_unverifiable` (Task 4). So the honest statement is not "Deck requires Linux" but "**pane binding** requires Linux, and enforcement requires pane binding." Writing the stronger claim would be wrong in the direction that costs a macOS user the whole app.
+
+#### What is deliberately *not* documented
+
+- **No `.env.example`.** `CLAUDE.md` states "No `.env` file needed — all config has defaults in `backend/app/config.py`," and that stays true: both new settings have defaults. Shipping an example file would invert the project's stated posture for two optional settings.
+- **No README section on capability tokens.** The README is a user-facing feature tour; the enforcement flag is an operator concern with one audience of one. It goes in `docs/deploy/`.
+- **No rollback procedure.** Flipping `mail_capability_tokens_required` back to `False` and restarting is the rollback, and it is stated inline in the note. A separate section would imply a process that does not exist.
+- **`CLAUDE.md`'s "no migration system" line is left alone.** Task 1 adds additive ladder rungs, which makes that line imprecise, but fixing it is a separate `docs:` commit outside this spec — it describes the whole project, not PR0.
+
+- [ ] **Step 1: Add the prerequisite bullet**
+
+In `README.md`, after the CLI bullet at `:114`:
+
+```markdown
+- **Linux** for agent-team pane binding. Deck reads `/proc/net/tcp` and `/proc/<pid>/stat` to derive which tmux pane a registering agent is running in. On macOS or Windows every other feature works, but agents register unbound, and the Agent Mail capability-token enforcement described in `docs/deploy/pr0-capability-tokens-rollout.md` cannot be turned on
+```
+
+Match the list's existing style: no terminal period, sentence case, `**bold**` for the lead term as the CLI bullet does not — but the other three bullets are bare, so bold only the word `Linux` and leave the rest plain.
+
+- [ ] **Step 2: Verify the README renders and says what you meant**
+
+```bash
+sed -n '108,120p' README.md
+```
+
+Read it back as an operator on a Mac would: the paragraph above says Docker is unsupported because containers cannot see the host, and this bullet now says one feature needs Linux. Those are consistent. If the bullet reads as "Deck is Linux-only," rewrite it — measurement 4 says that is false.
+
+- [ ] **Step 3: Write the rollout note**
+
+Create `docs/deploy/pr0-capability-tokens-rollout.md`:
+
+````markdown
+# PR0 rollout — Agent Mail capability tokens
+
+Four ordered steps. **Steps 1 and 2 provision the operator credential; steps 3
+and 4 provision the agents'.** They are different credentials with different
+lifetimes, and each needs its own restart — the backend loads the operator token
+at import, while agents obtain session tokens by registering. Doing 4 before 3
+locks every agent out of mail.
+
+Autonomy stays **off** for the whole sequence. Nothing here needs a dispatch to
+verify, and a dispatch mid-rollout would register against a half-configured
+backend.
+
+## Step 1 — write the operator token
+
+```bash
+openssl rand -hex 32                     # 32 bytes is a floor, not a suggestion
+```
+
+Put it in `backend/.env` as `operator_token`:
+
+```
+operator_token=<the value>
+```
+
+Then:
+
+```bash
+chmod 600 backend/.env
+```
+
+`backend/.env` is already gitignored (`.gitignore:27` is a bare `.env`, which git
+matches at any depth) — do not add another rule. The `chmod` is the part that is
+not automatic.
+
+**Never `export` this value.** `spawn_session` runs `subprocess.run(["tmux",
+"new-session", ...])` with **no `env=` argument** (`app/services/agent_bridge/spawn.py:79-84`),
+so the tmux server inherits the backend process's environment, and any pane can
+read it with `tmux show-environment -g`.
+A secret exported into the shell that launched the backend is a secret every
+agent can read, which defeats the entire point of a credential agents are not
+given.
+
+`hmac.compare_digest` protects the comparison against timing attacks. Nothing
+protects a short secret from being guessed at loopback speed, which is why the
+floor is 32 bytes.
+
+## Step 2 — restart the backend
+
+```bash
+# whatever you use to run it; the point is a NEW process
+```
+
+`settings = Settings()` runs at import (`backend/app/config.py:57`), so the value
+is read once per process. Until this restart, every operator-gated route answers
+`503 operator_token_unconfigured` — which is the intended fail-closed posture,
+not a bug.
+
+**Verify before continuing:**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -X POST http://127.0.0.1:8000/api/v1/agent-teams/github-scopes/1/workspaces/1/force-release \
+  -H 'Content-Type: application/json' -d '{}'
+# expect 401 -- the route exists and demands a credential
+
+curl -s -o /dev/null -w '%{http_code}\n' \
+  http://127.0.0.1:8000/api/v1/agent-teams/github-scopes/1/workspaces \
+  -H "X-Deck-Operator-Token: $(grep '^operator_token=' backend/.env | cut -d= -f2-)"
+# expect 200 or 404 -- authenticated; 404 only means scope 1 does not exist
+```
+
+A `503` on the second call means the restart did not pick up the file. A `401`
+means the value does not match — check for a trailing newline or a quoted value.
+
+**Do not put the token in shell history.** The `grep | cut` form above reads it
+from the file rather than typing it. If you type it once, clear the line.
+
+## Step 3 — restart the agent panes
+
+Each agent registers on its next MCP call and receives a capability token, once,
+in the registration response. The shim stores it and sends it as
+`X-Deck-Session-Token` from then on (Task 6).
+
+Until a pane restarts it holds no token. That is exactly why step 4 comes last:
+with `mail_capability_tokens_required = False`, tokenless writes still work and
+log `capability_token_missing` once per member — so this step's progress is
+observable in the backend log.
+
+**Verify before continuing:** the log should show no new
+`capability_token_missing` lines for members whose panes you restarted. A member
+that still logs it has a pane running pre-upgrade shim code.
+
+## Step 4 — enforce
+
+Add to `backend/.env`:
+
+```
+mail_capability_tokens_required=true
+```
+
+Restart the backend again. From this point:
+
+- A mail write with no credential is `401 session_token_required`.
+- A write with a token matching no session is `401 session_token_invalid` — an
+  invalid token is never treated as an absent one.
+- Agent registration on a host where the pane cannot be derived from the kernel
+  refuses with `bind_unverifiable`. On Linux this means the peer process is
+  gone; on macOS it means always, which is why the README lists Linux as a
+  prerequisite for this feature.
+- The Agent Mail **UI** needs the operator token pasted into Config → Operator
+  token, per tab. Without it, sending mail from the UI answers
+  `401 session_token_required` and the UI says so.
+
+**Rollback** is this step in reverse: set `mail_capability_tokens_required=false`,
+restart the backend. Grace mode returns and tokenless writes work again. The
+operator token stays configured and the operator routes stay gated — that half
+took effect at step 2 and is not covered by the flag.
+
+## What changes immediately at step 2, before enforcement
+
+Two behaviours do not wait for the flag, and both are intentional:
+
+- **Force-release and the workspace listing require the operator token.** An
+  unconfigured install has no working operator route at all. A destructive route
+  with no credential should be closed rather than open.
+- **The force-release mismatch message no longer contains a lease token.**
+  It previously interpolated the live token into an HTTP 409 body, making two
+  unauthenticated calls enough to force-release any agent's workspace: guess,
+  read the real token from the refusal, replay. The message now names the item,
+  never either value.
+
+## Rotating the operator token
+
+Replace it in `backend/.env` and restart the backend. There is no overlap
+window: the old value dies with the old process. Acceptable here because the
+population holding it is one human, not 150 panes — every open browser tab needs
+the new value pasted, and `sessionStorage` means a tab that is closed and
+reopened asks anyway.
+````
+
+- [ ] **Step 4: Check the note against the code it describes**
+
+Not a proofread — a verification. Each of these is a claim the note makes that the reader cannot check:
+
+```bash
+cd backend
+grep -n 'settings = Settings()' app/config.py          # the import-time claim
+grep -n '^\.env$' ../.gitignore                        # the bare-.env claim
+git check-ignore -v .env                               # and the consequence
+grep -n 'new-session' app/services/agent_bridge/spawn.py   # note: no env= is passed
+```
+
+If `settings = Settings()` is not at `config.py:57` after Task 1's edit, fix the line number in the note. Task 1 inserts two settings between `:49` and `:51`, so **it will have moved** — this is the one number in this task guaranteed to be stale by the time you write it. Read it, do not copy it.
+
+- [ ] **Step 5: Confirm the curl commands actually work**
+
+Run both verification commands from step 2 against the running backend, with a real `operator_token` configured. A rollout note whose verification step does not run is worse than none: it teaches the operator to skip verification.
+
+The paths were verified against source while writing this plan: force-release is
+`/github-scopes/{scope_id}/workspaces/{workspace_id}/force-release` (`agent_teams.py:673`) under the
+`/api/v1/agent-teams` prefix (`router.py:62`), and the listing is `/github-scopes/{scope_id}/workspaces` (`:550-551`).
+Task 9 rewrote force-release's body, not its path. If a command 404s on a path
+rather than on a missing scope, fix the note rather than the route.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add README.md docs/deploy/pr0-capability-tokens-rollout.md
+git commit -m "docs: Linux prerequisite and the PR0 rollout sequence
+
+Two facts about PR0 are invisible in its diff.
+
+Pane binding reads /proc/net/tcp and /proc/<pid>/stat, so it needs Linux. The
+README's prerequisite list named only Python, Node, and an agent CLI. The bullet
+is scoped to the feature rather than the app: on macOS everything else works and
+agents simply register unbound, so claiming 'Deck requires Linux' would be wrong
+in the direction that costs a user the whole app.
+
+The rollout is four ordered steps with two restarts for two credentials. The
+backend restarts to LOAD the operator token, because settings is constructed at
+import; panes restart to OBTAIN session tokens. Flipping the enforcement flag
+before the panes restart locks every agent out of mail. Spec 3.6a's warning is
+that an operator who reads 'restart the panes' and stops has provisioned
+nothing, so the note states which restart does what, in order, with a
+verification command between each pair.
+
+backend/.env needed no gitignore instruction -- .gitignore:27 is a bare .env,
+which git matches at any depth (verified with git check-ignore). The chmod 600
+is the part that is not automatic, and the note says not to export the value:
+spawn_session starts tmux with no env=, so an exported secret is readable by
+every pane with tmux show-environment -g.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.8"
 ```
 
 ---
