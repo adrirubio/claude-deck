@@ -8,7 +8,7 @@
 
 **Tech Stack:** FastAPI, async SQLAlchemy + aiosqlite, pydantic-settings, pytest + pytest-asyncio + httpx `ASGITransport`, React 19 + TypeScript (two write call sites), Python `stdlib` only for the resolver (`socket.inet_pton`, `/proc`, `subprocess` for `tmux list-panes`).
 
-**Spec:** `docs/superpowers/specs/2026-08-05-distinct-approver-identity-design.md` — revision 17, HEAD `4810c1b`. This plan implements **PR0 only**: spec §3.1–§3.8 plus §4.6a requirements 1–4. PR1 (release protocol) and PR2 follow in their own plans.
+**Spec:** `docs/superpowers/specs/2026-08-05-distinct-approver-identity-design.md` — **revision 19**, commit `8d7321b`. This plan implements **PR0 only**: spec §3.1–§3.8 (including §3.6b, the actor thread capability) plus §4.6a requirements 1–4. PR1 (release protocol) and PR2 follow in their own plans. Revisions 18 and 19 changed the spec and not the code: `git diff --name-only 4810c1b 8d7321b` is two files, both under `docs/`, so every measurement in this plan taken at `4810c1b` still holds at `8d7321b`.
 
 **Precedence, when documents disagree** — one rule, and the same rule appears in the Codex handoff prompt:
 
@@ -63,7 +63,7 @@ These apply to **every** task. They are not negotiable and several are safety ru
   - `pytest tests/agent_teams/ tests/agent_mail/ -q -p no:warnings` → **`454 passed in 31.61s`**. Every "Expected: N passed" in this plan counts up from this number.
   - `pytest tests/ -q -p no:warnings` → **`622 passed, 1 failed`**. The one failure is **pre-existing on a clean tree at `4810c1b`** and unrelated to this spec: `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` calls `agent_bridge_api.list_sessions` without awaiting it (`RuntimeWarning: coroutine 'list_sessions' was never awaited`), so its `calls` list is empty and `assert calls == [None, "codex-cli"]` fails. **Do not fix it in this PR** — report it, per the standing rule on pre-existing failures. Run the full suite at Tasks 8 and 9, which are the ones that touch `agent_teams.py`, and expect exactly this one failure and no other.
 - Any task that ends with fewer passing tests than it started with, minus the tests it deliberately re-authored, is a regression — stop and report.
-- **The expected counts, all of them, in one place.** Each task's own step repeats its number; this table is the cross-check. Every figure is *collected cases*, not test functions — six tests in this plan are parameterized, so the two differ.
+- **The expected counts, all of them, in one place.** Each task's own step repeats its number; this table is the cross-check. Every figure is *collected cases*, not test functions — **five** tests in this plan are parameterized, so the two differ. They are enumerated four paragraphs down; the revision at `0490035` said "six" and enumerated five.
 
   | After task | `test_capability_tokens.py` | `test_peer_process.py` | new cases (cumulative) | `agent_teams/ + agent_mail/` | whole `tests/` |
   | --- | --- | --- | --- | --- | --- |
@@ -77,7 +77,9 @@ These apply to **every** task. They are not negotiable and several are safety ru
   | 7 | 33 | 15 | 75 | 526 | 697 |
   | 8 | 33 | 15 | 87 | 538 | 709 |
   | 9 | 33 | 15 | 96 | 547 | 718 |
-  | 10 | 35 | 15 | 106 | 557 | 728 |
+  | 10 | 33 | 15 | 109 | 560 | 731 |
+
+  **Task 10 adds nothing to either watched file.** Its thirteen cases all live in a third new file, `test_actor_thread_capability.py`, so the first column stops moving at Task 9. Measured directly, with only Task 10's changes applied to a clean tree: `pytest tests/agent_teams/ tests/agent_mail/` → **`467 passed`**, the 454 baseline plus exactly 13. The revision at `0490035` had this row reading `35`, because the superseded task appended two cases to `test_capability_tokens.py` and eight to a `test_operator_mail_writes.py` that no longer exists.
 
   `test_capability_tokens.py` is the file to watch, because five different tasks append to it and one of them (Task 3) puts both service-level and route-level tests there — Step 7 says "append to `test_capability_tokens.py`" while naming `test_api.py` only as the place to *copy the `client` fixture from*. Read that instruction carefully; creating a second file there breaks every later per-file figure in this column while leaving the suite totals correct, which is the confusing way to be wrong.
 
@@ -100,7 +102,7 @@ If a step's preconditions do not hold — a function has a different shape, a te
 
 ## File Structure
 
-Nine new files — two in `app/`, four test files, two in `frontend/src/`, one under `docs/deploy/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
+Eight new files — two in `app/`, four test files, one in `frontend/src/`, one under `docs/deploy/`; everything else is an edit to an existing one. **Do not split `agent_mail_service.py` or `github_dispatch_service.py`** — they are large, but the codebase keeps service logic in one file per domain and a split here would collide with PR1.
 
 | File | Create / Modify | Responsibility |
 | --- | --- | --- |
@@ -109,7 +111,7 @@ Nine new files — two in `app/`, four test files, two in `frontend/src/`, one u
 | `backend/app/models/database.py` | Modify | Three new `MailAgentSession` columns; new `AgentPaneBinding` table |
 | `backend/app/models/schemas.py` | Modify | `capability_token` on `MailAgentRegisterResponse`; force-release request rewrite; drop the `lease_token` projection |
 | `backend/app/utils/peer_process.py` | **Create** | Kernel-derived resolver: peer socket → pid → tmux pane pid + proc start |
-| `backend/app/api/v1/deps.py` | **Create** | `mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id`, `require_operator`, `OperatorPrincipal` |
+| `backend/app/api/v1/deps.py` | **Create** | `mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id` (Task 5), `require_operator` (Task 8) |
 | `backend/app/services/agent_mail_service.py` | Modify | `hash_capability_token`, `ensure_capability_token`, `peek_session_by_key` — three new methods **beside** `register_session`, not inside it (Task 3 says why) |
 | `backend/app/services/agent_team_service.py` | Modify | Write and commit the `agent_pane_bindings` row on both launch paths (`:569` reuse, `:637` spawn) — without this every Deck-launched pane gets `409 bind_pending` forever |
 | `backend/app/services/agent_bridge/spawn.py` | Modify | Return the pane pid from `new-session -P -F '#{pane_pid}'` so the binding writer has something to key on |
@@ -117,10 +119,9 @@ Nine new files — two in `app/`, four test files, two in `frontend/src/`, one u
 | `backend/app/api/v1/agent_teams.py` | Modify | `/dispatch-status` authorization resolver; `require_operator` on operator routes; force-release migration |
 | `backend/app/services/github_workspace_service.py` | Modify | `release_by_token` predicate + the seven-column clear at one `now` |
 | `backend/mcp_shim/agent_mail_server.py` | Modify | Capture the minted token; send `X-Deck-Session-Token` on every bridge call |
-| `frontend/src/lib/operatorToken.ts` | **Create** | Per-tab operator-token store, cached; `sessionStorage` so the secret dies with the tab |
-| `frontend/src/lib/api.ts` | Modify | `X-Deck-Operator-Token` injection into `apiClient` (`:99-131`) |
-| `frontend/src/features/agent-mail/api.ts` | Modify | The three write helpers gain an actionable `401` message |
-| `frontend/src/features/config/OperatorTokenCard.tsx` | **Create** | Where the operator pastes the token; never renders it back |
+| `frontend/src/features/agent-mail/actorAuth.ts` | **Create** | Per-tab external-actor token: lazy provision into `sessionStorage`, `actorFetch` re-provisioning once on `401` |
+| `frontend/src/features/agent-mail/api.ts` | Modify | The three write helpers move to the external-actor routes; compose fans out by kind |
+| `frontend/src/features/agent-mail/ThreadDialog.tsx` | Modify | Drop the "Reply as" member select; both ack buttons collapse into one root-scoped ack |
 | `README.md` (after `:114`) | Modify | Linux prerequisite bullet, scoped to pane binding rather than to the app |
 | `docs/deploy/pr0-capability-tokens-rollout.md` | **Create** | The four ordered steps; two restarts for two credentials |
 | `backend/tests/agent_mail/test_capability_tokens.py` | **Create** | Spec §3.7 tests 1–22 |
@@ -132,7 +133,7 @@ Nine new files — two in `app/`, four test files, two in `frontend/src/`, one u
 | `backend/tests/test_agent_bridge_spawn.py` | Modify | Three of its 13 tests re-authored for the added `-P -F` argv pair (Task 4 names them) |
 | `backend/tests/agent_teams/test_agent_team_service.py` | Modify | Binding-writer tests on both launch paths; 41 tests today |
 | `backend/tests/agent_teams/test_operator_auth.py` | **Create** | Spec §3.7 test 20 — the eight-case matrix, for each of the two operator routes |
-| `backend/tests/agent_mail/test_operator_mail_writes.py` | **Create** | Task 10 — the operator credential on the UI's three writes; §3.6 has no test today, which is why its two false claims survived |
+| `backend/tests/agent_mail/test_actor_thread_capability.py` | **Create** | Task 10 — spec §3.7 tests 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m (all but 6c, and 6h's backend half); §3.6 had no test today, which is why its two false claims survived |
 | `backend/tests/agent_teams/test_github_workspace_api.py` | Modify | 8 call sites gain the operator header (Task 8); then the force-release migration — six tests, incl. inverting the disclosure assertion (Task 9) |
 
 ## Task Index
@@ -183,10 +184,10 @@ The PR boundary rule is §2.1's: *each artifact ships in the earliest PR that ha
 
 **Why all of this lands in one task:** a reviewer cannot usefully accept the settings while rejecting the columns — nothing reads either one yet, and every later task consumes both. The independently testable deliverable is "the schema exists and the ladder is idempotent."
 
-**Two deliberate deltas from the spec:**
+**Two points that were deltas against revision 17 and are now spec text.** Both were reported by the eighteenth review, confirmed, and written into §3.3 by revision 19 — so this task implements the spec rather than diverging from it, and neither needs a `Correction` marking. Restated here because the plan is what the implementer reads:
 
-1. **The spec's `AgentPaneBinding` sketch types `slot_id` and `preset_id` as `Mapped[int]`** (§3.3). The plan makes both **nullable**, because `slot_id`'s FK is `ondelete="SET NULL"` — a non-nullable column with a SET NULL cascade is a contradiction SQLite will hit the moment a slot is deleted. `preset_id` follows `MailAgentSession.team_preset_id`, which is nullable for the same reason.
-2. **`agent_pane_bindings` is created by `create_all`, not by a ladder rung.** It is a brand-new table, so `create_all` makes it on every existing database. Only the three `mail_agent_sessions` columns need rungs, because that table already exists in the live DB.
+1. **`slot_id` and `preset_id` are `Mapped[int | None]`, nullable.** Revision 17's sketch typed them `Mapped[int]` while specifying `ondelete="SET NULL"`, which are two different schemas. §3.3 now states the nullable form and the reason: every `SET NULL` foreign key in `app/models/database.py` is `Mapped[int | None]` with `nullable=True` — seven for seven (`:36-37`, `:191-192`, `:256-265`, `:302-303`, `:356-357`) — and a deleted slot must leave the binding row *discoverable* so the pane resolves to §3.3's unbound rung instead of vanishing.
+2. **`agent_pane_bindings` is created by `create_all` and needs no ladder rung.** `app/database.py:479` runs `Base.metadata.create_all`, which issues `CREATE TABLE` for any model without a table, so a new **table** is free while a new **column** on an existing table needs the additive `ALTER` ladder (`:421-440`). §3.3 now states this distinction explicitly, because the two cases look alike in a diff and only one needs the ladder: PR0 adds a table, PR1 adds columns. Only the three `mail_agent_sessions` columns get rungs here.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1354,7 +1355,7 @@ async def client(db):
     app.dependency_overrides.clear()
 ```
 
-Note `base_url="http://test"` — that hostname is why `_is_loopback_request` (`external_agent_mail.py:39-41`) accepts these requests, which Task 10's test 20 depends on. Do not change it.
+Note `base_url="http://test"` — that hostname is why `_is_loopback_request` (`external_agent_mail.py:39-41`) accepts these requests, which Task 8's test 20 depends on (and Task 10's actor fixtures likewise). Do not change it.
 
 ```python
 @pytest.mark.asyncio
@@ -2831,12 +2832,14 @@ Spec: 2026-08-05-distinct-approver-identity-design.md sections 3.3, 3.3a, 3.8"
 **Interfaces:**
 - Consumes: `agent_mail_service.hash_capability_token` (Task 3); `settings.mail_capability_tokens_required` (Task 1).
 - Produces, in `app.api.v1.deps`:
-  - `mail_session(x_deck_session_token, db) -> MailAgentSession | None` — the resolved session, or `None` in grace mode with no token. Raises `401 session_token_invalid` for a token that does not match. **Task 10 widens this return to `MailAgentSession | OperatorPrincipal | None`**; write the two-member version here and let Task 10 add the third, since nothing in PR0 before Task 10 can produce an `OperatorPrincipal`.
-  - `require_mail_session(...) -> MailAgentSession` — the same, but `401 session_token_required` rather than `None`. The return stays `MailAgentSession` through Task 10: its whole job there is to *refuse* the widened union, so the narrowing is the point and the annotation does not move.
-  - `require_session_slot(session) -> int` — the session's `team_slot_id`, or `403 session_not_slot_bound`. **Task 10 adds an `isinstance` guard** to this function, because `/dispatch-status` reaches it with whatever `mail_session` returned and Task 10 widens that union.
+  - `mail_session(x_deck_session_token, db) -> MailAgentSession | None` — the resolved session, or `None` in grace mode with no token. Raises `401 session_token_invalid` for a token that does not match.
+  - `require_mail_session(...) -> MailAgentSession` — the same, but `401 session_token_required` rather than `None`.
+  - `require_session_slot(session) -> int` — the session's `team_slot_id`, or `403 session_not_slot_bound`.
   - `derive_member_id(session, claimed: int | None, *, detail: str = "sender_not_token_holder") -> Optional[int]` — derive, do not compare. The keyword-only `detail` is what the refusal says when `claimed` disagrees with the token holder: the three `sender_member_id` routes take the default, and the inbox route passes `detail="member_not_token_holder"` (Step 6), because on that route the caller is naming *whose inbox to read*, not whose name to sign. Two codes rather than one, because an operator debugging a `403` needs to know which of the two claims was rejected.
 
-    The return is `Optional[int]`, not `int`, and it is `Optional` from Task 5 onward — **not** something Task 10 widens. Task 10 adds a third caller shape (`OperatorPrincipal`) that returns `None` on the anonymous-compose path, but the annotation already admits it. Write `Optional[int]` here in Task 5 and Task 10 changes only the `session` parameter's type. A Task 5 that writes `-> int` produces a real type error the moment Task 10's branch lands, and `mypy` is not in this repo's CI to catch it.
+    The return is `Optional[int]`, not `int`, because grace mode with no token resolves no member. Nothing later in PR0 widens it.
+
+**These four signatures are final for PR0.** `mail_session` admits agent session tokens and nothing else, in every task. The revision at `0490035` had Task 10 widen the union to `MailAgentSession | OperatorPrincipal | None` and thread an `isinstance` guard through `require_session_slot`; the eighteenth review rejected that design, and the replacement Task 10 does not touch this file. If you find yourself adding a principal type here, you are implementing the superseded task — re-read Task 10.
 
 **`app/api/v1/` has no `deps.py`** — this is a new file. Put it there rather than in `agent_mail.py` because Task 7 imports `require_session_slot` from `agent_teams.py`, and a cross-import between two route modules is a cycle waiting to happen.
 
@@ -5988,167 +5991,174 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 4.6a"
 
 ---
 
-### Task 10: The operator credential reaches the UI, because the actor token cannot
+### Task 10: The operator acts as an external actor, and never as a member
 
 **Files:**
-- Modify: `backend/app/api/v1/deps.py` (`mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id` — all four from Task 5)
-- Modify: `backend/app/api/v1/agent_mail.py` (`mark_read`, `ack_message`, `agent_inbox` — a `None`-member guard each, per Step 6)
-- Modify: `backend/tests/agent_mail/test_dispatch_status_tool.py` (one case, per Step 9 — the widened union reaches this route through `mail_session`)
-- Create: `frontend/src/lib/operatorToken.ts`
-- Modify: `frontend/src/lib/api.ts` (`apiClient`, `:99-131`)
-- Modify: `frontend/src/features/agent-mail/api.ts` (`sendAgentMailMessage` `:28-33`, `ackAgentMailMessage` `:73-78`, `markAgentMailRead` `:57-62`)
-- Create: `frontend/src/features/config/OperatorTokenCard.tsx`
-- Modify: `frontend/src/features/config/ConfigViewerPage.tsx` (mount the card beside the three Codex cards)
-- Test: `backend/tests/agent_mail/test_operator_mail_writes.py` (**create**)
-- Modify: `backend/tests/agent_mail/test_capability_tokens.py` (Task 5's file — two added cases)
+- Modify: `backend/app/services/external_agent_mail_service.py` (`reply_in_thread` `:248-270`; new methods after `acknowledge_external_request` `:330-346`)
+- Modify: `backend/app/api/v1/external_agent_mail.py` (one new route after `:229`)
+- Create: `backend/tests/agent_mail/test_actor_thread_capability.py`
+- Create: `frontend/src/features/agent-mail/actorAuth.ts`
+- Modify: `frontend/src/features/agent-mail/api.ts` (`:28-33`, `:73-78`)
+- Modify: `frontend/src/features/agent-mail/ThreadDialog.tsx` (`:2`, `:16-22`, `:27`, `:31`, `:35`, `:95`, `:117`, `:125-132`, `:134-146`, `:148-175`, `:214-229`, `:232-258`, `:263-270`)
 
 **Interfaces:**
-- Consumes: `mail_session` and `derive_member_id` from Task 5; `settings.operator_token` from Task 1; the `X-Deck-Operator-Token` header name and the three refusal codes from Task 8's `require_operator`.
+- Consumes: nothing from Tasks 1–9. This task is independent of the capability-token work; it needs only the external-actor plumbing that already ships. It may be implemented before or after them.
 - Produces:
-  - `OperatorPrincipal` — a module-level sentinel class in `deps.py`, exported so Task 5's callers can type the union. `mail_session` now returns `MailAgentSession | OperatorPrincipal | None`.
-  - `operatorToken(): string | null` and `setOperatorToken(value: string | null): void` in `frontend/src/lib/operatorToken.ts`.
-  - No new routes and no new response fields. PR1's `POST /agent-mail/decisions` (§4.3a) consumes the same `mail_session` union.
+  - `ExternalAgentMailService.acknowledge_actor_request(db, actor, message_id) -> ExternalAgentMailRequestStatus`
+  - `ExternalAgentMailService._actor_request_status(db, message_id) -> ExternalAgentMailRequestStatus`
+  - `POST /api/v1/external/agent-mail/requests/{message_id}/actor-ack`
+  - `actorAuth.ts`: `actorFetch<T>(path, init?): Promise<T>` and `resetActorToken(): void`
+  - `api.ts`: `replyInAgentMailThread(rootId, bodyMarkdown)`, `ackAgentMailRequest(rootId)`; `sendAgentMailMessage` keeps its signature and changes its transport
+  - No new response fields, no new tables, no change to `mail_session`. PR1's `POST /agent-mail/decisions` (§4.3a) is unaffected.
 
-**The spec is internally contradictory here, and the measured half wins.** §3.6 says the UI should authenticate as an **external actor** and that "the ack path uses the actor ack endpoint that already exists, so no new route is needed." §3.6a, written later and against measurements, says "**the external-actor token cannot be the operator credential**" because `POST /external/agent-mail/actors` gates only on `_is_loopback_request` and an agent pane is a loopback caller. Both cannot hold. §3.6a is the section with measurements behind it, and four more measurements below show §3.6's mechanism does not even reach the UI's writes. So this task implements §3.6's *requirement* — the UI writes without a session token — using §3.6a's *credential*, the operator token Task 8 already ships.
+**This task replaces the one at revision `0490035`, which inverted the spec.** That version widened `mail_session` to admit the operator token and let the browser send an arbitrary `sender_member_id`, so a human typing in the mail UI produced a row indistinguishable from one an agent's authenticated session wrote — the confusion Finding #1 exists to remove. The eighteenth review's blocker 1 rejected it, and its recommendation is what this task implements: *preserve operator attribution and extend external-actor thread capabilities, not let the operator impersonate agent members.*
 
-**Why the external routes cannot serve this UI, in three refutations.** Each was driven through the real ASGI app; none is an inference from reading.
+Spec §3.6b and §3.7's tests 6a–6m are the contract. Step 1 writes **twelve of the thirteen**: 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m. Only **6c** is absent, with its reason recorded under "what is deliberately not touched" — it tests a capability (the actor `answer`) that §3.6b permits and does not require, and that this task does not add. 6h is split: its backend half is automated, its retry-count half is manual, also recorded there. **Spec revision 19 exists because implementing revision 18's three route requirements surfaced three defects in the obvious code**, and this task's steps are ordered around them.
 
-*First, the ack route refuses.* `POST /external/agent-mail/requests/{id}/ack` reaches `acknowledge_external_request`, which opens with `if root.sender_actor_id != actor.id: raise ValueError("External actors can only acknowledge requests they created")` (`external_agent_mail_service.py:339-340`). The UI acks messages **agents** created, whose `sender_actor_id` is NULL. Measured: `400`. Spec §3.6's closing bullet is refuted by its own cited line number.
+**Everything the old task built is dropped:** `OperatorPrincipal`, the `mail_session` union, `derive_member_id`'s third caller shape, `frontend/src/lib/operatorToken.ts`, the `apiClient` header injection, `OperatorTokenCard.tsx`, and the `ConfigViewerPage.tsx` mount. `deps.py` and `agent_mail.py` are **not touched by this task at all**; Task 5 owns them and its four write routes are unchanged. `operator_token` stays what Task 8 makes it: the credential for force-release and the workspace listing, which have no frontend caller (§7).
 
-*Second, the reply route refuses for the same reason.* `reply_in_thread` (`:255-256`) carries the identical check with "reply in threads they created." The UI replies in agent-created threads. Measured: `400`.
+#### Why the operator does not need to be a member
 
-*Third — and this is the one that decides the design — the UI's reply is not expressible as an actor write at all.* `ThreadDialog.tsx:152-156` chooses `kind` by comparing the operator-selected sender against the thread root: `root.recipient_member_id === senderId ? 'answer' : 'message'`. And `send_message` requires exactly that agreement — `if root.recipient_member_id != request.sender_member_id: raise ValueError("only the context request recipient can answer it")` (`agent_mail_service.py:859-860`). Measured, an `answer` posted with no `sender_member_id` returns **`400 "only the context request recipient can answer it"`**, and the root stays `pending`. An actor write lands in `sender_actor_id` and leaves `sender_member_id` NULL **by construction**, so no actor token — per-tab or otherwise — can post the UI's answer. The reply path needs a **member sender**, which is the one thing the external routes are built never to accept.
+The old task rested on two measured facts and an inference that does not follow. The facts hold: an actor cannot post `kind="answer"` (`agent_mail_service.py:859` compares `root.recipient_member_id` against `request.sender_member_id`, NULL for an actor), and an actor cannot reply in a thread it did not create (`:258-259`). The inference — that the operator must therefore post as a member — fails because **the operator's reply does not need to be an answer-of-record to be useful**, and §4.3 rule 4 is precisely the rule that requires it not to be. An actor-authored row has `sender_member_id = NULL` by construction, so it fails the leader-approval predicate structurally rather than by a check someone must remember to write. That is the property, not a limitation.
 
-**And a member-sender route gated on an actor token would be a hole, not a fix.** This is the trap to see before writing any code. Measured end to end:
-
-```
-POST /api/v1/external/agent-mail/actors (NO credential) -> 200
-  token minted: len 43
-  GET /actors/me with it -> 200, kind='supervisor'
-```
-
-Any pane mints a "supervisor" actor in one unauthenticated call. Today that token is harmless *because* the external schemas have no `sender_member_id` — measured, passing one is silently ignored and the row still stores `(sender_member_id=None, sender_actor_id=1)`. A new route that accepted a member sender on an actor token would convert a bounded credential into an unbounded one, and PR1 is precisely where that matters: §4.3 rule 4 accepts an approval only from an `answer` whose `sender_member_id == leader_member.id`. Gating a member-sender write on a token every agent can mint hands every agent the leader's signature. **The operator token is the only credential in this system that an agent cannot obtain**, which is the entire reason §3.6a introduced it.
-
-**So the change is one union in one dependency, not a route.** `mail_session` learns a second credential; `derive_member_id` learns a third caller shape. The four write routes Task 5 already touched need no edit — they call these two functions and nothing else.
-
-#### The five measurements that decide this task's code
-
-**1. One dependency serves all three UI writes, under enforcement, with no new route.** A faithful stand-in for Task 5's `mail_session` — extended exactly as Step 1 extends it — driven against the three writes `ThreadDialog` and `AgentMailPage` actually perform:
+And the gap the old task tried to close by widening the dependency is both wider and pointed the other way. Every actor capability compares `sender_actor_id` against the caller and refuses on mismatch — read (`_require_actor_owns_thread`, `:396-402`), ack (`:339-340`), reply (`:258-259`). Measured, on a thread one actor created and an agent answered, a *second* actor is refused all three:
 
 ```
-=== ENFORCED, WITH the operator header
-  compose  (no sender at all)   -> 200 sender=(None, None)
-  reply kind=answer as bravo    -> 200 sender_member=2
-     root request_status -> answered
-  ack the answer as alpha       -> 200
-     root status after ack -> acknowledged
-     answer receipt read_at -> [(1, 1)]
-  ack the handoff as bravo      -> 200
-     handoff status / receipt -> [('acknowledged', 1, 1)]
+tab A actor id=1  tab B actor id=2  distinct? True
+tab A created root id=1 sender_actor_id=1 sender_member_id=None
+agent answered -> root request_status='answered'
 
-=== ENFORCED, WITHOUT the header
-  answer as bravo, no header              -> 401 session_token_required
-  ack handoff bravo, no header            -> 401 session_token_required
-  answer as bravo, wrong operator token   -> 401 operator_token_invalid
-  ack handoff bravo, wrong operator token -> 401 operator_token_invalid
+--- tab B (a NEW tab, same operator) on tab A's thread ---
+  read  thread:    REFUSED -- PermissionError: External actors can only read threads they created
+  ack   request:   REFUSED -- ValueError: External actors can only acknowledge requests they created
+  reply in thread: REFUSED -- ValueError: External actors can only reply in threads they created
 ```
 
-Both ack shapes the UI can reach are covered, and they are genuinely different rows: `answerAckMember` acks the **answer** (`ThreadDialog.tsx:132`), `handoffAckMember` acks the **root** (`:126-128`). Both flip `request_status` to `acknowledged` and both write `read_at` **and** `acked_at` on the acking member's receipt — the field `_brief_delivered` reads. That is what Task 5's own note says an unauthenticated ack must not be able to do, and it is why the operator path has to be authenticated rather than merely left open.
+So "threads they created" is an **empty** predicate for the threads that matter — the ones agents created. The fix is not a loosened ownership comparison; it is permission into threads *no actor created at all*.
 
-**2. Compose stores `(NULL, NULL)` today, so the operator path is strictly more attribution — but only if the UI keeps sending no sender.** Measured against the member route with exactly the body `ComposeDialog.tsx:150-157` builds, which contains no `sender_member_id` key at all:
+#### The measurements this task's code is built from
+
+Each was driven through the real ASGI app with the amended requirement implemented as it will ship, then reverted. Three are the reason spec revision 19 exists.
+
+**1. The ack cannot return through `request_status`, and it fails *after* committing.** `acknowledge_external_request` ends `return await self.request_status(db, actor, message_id)` (`:346`); `request_status` calls `self.thread` (`:288`); `thread` calls `_require_actor_owns_thread` (`:279` → `:396-402`). Relax only the ack's own comparison and the *response* path refuses — and the ack route beside it catches `ValueError` alone (`external_agent_mail.py:228`), so `PermissionError` escapes:
 
 ```
-message          -> 200  row(sender_member,sender_actor)=(None, None)
-broadcast        -> 200  row(sender_member,sender_actor)=(None, None)
-context_request  -> 200  row(sender_member,sender_actor)=(None, None)
-handoff          -> 200  row(sender_member,sender_actor)=(None, None)
+ack with ONLY :339-340 relaxed -> HTTP 500
+  root request_status after the failed call: 'acknowledged'
+  ^ the write COMMITTED and the caller saw a failure.
 ```
 
-So today every operator-composed message is anonymous. Keep it that way: `ComposeDialog` must **not** gain a sender field in this task. §3.6's consequence that "an operator-authored message has `sender_member_id = NULL`, so it can never be mistaken for the leader's approval" already holds for compose, and PR1's §4.3 depends on it. The reply path is different and deliberately so — there the operator *chooses* a member, and that is a pre-existing capability this task authenticates rather than creates.
+This is the default implementation and the worst available outcome: the UI reports failure, the operator retries, the state has already moved. Hence Step 4's separate projection and Step 5's `PermissionError` handler.
 
-**3. `settings.operator_token` must be read at call time here too, for Task 8's measured reason.** `settings` is constructed at import (`config.py:57`), so a module-level capture in `deps.py` would freeze the empty default and make every operator mail write a `503`. The same `monkeypatch.setattr(settings, "operator_token", ...)` Task 8's fixtures use is what makes this task's tests possible.
+**2. The ack is a silent no-op on one of the UI's two ack buttons.** `ThreadDialog` acks a **pending `handoff`** (`:126-128`) and an **answered `context_request`** (`:129-132`). The member ack moves a pending handoff (`agent_mail_service.py:1298-1305`); `acknowledge_external_request` moves only `answered → acknowledged` (`:343-345`). Measured:
 
-**4. The empty-setting hole needs two mutations, not one, so one test cannot catch it.** `hmac.compare_digest("", "")` is `True`, and Task 8 closes that trap for `require_operator`. Here the trap has a different shape, and measuring it changed both this task's comment and its test. Driven through a real route in `mail_session`'s exact form, with `operator_token = ""` and enforcement on:
+```
+handoff status before: 'pending'
+relaxed actor ack on a PENDING handoff -> returned status 'pending'
+handoff request_status after the actor ack: 'pending'  <-- moved? False
+member ack moves it: 'acknowledged'
+```
 
-| | no header | empty header | wrong header |
-|---|---|---|---|
-| correct: truthy guard + `503` check | `401 session_token_required` | `401 session_token_required` | `503 operator_token_unconfigured` |
-| **A:** the `503` check deleted | `401 session_token_required` | `401 session_token_required` | `401 operator_token_invalid` |
-| **B:** guard widened to `is not None` | `401 session_token_required` | `503 operator_token_unconfigured` | `503 operator_token_unconfigured` |
-| **A + B** | `401 session_token_required` | **`200` — authorized** | `401 operator_token_invalid` |
+`200`, green, and the button does nothing.
 
-So it is the **truthy guard**, not the `503` check, that keeps an empty header out of the comparison: `if x_deck_operator_token:` is falsy on `""`, so an empty header falls through to the enforcement refusal. Deleting the `503` check *alone opens nothing* — it only degrades the diagnosis from `operator_token_unconfigured` to `operator_token_invalid`. The hole needs both mutations together.
+**3. The two ack buttons post two different ids, and only one is a request.** The handoff button sends the root's id (`:217`); the answer button sends `answerToAck.id` (`:223`), because the member ack is receipt-scoped and there is a receipt on the answer. An actor ack is root-scoped:
 
-This is the reason the first draft of this task's test was worthless. An assertion of the form `status_code in (401, 503)` passes against A, against B, and against correct code — it tests that *something* refused, and all three refuse. **The codes are what differ, so the codes are what the test must name.** Two cases pin the two mutations: a *wrong* header against an empty setting must be `503` (kills A), and an *empty* header against an empty setting must be `401 session_token_required` (kills B, and A+B with it).
+```
+actor-ack on the ANSWER id (2) -> HTTP 400 {"detail":"Message is not a request"}
+actor-ack on the ROOT   id     -> 'acknowledged'
+```
 
-**5. The comparison is over bytes.** Re-measured here rather than inherited: Task 8 established that `hmac.compare_digest` raises `TypeError` on `str` values holding non-ASCII characters, and that driven through a real route this is **HTTP 500**, not a refusal. A header can carry a `latin-1` byte. `.encode("utf-8")` on both sides is not defensive styling; it is the difference between `401` and an unhandled exception.
+So that call site changes its **argument**, not just its helper.
+
+**4. With all three fixed, every discriminating case passes.**
+
+```
+=== 6b: reply into an AGENT-created thread ===
+  HTTP 200
+  row: sender_member_id=None sender_actor_id=1 sender_type='external_actor'
+  reply receipts: [1, 2] (both [1, 2] notified? True)
+
+=== 6i: a SECOND actor in the first actor's thread ===
+  tab B replying in tab A's OWN root -> HTTP 400 "External actors can only reply in threads they created"
+  tab B acking   tab A's OWN root    -> HTTP 400 "External actors can only acknowledge requests they created"
+
+=== 6d: the actor ack on an ANSWERED context_request ===
+  HTTP 200   root status: 'answered' -> 'acknowledged'
+  root receipts   before=[(2, 0, 0)] after=[(2, 0, 0)]
+  answer receipts before=[(1, 0, 0)] after=[(1, 0, 0)]
+
+=== 6k: the actor ack on a PENDING handoff ===
+  HTTP 200   handoff status: 'pending' -> 'acknowledged'
+
+=== 6e: an actor token cannot buy a member-authored row ===
+  HTTP 200  sender_member_id=None sender_actor_id=1
+
+=== read is NOT relaxed ===
+  GET /external/threads/1              -> HTTP 403 (actor route, still owner-scoped)
+  GET /agent-mail/messages/1/thread    -> HTTP 200 (member route, ungated today)
+```
+
+The last pair is why `_require_actor_owns_thread` is left alone: the member thread route has **no dependency but `get_db`** (`agent_mail.py:78-87`), so the UI's read path already works, and relaxing the actor read would grant nothing while widening a scope this task has no reason to widen. `get_thread` (`agent_mail_service.py:1316-1336`) is verified read-only — it projects through `_message_response` (`:973`), which only SELECTs — which is what makes it safe as the ack's response source.
+
+**5. The whole thing was implemented, tested, mutated, and reverted before this task was written.** The counts in Steps 2, 6, 7 and 8 are measured on this branch, not estimated. Each mutation in Step 7 was applied to working code, run, and reverted.
 
 #### What is deliberately *not* touched
 
-- **No new backend route.** §3.6 predicted "no new route is needed" for the wrong reason and reached the right conclusion. The UI's three writes are three of the four routes Task 5 already guards.
-- **`ComposeDialog.tsx` gains nothing.** See measurement 2.
-- **`fetchAgentMailThread` and the other read paths stay open.** Task 5 gates writes, not reads; `mail_session` is not applied to `GET /messages/{id}/thread`, so the UI's thread view keeps working with no credential. Gating reads is not in this spec.
-- **`markAgentMailRead` and `fetchAgentMailInbox` have zero callers** — grepped across `src/`. They still get the header, because leaving one write helper without it is how a future caller acquires a silent `401`.
-- **Per-tab actor keys, `sessionStorage`, `crypto.randomUUID`, the `401` re-provision, the actor-row accumulation note.** All of §3.6's provisioning machinery is dropped: it exists to obtain a credential this task does not use. Recorded here so a reviewer comparing plan to spec sees a decision rather than an omission.
-- **The `deck-ui-*` actor pruning note (§3.6's "one consequence to accept")** becomes moot for the same reason. No `deck-ui-*` actors are ever created.
+- **`_require_actor_owns_thread` (`:396-402`).** Read scope is a separate decision from write scope. See measurement 4.
+- **`mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id`, and the four member write routes.** Task 5 owns all of them; this task changes none.
+- **`ComposeDialog.tsx`.** It gains no sender field. Measured, today's operator compose stores `(sender_member_id=None, sender_actor_id=None)` for all four kinds, so moving it to the actor routes is strictly *more* attribution. Its `payload` nesting is unwrapped at the **call site** (Step 11), not in the dialog.
+- **`agent_mail_service.py:859`, the actor `answer`.** §3.6b permits PR0 to relax it and does not require it. This task does not: the operator's reply is a `message`, the thread stays readable, and the root's state is moved by the ack instead. Skipping it also keeps the exclusivity check at `:849-850` untouched, which the mutation table flags as the thing an implementer takes with it. **Spec test 6c is therefore not in this task**; it belongs to whoever adds the capability. Recorded so a reviewer sees a decision rather than a gap.
+- **6h's frontend half.** The spec's 6h has two halves: which failures are `401` (and so may re-provision), and that the retry happens **once**. The first half is a backend fact and is tested here — `test_6h_only_a_pruned_token_is_401` measures all three codes. The second half is not automated, because **the repo has no frontend test runner**: measured, `frontend/package.json`'s scripts are `dev`, `build`, `lint`, `preview` only, and there is no vitest, jest, jsdom, happy-dom, or `@testing-library` anywhere in the dependencies or in `node_modules`. Standing up one is a larger decision than this task, and a task that quietly grows a test framework is a task a reviewer cannot gate. So the retry count is **Step 15's manual verification items 7 and 8** — both halves, the `401` that retries once and the `403` that does not retry at all — read off the network tab. The bound is also structural and reviewable by eye: `actorFetch` has no loop, one `if (response.status === 401)`, one re-send. Recorded the same way as 6c: a decision with its reason, not a gap.
+- **`fetchAgentMailInbox` (`:48-55`) and `markAgentMailRead` (`:57-62`).** Both are **dead** — grepped across `src/`, no component calls either. They stay on the member route and stay dead. The old task gave them a header "so a future caller does not acquire a silent 401"; under this design a future caller wants either the actor route or a session token, and guessing which is worse than leaving them alone.
+- **`fetchAgentMailThread` and every read path.** Unchanged, and they keep working with no credential.
 
-- [ ] **Step 1: Write the failing test — the operator credential on the three UI writes**
+- [ ] **Step 1: Write the tests — seven for the capability that does not exist, six to bound the one that does**
 
-Create `backend/tests/agent_mail/test_operator_mail_writes.py`. This file exists because §3.6's write paths have **no** test today, which is exactly why its two false claims survived twelve revisions of review.
+Create `backend/tests/agent_mail/test_actor_thread_capability.py`. Thirteen tests: seven fail now and pass after Steps 3–5, six pass throughout and exist so that widening the credential's authority breaks the build. The fixtures mirror `test_external_api.py:14-62`, which is the file this one sits beside. `_member`'s `identity_key` is `f"repo:{repo_id}"` and that column is UNIQUE (`app/models/database.py:350`), so **two members need two different `repo_id` values** — a same-`repo_id` pair raises `IntegrityError` on the second commit rather than failing an assertion.
 
 ```python
-"""Task 10 -- the operator credential on the UI's mail writes.
+"""Spec 3.6b -- an external actor may participate in a thread it did not create.
 
-Spec 3.6 requires the UI to write without a session token; spec 3.6a requires
-the credential to be one an agent cannot mint. This file pins both halves: the
-operator header works, and everything an agent can present does not.
+Every test here uses an AGENT-created root, because an actor-created root
+satisfies the existing ownership check by construction and would pass without
+the relaxation these tests exist to verify (spec 3.7's caveat on 6b/6d).
 """
 import httpx
 import pytest
 import pytest_asyncio
+from fastapi.routing import APIRoute
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.config import settings
-from app.database import Base, get_db
+from app.database import get_db
 from app.main import app
 from app.models.database import MailTeamMember
-
-OPERATOR_TOKEN = "0f3c9a71b25e4d8fa6c1e07b9d24aa5b1c3d5e7f9a1b3c5d7e9f1a3b5c7d9e1f"
-OP = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+from app.models.schemas import MailMessageCreate
+from app.services.agent_mail_service import agent_mail_service
+from app.services.external_agent_mail_service import external_agent_mail_service
 
 
 @pytest_asyncio.fixture
-async def client_and_db(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as db:
-        async def override():
-            yield db
+async def client(db):
+    async def _override():
+        yield db
 
-        app.dependency_overrides[get_db] = override
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            yield client, db
-        app.dependency_overrides.clear()
-    await engine.dispose()
+    app.dependency_overrides[get_db] = _override
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def enforced(monkeypatch):
-    """Both settings on: this is the state PR0's rollout ends in."""
-    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
-    monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
-    return OPERATOR_TOKEN
+@pytest.fixture(autouse=True)
+def clean_external_rate_limits(monkeypatch):
+    external_agent_mail_service._send_windows.clear()
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: [])
 
 
-async def _member(db, name):
-    """No member-creation route exists; the ORM is the only way in."""
+async def _member(db, repo_id, name):
     member = MailTeamMember(
-        identity_key=f"repo:{name}",
-        repo_id=name,
+        identity_key=f"repo:{repo_id}",
+        repo_id=repo_id,
         repo_path=f"/tmp/{name}",
         repo_name=name,
         display_name=name,
@@ -6159,887 +6169,1052 @@ async def _member(db, name):
     return member
 
 
-@pytest.mark.asyncio
-async def test_operator_composes_anonymously(client_and_db, enforced):
-    """Compose is exactly ComposeDialog's body: no sender key at all.
-
-    The stored row must keep sender_member_id NULL. PR1's section 4.3 relies on
-    an operator-composed message being unable to look like a leader approval,
-    and that property comes from this absence, not from a check.
-    """
-    client, db = client_and_db
-    recipient = await _member(db, "bravo")
-
-    response = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers=OP,
-        json={
-            "kind": "message",
-            "recipient_member_id": recipient.id,
-            "subject": "from the UI",
-            "body_markdown": "hello",
-            "payload": None,
-        },
+async def _actor(client, key="deck-ui-aaaa1111"):
+    resp = await client.post(
+        "/api/v1/external/agent-mail/actors",
+        json={"actor_key": key, "display_name": "Deck UI", "kind": "supervisor"},
     )
+    assert resp.status_code == 200
+    return {"Authorization": f"Bearer {resp.json()['token']}"}
 
-    assert response.status_code == 200, response.text
-    row = (
-        await db.execute(
-            text(
-                "SELECT sender_member_id, sender_actor_id FROM mail_messages "
-                "WHERE id = :i"
+
+async def _agent_context_request(db, asker, asked, *, answered=True):
+    """A context_request one AGENT asked another. sender_actor_id is NULL."""
+    root = await agent_mail_service.send_message(
+        db,
+        MailMessageCreate(
+            kind="context_request",
+            sender_member_id=asker.id,
+            recipient_member_id=asked.id,
+            subject="which file?",
+            body_markdown="where does the retry live?",
+        ),
+        auto_nudge=False,
+    )
+    answer = None
+    if answered:
+        answer = await agent_mail_service.send_message(
+            db,
+            MailMessageCreate(
+                kind="answer",
+                sender_member_id=asked.id,
+                thread_root_id=root.id,
+                body_markdown="app/services/retry.py",
             ),
-            {"i": response.json()["id"]},
+            auto_nudge=False,
         )
-    ).one()
-    assert row == (None, None)
+    return root, answer
+
+
+async def _receipts(db, message_id):
+    rows = await db.execute(
+        text(
+            "SELECT member_id, read_at IS NOT NULL, acked_at IS NOT NULL "
+            "FROM mail_receipts WHERE message_id = :m ORDER BY member_id"
+        ),
+        {"m": message_id},
+    )
+    return rows.all()
+
+
+async def _status(db, message_id):
+    row = await db.execute(
+        text("SELECT request_status FROM mail_messages WHERE id = :i"), {"i": message_id}
+    )
+    return row.scalar_one()
 
 
 @pytest.mark.asyncio
-async def test_operator_answers_as_the_designated_recipient(client_and_db, enforced):
-    """The reply path, which no actor token can express.
+async def test_6b_actor_reply_into_agent_thread_is_actor_authored_and_fans_out(client, db):
+    """6b -- the row is actor-authored AND both participants get a receipt."""
+    asker = await _member(db, "repo-alpha", "alpha")
+    asked = await _member(db, "repo-beta", "beta")
+    root, _ = await _agent_context_request(db, asker, asked)
+    auth = await _actor(client)
 
-    kind='answer' is accepted only when sender_member_id equals the root's
-    recipient_member_id, so the operator must be able to name a member. This is
-    the measurement that ruled out the external routes.
-    """
-    client, db = client_and_db
-    asker = await _member(db, "alpha")
-    answerer = await _member(db, "bravo")
-
-    root = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers=OP,
-        json={
-            "kind": "context_request",
-            "sender_member_id": asker.id,
-            "recipient_member_id": answerer.id,
-            "subject": "need input",
-            "body_markdown": "which branch?",
-        },
+    resp = await client.post(
+        f"/api/v1/external/agent-mail/threads/{root.id}/replies",
+        json={"body_markdown": "operator: use the newer helper"},
+        headers=auth,
     )
-    assert root.status_code == 200, root.text
-    root_id = root.json()["id"]
+    assert resp.status_code == 200, resp.text
+    message = resp.json()["message"]
+    assert message["sender_member_id"] is None
+    assert message["sender_actor_id"] is not None
+    assert message["sender_type"] == "external_actor"
 
-    answer = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers=OP,
-        json={
-            "kind": "answer",
-            "sender_member_id": answerer.id,
-            "thread_root_id": root_id,
-            "body_markdown": "the feature branch",
-        },
-    )
-
-    assert answer.status_code == 200, answer.text
-    assert answer.json()["sender_member_id"] == answerer.id
-    assert (
-        await db.execute(
-            text("SELECT request_status FROM mail_messages WHERE id = :i"),
-            {"i": root_id},
-        )
-    ).one() == ("answered",)
+    # The discriminating half: routing. recipient_member_id=root.recipient_member_id
+    # would notify only the member who was ASKED, never the member who ASKED.
+    receipts = await _receipts(db, message["id"])
+    assert sorted(r[0] for r in receipts) == sorted([asker.id, asked.id])
 
 
 @pytest.mark.asyncio
-async def test_operator_acks_and_the_receipt_records_it(client_and_db, enforced):
-    """The ack path, and the field that makes it security-relevant.
+async def test_6d_actor_ack_moves_state_and_touches_no_member_evidence(client, db):
+    """6d -- request_status moves; read_at/acked_at do not."""
+    asker = await _member(db, "repo-alpha", "alpha")
+    asked = await _member(db, "repo-beta", "beta")
+    root, answer = await _agent_context_request(db, asker, asked)
+    auth = await _actor(client)
 
-    ack_message writes read_at and acked_at on the acking member's receipt.
-    _brief_delivered reads read_at to decide the brief_unread escalation, so an
-    unauthenticated ack silences a dispatch escalation -- which is why this
-    route needs a credential rather than an open door.
+    assert await _status(db, root.id) == "answered"
+    root_before = await _receipts(db, root.id)
+    answer_before = await _receipts(db, answer.id)
+
+    resp = await client.post(
+        f"/api/v1/external/agent-mail/requests/{root.id}/actor-ack", headers=auth
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["acknowledged"] is True
+
+    # positive half -- the ack cannot pass by doing nothing
+    assert await _status(db, root.id) == "acknowledged"
+    # discriminating half -- read_at is what the brief_unread ladder reads
+    assert await _receipts(db, root.id) == root_before
+    assert await _receipts(db, answer.id) == answer_before
+    assert all(r[1] == 0 and r[2] == 0 for r in await _receipts(db, root.id))
+
+
+@pytest.mark.asyncio
+async def test_6j_actor_ack_returns_200_not_500(client, db):
+    """6j -- the code, not the state. request_status()'s tail re-enters the
+    ownership gate and raises PermissionError AFTER the commit."""
+    asker = await _member(db, "repo-alpha", "alpha")
+    asked = await _member(db, "repo-beta", "beta")
+    root, _ = await _agent_context_request(db, asker, asked)
+    auth = await _actor(client)
+
+    resp = await client.post(
+        f"/api/v1/external/agent-mail/requests/{root.id}/actor-ack", headers=auth
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["message_id"] == root.id
+    assert body["request_status"] == "acknowledged"
+    assert body["root"]["id"] == root.id
+    assert len(body["replies"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_6k_actor_ack_moves_a_pending_handoff(client, db):
+    """6k -- the transition acknowledge_external_request does NOT make."""
+    sender = await _member(db, "repo-alpha", "alpha")
+    recipient = await _member(db, "repo-beta", "beta")
+    handoff = await agent_mail_service.send_message(
+        db,
+        MailMessageCreate(
+            kind="handoff",
+            sender_member_id=sender.id,
+            recipient_member_id=recipient.id,
+            subject="take the retry work",
+            body_markdown="over to you",
+        ),
+        auto_nudge=False,
+    )
+    auth = await _actor(client)
+    assert await _status(db, handoff.id) == "pending"
+    before = await _receipts(db, handoff.id)
+
+    resp = await client.post(
+        f"/api/v1/external/agent-mail/requests/{handoff.id}/actor-ack", headers=auth
+    )
+    assert resp.status_code == 200, resp.text
+    assert await _status(db, handoff.id) == "acknowledged"
+    assert await _receipts(db, handoff.id) == before
+
+
+@pytest.mark.asyncio
+async def test_6l_actor_ack_refuses_an_answer_id(client, db):
+    """6l -- the id the frontend sends today. Root-scoped, so an answer refuses."""
+    asker = await _member(db, "repo-alpha", "alpha")
+    asked = await _member(db, "repo-beta", "beta")
+    root, answer = await _agent_context_request(db, asker, asked)
+    auth = await _actor(client)
+
+    resp = await client.post(
+        f"/api/v1/external/agent-mail/requests/{answer.id}/actor-ack", headers=auth
+    )
+    assert resp.status_code == 400
+    assert "not a request" in resp.json()["detail"]
+    assert await _status(db, root.id) == "answered"
+
+
+@pytest.mark.asyncio
+async def test_6m_actor_reply_into_an_anonymous_root(client, db):
+    """6m -- 105 such roots exist in the live DB. The narrow predicate
+    `sender_member_id IS NOT NULL` would refuse all 59 message threads."""
+    recipient = await _member(db, "repo-beta", "beta")
+    anon = await agent_mail_service.send_message(
+        db,
+        MailMessageCreate(
+            kind="message",
+            recipient_member_id=recipient.id,
+            subject="operator note",
+            body_markdown="composed by the operator, no sender at all",
+        ),
+        auto_nudge=False,
+    )
+    assert anon.sender_member_id is None and anon.sender_actor_id is None
+    auth = await _actor(client)
+
+    resp = await client.post(
+        f"/api/v1/external/agent-mail/threads/{anon.id}/replies",
+        json={"body_markdown": "operator follow-up"},
+        headers=auth,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["message"]["sender_actor_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_6i_a_second_actor_is_refused_both_writes(client, db):
+    """6i -- the relaxation is scoped to roots no OTHER actor owns.
+
+    A blanket "any actor may write in any thread" passes every single-actor
+    test in this file and hands each browser tab the other tabs' threads.
     """
-    client, db = client_and_db
-    sender = await _member(db, "alpha")
-    recipient = await _member(db, "bravo")
+    recipient = await _member(db, "repo-beta", "beta")
+    tab_a = await _actor(client, key="deck-ui-aaaa1111")
+    tab_b = await _actor(client, key="deck-ui-bbbb2222")
 
-    handoff = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers=OP,
+    created = await client.post(
+        "/api/v1/external/agent-mail/context-requests",
+        headers=tab_a,
         json={
-            "kind": "handoff",
-            "sender_member_id": sender.id,
             "recipient_member_id": recipient.id,
-            "subject": "take it",
-            "body_markdown": "yours now",
+            "subject": "tab A's own request",
+            "body_markdown": "only tab A owns this",
         },
     )
-    assert handoff.status_code == 200, handoff.text
-    handoff_id = handoff.json()["id"]
+    assert created.status_code == 200, created.text
+    root_id = created.json()["message"]["id"]
+
+    reply = await client.post(
+        f"/api/v1/external/agent-mail/threads/{root_id}/replies",
+        json={"body_markdown": "intruding from another actor"},
+        headers=tab_b,
+    )
+    assert reply.status_code == 400
+    assert "threads they created" in reply.json()["detail"]
 
     ack = await client.post(
-        f"/api/v1/agent-mail/messages/{handoff_id}/ack",
-        headers=OP,
-        json={"member_id": recipient.id},
+        f"/api/v1/external/agent-mail/requests/{root_id}/actor-ack", headers=tab_b
     )
-
-    assert ack.status_code == 200, ack.text
-    assert (
-        await db.execute(
-            text(
-                "SELECT m.request_status, r.read_at IS NOT NULL, r.acked_at IS NOT NULL "
-                "FROM mail_messages m JOIN mail_receipts r ON r.message_id = m.id "
-                "WHERE m.id = :i AND r.member_id = :m"
-            ),
-            {"i": handoff_id, "m": recipient.id},
-        )
-    ).one() == ("acknowledged", 1, 1)
+    assert ack.status_code == 400
+    assert "requests they created" in ack.json()["detail"]
 
 
 @pytest.mark.asyncio
-async def test_a_wrong_operator_token_is_refused_not_downgraded(client_and_db, enforced):
-    """A bad operator token must never fall through to the tokenless path.
+async def test_6e_actor_token_cannot_buy_a_member_authored_row(client, db):
+    """6e -- a regression lock on send_message's exclusivity check (:849-850)."""
+    sender = await _member(db, "repo-alpha", "alpha")
+    recipient = await _member(db, "repo-beta", "beta")
+    auth = await _actor(client)
 
-    This is the sibling of Task 5's 'invalid is not absent' rule. If a wrong
-    operator token were treated as no credential, enforcement would be advisory:
-    send garbage, get the legacy path.
-    """
-    client, db = client_and_db
-    recipient = await _member(db, "bravo")
-    body = {
-        "kind": "message",
-        "recipient_member_id": recipient.id,
-        "body_markdown": "x",
-    }
-
-    for header, expected in [
-        ({"X-Deck-Operator-Token": "i-am-guessing"}, "operator_token_invalid"),
-        ({"X-Deck-Operator-Token": OPERATOR_TOKEN[:-1]}, "operator_token_invalid"),
-        ({"X-Deck-Operator-Token": OPERATOR_TOKEN + "X"}, "operator_token_invalid"),
-        ({"X-Deck-Operator-Token": OPERATOR_TOKEN.upper()}, "operator_token_invalid"),
-        ({}, "session_token_required"),
-    ]:
-        response = await client.post(
-            "/api/v1/agent-mail/messages", headers=header, json=body
-        )
-        label = f"header={header!r}"
-        assert response.status_code == 401, f"{label}: {response.text}"
-        assert response.json()["detail"] == expected, label
-
-
-@pytest.mark.asyncio
-async def test_an_unconfigured_operator_token_refuses_with_the_right_code(
-    client_and_db, monkeypatch
-):
-    """The compare_digest("", "") trap, pinned by CODE and not merely by refusal.
-
-    Measured, this hole needs TWO mutations: deleting the 503 check and widening
-    the presence guard from truthy to `is not None`. Either one alone still
-    refuses, so `assert status in (401, 503)` passes against both and proves
-    nothing. The exact codes are the only thing that differs between the correct
-    implementation and each mutant, so the exact codes are what this asserts.
-    """
-    client, db = client_and_db
-    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
-    monkeypatch.setattr(settings, "operator_token", "")
-    recipient = await _member(db, "bravo")
-
-    for header, status, detail, kills in [
-        (
-            {"X-Deck-Operator-Token": "anything"},
-            503,
-            "operator_token_unconfigured",
-            "a deleted 503 check, which answers operator_token_invalid instead "
-            "and tells an operator who forgot the setting that their token is wrong",
-        ),
-        (
-            {"X-Deck-Operator-Token": ""},
-            401,
-            "session_token_required",
-            "an `is not None` guard, which lets an empty header reach the "
-            "comparison -- and with the 503 check also gone, compare_digest("
-            '"", "") authorizes it',
-        ),
-    ]:
-        response = await client.post(
-            "/api/v1/agent-mail/messages",
-            headers=header,
-            json={
-                "kind": "message",
-                "recipient_member_id": recipient.id,
-                "body_markdown": "x",
-            },
-        )
-        assert response.status_code == status, f"kills {kills}: {response.text}"
-        assert response.json()["detail"] == detail, f"kills {kills}"
-
-    assert (
-        await db.execute(text("SELECT COUNT(*) FROM mail_messages"))
-    ).one() == (0,), "an unconfigured install wrote a message"
-
-
-@pytest.mark.asyncio
-async def test_a_non_ascii_operator_header_is_a_refusal_not_a_500(
-    client_and_db, enforced
-):
-    """compare_digest raises TypeError on non-ASCII str; a header can carry one.
-
-    Sent as raw bytes because httpx will not encode a non-latin-1 str header.
-    """
-    client, db = client_and_db
-    recipient = await _member(db, "bravo")
-
-    response = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers={"X-Deck-Operator-Token": "café".encode("latin-1")},
+    resp = await client.post(
+        "/api/v1/external/agent-mail/messages",
         json={
-            "kind": "message",
             "recipient_member_id": recipient.id,
-            "body_markdown": "x",
+            "body_markdown": "as the leader, approved",
+            "sender_member_id": sender.id,
         },
+        headers=auth,
     )
-
-    assert response.status_code == 401, response.text
-    assert response.json()["detail"] == "operator_token_invalid"
+    assert resp.status_code == 200, resp.text
+    message = resp.json()["message"]
+    assert message["sender_member_id"] is None
+    assert message["sender_actor_id"] is not None
 
 
 @pytest.mark.asyncio
-async def test_an_actor_token_does_not_open_a_member_sender_write(
-    client_and_db, enforced
-):
-    """The credential-provenance rule, as a test.
+async def test_6g_two_tabs_do_not_evict_each_other(client, db):
+    """6g -- the revision-3 defect. Distinct keys, both still valid."""
+    tab_a = await _actor(client, key="deck-ui-aaaa1111")
+    tab_b = await _actor(client, key="deck-ui-bbbb2222")
 
-    An agent pane mints an actor with no credential at all -- measured, 200 and
-    a 43-character token. If that token opened a member-sender write, PR1's
-    approval gate (section 4.3 rule 4 matches sender_member_id == leader) would
-    be forgeable by every agent on the host. The actor token authenticates a
-    caller; it does not authorize speaking as a member.
+    assert (await client.get("/api/v1/external/agent-mail/actors/me", headers=tab_a)).status_code == 200
+    assert (await client.get("/api/v1/external/agent-mail/actors/me", headers=tab_b)).status_code == 200
+
+
+_COMPOSE_ROUTES = [
+    ("message", "external/agent-mail/messages", {}),
+    ("broadcast", "external/agent-mail/broadcasts", {}),
+    ("context_request", "external/agent-mail/context-requests",
+     {"why_needed": "to route the work", "files_or_symbols": ["app/x.py"]}),
+    ("handoff", "external/agent-mail/handoffs",
+     {"files": ["app/x.py"], "next_steps": ["ship it"]}),
+]
+
+
+@pytest.mark.asyncio
+async def test_6a_every_compose_kind_stays_actor_authored(client, db):
+    """6a -- all four ComposeDialog kinds, through the routes Step 11 moves them to."""
+    recipient = await _member(db, "repo-beta", "beta")
+    auth = await _actor(client)
+
+    for kind, path, extra in _COMPOSE_ROUTES:
+        resp = await client.post(
+            f"/api/v1/{path}",
+            json={
+                "recipient_member_id": recipient.id,
+                "subject": f"operator {kind}",
+                "body_markdown": "composed in the Deck UI",
+                **extra,
+            },
+            headers=auth,
+        )
+        assert resp.status_code == 200, f"{kind}: {resp.text}"
+
+    rows = (await db.execute(text(
+        "SELECT kind, sender_member_id, sender_actor_id FROM mail_messages ORDER BY id"
+    ))).all()
+    assert [r[0] for r in rows] == [k for k, _, _ in _COMPOSE_ROUTES]
+    assert all(r[1] is None for r in rows)
+    assert all(r[2] is not None for r in rows)
+
+
+def _api_routes(node):
+    """Every APIRoute in the app.
+
+    FastAPI 0.140 keeps an included router as an _IncludedRouter node whose real
+    routes hang off .original_router, so a flat walk of app.routes finds ONE
+    APIRoute. A structural assertion built on a flat walk vacuously passes.
     """
-    client, db = client_and_db
-    leader = await _member(db, "leader")
+    for route in getattr(node, "routes", []):
+        if isinstance(route, APIRoute):
+            yield route
+        else:
+            yield from _api_routes(route)
+    inner = getattr(node, "original_router", None)
+    if inner is not None:
+        yield from _api_routes(inner)
 
-    minted = await client.post(
+
+def _reads(dependant, target) -> bool:
+    return any(sub.call is target or _reads(sub, target) for sub in dependant.dependencies)
+
+
+@pytest.mark.asyncio
+async def test_6f_a_self_minted_actor_token_grants_nothing_more(client, db):
+    """6f -- mint the credential rather than fabricate one, then bound it."""
+    from app.api.v1.agent_mail import ack_message, mark_read, send_message
+    from app.api.v1.agent_teams import (
+        force_release_github_workspace,
+        list_github_workspaces,
+        report_dispatch_status,
+    )
+    from app.api.v1.external_agent_mail import external_actor
+
+    resp = await client.post(
         "/api/v1/external/agent-mail/actors",
-        json={
-            "actor_key": "totally-not-an-agent",
-            "display_name": "Deck UI",
-            "kind": "supervisor",
-        },
+        json={"actor_key": "deck-ui-selfmint", "display_name": "Deck UI", "kind": "supervisor"},
     )
-    assert minted.status_code == 200, minted.text
-    actor_token = minted.json()["token"]
+    assert resp.status_code == 200, resp.text
+    auth = {"Authorization": f"Bearer {resp.json()['token']}"}
 
-    response = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers={"Authorization": f"Bearer {actor_token}"},
-        json={
-            "kind": "message",
-            "sender_member_id": leader.id,
-            "recipient_member_id": leader.id,
-            "body_markdown": "signed, the leader",
-        },
-    )
+    # No member identity and no slot identity -- in the response or the schema.
+    me = await client.get("/api/v1/external/agent-mail/actors/me", headers=auth)
+    assert me.status_code == 200
+    assert "member_id" not in me.json()
+    assert "team_slot_id" not in me.json()
+    columns = {row[1] for row in (await db.execute(
+        text("PRAGMA table_info(mail_external_actors)")
+    )).all()}
+    assert not columns & {"member_id", "team_slot_id", "slot_id", "reporting_slot_id"}
 
-    assert response.status_code == 401, response.text
-    assert response.json()["detail"] == "session_token_required"
-    assert (
-        await db.execute(text("SELECT COUNT(*) FROM mail_messages"))
-    ).one() == (0,)
-```
+    # Minting touched the actor table and nothing else.
+    for table in ("mail_team_members", "mail_agent_sessions", "mail_messages", "mail_receipts"):
+        count = (await db.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one()
+        assert count == 0, table
 
-- [ ] **Step 2: Run it and read the failures**
-
-```bash
-cd backend && source venv/bin/activate
-pytest tests/agent_mail/test_operator_mail_writes.py -v -p no:warnings
-```
-
-Expected: **7 failed**. The four positive tests fail with `401 session_token_required` — under enforcement `mail_session` refuses every credential it does not yet recognise, and the operator token is one of those. `test_a_wrong_operator_token_is_refused_not_downgraded` fails only on its four operator-header rows, which currently return `session_token_required` rather than `operator_token_invalid`; its `{}` row already passes. The empty-setting and non-ASCII tests fail the same way. `test_an_actor_token_does_not_open_a_member_sender_write` **passes already** — an actor token is not an operator token and never was — and it stays in the file as a regression guard, because the mutation in Step 8 is what makes it earn its place.
-
-Read the failure of `test_operator_answers_as_the_designated_recipient` carefully. Without the extension there is **no** way to post that row under enforcement: not the external routes (measured `400`), not an actor token, not a session token the UI does not have. That absence is the requirement.
-
-- [ ] **Step 3: Add the operator principal to `deps.py`**
-
-At the top of `deps.py`, beside `_missing_token_logged`:
-
-```python
-class OperatorPrincipal:
-    """The human operator, authenticated by settings.operator_token.
-
-    A sentinel rather than a row: the operator has no MailAgentSession, no
-    member, and no slot. It exists so mail_session can return "authenticated,
-    but not as an agent" without overloading None -- None means grace mode, and
-    conflating the two would make an unconfigured install indistinguishable from
-    an authenticated operator.
-
-    Deliberately NOT a MailAgentSession subclass. require_session_slot must
-    refuse it, and it does so by the attribute access failing loudly rather
-    than by a check someone can forget to write: an operator cannot report
-    dispatch status on a slot's behalf.
-    """
-
-
-OPERATOR = OperatorPrincipal()
-```
-
-`OPERATOR` is a module-level singleton because nothing distinguishes two operator principals, and an identity check reads better at the call sites than an `isinstance`.
-
-**Widen the `typing` import in the same edit.** Task 5 wrote `from typing import Optional`; Steps 4, 5 and 6 all annotate with `Union`, so change that line to `from typing import Optional, Union`. Missing it is a `NameError` at **import** time, which surfaces as every test in the file erroring during collection rather than as one failing assertion — a confusing failure for a one-word omission.
-
-- [ ] **Step 4: Teach `mail_session` the second credential**
-
-Replace `mail_session` (added in Task 5) with the version below. Only the middle block is new; the session-token half is unchanged.
-
-```python
-async def mail_session(
-    x_deck_session_token: Optional[str] = Header(default=None),
-    x_deck_operator_token: Optional[str] = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> Union[MailAgentSession, OperatorPrincipal, None]:
-    """Resolve the caller: an agent session, the operator, or grace mode.
-
-    The two credentials are checked in order and never blended. A session token
-    is tried first because it is the common case and the more specific claim; an
-    operator token is only consulted when no session token was presented, so a
-    pane that holds both cannot escalate by adding a header.
-
-    Returns None only in grace mode with NO credential at all. A credential that
-    is present but does not match is always a refusal: treating an invalid token
-    as an absent one would make the enforcement flag meaningless, because any
-    caller could send garbage and get the legacy unauthenticated path.
-    """
-    if x_deck_session_token:
-        hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
-        result = await db.execute(
-            select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
-        )
-        for session in result.scalars().all():
-            if hmac.compare_digest(session.capability_token_hash, hashed):
-                return session
-        raise HTTPException(status_code=401, detail="session_token_invalid")
-
-    if x_deck_operator_token:
-        expected = settings.operator_token
-        # The empty check precedes the comparison, and that order is load-bearing:
-        # compare_digest("", "") is True, so leaving the empty setting to the
-        # comparison would let any caller sending an empty header write mail as
-        # any member on an unconfigured install. Same trap as require_operator,
-        # separate comparison, so it must be closed separately.
-        if not expected:
-            raise HTTPException(status_code=503, detail="operator_token_unconfigured")
-        # Bytes, because compare_digest raises TypeError on a non-ASCII str and
-        # an unhandled TypeError here is a 500 rather than a refusal.
-        if not hmac.compare_digest(
-            x_deck_operator_token.encode("utf-8"), expected.encode("utf-8")
-        ):
-            raise HTTPException(status_code=401, detail="operator_token_invalid")
-        return OPERATOR
-
-    if settings.mail_capability_tokens_required:
-        raise HTTPException(status_code=401, detail="session_token_required")
-    return None
-```
-
-Add `Union` to the `typing` import. Note what moved: Task 5's version returned early on `if not x_deck_session_token`, which cannot accommodate a second credential; this version inverts that into `if x_deck_session_token:` and lets the enforcement check fall to the end, where it now guards "no credential of either kind."
-
-**Do not reuse `require_operator` as a sub-dependency here.** It raises `401 operator_token_required` when the header is absent, which is the wrong refusal for a route that also accepts a session token — a pane calling with no headers at all would be told to present an operator token. The comparison is four lines; the refusal vocabulary is what differs.
-
-- [ ] **Step 5: Teach `derive_member_id` the operator shape**
-
-In `derive_member_id`, insert one branch **before** the `session is None` branch:
-
-```python
-    if session is OPERATOR:
-        # The operator names the member it acts as, and that is the point rather
-        # than a weakness: ThreadDialog's answer path is only valid when
-        # sender_member_id equals the thread root's recipient_member_id, so a
-        # server-derived value is impossible here -- there is no session to
-        # derive from. What makes this safe is the credential, not the claim:
-        # the operator token is the one secret no agent is given.
-        #
-        # A missing claim is NOT an error. Compose sends no sender at all and
-        # must keep storing NULL, which is what stops an operator-composed
-        # message from ever resembling a leader approval (PR1 section 4.3).
-        return claimed
-```
-
-Then widen the signature and return type:
-
-```python
-def derive_member_id(
-    session: Union[MailAgentSession, OperatorPrincipal, None],
-    claimed: Optional[int],
-    *,
-    detail: str = "sender_not_token_holder",
-) -> Optional[int]:
-```
-
-**Only the `session` parameter's annotation changes here.** The return is already `Optional[int]` — Task 5 wrote it that way, because its own grace-mode branch can return a `None` claim. So this step widens the input union and adds one branch; it does not touch the return annotation. If you find `-> int` there, Task 5 was implemented against the older Interfaces line and the operator-compose path will not type-check — fix it here and say so in the handoff.
-
-The `None` return *reaches a new caller* now, though: the operator-compose path returns `None` deliberately, where before `None` only came back from a grace-mode path that had already raised on a missing claim. That has one consequence at the call sites Task 5 wrote, and Step 6 handles it.
-
-**`require_session_slot` needs one guard, and this is the step that must not skip it.** Its `session.team_slot_id` raises `AttributeError` on an `OperatorPrincipal`, and that path is **reachable**: `/dispatch-status` (Task 7, `agent_teams.py`) declares `session: MailAgentSession | None = Depends(mail_session)` — `mail_session`, *not* `require_mail_session` — and `_authorize_dispatch_report` calls `require_session_slot(session)` after only an `if session is None: return`. An `OperatorPrincipal` is not `None`, so it falls straight through to the attribute access and the operator gets a `500` instead of a refusal.
-
-Add the type check rather than relying on the attribute failing:
-
-```python
-def require_session_slot(session: Union[MailAgentSession, "OperatorPrincipal"]) -> int:
-    """The slot this session is bound to, or 403.
-
-    The operator is refused for the same reason an unbound agent is: it has no
-    slot, and every dispatch-status report claims to speak for one. Checked
-    explicitly rather than left to AttributeError, because the difference
-    between the two is a 403 and a 500.
-    """
-    if not isinstance(session, MailAgentSession):
-        raise HTTPException(status_code=403, detail="session_not_slot_bound")
-    if session.team_slot_id is None:
-        raise HTTPException(status_code=403, detail="session_not_slot_bound")
-    return session.team_slot_id
-```
-
-Both branches return the same code deliberately: from the reporter's side "you are not bound to a slot" is the same fact either way, and inventing a second code would be a new refusal string PR0's spec does not define.
-
-This is the one place in Task 10 where a route *outside* `agent_mail.py` sees the widened union, which is why it is easy to miss — Step 8's fifth mutation row exists to catch it.
-
-- [ ] **Step 6: Fix the two call sites the widened return type breaks**
-
-`require_mail_session` must refuse the operator, or `/dispatch-status` would accept an operator token as an agent's slot claim:
-
-```python
-async def require_mail_session(
-    session: Union[MailAgentSession, OperatorPrincipal, None] = Depends(mail_session),
-) -> MailAgentSession:
-    """Like mail_session, but always a real agent session.
-
-    The operator is refused here rather than at each caller: a route that needs
-    a SLOT needs an agent, and the operator has none. session_token_required is
-    the right refusal -- the caller did authenticate, just not as the kind of
-    principal this route serves.
-    """
-    if not isinstance(session, MailAgentSession):
-        raise HTTPException(status_code=401, detail="session_token_required")
-    return session
-```
-
-And in `agent_mail.py`, the two routes that pass the derived value into `int(...)` — `mark_read` and `ack_message` — need the `None` case, which is now reachable for an operator who omits `member_id`:
-
-```python
-    member_id = derive_member_id(
-        session, body.get("member_id"), detail="member_not_token_holder"
-    )
-    if member_id is None:
-        # Reachable only for an operator who named no member. Compose may store
-        # a NULL sender; a receipt cannot have a NULL member, so this is a 400
-        # rather than a silent no-op -- ack_message returns quietly when no
-        # receipt matches, and that quiet is what would hide the mistake.
-        raise HTTPException(status_code=400, detail="member_id_required")
-    await agent_mail_service.mark_read(db, message_id, int(member_id))
-```
-
-Apply the same three lines to `ack_message`. `send_message` needs no such guard: it passes the value into `model_copy`, and a `None` sender is exactly what compose stores.
-
-`agent_inbox` also calls `int(resolved)`. Add the same guard there, with the same reasoning — an operator hitting the agent inbox with no `member_id` has named no inbox to read.
-
-- [ ] **Step 7: Run the file — expect green**
-
-```bash
-cd backend && source venv/bin/activate
-pytest tests/agent_mail/test_operator_mail_writes.py -v -p no:warnings
-```
-
-Expected: **7 passed**.
-
-- [ ] **Step 8: Mutate the dependency eight ways**
-
-Each mutation must turn at least one test red. If any is silent, the test that should have caught it is wrong — fix the test, not the mutation.
-
-| Mutation | Test that must fail | Why it is the trap |
-| --- | --- | --- |
-| Check `x_deck_operator_token` **before** `x_deck_session_token` | none in this file — **add the case** | A pane holding a real session token plus a guessed operator token would be resolved as the operator. Add a case to `test_capability_tokens.py`: a valid session token *and* a wrong operator header must still resolve as the session, not `401` |
-| Delete the `if not expected: raise 503` line | `test_an_unconfigured_operator_token_refuses_with_the_right_code`, first case | Measured, this alone opens **nothing** — an empty header is falsy and never reaches the comparison. What it destroys is the *diagnosis*: an operator who forgot the setting is told their token is invalid. Only a code-exact assertion catches it |
-| Widen the guard to `if x_deck_operator_token is not None:` | the same test, second case | Now an empty header does reach the comparison. Together with the row above, `compare_digest("", "")` returns `True` and an unconfigured install **authorizes every caller** — measured `200` |
-| Compare `str` instead of bytes | `test_a_non_ascii_operator_header_is_a_refusal_not_a_500` | `TypeError` → `500`. A suite that only sends ASCII garbage sees nothing wrong |
-| Return `None` instead of `OPERATOR` on a valid operator token | the three positive tests, but **not** with a useful message | Under enforcement `None` means grace mode, so the write would *succeed* while logging `capability_token_missing`. Green tests, silently wrong audit trail — check the log assertion in Step 9 |
-| Delete the `isinstance` guard from `require_session_slot` (Step 6) | none in this file — **add the case** | This is the reachable `500`. `/dispatch-status` takes `Depends(mail_session)`, not `require_mail_session`, so an operator token arrives as an `OperatorPrincipal`, survives `if session is None: return`, and hits `session.team_slot_id`. Add the case to `test_operator_mail_writes.py` — see Step 9's third test |
-| Make `require_mail_session` accept `OperatorPrincipal` | **nothing today — and that is the finding** | It reads like the dangerous mutation and is currently inert, because no PR0 route depends on `require_mail_session`: `/dispatch-status` uses `mail_session` directly and the four mail routes use `derive_member_id`. Leave the narrowing in place anyway — PR1 adds routes that do depend on it — but do not record this row as "caught by Task 7's suite," because it is not |
-| In `derive_member_id`, raise on `claimed is None` for the operator instead of returning it | `test_operator_composes_anonymously` | Compose would `400`. This is the mutation that looks like tightening and is actually a regression |
-
-- [ ] **Step 9: Add the two cases to `test_capability_tokens.py`**
-
-The first is the credential-precedence case Step 8's first row demands. The second pins the log line, which Step 8's fourth row shows is the only observable difference between a correct operator write and a grace-mode one.
-
-```python
-@pytest.mark.asyncio
-async def test_a_session_token_wins_over_an_operator_header(
-    client, db, tmp_path, monkeypatch
-):
-    """A pane that adds a guessed operator header must not become the operator.
-
-    Precedence is the whole of this test: the session token is checked first, so
-    the bogus operator header is never consulted. Reverse the order in deps.py
-    and this returns 401 operator_token_invalid instead of 200.
-    """
-    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
-    monkeypatch.setattr(settings, "operator_token", "the-real-operator-token")
-    register = await client.post(
-        "/api/v1/agent-mail/agent/register",
-        json=_body(tmp_path, session_key="mcp:precedence"),
-    )
-    token = register.json()["capability_token"]
-    sender_id = register.json()["member"]["id"]
-    recipient = await _member(db, "other-repo", "other")
-
-    response = await client.post(
-        "/api/v1/agent-mail/messages",
-        headers={
-            "X-Deck-Session-Token": token,
-            "X-Deck-Operator-Token": "i-guessed-this",
-        },
-        json={
-            "kind": "message",
-            "recipient_member_id": recipient.id,
-            "body_markdown": "hi",
-        },
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["sender_member_id"] == sender_id
+    # No dispatch reporting and no lease authority: the credential is not read
+    # by those routes at all.
+    routes = list(_api_routes(app))
+    assert len(routes) > 100, f"the route walk found only {len(routes)}"
+    actor_endpoints = {r.endpoint for r in routes if _reads(r.dependant, external_actor)}
+    assert actor_endpoints, "the walk found no actor route; the test is broken"
+    for endpoint in (
+        report_dispatch_status,
+        list_github_workspaces,
+        force_release_github_workspace,
+        send_message,
+        mark_read,
+        ack_message,
+    ):
+        assert endpoint not in actor_endpoints, endpoint.__name__
 
 
 @pytest.mark.asyncio
-async def test_an_operator_write_does_not_log_a_missing_token(
-    client, db, tmp_path, monkeypatch, caplog
-):
-    """An authenticated operator is not a tokenless caller.
+async def test_6h_only_a_pruned_token_is_401(client, db):
+    """6h backend half -- which failures are 401, and which are not.
 
-    derive_member_id logs capability_token_missing for the grace-mode path. If
-    mail_session returned None for a valid operator token instead of OPERATOR,
-    every UI write would still succeed and would be recorded as unauthenticated
-    -- green tests, false audit trail. This assertion is the difference.
+    These three codes are exactly what bounds actorFetch's single retry
+    (Step 10). A 403 or a 400 that were reported as 401 would retry forever.
     """
-    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
-    monkeypatch.setattr(settings, "operator_token", "the-real-operator-token")
-    recipient = await _member(db, "other-repo", "other")
+    asker = await _member(db, "repo-alpha", "alpha")
+    asked = await _member(db, "repo-beta", "beta")
+    root, _ = await _agent_context_request(db, asker, asked)
+    auth = await _actor(client)
+    other = await _actor(client, key="deck-ui-bbbb2222")
 
-    with caplog.at_level(logging.WARNING, logger="app.api.v1.deps"):
-        response = await client.post(
-            "/api/v1/agent-mail/messages",
-            headers={"X-Deck-Operator-Token": "the-real-operator-token"},
-            json={
-                "kind": "message",
-                "sender_member_id": recipient.id,
-                "recipient_member_id": recipient.id,
-                "body_markdown": "hi",
-            },
-        )
-
-    assert response.status_code == 200, response.text
-    assert "capability_token_missing" not in caplog.text
-```
-
-Add `import logging` to the file if Task 5 did not.
-
-**The third case goes in a different file, because the route it exercises is not a mail route.** Step 8's `require_session_slot` row describes a reachable `500` on `/dispatch-status`, and that route lives in `agent_teams.py` with its own fixtures. Append to `backend/tests/agent_mail/test_dispatch_status_tool.py`, which Task 7 already extended and which owns `client_and_db` and `_seed_item`:
-
-```python
-@pytest.mark.asyncio
-async def test_an_operator_token_is_refused_not_a_500(client_and_db, monkeypatch):
-    """The operator has no slot, so it cannot report on one -- 403, not 500.
-
-    /dispatch-status takes Depends(mail_session), NOT require_mail_session, so
-    Task 10's widened union arrives here directly. The route's only None check
-    is `if session is None: return`, and an OperatorPrincipal is not None -- so
-    without the isinstance guard in require_session_slot this reaches
-    `session.team_slot_id` on a class that has no such attribute and the client
-    sees an unhandled AttributeError. Delete that guard and this test is the
-    only thing in the suite that notices.
-    """
-    monkeypatch.setattr(settings, "operator_token", "the-real-operator-token")
-    ac, maker = client_and_db
-    item_id = await _seed_item(maker, approval_round_count=1)
-
-    resp = await ac.post(
-        "/api/v1/agent-teams/dispatch-status",
-        headers={"X-Deck-Operator-Token": "the-real-operator-token"},
-        json={"work_item_id": item_id, "status": "triaging"},
+    # A thread the actor does not own: 403, and NOT 401.
+    forbidden = await client.get(
+        f"/api/v1/external/agent-mail/threads/{root.id}", headers=auth
     )
+    assert forbidden.status_code == 403
 
+    # A cross-actor write: 400, and NOT 401.
+    created = await client.post(
+        "/api/v1/external/agent-mail/context-requests",
+        headers=auth,
+        json={
+            "recipient_member_id": asked.id,
+            "subject": "actor A's own",
+            "body_markdown": "mine",
+        },
+    )
+    assert created.status_code == 200, created.text
+    intruder = await client.post(
+        f"/api/v1/external/agent-mail/threads/{created.json()['message']['id']}/replies",
+        json={"body_markdown": "not mine"},
+        headers=other,
+    )
+    assert intruder.status_code == 400
+
+    # Only a pruned actor row is 401 -- the one case that may re-provision.
+    await db.execute(
+        text("DELETE FROM mail_external_actors WHERE actor_key = 'deck-ui-aaaa1111'")
+    )
+    await db.commit()
+    pruned = await client.get("/api/v1/external/agent-mail/actors/me", headers=auth)
+    assert pruned.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_actor_read_scope_is_unchanged(client, db):
+    """Not a spec test -- a lock that this task did not widen the read scope."""
+    asker = await _member(db, "repo-alpha", "alpha")
+    asked = await _member(db, "repo-beta", "beta")
+    root, _ = await _agent_context_request(db, asker, asked)
+    auth = await _actor(client)
+
+    # The actor read stays owner-scoped...
+    resp = await client.get(f"/api/v1/external/agent-mail/threads/{root.id}", headers=auth)
     assert resp.status_code == 403
-    assert resp.json()["detail"] == "session_not_slot_bound"
-    async with maker() as db:
-        item = await db.get(GithubWorkItem, item_id)
-        assert item.dispatch_status == "dispatched", "a refused report must change nothing"
+    # ...and the UI reads through the member route, which needs no credential.
+    resp = await client.get(f"/api/v1/agent-mail/messages/{root.id}/thread")
+    assert resp.status_code == 200
 ```
 
-This test needs `from app.config import settings` in that file — check whether Task 7 already added it; the pre-existing file does not import it. It does **not** need `mail_capability_tokens_required` set: the operator branch in `mail_session` is reached on the strength of the operator header alone, in either mode, which is itself worth knowing.
+Four notes on tests an implementer may be tempted to change.
 
-That makes **three** Step 9 cases, not two: two in `test_capability_tokens.py` and one in `test_dispatch_status_tool.py`, taking that file to **40** and this task's total to **10** new cases.
+**6f asserts what *reads* the credential, not what *refuses* it — because today those routes refuse nobody.** The spec's wording ("it buys no `POST /dispatch-status`, no approval, no lease authority") reads like a behavioural test, and it cannot be one in PR0's starting state. Measured through the real ASGI app, a freshly minted actor token reaches `POST /api/v1/agent-teams/dispatch-status` and gets **`200` with the note landing** — as an `Authorization: Bearer` header *and* as an `X-Deck-Session-Token` header, because that route reads neither:
 
-**`_missing_token_logged` is module-level state and `caplog` only sees the first log for a given member.** If a preceding test in the same process already logged for this member id, the assertion passes for the wrong reason. It cannot fire falsely *negative*, which is the direction that matters here, but note it: a positive control for the log line belongs with Task 5's grace-mode tests, where the set is empty.
+```
+actor token via Bearer                -> 200, status_note became 'actor via Bearer'
+actor token via X-Deck-Session-Token  -> 200, status_note became 'actor via X-Deck-Session-Token'
+GET  /github-scopes/1/workspaces      -> 200
+POST /agent-mail/messages/1/ack       -> 200
+```
 
-- [ ] **Step 10: Run both backend files, then the whole mail suite**
+Those routes are unauthenticated until Task 5 gates them, so `assert refused` would fail on correct code. The honest assertion is the structural one: the actor dependency is not in those endpoints' dependency trees, the actor row and its response carry no member or slot column, and minting writes nothing outside `mail_external_actors`. The spec's "mint it rather than fabricating one" reason survives intact — if a future change wires a credential onto `report_dispatch_status`, `actor_endpoints` grows and this test fails.
+
+**6f's route walk must recurse through `.original_router`, and the `> 100` guard is load-bearing.** FastAPI 0.140.7 keeps an included router as an `_IncludedRouter` node; the real routes hang off its `.original_router`. A flat walk of `app.routes` sees 7 entries — `Counter({'Route': 4, '_IncludedRouter': 1, 'APIRoute': 1, 'Mount': 1})` — finds **one** APIRoute, computes an empty `actor_endpoints`, and passes every `not in` assertion. That is the worst kind of green: a vacuous pass on a test whose whole job is to bound authority. The recursive walk finds **234** APIRoutes and **11** reading `external_actor`. `assert len(routes) > 100` and `assert actor_endpoints` exist so the flat-walk mistake is a failure rather than a pass; Step 7's mutation M-F4 is the flat walk itself.
+
+**6f keys on the endpoint function, not on the route path.** A sub-router's `.path` carries no prefix — the eleven actor routes report `/messages`, `/actors/me`, `/threads/{message_id}/replies`, and so on. So `assert not path.startswith("/api/v1/external/agent-mail/")` fails on all eleven legitimate routes: it measures FastAPI's internal path composition, not authority. Importing the six endpoint functions and comparing object identity measures the thing the test is about. Do not "simplify" this back to paths.
+
+**6i is self-contained here rather than an addition to `test_external_api.py`'s cross-actor read test.** That test binds `message_id` and `other_token`, not `root_id`, so appending to it means renaming; and 6i needs a root that is a *request* (so the ack reaches its ownership check rather than its kind check), which that test's root is not. Keeping it here also means both refusals live beside the relaxation they bound.
+
+**6e sends an extra `sender_member_id` key that the schema does not declare.** `ExternalAgentMailMessageRequest` (`schemas.py:1931-1935`) has no such field and its `model_config` is empty, so pydantic v2's default `extra="ignore"` drops it — measured: the parsed model has no `sender_member_id` attribute at all. The test asserts the *outcome* (a NULL member sender) rather than a validation error, because ignoring the field and rejecting it are both acceptable; producing a member-authored row is not.
+
+- [ ] **Step 2: Run them and read the failure count**
 
 ```bash
 cd backend && source venv/bin/activate
-pytest tests/agent_mail/test_operator_mail_writes.py tests/agent_mail/test_capability_tokens.py -v -p no:warnings
-pytest tests/agent_mail/ tests/agent_teams/ -q -p no:warnings
+pytest tests/agent_mail/test_actor_thread_capability.py -p no:warnings -q
 ```
 
-Expected: `7 passed` in `test_operator_mail_writes.py` and `35 passed` in `test_capability_tokens.py` (33 after Task 5 + this task's Step 9 pair), then **`557 passed`** for the two suites (547 after Task 9 + this task's 10 — Step 1's 7 plus Step 9's 3). `test_dispatch_status_tool.py` goes to **40**. Any *other* failure is a real regression from the widened return type — most likely a call site passing the derived value into `int()` that Step 6 missed. Grep for `derive_member_id` and check each caller handles `None`.
+**Measured: `7 failed, 6 passed`.** Read the count — it is the evidence the tests point at real gaps rather than at typos. Thirteen tests collected; if the collection count differs, a test was dropped or renamed.
 
-- [ ] **Step 11: Commit the backend half**
+Failing, and why:
+- `test_6b_...`, `test_6m_...` — `400 "External actors can only reply in threads they created"` (`:258-259`).
+- `test_6d_...`, `test_6j_...`, `test_6k_...`, `test_6l_...` — the route `POST /requests/{id}/actor-ack` does not exist. 6l cannot assert its `400` until it does.
+- `test_6i_...` — its *reply* half already passes (that refusal exists today); it fails on the ack half's missing route.
+
+**The missing-route code is `405` on a built tree and `404` on an unbuilt one — do not treat either as a symptom.** `main.py:79-80` mounts `StaticFiles` at `/` when `frontend/dist` exists, and that mount catches every unmatched path: a POST to it is `405 Method Not Allowed`, while a GET falls through to the SPA handler at `:82-87` and returns `404`. `frontend/dist` is gitignored (`frontend/.gitignore:11`), so a fresh clone gives `404` and a tree where anyone has run `npm run build` gives `405`. Measured both ways. The tests assert the *success* codes (`200`, and `400` for 6l), so they are indifferent — but an implementer who sees `405` and goes looking for a method mismatch in a route they have not written yet will waste an afternoon.
+
+Passing already, and each is a lock rather than a gap:
+- `test_6e_...` — the exclusivity check and the schema already refuse. **This must pass now**; if it fails, something else is wrong.
+- `test_6g_...` — the per-key actor model already holds.
+- `test_6a_...` — measured, all four compose kinds already store `(sender_member_id=None, sender_actor_id=1)` on the external routes: `[('message',None,1),('broadcast',None,1),('context_request',None,1),('handoff',None,1)]`. It locks that Step 11's move of the call sites cannot regress attribution.
+- `test_6f_...` — the actor credential's authority is already this narrow. It locks that nothing in Steps 3–5 widens it.
+- `test_6h_...` — the three response codes already hold. It locks the contract Step 10's retry is built on, before Step 10 writes the retry.
+- `test_actor_read_scope_is_unchanged` — the `403` and the `200` are both today's behaviour, which is the point.
+
+Six of thirteen passing in the red phase is expected and correct: seven tests cover the capability this task adds, and six bound what it must not change. A task that only adds tests for new behaviour has no way to fail when it widens something by accident.
+
+- [ ] **Step 3: Relax the reply, and fix its routing**
+
+In `backend/app/services/external_agent_mail_service.py`, replace the guard at `:258-259` and the recipient argument at `:265`:
+
+```python
+        root = await db.get(MailMessage, root_id)
+        if root is None:
+            raise ValueError("Thread root not found")
+        # Spec 3.6b: an actor may participate in a thread no OTHER actor owns --
+        # agent-created roots (sender_member_id set) and anonymous roots (both
+        # senders NULL). Narrowing this to `sender_member_id is not None` refuses
+        # the 59 anonymous message threads in the live database AND the actor's
+        # own threads; see spec test 6m and mutation 5.
+        if root.sender_actor_id is not None and root.sender_actor_id != actor.id:
+            raise ValueError("External actors can only reply in threads they created")
+        return await self.send_message(
+            db,
+            actor,
+            request,
+            kind="message",
+            # NOT root.recipient_member_id: on an agent-created context_request
+            # that is the member who was ASKED, so the member who ASKED -- the one
+            # waiting for this reply -- would get no receipt. None selects
+            # send_message's thread fan-out (agent_mail_service.py:881-886), which
+            # excludes request.sender_member_id and so excludes nobody, because an
+            # actor's sender_member_id is NULL. Spec test 6b asserts the receipts.
+            recipient_member_id=None,
+            thread_root_id=root_id,
+            subject=request.subject,
+            body_markdown=request.body_markdown,
+            payload=request.payload,
+        )
+```
+
+- [ ] **Step 4: Add the actor-scoped acknowledgement**
+
+In the same file, immediately after `acknowledge_external_request` (`:346`):
+
+```python
+    async def acknowledge_actor_request(
+        self,
+        db: AsyncSession,
+        actor: MailExternalActor,
+        message_id: int,
+    ) -> ExternalAgentMailRequestStatus:
+        """Acknowledge a request as an external actor, writing no member evidence.
+
+        Spec 3.6b. Three things differ from acknowledge_external_request, and each
+        one is a measured defect in the version that merely relaxes its ownership
+        check:
+
+        1. It permits any root no OTHER actor owns, not only the actor's own.
+        2. It moves a PENDING handoff as well as an ANSWERED context_request. The
+           member ack does both (agent_mail_service.py:1298-1313); the external ack
+           moves only `answered`, so the UI's handoff button would return 200 and
+           change nothing.
+        3. It projects its response WITHOUT self.request_status, whose self.thread
+           call re-enters _require_actor_owns_thread -- which raises after this
+           method has already committed.
+
+        It writes no MailReceipt. read_at is the only mail field any dispatch
+        service reads (github_dispatch_service.py:824, gating the brief_unread
+        ladder), so an operator ack that reached a member receipt would report that
+        an agent read a brief it has never seen.
+        """
+        root = await db.get(MailMessage, message_id)
+        if root is None:
+            raise ValueError("Message not found")
+        if root.sender_actor_id is not None and root.sender_actor_id != actor.id:
+            raise ValueError("External actors can only acknowledge requests they created")
+        if root.kind not in {"context_request", "handoff"}:
+            raise ValueError("Message is not a request")
+        if root.request_status in {"pending", "answered"}:
+            root.request_status = "acknowledged"
+            await db.commit()
+        return await self._actor_request_status(db, root.id)
+
+    async def _actor_request_status(
+        self,
+        db: AsyncSession,
+        message_id: int,
+    ) -> ExternalAgentMailRequestStatus:
+        """request_status without the ownership gate. See acknowledge_actor_request."""
+        thread = await agent_mail_service.get_thread(db, message_id)
+        root = thread.root
+        answered = root.request_status in {"answered", "acknowledged"} or any(
+            reply.kind == "answer" for reply in thread.replies
+        )
+        return ExternalAgentMailRequestStatus(
+            message_id=root.id,
+            kind=root.kind,
+            request_status=root.request_status,
+            is_stale=root.is_stale,
+            answered=answered,
+            acknowledged=root.request_status == "acknowledged",
+            root=root,
+            replies=thread.replies,
+        )
+```
+
+Two notes an implementer will otherwise re-derive:
+
+The transition guard is `in {"pending", "answered"}` rather than the two-branch `if handoff and pending / elif answered` form §3.6b's prose describes. It is equivalent for the two kinds this method accepts — a `handoff` reaches `pending`, a `context_request` reaches `answered`, `acknowledged` is idempotent, and no third value exists — and it has one fewer branch to get wrong. Mutation 4 confirms the narrowing is still caught.
+
+`ExternalAgentMailRequestStatus` and `agent_mail_service` are both already imported in this file (`:20`, `:29`); no import changes are needed.
+
+- [ ] **Step 5: Add the route, catching both exception types**
+
+In `backend/app/api/v1/external_agent_mail.py`, after the existing ack route (`:229`):
+
+```python
+@router.post("/requests/{message_id}/actor-ack", response_model=ExternalAgentMailRequestStatus)
+async def actor_ack_external_agent_mail_request(
+    message_id: int,
+    actor: MailExternalActor = Depends(external_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Acknowledge a request the actor did not create (spec 3.6b)."""
+    try:
+        return await external_agent_mail_service.acknowledge_actor_request(db, actor, message_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+```
+
+No imports change: `ExternalAgentMailRequestStatus`, `Depends`, `HTTPException`, `external_actor` and `get_db` are all already in scope.
+
+The `PermissionError` handler is not decoration, and it is also not what makes 6j pass — Step 4 is. Its job is to bound the *symptom* if a future edit reintroduces the gate. Measured: with the handler, mutation 3 produces a `403`; without it, the exception escapes the route, which in the test suite surfaces as an uncaught `PermissionError` (the `client` fixture's `httpx.ASGITransport` re-raises by default) and under uvicorn as an HTTP `500`. Both fail 6j, so the test catches the regression either way; the handler decides whether *production* sees a `403` or a `500` on a write that already committed. The ack route beside it (`:218-229`) catches `ValueError` alone, which is exactly the omission that produced measurement 1.
+
+- [ ] **Step 6: Run the new tests**
 
 ```bash
-git add backend/app/api/v1/deps.py backend/app/api/v1/agent_mail.py \
-        backend/tests/agent_mail/test_operator_mail_writes.py \
-        backend/tests/agent_mail/test_capability_tokens.py
-git commit -m "feat(mail): accept the operator credential on the UI's mail writes
-
-The Agent Mail UI holds no session token and its reply path requires a MEMBER
-sender: kind='answer' is valid only when sender_member_id equals the thread
-root's recipient_member_id. An external-actor write lands in sender_actor_id and
-leaves sender_member_id NULL by construction, so no actor token can post it --
-measured 400 'only the context request recipient can answer it'. The two
-external routes spec 3.6 named also refuse outright, both with 'External actors
-can only ... they created', because the UI acts in threads agents created.
-
-mail_session therefore accepts a second credential: the operator token from
-spec 3.6a, which is the only secret in this system an agent cannot mint. A
-member-sender route gated on an actor token would be a hole, not a fix -- POST
-/external/agent-mail/actors needs no credential at all, so every pane could
-then write as the leader whose answer PR1's approval gate reads.
-
-Session token is checked first, so a pane holding one cannot escalate by adding
-an operator header. The empty-setting check precedes the comparison because
-compare_digest('', '') is True. The comparison is over bytes because
-compare_digest raises TypeError on a non-ASCII str, which is a 500 not a
-refusal.
-
-Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6, resolved
-against section 3.6a"
+cd backend && source venv/bin/activate
+pytest tests/agent_mail/test_actor_thread_capability.py -p no:warnings -q
 ```
 
-- [ ] **Step 12: Add the token store to the frontend**
+**Measured: `13 passed`.**
 
-Create `frontend/src/lib/operatorToken.ts`:
+- [ ] **Step 7: Mutate twelve ways and confirm each named test fails**
+
+Each mutation is one edit, applied and then reverted before the next. This is the step that decides whether the tests are worth having: every one of these mutants is green against some *other* plausible test of the same behaviour. The "measured result" column is what actually happened, not a prediction.
+
+Run after each: `pytest tests/agent_mail/test_actor_thread_capability.py tests/agent_mail/test_external_api.py -p no:warnings -q` (baseline for the pair: **24 passed**).
+
+Mutations 1–5 attack the capability this task adds:
+
+| # | Mutation | Measured result |
+|---|---|---|
+| 1 | In `reply_in_thread`, restore `recipient_member_id=root.recipient_member_id` | `1 failed, 23 passed` — `test_6b_...` only, and only on its receipt assertion. The row assertions still pass: the reply is authored correctly and delivered to the wrong agent |
+| 2 | Delete both ownership guards **in full** — the whole `if`/`raise` at `:258-259` and at `:357-358` (the blanket relaxation) | `2 failed, 22 passed` — `test_6i_...` **and `test_6h_...`**. 6i is the test written for this mutant; 6h catches it as a side effect, because its cross-actor write must be a `400` for `actorFetch` not to retry, and the blanket relaxation turns that `400` into a `200`. Two independent tests failing on one mutant is not redundancy: they fail on different assertions, for different reasons. **Delete the whole statement, not just the `sender_actor_id is not None and` clause** — striking only that clause restores the *pre-task* narrow guard, which is mutation 5's shape and produces mutation 5's failures (`test_6b`, `6d`, `6j`, `6k`, `6l`, `6m` — six, measured). Two opposite mistakes look similar in a diff |
+| 3 | In `acknowledge_actor_request`, replace the last line with `return await self.request_status(db, actor, root.id)` | `3 failed, 21 passed` — `test_6d_...`, `test_6j_...`, `test_6k_...`, all with `403`. Their *state* assertions never run; each fails on the response. Remove the route's `PermissionError` handler as well and the same three fail on an uncaught `PermissionError` — the `500` is the uvicorn symptom, not the in-test one |
+| 4 | Narrow the transition to `if root.request_status == "answered":` | `1 failed, 23 passed` — `test_6k_...` only. `test_6d_...` passes: its root is already `answered` |
+| 5 | Narrow the reply guard to `if root.sender_member_id is None: raise ...` | `2 failed, 22 passed` — `test_6m_...` **and the pre-existing `test_external_api.py::test_external_actor_can_reply_in_own_thread` (`:320-352`, asserting at `:343`)**, because that test's root is actor-created and so has a NULL member sender. Worth knowing: the narrow predicate breaks the capability that already shipped, not only the new one |
+
+Mutations 6–9 attack the three locks. A lock that no mutant can break is a comment, not a test, so each was run:
+
+| # | Mutation | Measured result |
+|---|---|---|
+| 6 | In `send_broadcast` (`:202`), change `kind="broadcast"` to `kind="message"` | `1 failed, 23 passed` — `test_6a_...` only, on its kind list. This is 6a's unique discriminator: no other test in either file checks that each compose route produces the kind it names, so a route silently downgraded to a plain message ships |
+| 6′ | Change `kind="context_request"` (`:222`) the same way | `2 failed, 22 passed` — `test_6a_...` **and the pre-existing `test_external_api.py::test_external_request_status_wait_and_ack_lifecycle`**, which needs a real request to have a status. Worth running as well as 6: it shows which kinds already have cover (`context_request`) and which have none (`broadcast`, `handoff`) |
+| 6″ | Set `sender_actor_id=None` at `:174` instead | `9 failed, 15 passed` — six in the new file and three in `test_external_api.py`. **Not a useful mutant**: `:174` is the single shared row-construction path for every external send, so breaking it breaks everything and tells you nothing about which test guards attribution. Recorded because it is the mutation an implementer reaches for first, and its result is misleading in the reassuring direction — nine failures look like strong cover when they are one assertion repeated |
+| 7 | Add `member_id: Optional[int] = None` to `MailExternalActorResponse` | `1 failed, 23 passed` — `test_6f_...` on `"member_id" not in me.json()`. The credential's response shape is part of its authority: a `member_id` field is where impersonation starts |
+| 8 | Add `actor = Depends(external_actor)` to `report_dispatch_status` (`agent_teams.py`), importing it from `external_agent_mail` | `1 failed, 23 passed` — `test_6f_...`, with `AssertionError: report_dispatch_status`; the endpoints reading the credential go **11 → 12**. This is the mutant 6f exists for, and the only one of the twelve that a reviewer might wave through as a plausible improvement |
+| 8′ | Have `create_actor` also insert a `MailTeamMember` keyed to the actor (`identity_key=f'repo:{actor_key}'`) | `3 failed, 21 passed` — `test_6f_...` on `assert count == 0, table` for `mail_team_members`, plus two pre-existing `test_external_api.py::test_external_delivery_reports_tmux_wake_success` parameterizations that now see an unexpected member. Note: keying the injected member on a **constant** instead makes the second mint raise `IntegrityError` on the UNIQUE `identity_key` and fails all 13 — a broken mutation, not a strong test |
+| 9 | Replace `_api_routes`'s body with a flat `for route in getattr(node, "routes", [])` walk, dropping the `else` recursion and the `original_router` tail | `1 failed, 12 passed` — `test_6f_...` on `AssertionError: the route walk found only 1`. **Without that guard this mutant passes**: the flat walk finds no actor endpoint, so all six `not in` assertions are vacuously true. The guard is the test's own self-check, and this row is its evidence |
+
+Three more mutations bound 6h's codes. Each was run; two of the three also break a pre-existing test, which is worth knowing before you see the count:
+
+| # | Mutation | Measured result |
+|---|---|---|
+| H1 | In `reply_external_agent_mail_thread`, raise the `ValueError` handler as `401` instead of `400` | `2 failed, 22 passed` — `test_6h_...` **and `test_6i_...`**, which asserts that same `400` |
+| H2 | In `get_external_agent_mail_thread`, raise the `PermissionError` handler as `401` instead of `403` | `3 failed, 21 passed` — `test_6h_...`, `test_actor_read_scope_is_unchanged`, and the pre-existing `test_external_api.py::test_external_actor_cannot_read_other_actor_threads` |
+| H3 | In `authenticate_actor`, after the compare loop, return the first actor row instead of raising `Invalid bearer token` | `1 failed, 23 passed` — `test_6h_...` alone. **This is the one that matters**, and the only test in the repo that catches it: it makes the retry unnecessary and the credential meaningless in the same edit, and every other actor test still passes because they all present valid tokens. Insert after the loop, not before it — the earlier `raise` in that method is the *missing*-token case, and mutating that one fails `test_external_api.py::test_external_actor_registration_and_auth` instead |
+
+If a mutation does not produce the named failures, the test is wrong and not the table — fix the test before continuing. Revert everything before Step 8, and check `git status` rather than trusting the reverts: the test file is new and therefore untracked, so `git checkout` does **not** restore it. A mutation left applied to it silently contaminates every later run.
+
+- [ ] **Step 8: Run the full mail and teams suites**
+
+```bash
+cd backend && source venv/bin/activate
+pytest tests/agent_mail/ tests/agent_teams/ -p no:warnings -q
+```
+
+**Measured: `467 passed`** — the 454 baseline plus this task's 13. If Tasks 1–9 landed first the arithmetic is that number plus 13; the invariant is that nothing previously passing now fails.
+
+- [ ] **Step 9: Commit the backend half**
+
+```bash
+cd /home/juan/work/repos/juanrubio/claude-deck-g1
+git add backend/app/services/external_agent_mail_service.py \
+        backend/app/api/v1/external_agent_mail.py \
+        backend/tests/agent_mail/test_actor_thread_capability.py
+git commit -m "feat(agent-mail): external actors may participate in threads they did not create
+
+Spec 3.6b. The operator's mail UI needs to reply to and acknowledge threads
+AGENTS created, and every actor capability was scoped to 'threads they created'
+-- an empty predicate for exactly those threads. The alternative, letting the
+operator write as a member, is what the eighteenth review rejected: it produces
+rows indistinguishable from an authenticated agent's, which is the confusion
+Finding #1 exists to remove.
+
+reply_in_thread now permits any root no OTHER actor owns, and routes with
+recipient_member_id=None. The previous argument, root.recipient_member_id, is
+the member who was ASKED -- so on an agent-created context_request the member
+who ASKED, the one waiting for the reply, received no receipt.
+
+acknowledge_actor_request is new rather than a relaxation of
+acknowledge_external_request, for three measured reasons:
+  * that method returns through request_status -> thread ->
+    _require_actor_owns_thread, which refuses AFTER the commit and, since the
+    route catches only ValueError, surfaces as HTTP 500 on a write that landed
+  * it moves only answered->acknowledged, so the UI's pending-handoff button
+    would return 200 and change nothing
+  * it must write no MailReceipt: read_at is the only mail field any dispatch
+    service reads (github_dispatch_service.py:824) and setting it would report
+    that an agent read a brief it never saw
+
+Read scope is deliberately unchanged. _require_actor_owns_thread still refuses,
+and the UI reads through the member thread route, which has no dependency but
+get_db.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6b
+Tests: 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m"
+```
+
+- [ ] **Step 10: The actor token provisioner**
+
+Create `frontend/src/features/agent-mail/actorAuth.ts`. It lives in the feature rather than in `lib/` because exactly one feature authenticates this way, and `lib/api.ts` must not learn about it — see the `apiClient` note in the docstring.
 
 ```ts
-const STORAGE_KEY = 'deck.operatorToken'
+import { API_BASE_URL } from '@/lib/constants'
 
-// Cached because apiClient reads it on every request and sessionStorage access
-// is a synchronous cross-boundary call. The cache is invalidated only through
-// setOperatorToken, which is the sole writer.
-let cached: string | null | undefined
+const STORAGE_KEY = 'deck-agent-mail-actor-token'
 
-export function operatorToken(): string | null {
-  if (cached === undefined) {
-    try {
-      cached = sessionStorage.getItem(STORAGE_KEY)
-    } catch {
-      // Private-mode or a hardened browser: treat as absent rather than throw.
-      cached = null
-    }
-  }
-  return cached
+/**
+ * One external-actor row per browser tab.
+ *
+ * sessionStorage, not localStorage: the token dies with the tab, and per-tab
+ * keys mean two tabs cannot rotate each other's credential. The cost is one
+ * actor row per tab, which is why the key is random rather than fixed.
+ */
+function actorKey(): string {
+  return `deck-ui-${crypto.randomUUID().slice(0, 8)}`
 }
 
-export function setOperatorToken(value: string | null): void {
-  cached = value
-  try {
-    if (value) {
-      sessionStorage.setItem(STORAGE_KEY, value)
-    } else {
-      sessionStorage.removeItem(STORAGE_KEY)
-    }
-  } catch {
-    // The in-memory cache still holds it for this tab's lifetime.
+async function provision(): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}external/agent-mail/actors`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      actor_key: actorKey(),
+      display_name: 'Deck UI',
+      kind: 'supervisor',
+      description: 'Claude Deck browser session',
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(`Could not provision an Agent Mail credential (HTTP ${response.status})`)
   }
+  const token = (await response.json()).token as string
+  sessionStorage.setItem(STORAGE_KEY, token)
+  return token
 }
-```
 
-**`sessionStorage`, not `localStorage`, and this is the one part of §3.6's provisioning advice that survives.** The token dies with the tab, so a shared machine does not leave an operator credential in a profile that outlives the session. It also means the operator pastes it once per tab, which is the cost of not storing a secret durably in the browser.
+async function token(): Promise<string> {
+  return sessionStorage.getItem(STORAGE_KEY) ?? (await provision())
+}
 
-- [ ] **Step 13: Send the header from `apiClient`**
+export function resetActorToken(): void {
+  sessionStorage.removeItem(STORAGE_KEY)
+}
 
-In `frontend/src/lib/api.ts`, import the store and add one header. The spread order matters: `...options?.headers` stays **last** so a call site can still override.
-
-```ts
-import { operatorToken } from '@/lib/operatorToken'
-```
-
-```ts
-export async function apiClient<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint}`
-  const token = operatorToken()
-
-  try {
-    const response = await fetch(url, {
-      ...options,
+/**
+ * Fetch through the actor credential, re-provisioning ONCE on 401 and on
+ * nothing else.
+ *
+ * The bound matters: a pruned actor row is a 401 and is worth one retry, but a
+ * 403 or a 500 retried in a loop is indistinguishable from a hung UI. This is
+ * also why these calls do not go through apiClient -- it throws
+ * `new Error(message)` and discards response.status (lib/api.ts:117-122), so
+ * 401 could not be told apart from 403.
+ */
+export async function actorFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const send = async (bearer: string) =>
+    fetch(`${API_BASE_URL}${path}`, {
+      ...init,
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'X-Deck-Operator-Token': token } : {}),
-        ...options?.headers,
+        ...init?.headers,
+        Authorization: `Bearer ${bearer}`,
       },
     })
+
+  let response = await send(await token())
+  if (response.status === 401) {
+    resetActorToken()
+    response = await send(await provision())
+  }
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null)
+    const message =
+      typeof detail?.detail === 'string' ? detail.detail : `HTTP ${response.status}`
+    throw new Error(response.status === 429 ? `Sending too fast — ${message}` : message)
+  }
+  return response.json() as Promise<T>
+}
 ```
 
-Sending it on **every** request rather than only on mail writes is deliberate: the backend ignores the header on routes with no dependency reading it, and a per-call opt-in is how a future write acquires a silent `401`. It also means Task 8's operator-gated workspace routes become reachable from the UI for free, which is what makes the deferred workspace-lease UI (§7) possible without another auth change.
+`API_BASE_URL` is `import.meta.env.VITE_API_URL || '/api/v1/'` (`lib/constants.ts:1`) — it carries a trailing slash, which is why the paths passed to `actorFetch` have no leading one.
 
-- [ ] **Step 14: Add the settings field so the operator can supply the token**
+The `429` branch is not defensive styling. The external send path is rate-limited at 30 messages per 60 seconds per actor (`external_agent_mail_service.py:32-33`) where the member route has no limit, so this is a refusal the operator can actually reach, and a generic "failed to send" for it is a support ticket. Per-tab actor keys give each tab its own window.
 
-Create `frontend/src/features/config/OperatorTokenCard.tsx`.
+- [ ] **Step 11: Point the three write helpers at the external routes**
 
-**Measured before writing: there is no `features/settings/` directory.** `ConfigViewerPage.tsx` composes sibling `*Card.tsx` files from `features/config/` directly (`CodexDiagnosticsCard`, `CodexInventoryCard`, `CodexProfileResolverCard` — imported at `:8-10`, rendered at `:297`). There *is* a `features/config/settings/` subtree, but it belongs to `SettingsEditor` and edits Claude's own settings files, not Deck's. Follow the sibling-card pattern.
+In `frontend/src/features/agent-mail/api.ts`. Add `import { actorFetch } from './actorAuth'` below the existing `@/lib/api` import (`:1`), replace `sendAgentMailMessage` (`:28-33`) with the block below, and delete `ackAgentMailMessage` (`:73-78`).
 
-```tsx
-import { useState } from 'react'
-import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { operatorToken, setOperatorToken } from '@/lib/operatorToken'
+Compose fans out to four routes rather than one, because the external API has one route per kind (`external_agent_mail.py:99-152`) and its request schemas carry `why_needed`/`files_or_symbols`/`files`/`next_steps` at the **top level** (`schemas.py:1938-1951`), where `ComposeDialog` nests them under `payload` (`ComposeDialog.tsx:138-156`).
 
-export function OperatorTokenCard() {
-  const [value, setValue] = useState('')
-  const [stored, setStored] = useState(() => operatorToken() !== null)
+```ts
+interface ExternalSendResponse {
+  message: MailMessageResponse
+  delivery_state: string
+}
 
-  const save = () => {
-    const next = value.trim() || null
-    setOperatorToken(next)
-    setStored(next !== null)
-    setValue('')
-    toast.success(next ? 'Operator token stored for this tab' : 'Operator token cleared')
+/**
+ * Compose, as an external actor. The four kinds map onto four routes; the
+ * payload fields ComposeDialog nests are top-level in the external schemas.
+ *
+ * No sender_member_id is sent, and none could be: the external schemas have no
+ * such field. That is the point -- an operator-composed row has
+ * sender_member_id = NULL and so can never satisfy PR1's leader-approval
+ * predicate. Today's member-route compose already stores (NULL, NULL), so this
+ * is strictly more attribution, not less.
+ */
+export async function sendAgentMailMessage(
+  message: MailMessageCreate
+): Promise<MailMessageResponse> {
+  const payload = (message.payload ?? {}) as Record<string, unknown>
+  const base = {
+    recipient_member_id: message.recipient_member_id ?? undefined,
+    subject: message.subject ?? undefined,
+    body_markdown: message.body_markdown,
   }
+  const routes: Record<string, { path: string; body: Record<string, unknown> }> = {
+    message: { path: 'external/agent-mail/messages', body: base },
+    broadcast: { path: 'external/agent-mail/broadcasts', body: base },
+    context_request: {
+      path: 'external/agent-mail/context-requests',
+      body: {
+        ...base,
+        why_needed: payload.why_needed ?? null,
+        files_or_symbols: payload.files_or_symbols ?? [],
+      },
+    },
+    handoff: {
+      path: 'external/agent-mail/handoffs',
+      body: { ...base, files: payload.files ?? [], next_steps: payload.next_steps ?? [] },
+    },
+  }
+  const route = message.kind ? routes[message.kind] : undefined
+  if (!route) {
+    throw new Error(`The Deck UI cannot send kind "${message.kind ?? 'unset'}"`)
+  }
+  const response = await actorFetch<ExternalSendResponse>(route.path, {
+    method: 'POST',
+    body: JSON.stringify(route.body),
+  })
+  return response.message
+}
 
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Operator token</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">
-          Required to send Agent Mail and to manage workspace leases once capability
-          tokens are enforced. Must match <code>operator_token</code> in{' '}
-          <code>backend/.env</code>. Stored for this tab only — a new tab will ask
-          again.
-        </p>
-        <div className="space-y-2">
-          <Label htmlFor="operator-token">Token</Label>
-          <div className="flex gap-2">
-            <Input
-              id="operator-token"
-              type="password"
-              autoComplete="off"
-              placeholder={stored ? '•••••••• (stored for this tab)' : 'paste the token'}
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-            />
-            <Button onClick={save} disabled={!value.trim() && !stored}>
-              {value.trim() ? 'Save' : 'Clear'}
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+/** Reply in a thread, as an external actor. Always kind="message". */
+export async function replyInAgentMailThread(
+  rootId: number,
+  bodyMarkdown: string
+): Promise<MailMessageResponse> {
+  const response = await actorFetch<ExternalSendResponse>(
+    `external/agent-mail/threads/${rootId}/replies`,
+    { method: 'POST', body: JSON.stringify({ body_markdown: bodyMarkdown }) }
+  )
+  return response.message
+}
+
+/** Acknowledge a request as an external actor. Takes the ROOT's id. */
+export async function ackAgentMailRequest(rootId: number): Promise<{ request_status: string }> {
+  return actorFetch<{ request_status: string }>(
+    `external/agent-mail/requests/${rootId}/actor-ack`,
+    { method: 'POST' }
   )
 }
 ```
 
-`type="password"` and `autoComplete="off"` because this is a secret on a screen that gets shared and screenshotted. The card **never renders the stored value back** — only whether one exists — which is the same posture `CodexDiagnosticsCard` already takes with its `SENSITIVE_KEY_PATTERN` redaction (`:15`). `stored` is `useState` rather than a bare `operatorToken()` call so the placeholder updates after a save without a reload.
+The route lookup is guarded rather than written `routes[message.kind]`: `kind` is optional on `MailMessageCreate` (`types/agentMail.ts:61`), so the direct form does not type-check under `strict`. Measured — this is a `tsc` error, not a style preference.
 
-Mount it in `ConfigViewerPage.tsx` beside the existing cards: add `import { OperatorTokenCard } from "./OperatorTokenCard";` next to the three Codex imports, and render `<OperatorTokenCard />` in the same section. **Do not add a route** — `App.tsx`'s 17 routes are enumerated in `CLAUDE.md`, and one field does not warrant an 18th.
+`kind: 'answer'` is deliberately absent from the route map, and the `throw` is the honest failure: an actor cannot post an answer today, and this task does not add that capability (see "what is deliberately not touched"). `MailMessageCreate` stays imported — this function still takes it.
 
-- [ ] **Step 15: Improve the `401` message on the three mail writes**
+- [ ] **Step 12: Update `ThreadDialog` — the reply box loses its sender, the ack gains the root**
 
-A bare `401 session_token_required` in a toast tells an operator nothing actionable. In `frontend/src/features/agent-mail/api.ts`, wrap the three writes:
+In `frontend/src/features/agent-mail/ThreadDialog.tsx`. Six edits, then six deletions that `noUnusedLocals` will enforce.
+
+1. Replace the ack member computations (`:125-132`) — both buttons now ack the **root**, and neither needs a member:
 
 ```ts
-import { apiClient, buildEndpoint } from '@/lib/api'
-import { operatorToken } from '@/lib/operatorToken'
+  const root = thread?.root
+  const ackableRoot =
+    root && ((root.kind === 'handoff' && root.request_status === 'pending') ||
+             (root.kind === 'context_request' && root.request_status === 'answered'))
+      ? root
+      : null
 ```
 
+`answerAckMember`'s old gate on `root.sender_member_id` (`:132`) goes with this: it was NULL on any actor-created request, so that button never rendered for a thread the operator started.
+
+2. Replace `handleAck` (`:134-146`):
+
 ```ts
-async function operatorWrite<T>(endpoint: string, body: unknown): Promise<T> {
-  try {
-    return await apiClient<T>(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    if (message.includes('session_token_required') || message.includes('operator_token')) {
-      throw new Error(
-        operatorToken()
-          ? 'The stored operator token was rejected. Re-enter it in Config.'
-          : 'Agent Mail writes need an operator token. Add it in Config.'
-      )
+  const handleAck = async () => {
+    if (!ackableRoot) return
+    setSaving(true)
+    try {
+      await ackAgentMailRequest(ackableRoot.id)
+      await loadThread()
+      await onChanged()
+      toast.success('Acknowledged')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to acknowledge')
+    } finally {
+      setSaving(false)
     }
-    throw error
   }
-}
-
-export function sendAgentMailMessage(message: MailMessageCreate): Promise<MailMessageResponse> {
-  return operatorWrite<MailMessageResponse>('agent-mail/messages', message)
-}
-
-export function markAgentMailRead(messageId: number, memberId: number): Promise<{ ok: boolean }> {
-  return operatorWrite<{ ok: boolean }>(`agent-mail/messages/${messageId}/read`, {
-    member_id: memberId,
-  })
-}
-
-export function ackAgentMailMessage(messageId: number, memberId: number): Promise<{ ok: boolean }> {
-  return operatorWrite<{ ok: boolean }>(`agent-mail/messages/${messageId}/ack`, {
-    member_id: memberId,
-  })
-}
 ```
 
-The two branches are distinguishable on purpose: "no token stored" and "the stored token is wrong" send the operator to different actions, and `apiClient` surfaces FastAPI's `detail` through `apiErrorMessage`, so the string match has something to match on.
+3. Replace `handleReply` (`:148-175`). The `kind` computation goes: an actor reply is always a `message`.
 
-`markAgentMailRead` has zero callers today and still gets this treatment — see "What is deliberately not touched."
+```ts
+  const handleReply = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!root || !replyBody.trim()) return
+    setSaving(true)
+    try {
+      await replyInAgentMailThread(root.id, replyBody)
+      setReplyBody('')
+      await loadThread()
+      await onChanged()
+      toast.success('Reply sent')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to send reply')
+    } finally {
+      setSaving(false)
+    }
+  }
+```
 
-- [ ] **Step 16: Verify the frontend builds and lints**
+4. Replace the two ack buttons (`:214-229`) with one:
+
+```tsx
+          {ackableRoot && (
+            <div className="flex flex-wrap gap-2 rounded-lg border bg-muted/40 p-3">
+              <Button size="sm" onClick={handleAck} disabled={saving}>
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+                {ackableRoot.kind === 'handoff' ? 'Accept handoff' : 'Acknowledge answer'}
+              </Button>
+            </div>
+          )}
+```
+
+5. Replace the reply form's grid, select, and textarea wrapper (`:232-258`) with the textarea alone. The grid and the inner `space-y-2` div both go — keeping both leaves a `space-y-2` nested directly inside a `space-y-2`, which is dead markup:
+
+```tsx
+            <div className="space-y-2">
+              <Label htmlFor="agent-mail-thread-reply">Reply</Label>
+              <Textarea
+                id="agent-mail-thread-reply"
+                value={replyBody}
+                onChange={(event) => setReplyBody(event.target.value)}
+                rows={3}
+                placeholder="Add a completion note, clarification, or answer."
+              />
+            </div>
+```
+
+6. Replace the submit button (`:263-270`) — the sender gate and the two-icon branch both go, since there is no longer an "answer" case to signal:
+
+```tsx
+              <Button type="submit" disabled={!replyBody.trim() || saving}>
+                <Send className="mr-2 h-4 w-4" />
+                Send reply
+              </Button>
+```
+
+Then delete what is now unused. Each of these fails the build if missed, which is the check that the edits above were complete:
+
+- the `sender` state (`:95`) and its reset inside the `useEffect` (`:117`)
+- `MessageSquareReply` from the `lucide-react` import (`:2`)
+- the whole `Select`/`SelectContent`/`SelectItem`/`SelectTrigger`/`SelectValue` import block (`:16-22`)
+- `MailMessageCreate` from the type import (`:27`)
+- `memberName` from the `./utils` import (`:35`)
+- and change the api import (`:31`) to `import { ackAgentMailRequest, fetchAgentMailThread, replyInAgentMailThread } from './api'`
+
+`members` stays a prop and `Label`, `Textarea`, `CheckCircle2` and `Send` all stay imported — `MessageBlock` uses `members` to name the sender and recipient (`:72`), and the textarea keeps its label.
+
+The select cannot stay. It requires an operator-chosen member sender, which under Task 5's gate is exactly the write a browser holding no session token cannot make — a control whose every submission returns `401` is worse than no control. Attribution does not disappear with it: `MessageBlock` already renders the actor's display name (`:72`) and a `sender_type` badge (`:74-78`).
+
+- [ ] **Step 13: Check `AgentMailPage` needs no change**
+
+`handleSendMessage` (`AgentMailPage.tsx:172-181`) needs no edit — `sendAgentMailMessage` keeps its signature, and the handler already surfaces `error.message`, so real refusals (`429`, provisioning failure) reach the toast. Verify the import list still resolves: `ackAgentMailMessage` is gone from `api.ts`, and `AgentMailPage` never imported it (grepped — its only importer was `ThreadDialog`).
+
+- [ ] **Step 14: Type-check, lint, and build**
 
 ```bash
 cd frontend
-npm run lint
-npx tsc --noEmit
+npx tsc --noEmit -p tsconfig.app.json
+npx eslint src/features/agent-mail/
 npm run build
 ```
 
-Expected: clean. `noUnusedLocals` is on, so an unused import from Step 13 or 15 is an error, not a warning.
+**Measured: all three clean.**
 
-- [ ] **Step 17: Manually verify the three writes, both ways**
+Scope the lint to `src/features/agent-mail/` deliberately. Repo-wide, `npm run lint` reports **25 errors and 58 warnings that are pre-existing** on this branch (`src/lib/api.ts:70`/`:129` `preserve-caught-error`, `src/hooks/useProviders.ts:39` `react-hooks/set-state-in-effect`, and others). Do not fix them here, and do not read that non-zero exit as this task's failure — a step that said "`npm run lint`, expected: clean" would tell you that you broke something you did not touch.
 
-The backend tests prove the routes; this proves the browser actually sends the header. With the backend running and `operator_token` set in `backend/.env`:
+- [ ] **Step 15: Manual verification**
 
-1. With **no** token in Config, open Agent Mail and send a message. Expect the toast: *"Agent Mail writes need an operator token. Add it in Config."*
-2. Paste a **wrong** token in Config, retry. Expect: *"The stored operator token was rejected. Re-enter it in Config."*
-3. Paste the **real** token, retry. Expect the message to send.
-4. Open a thread on a `context_request` addressed to a member, select that member as sender, and reply. Expect *"Answer sent"* and the root's status to become `answered`.
-5. Ack a pending handoff. Expect *"Acknowledged"*.
-6. Open a **new tab**. Expect step 1's toast again — `sessionStorage` is per-tab, and confirming that is confirming the secret is not persisted.
+With both servers running and **`mail_capability_tokens_required = True`** — this is the regime the task exists for, and verifying under grace mode proves nothing:
 
-Steps 4 and 5 are the ones no automated frontend test covers (this project has none) and the ones the spec got wrong, so do not skip them.
+1. Open Agent Mail. Compose a `message` to a member → sent. In the DB: `sender_member_id IS NULL`, `sender_actor_id` set, `sender_type = 'external_actor'`.
+2. Compose a `context_request` with a "why needed" value → the row's `payload` carries `why_needed`, matching what the member route produced before.
+3. Have an agent send a `context_request` to another member and answer it. Open the thread: the reply box has **no** "Reply as" select. Reply → sent, actor-attributed, and **both** participants have a receipt.
+4. Click "Acknowledge answer" → the root reaches `acknowledged`, and neither participant's `MailReceipt.read_at` moved. The UI cannot show you this; check it in the DB.
+5. Have an agent send a `handoff`. Click "Accept handoff" → `acknowledged`.
+6. Open a second tab. Reply in the same thread → works. The two tabs hold different actor rows (`SELECT actor_key FROM mail_external_actors`), and each reply carries its own `sender_actor_id`.
+7. **6h, positive half.** In tab 1's devtools, corrupt the stored token (`sessionStorage.setItem('deck-agent-mail-actor-token','nope')`) and reply. With the network tab open: succeeds, and there are **exactly three** requests — the `401`, the `POST /actors`, and the retried write. Not four, and not a growing list. A *third* actor row appears; that accumulation is the accepted cost of per-tab keys.
+8. **6h, negative half — the one worth the trouble.** In tab 1, ack a request tab 2 owns. In the DB: `UPDATE mail_messages SET sender_actor_id = <tab 2's actor id> WHERE id = <the root>`, then click Acknowledge in tab 1. The network tab shows **one** request, a `400`, and a toast carrying the server's message. No re-provision, no second attempt. An unbounded retry here has no visible symptom other than a UI that appears to hang, which is why this is checked by hand rather than assumed from the code.
 
-- [ ] **Step 18: Commit the frontend half**
+- [ ] **Step 16: Commit the frontend half**
 
 ```bash
-git add frontend/src/lib/operatorToken.ts frontend/src/lib/api.ts \
+cd /home/juan/work/repos/juanrubio/claude-deck-g1
+git add frontend/src/features/agent-mail/actorAuth.ts \
         frontend/src/features/agent-mail/api.ts \
-        frontend/src/features/config/OperatorTokenCard.tsx \
-        frontend/src/features/config/ConfigViewerPage.tsx
-git commit -m "feat(ui): send the operator token with every request
+        frontend/src/features/agent-mail/ThreadDialog.tsx
+git commit -m "feat(agent-mail): the Deck UI writes mail as an external actor
 
-apiClient adds X-Deck-Operator-Token when one is stored, so the three Agent Mail
-writes keep working once capability tokens are enforced -- and Task 8's
-operator-gated workspace routes become reachable without a second auth change.
+Spec 3.6b. The UI's three mail writes move onto the external-actor routes and
+authenticate with a per-tab token provisioned into sessionStorage. Compose fans
+out to four routes because the external API has one per kind and carries the
+payload fields at the top level.
 
-sessionStorage rather than localStorage: the token dies with the tab, so a
-shared machine does not leave an operator credential in a browser profile. The
-cost is re-entry per tab, which is the right trade for a secret.
+The 'Reply as' select is removed. It required an operator-chosen member sender,
+which is exactly the write Task 5's gate refuses from a browser -- a control
+whose every submission returns 401 is worse than no control. Attribution stays
+visible: MessageBlock already renders the actor name and a sender_type badge.
 
-Spec 3.6 proposed a per-tab external ACTOR token instead. Dropped: that
-credential needs no secret to mint (POST /external/agent-mail/actors is
-loopback-gated only), and the UI's reply path needs a member sender, which the
-external schemas have no field for.
+Both ack buttons collapse into one that acknowledges the ROOT. The answer-ack
+button previously sent the answer's id, which the actor ack refuses as 'not a
+request' -- the call site changes its argument, not just its helper.
 
-Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6"
+These calls do not go through apiClient: it throws new Error(message) and
+discards response.status, so a pruned-actor 401 could not be told apart from a
+403. actorFetch re-provisions once on 401 and on nothing else, because a retry
+loop on a non-auth error is indistinguishable from a hung UI.
+
+Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6b"
 ```
 
 ---
