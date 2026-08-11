@@ -1682,9 +1682,11 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 3.4"
 
 **`register_agent`'s body parameter is already named `request`.** The ASGI `Request` therefore needs a different name. Use `http_request` and put it **first** in the signature.
 
-**The four-row policy, verbatim from §3.3a.** The body's `team_slot_id` / `team_preset_id` claim is used **only** to choose between two refusal policies, never for identity:
+**The four-row policy, verbatim from §3.3a.** The body's `team_slot_id` / `team_preset_id` claim is used **only** to choose between two refusal policies, never for identity.
 
-| Binding row | Body claims team context | Result |
+**Every row below presupposes a pane was derived.** This is §3.3's rung **3**, and "Binding row: none" means *this pane has no row*, never *there is no pane*. The no-pane cases are the two rungs stated immediately after the table, and they are reached on a **different branch** — Step 13's Correction is what happens when the two are flattened together:
+
+| Binding row (pane **was** derived) | Body claims team context | Result |
 | --- | --- | --- |
 | exists, `slot_id` set | either way | bound to that slot (derived; a disagreeing body claim is `403`) |
 | exists, `slot_id` NULL | either way | unbound token |
@@ -1938,7 +1940,7 @@ The select is deliberately unfiltered: the prune is a whole-table sweep, which i
 cd /home/juan/work/repos/juanrubio/claude-deck-g1/backend && source venv/bin/activate && pytest tests/agent_mail/test_capability_tokens.py -q -p no:warnings
 ```
 
-Expected: `13 passed`.
+Expected: **`17 passed`** — the 13 this file already holds after Task 3 (Task 1's 4 plus Task 3's 9) plus this step's 4 binding-reader tests. *Corrected 2026-08-11 (measured at the Task 4 reader checkpoint):* the figure here read `13`, which was Task 3's closing total re-used as though this step's four tests were the file's only contents. The cumulative table's `25` after Step 11 is right and already assumes `17` here, so this was a local slip rather than a broken chain.
 
 - [ ] **Step 10: Commit**
 
@@ -1992,7 +1994,14 @@ async def test_row_with_a_slot_binds_the_session(client, db, tmp_path, pane_reso
     await db.commit()
     pane_resolver(_pane())
 
-    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    # The cwd and provider MUST satisfy _slot_matches_registration, or
+    # _resolve_team_context discards the derived slot and returns (None, None).
+    # See the Correction below -- with a mismatched body this test fails on
+    # team_slot_id while the route is entirely correct.
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(slot.repo_path, provider=slot.provider),
+    )
     assert response.status_code == 200
     assert response.json()["capability_token"]
 
@@ -2102,6 +2111,12 @@ async def test_unresolvable_peer_mints_unbound_in_grace_mode(client, tmp_path, p
 
 You need `slot` and `other_slot` fixtures making two `AgentTeamSlot` rows on one preset. **Do not invent them** — `tests/agent_teams/test_agent_team_service.py` and `tests/agent_mail/test_registry.py` both already build slots; copy the shape from whichever helper is closest, and note in your report which you copied. Every required column must be set, or the insert fails with a constraint error that reads like a logic bug.
 
+**Correction (2026-08-11, measured — deriving the slot is necessary but not sufficient, and the first test in this block hid that).** `register_session` does not trust a `team_slot_id` just because the route derived it. It re-validates through `_resolve_team_context` → `_slot_matches_registration` (`agent_mail_service.py:345-374`), which returns `False` unless **both** `request.provider == slot.provider` **and** `derive_repo_identity(request.cwd)["repo_id"] == slot.repo_id`; on `False` the whole context collapses to `(None, None)` and the session is written **unbound**. So the body's `cwd` and `provider` are load-bearing in every test that expects a bound row.
+
+The consequence to design your fixtures around: your `slot` fixture must build its repo somewhere `derive_repo_identity` agrees with, and the register body must name **that** path and **that** provider. Measured with a body defaulting to `provider="claude"` and `cwd=tmp_path` against a slot at `tmp_path/"binding-repo"` with `provider="codex-cli"`: `repo_id` `c1124140d885c2d0` vs the slot's `bddec4f8b6c03716`, two mismatches, and the test fails `assert (None, 3000, '111') == (1, 3000, '111')` — **pointing at `team_slot_id` while the route is entirely correct**. That is the expensive kind of red: it reads as a binding bug in the code you just wrote. Pass `slot.repo_path` and `slot.provider` explicitly, as the test above now does, and let `_body`'s `**extra` override the default provider.
+
+Note this is the *route-level* counterpart of the reader tests in Step 6, which pass a `PeerPane` straight to `resolve_pane_binding` and so never touch `_slot_matches_registration`. A green reader test says nothing about whether the route's derived slot survives `register_session`.
+
 **Note what the last two tests pin down.** `pane_resolver(None)` cannot distinguish "no pane ancestor" from "no peer pid" — the route sees `None` either way, so the *only* thing that separates minting unbound from refusing `bind_unverifiable` is the enforcement flag. These two tests are the same request differing only in that flag, which is exactly the discrimination the route makes. Do not merge them into one loose assertion: a test that accepts either refusal proves nothing about which branch ran.
 
 `test_no_pane_ancestor_mints_unbound` and `test_unresolvable_peer_mints_unbound_in_grace_mode` overlap by design — the first has no team claim, the second has one. Together they show the claim alone does not trigger a refusal in grace mode.
@@ -2164,18 +2179,22 @@ async def register_agent(
     pane = resolve_request_pane(http_request)
 
     binding = None
-    if pane is not None:
+    if pane is None:
+        # Cannot verify where this caller runs. Under enforcement, a slot claim
+        # we cannot check is refused. In grace mode we mint unbound instead:
+        # refusing here would break every pre-upgrade and non-Linux caller the
+        # moment PR0 deploys. bind_pending is NOT reachable from here -- see the
+        # Correction below for why the two refusals must not share a branch.
+        if claims_team_context and settings.mail_capability_tokens_required:
+            raise HTTPException(status_code=409, detail="bind_unverifiable")
+    else:
         binding = await agent_mail_service.resolve_pane_binding(db, pane)
-    elif claims_team_context and settings.mail_capability_tokens_required:
-        # Cannot verify where this caller runs, and it claims a slot. Refuse --
-        # retryable, because the cause may be a binding that is not committed
-        # yet. In grace mode we mint unbound instead: refusing here would break
-        # every pre-upgrade and non-Linux caller the moment PR0 deploys.
-        raise HTTPException(status_code=409, detail="bind_unverifiable")
+        # A pane we DID derive, with no binding row, claiming a slot: retryable,
+        # because Deck may not have committed the binding row yet.
+        if binding is None and claims_team_context:
+            raise HTTPException(status_code=409, detail="bind_pending")
 
     derived_slot_id = binding.slot_id if binding is not None else None
-    if binding is None and claims_team_context:
-        raise HTTPException(status_code=409, detail="bind_pending")
     if (
         request.team_slot_id is not None
         and derived_slot_id is not None
@@ -2210,6 +2229,10 @@ async def register_agent(
         capability_token=capability_token,
     )
 ```
+
+**Correction (2026-08-11, measured — the revision at `b719fcd` had these two refusals sharing a branch, and grace mode could not be reached).** The superseded code read `if pane is not None: … elif claims_team_context and enforcement: raise bind_unverifiable`, then, *unconditionally*, `if binding is None and claims_team_context: raise bind_pending`. With no pane and enforcement off the `elif` correctly declined to raise — and execution then fell into the `bind_pending` line anyway, because `binding` is still `None`. Grace mode returned `409 bind_pending` on the exact request spec §3.3 rung 2 says must mint. Measured by applying the superseded block verbatim: `2 failed, 23 passed`, with `test_unresolvable_peer_mints_unbound_in_grace_mode` failing `assert 409 == 200`. With the block above: **`25 passed`**.
+
+The structural rule this encodes: **`bind_unverifiable` and `bind_pending` answer different questions and must not share a fallthrough.** The first means *we could not observe the caller's pane at all*; the second means *we observed it, and Deck has not written its row yet*. Spec §3.3's numbered rungs are sequential — rung 1 is "no peer pid", rung 2 is "no pane ancestor", and the rung-3 table at spec lines 551-556 (`| none | yes | 409 bind_pending |`) governs only the case where a pane **was** derived. Flattening rungs 2 and 3 into one `binding is None` test loses that distinction, and it loses it silently, in the direction that strands every caller grace mode exists to protect. Nest the second refusal inside the `else`, as above.
 
 Three things to be careful about:
 
