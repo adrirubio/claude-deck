@@ -1,6 +1,9 @@
 """Agent Mail: durable team members, ephemeral sessions, messages, delivery context."""
+
+import hashlib
 import logging
 import os
+import secrets
 import subprocess
 import time
 from datetime import datetime, timedelta
@@ -216,6 +219,52 @@ class AgentMailService:
         await db.refresh(member)
         await db.refresh(session)
         return member, session
+
+    @staticmethod
+    def hash_capability_token(token: str) -> str:
+        """Hash a capability token for storage.
+
+        Same construction as external_agent_mail_service._hash_token, so the
+        two credential families are verified identically.
+        """
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    async def ensure_capability_token(
+        self, db: AsyncSession, session: MailAgentSession
+    ) -> Optional[str]:
+        """Mint this session's capability token, or None if it already has one.
+
+        Called by the register_agent route, never by the hook registration path
+        (a hook returns {} and has nowhere to put the plaintext).
+
+        The token is minted once and NEVER rotated: the MCP shim re-registers
+        before every tool call, so rotating here would invalidate the token the
+        shim is holding on every single call. A row therefore keeps its hash for
+        life -- including after the shim dies -- which locks nobody out, because
+        a restarted shim generates a fresh session_key and so gets a fresh row.
+        """
+        if session.capability_token_hash is not None:
+            return None
+        token = secrets.token_urlsafe(32)
+        session.capability_token_hash = self.hash_capability_token(token)
+        await db.commit()
+        await db.refresh(session)
+        return token
+
+    async def peek_session_by_key(
+        self, db: AsyncSession, session_key: str
+    ) -> Optional[MailAgentSession]:
+        """Look up a session by key without writing anything.
+
+        The register route's rebind check needs to know whether a row already
+        exists, and with what hash, before register_session can rewrite that row
+        in place. Reusing register_session for the check would inspect a row
+        already repointed at the caller.
+        """
+        result = await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == session_key)
+        )
+        return result.scalar_one_or_none()
 
     async def _infer_team_context_from_process(
         self,

@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models.database import MailTeamMember
 from app.models.schemas import (
@@ -121,13 +122,28 @@ async def register_agent(
     request: MailAgentRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    # This check must run before register_session, which rewrites a known key's
+    # row in place. A hashless existing row cannot prove that this caller owns
+    # it, so never backfill a token for that row in either rollout mode.
+    existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
+    hashless_rebind = existing is not None and existing.capability_token_hash is None
+    if hashless_rebind and settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=409, detail="token_required_for_rebind")
+
     member, session = await agent_mail_service.register_session(db, request)
+    capability_token = (
+        None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
+    )
     members = await agent_mail_service.list_team(db)
     member_resp = next(candidate for candidate in members if candidate.id == member.id)
     session_resp = next(
         candidate for candidate in member_resp.sessions if candidate.session_key == session.session_key
     )
-    return MailAgentRegisterResponse(member=member_resp, session=session_resp)
+    return MailAgentRegisterResponse(
+        member=member_resp,
+        session=session_resp,
+        capability_token=capability_token,
+    )
 
 
 @router.get("/agent/inbox", response_model=MailInboxResponse)

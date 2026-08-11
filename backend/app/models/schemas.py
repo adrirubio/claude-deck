@@ -1994,6 +1994,7 @@ class MailAgentRegisterRequest(BaseModel):
 class MailAgentRegisterResponse(BaseModel):
     member: MailMemberResponse
     session: MailSessionResponse
+    capability_token: Optional[str] = None
 
 
 class AgentMailInstallStatus(BaseModel):
