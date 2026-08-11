@@ -9,7 +9,7 @@ import pytest_asyncio
 from sqlalchemy import select, text
 
 import app.api.v1.agent_mail as agent_mail_routes
-from app.config import settings
+from app.config import Settings, settings
 from app.database import get_db
 from app.main import app
 from app.models.database import (
@@ -129,9 +129,17 @@ async def _member(db, repo_id, name):
 
 
 def test_capability_token_settings_default_to_grace_mode():
-    """PR0 ships enforcement off, so an unconfigured deploy behaves exactly as before."""
-    assert settings.mail_capability_tokens_required is False
-    assert settings.operator_token == ""
+    """PR0 ships enforcement off, so an unconfigured deploy behaves exactly as before.
+
+    Assert the DECLARED defaults, not the resolved singleton. `Settings` reads
+    `backend/.env`, so any developer or deploy that configures `operator_token`
+    -- which Tasks 8-11 require -- makes the resolved value non-empty. Asserting
+    the singleton made this test fail on exactly the machines that had followed
+    the rollout, and printed the operator token into the pytest failure output.
+    """
+    fields = Settings.model_fields
+    assert fields["mail_capability_tokens_required"].default is False
+    assert fields["operator_token"].default == ""
 
 
 def test_session_model_carries_the_three_binding_columns():
