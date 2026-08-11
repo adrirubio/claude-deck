@@ -139,3 +139,23 @@ def test_resolve_peer_pane_is_none_when_the_socket_is_gone(monkeypatch):
         peer_process, "find_socket_inode", lambda host, port, local_port=None: None
     )
     assert peer_process.resolve_peer_pane("127.0.0.1", 36253) is None
+
+
+def test_pane_is_alive_distinguishes_gone_from_unobservable(tmp_path, monkeypatch):
+    """Three-valued on purpose: gone means prune, unobservable means keep."""
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(_STAT)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+
+    assert peer_process.pane_is_alive(1234, "120913170") is True
+    assert peer_process.pane_is_alive(1234, "99999999") is False
+    assert peer_process.pane_is_alive(4321, "120913170") is False
+
+
+def test_pane_is_alive_is_none_when_proc_cannot_be_read(monkeypatch):
+    def _boom(pid):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(peer_process, "read_proc_stat", _boom)
+    assert peer_process.pane_is_alive(1234, "120913170") is None

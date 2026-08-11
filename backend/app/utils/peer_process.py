@@ -235,3 +235,20 @@ def resolve_peer_pane(
             return None
         pid = parent_pid
     return None
+
+
+def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
+    """Is the process at pane_pid still the one that started at pane_proc_start?
+
+    True means the same process is alive, False means it is gone or its pid was
+    reused, and None means the process cannot be observed and its row must be
+    kept rather than pruned.
+    """
+    try:
+        stat = read_proc_stat(pane_pid)
+    except OSError:
+        return None
+    if stat is None:
+        return False
+    _parent_pid, current_start = stat
+    return current_start == pane_proc_start
