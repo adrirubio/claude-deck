@@ -1,17 +1,26 @@
 """Spec §3.7 — capability token tests for PR0."""
 
 import hashlib
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 import app.api.v1.agent_mail as agent_mail_routes
 from app.config import settings
 from app.database import get_db
 from app.main import app
-from app.models.database import AgentPaneBinding, AgentTeamPreset, AgentTeamSlot, MailAgentSession
+from app.models.database import (
+    AgentPaneBinding,
+    AgentTeamPreset,
+    AgentTeamSlot,
+    MailAgentSession,
+    MailMessage,
+    MailReceipt,
+    MailTeamMember,
+)
 from app.models.schemas import MailAgentRegisterRequest
 from app.services.agent_mail_service import agent_mail_service
 from app.utils.peer_process import PeerPane
@@ -103,6 +112,20 @@ def _body(cwd, session_key="mcp:bind", **extra):
     }
     body.update(extra)
     return body
+
+
+async def _member(db, repo_id, name):
+    member = MailTeamMember(
+        identity_key=f"repo:{repo_id}",
+        repo_id=repo_id,
+        repo_path=f"/tmp/{name}",
+        repo_name=name,
+        display_name=name,
+    )
+    db.add(member)
+    await db.commit()
+    await db.refresh(member)
+    return member
 
 
 def test_capability_token_settings_default_to_grace_mode():
@@ -569,3 +592,211 @@ async def test_unresolvable_peer_mints_unbound_in_grace_mode(client, tmp_path, p
     )
     assert response.status_code == 200
     assert response.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_write_with_a_valid_token_derives_the_sender(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:send"),
+    )
+    token = register.json()["capability_token"]
+    sender_id = register.json()["member"]["id"]
+    recipient = await _member(db, "other-repo", "other")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "recipient_member_id": recipient.id,
+            "subject": "hello",
+            "body_markdown": "hi",
+        },
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["sender_member_id"] == sender_id
+
+
+@pytest.mark.asyncio
+async def test_write_with_no_token_is_401_under_enforcement(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    recipient = await _member(db, "other-repo", "other")
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": recipient.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_token_never_falls_back(client, db, tmp_path, monkeypatch):
+    assert settings.mail_capability_tokens_required is False
+    recipient = await _member(db, "other-repo", "other")
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": recipient.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+        headers={"X-Deck-Session-Token": "not-a-real-token"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_invalid"
+
+
+@pytest.mark.asyncio
+async def test_grace_mode_accepts_a_tokenless_write(client, db, tmp_path):
+    assert settings.mail_capability_tokens_required is False
+    sender = await _member(db, "sender-repo", "sender")
+    recipient = await _member(db, "other-repo", "other")
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": sender.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["sender_member_id"] == sender.id
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_sender_is_403(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:forge"),
+    )
+    token = register.json()["capability_token"]
+    victim = await _member(db, "victim-repo", "victim")
+    recipient = await _member(db, "other-repo", "other")
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        json={
+            "kind": "message",
+            "sender_member_id": victim.id,
+            "recipient_member_id": recipient.id,
+            "subject": "s",
+            "body_markdown": "b",
+        },
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "sender_not_token_holder"
+
+
+@pytest.mark.asyncio
+async def test_inbox_without_a_token_is_401(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    member = await _member(db, "inbox-repo", "inbox")
+    response = await client.get(f"/api/v1/agent-mail/agent/inbox?member_id={member.id}")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
+
+
+@pytest.mark.asyncio
+async def test_the_forged_liveness_attack_writes_nothing(client, db, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:victim"),
+    )
+    leader_id = register.json()["member"]["id"]
+
+    stale = datetime.utcnow() - timedelta(days=30)
+    session_row = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.member_id == leader_id)
+        )
+    ).scalar_one()
+    session_row.last_seen_at = stale
+    session_row.mailbox_status = "offline"
+
+    sender = await _member(db, "sender-repo", "sender")
+    message = MailMessage(
+        kind="message",
+        sender_member_id=sender.id,
+        recipient_member_id=leader_id,
+        subject="dispatch brief",
+        body_markdown="do the thing",
+    )
+    db.add(message)
+    await db.flush()
+    receipt = MailReceipt(message_id=message.id, member_id=leader_id)
+    db.add(receipt)
+    leader = await db.get(MailTeamMember, leader_id)
+    leader.last_inbox_checked_at = None
+    await db.commit()
+
+    response = await client.get(
+        f"/api/v1/agent-mail/agent/inbox?member_id={leader_id}&mark_read=true"
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
+
+    message_id = message.id
+    db.expire_all()
+    session_row = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.member_id == leader_id)
+        )
+    ).scalar_one()
+    assert session_row.last_seen_at == stale
+    assert session_row.mailbox_status == "offline"
+    receipt = (
+        await db.execute(select(MailReceipt).where(MailReceipt.message_id == message_id))
+    ).scalar_one()
+    assert receipt.read_at is None
+    leader = await db.get(MailTeamMember, leader_id)
+    assert leader.last_inbox_checked_at is None
+
+
+@pytest.mark.asyncio
+async def test_inbox_with_a_token_ignores_a_disagreeing_member_id(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    register = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, session_key="mcp:holder"),
+    )
+    token = register.json()["capability_token"]
+    holder_id = register.json()["member"]["id"]
+    victim = await _member(db, "victim-repo", "victim")
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["member_id"] == holder_id
+
+    response = await client.get(
+        f"/api/v1/agent-mail/agent/inbox?member_id={holder_id}",
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 200
+    assert response.json()["member_id"] == holder_id
+
+    response = await client.get(
+        f"/api/v1/agent-mail/agent/inbox?member_id={victim.id}",
+        headers={"X-Deck-Session-Token": token},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "member_not_token_holder"

@@ -7,9 +7,10 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.deps import derive_member_id, mail_session
 from app.config import settings
 from app.database import get_db
-from app.models.database import MailTeamMember
+from app.models.database import MailAgentSession, MailTeamMember
 from app.models.schemas import (
     AgentMailInstallStatus,
     AgentMailSnippets,
@@ -74,7 +75,15 @@ async def update_member(
 
 
 @router.post("/messages", response_model=MailMessageResponse)
-async def send_message(request: MailMessageCreate, db: AsyncSession = Depends(get_db)):
+async def send_message(
+    request: MailMessageCreate,
+    session: Optional[MailAgentSession] = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    if session is not None:
+        request = request.model_copy(
+            update={"sender_member_id": derive_member_id(session, request.sender_member_id)}
+        )
     try:
         return await agent_mail_service.send_message(db, request)
     except ValueError as exc:
@@ -101,20 +110,32 @@ async def get_thread(
 @router.post("/messages/{message_id}/read")
 async def mark_read(
     message_id: int,
-    body: dict[str, Any] = Body(...),
+    body: dict[str, Any] = Body(default_factory=dict),
+    session: Optional[MailAgentSession] = Depends(mail_session),
     db: AsyncSession = Depends(get_db),
 ):
-    await agent_mail_service.mark_read(db, message_id, int(body["member_id"]))
+    member_id = derive_member_id(
+        session,
+        body.get("member_id"),
+        detail="member_not_token_holder",
+    )
+    await agent_mail_service.mark_read(db, message_id, int(member_id))
     return {"ok": True}
 
 
 @router.post("/messages/{message_id}/ack")
 async def ack_message(
     message_id: int,
-    body: dict[str, Any] = Body(...),
+    body: dict[str, Any] = Body(default_factory=dict),
+    session: Optional[MailAgentSession] = Depends(mail_session),
     db: AsyncSession = Depends(get_db),
 ):
-    await agent_mail_service.ack_message(db, message_id, int(body["member_id"]))
+    member_id = derive_member_id(
+        session,
+        body.get("member_id"),
+        detail="member_not_token_holder",
+    )
+    await agent_mail_service.ack_message(db, message_id, int(member_id))
     return {"ok": True}
 
 
@@ -186,15 +207,21 @@ async def register_agent(
 
 @router.get("/agent/inbox", response_model=MailInboxResponse)
 async def agent_inbox(
-    member_id: int,
+    member_id: Optional[int] = None,
     unread_only: bool = False,
     mark_read: bool = False,
     limit: int = 50,
+    session: Optional[MailAgentSession] = Depends(mail_session),
     db: AsyncSession = Depends(get_db),
 ):
+    resolved = derive_member_id(
+        session,
+        member_id,
+        detail="member_not_token_holder",
+    )
     return await agent_mail_service.get_inbox(
         db,
-        member_id,
+        int(resolved),
         unread_only=unread_only,
         mark_read=mark_read,
         limit=limit,
