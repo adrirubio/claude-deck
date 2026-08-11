@@ -13,6 +13,7 @@ from app.main import app
 from app.models.database import AgentPaneBinding, MailAgentSession
 from app.models.schemas import MailAgentRegisterRequest
 from app.services.agent_mail_service import agent_mail_service
+from app.utils.peer_process import PeerPane
 
 
 @pytest_asyncio.fixture
@@ -34,6 +35,10 @@ def _register(cwd: str, session_key: str = "mcp:abc123") -> MailAgentRegisterReq
         cwd=cwd,
         session_key=session_key,
     )
+
+
+def _pane(pid: int = 3000, start: str = "111", target: str | None = "team:0.1") -> PeerPane:
+    return PeerPane(pane_pid=pid, pane_proc_start=start, tmux_target=target, peer_pid=pid + 1)
 
 
 def test_capability_token_settings_default_to_grace_mode():
@@ -314,3 +319,56 @@ async def test_a_fresh_session_key_from_the_same_pane_still_mints(client, tmp_pa
     assert restarted.status_code == 200
     assert restarted.json()["capability_token"], "a restarted shim must not be locked out"
     assert restarted.json()["capability_token"] != first.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_matches_on_pid_and_proc_start(db):
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="111", slot_id=None, preset_id=None))
+    await db.commit()
+
+    found = await agent_mail_service.resolve_pane_binding(db, _pane())
+    assert found is not None and found.pane_pid == 3000
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_ignores_a_row_with_a_stale_proc_start(db):
+    """Pid reuse: the number matches, the process does not."""
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="OLD", slot_id=None, preset_id=None))
+    await db.commit()
+
+    assert await agent_mail_service.resolve_pane_binding(db, _pane(start="111")) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_prunes_rows_for_dead_panes(db, monkeypatch):
+    """A row whose pane is gone is deleted, as session rows already are."""
+    from app.utils import peer_process
+
+    db.add(AgentPaneBinding(pane_pid=7777, pane_proc_start="OLD", slot_id=None, preset_id=None))
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="111", slot_id=None, preset_id=None))
+    await db.commit()
+
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda pid, start: pid == 3000)
+    await agent_mail_service.resolve_pane_binding(db, _pane())
+
+    remaining = (
+        await db.execute(text("SELECT pane_pid FROM agent_pane_bindings ORDER BY pane_pid"))
+    ).scalars().all()
+    assert remaining == [3000]
+
+
+@pytest.mark.asyncio
+async def test_resolve_pane_binding_keeps_a_row_it_cannot_observe(db, monkeypatch):
+    """None means 'cannot observe'. Never prune on doubt."""
+    from app.utils import peer_process
+
+    db.add(AgentPaneBinding(pane_pid=7777, pane_proc_start="OLD", slot_id=None, preset_id=None))
+    await db.commit()
+
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda pid, start: None)
+    await agent_mail_service.resolve_pane_binding(db, _pane())
+
+    remaining = (
+        await db.execute(text("SELECT pane_pid FROM agent_pane_bindings"))
+    ).scalars().all()
+    assert remaining == [7777]

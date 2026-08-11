@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamPreset,
     AgentTeamSlot,
     MailAgentSession,
@@ -34,6 +35,7 @@ from app.models.schemas import (
     MailThreadResponse,
 )
 from app.services.agent_bridge.discovery import discover_agent_sessions
+from app.utils import peer_process
 from app.utils.repo_utils import derive_repo_identity
 
 logger = logging.getLogger(__name__)
@@ -250,6 +252,24 @@ class AgentMailService:
         await db.commit()
         await db.refresh(session)
         return token
+
+    async def resolve_pane_binding(
+        self, db: AsyncSession, pane: "peer_process.PeerPane"
+    ) -> Optional[AgentPaneBinding]:
+        """Find the live binding row for this pane, pruning dead ones."""
+        rows = (await db.execute(select(AgentPaneBinding))).scalars().all()
+        match: Optional[AgentPaneBinding] = None
+        pruned = False
+        for row in rows:
+            if row.pane_pid == pane.pane_pid and row.pane_proc_start == pane.pane_proc_start:
+                match = row
+                continue
+            if peer_process.pane_is_alive(row.pane_pid, row.pane_proc_start) is False:
+                await db.delete(row)
+                pruned = True
+        if pruned:
+            await db.commit()
+        return match
 
     async def peek_session_by_key(
         self, db: AsyncSession, session_key: str
