@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
+from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.models.database import (
@@ -20,6 +21,17 @@ from app.services.github_workspace_service import (
     GithubWorkspaceResetError,
     github_workspace_service,
 )
+
+OPERATOR_TOKEN = "test-operator-token-for-workspace-api"
+
+
+@pytest.fixture(autouse=True)
+def operator_token(monkeypatch):
+    """Every guarded call in this file authenticates as the operator."""
+    monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
+
+
+OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
 
 
 @pytest_asyncio.fixture
@@ -149,7 +161,8 @@ async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     await db.commit()
 
     response = await client.get(
-        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces"
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 200
@@ -168,7 +181,10 @@ async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     assert rows[1]["lease_last_owner_contact_at"] is not None
     assert rows[1]["lease_release_reminded_at"] is not None
     assert 89 <= rows[1]["lease_age_seconds"] < 120
-    missing = await client.get("/api/v1/agent-teams/github-scopes/999999/workspaces")
+    missing = await client.get(
+        "/api/v1/agent-teams/github-scopes/999999/workspaces",
+        headers=OPERATOR_HEADERS,
+    )
     assert missing.status_code == 404
 
 
@@ -187,6 +203,7 @@ async def test_force_release_with_matching_token(client, db, tmp_path, monkeypat
             "reason": "owner is unavailable",
             "requested_by": "operator",
         },
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 200
@@ -211,6 +228,7 @@ async def test_force_release_rejects_stale_token(client, db, tmp_path, monkeypat
             "expected_lease_token": "lease-stale",
             "reason": "owner is unavailable",
         },
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 409
@@ -239,6 +257,7 @@ async def test_force_release_reports_dirty_paths_and_proceeds(
             "expected_lease_token": "lease-current",
             "reason": "discard abandoned changes",
         },
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 200
@@ -261,6 +280,7 @@ async def test_force_release_rejects_unleased_workspace(client, db, tmp_path):
             "expected_lease_token": "lease-current",
             "reason": "nothing owns it",
         },
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 409
@@ -285,6 +305,7 @@ async def test_force_release_reports_clean_unpushed_commits(
             "expected_lease_token": "lease-current",
             "reason": "discard abandoned commits",
         },
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 200
@@ -310,6 +331,7 @@ async def test_force_release_requires_token_and_reason(client, db, tmp_path, bod
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
         f"{workspace.id}/force-release",
         json=body,
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 422

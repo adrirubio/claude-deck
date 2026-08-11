@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import mail_session, require_session_slot
+from app.api.v1.deps import mail_session, require_operator, require_session_slot
 from app.database import get_db
 from app.models.database import (
     AgentTeamSlot,
@@ -626,6 +626,7 @@ async def delete_github_scope(scope_id: int, db: AsyncSession = Depends(get_db))
 )
 async def list_github_workspaces(
     scope_id: int,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     scope = await db.get(TeamGithubScope, scope_id)
@@ -750,6 +751,7 @@ async def force_release_github_workspace(
     scope_id: int,
     workspace_id: int,
     request: GithubWorkspaceForceReleaseRequest,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     scope = await db.get(TeamGithubScope, scope_id)
