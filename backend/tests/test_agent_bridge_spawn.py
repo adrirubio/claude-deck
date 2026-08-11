@@ -24,8 +24,19 @@ def test_claude_worktree_uses_generated_session_name_when_blank(monkeypatch, tmp
     )
 
     assert result["session_name"] == "repo-abcd"
-    assert calls[0][:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
-    assert "--worktree repo-abcd" in calls[0][7]
+    assert calls[0][:10] == [
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        "repo-abcd",
+        "-c",
+        str(tmp_path),
+        "-P",
+        "-F",
+        "#{pane_pid}",
+    ]
+    assert "--worktree repo-abcd" in calls[0][-1]
     assert spawn.get_spawned_sessions()["repo-abcd"]["worktree_name"] == "repo-abcd"
 
 
@@ -65,8 +76,19 @@ def test_claude_resume_resolves_directory_from_transcript_cwd(monkeypatch, tmp_p
     )
 
     assert result["session_name"] == "claude-deck-abcd"
-    assert calls[0][:7] == ["tmux", "new-session", "-d", "-s", "claude-deck-abcd", "-c", str(project_dir)]
-    assert "--resume session-123" in calls[0][7]
+    assert calls[0][:10] == [
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        "claude-deck-abcd",
+        "-c",
+        str(project_dir),
+        "-P",
+        "-F",
+        "#{pane_pid}",
+    ]
+    assert "--resume session-123" in calls[0][-1]
 
 
 def test_bedrock_platform_injects_env_flags(monkeypatch, tmp_path):
@@ -321,9 +343,58 @@ def test_anthropic_platform_adds_no_env_flags(monkeypatch, tmp_path):
 
     argv = calls[0]
     assert "-e" not in argv
-    assert argv[:7] == ["tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path)]
-    assert len(argv) == 8
+    assert argv[:10] == [
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        "repo-abcd",
+        "-c",
+        str(tmp_path),
+        "-P",
+        "-F",
+        "#{pane_pid}",
+    ]
+    assert len(argv) == 11
     assert spawn.get_spawned_sessions()["repo-abcd"]["platform"] == "anthropic"
+
+
+def test_spawn_session_returns_the_pane_pid(monkeypatch, tmp_path):
+    """The binding writer keys on this; a None pid means the pane never binds."""
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        return SimpleNamespace(returncode=0, stdout="49769\n", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    result = spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+    )
+    assert result["pane_pid"] == 49769
+
+
+def test_spawn_session_pane_pid_is_none_when_tmux_prints_nothing(monkeypatch, tmp_path):
+    """Every other test stubs an empty stdout, which must not raise."""
+    from app.services.agent_bridge import spawn
+    from app.services.providers.base import SpawnCommandOptions
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(spawn.subprocess, "run", fake_run)
+    spawn.get_spawned_sessions().clear()
+
+    result = spawn.spawn_session(
+        "claude-code",
+        SpawnCommandOptions(directory=str(tmp_path), mode="plain"),
+    )
+    assert result["pane_pid"] is None
 
 
 def test_spawn_session_accepts_controlled_extra_env(monkeypatch, tmp_path):
