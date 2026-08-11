@@ -255,14 +255,14 @@ class ExternalAgentMailService:
         root = await db.get(MailMessage, root_id)
         if root is None:
             raise ValueError("Thread root not found")
-        if root.sender_actor_id != actor.id:
+        if root.sender_actor_id is not None and root.sender_actor_id != actor.id:
             raise ValueError("External actors can only reply in threads they created")
         return await self.send_message(
             db,
             actor,
             request,
             kind="message",
-            recipient_member_id=root.recipient_member_id,
+            recipient_member_id=None,
             thread_root_id=root_id,
             subject=request.subject,
             body_markdown=request.body_markdown,
@@ -344,6 +344,47 @@ class ExternalAgentMailService:
             root.request_status = "acknowledged"
             await db.commit()
         return await self.request_status(db, actor, message_id)
+
+    async def acknowledge_actor_request(
+        self,
+        db: AsyncSession,
+        actor: MailExternalActor,
+        message_id: int,
+    ) -> ExternalAgentMailRequestStatus:
+        """Acknowledge a request as an external actor without member evidence."""
+        root = await db.get(MailMessage, message_id)
+        if root is None:
+            raise ValueError("Message not found")
+        if root.sender_actor_id is not None and root.sender_actor_id != actor.id:
+            raise ValueError("External actors can only acknowledge requests they created")
+        if root.kind not in {"context_request", "handoff"}:
+            raise ValueError("Message is not a request")
+        if root.request_status in {"pending", "answered"}:
+            root.request_status = "acknowledged"
+            await db.commit()
+        return await self._actor_request_status(db, root.id)
+
+    async def _actor_request_status(
+        self,
+        db: AsyncSession,
+        message_id: int,
+    ) -> ExternalAgentMailRequestStatus:
+        """Project request status without applying the actor thread-read gate."""
+        thread = await agent_mail_service.get_thread(db, message_id)
+        root = thread.root
+        answered = root.request_status in {"answered", "acknowledged"} or any(
+            reply.kind == "answer" for reply in thread.replies
+        )
+        return ExternalAgentMailRequestStatus(
+            message_id=root.id,
+            kind=root.kind,
+            request_status=root.request_status,
+            is_stale=root.is_stale,
+            answered=answered,
+            acknowledged=root.request_status == "acknowledged",
+            root=root,
+            replies=thread.replies,
+        )
 
     async def _delivery_recipients(
         self,

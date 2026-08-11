@@ -227,3 +227,23 @@ async def ack_external_agent_mail_request(
         return await external_agent_mail_service.acknowledge_external_request(db, actor, message_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/requests/{message_id}/actor-ack",
+    response_model=ExternalAgentMailRequestStatus,
+)
+async def actor_ack_external_agent_mail_request(
+    message_id: int,
+    actor: MailExternalActor = Depends(external_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Acknowledge a request the actor did not create."""
+    try:
+        return await external_agent_mail_service.acknowledge_actor_request(
+            db, actor, message_id
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
