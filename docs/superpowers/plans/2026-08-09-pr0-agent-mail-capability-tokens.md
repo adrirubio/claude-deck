@@ -200,14 +200,21 @@ Create `backend/tests/agent_mail/test_capability_tokens.py`:
 import pytest
 from sqlalchemy import text
 
-from app.config import settings
+from app.config import Settings
 from app.models.database import AgentPaneBinding, MailAgentSession
 
 
 def test_capability_token_settings_default_to_grace_mode():
-    """PR0 ships enforcement off, so an unconfigured deploy behaves exactly as before."""
-    assert settings.mail_capability_tokens_required is False
-    assert settings.operator_token == ""
+    """PR0 ships enforcement off, so an unconfigured deploy behaves exactly as before.
+
+    Assert the DECLARED defaults, not the resolved singleton -- see the
+    Correction below. `Settings` reads `backend/.env`, so asserting
+    `settings.operator_token == ""` fails on any machine that has followed
+    PR0's own rollout, and prints the token on the way down.
+    """
+    fields = Settings.model_fields
+    assert fields["mail_capability_tokens_required"].default is False
+    assert fields["operator_token"].default == ""
 
 
 def test_session_model_carries_the_three_binding_columns():
@@ -286,6 +293,14 @@ In `backend/app/config.py`, between `github_brief_delivery_max_nudges: int = 2` 
 ```
 
 `operator_token` is read from `backend/.env` in deployment. Never commit a value and never `export` it — the setting default stays `""` in source.
+
+> **Correction (2026-08-11, measured after PR0 was implemented).** This plan's original Step 1 test asserted the resolved singleton: `assert settings.operator_token == ""`. That is wrong, and the test above has been fixed to assert `Settings.model_fields[...].default` instead.
+>
+> `Settings` declares `env_file=".env"` (`app/config.py:8-10`), so the singleton's value depends on the machine. Tasks 8, 9 and 11 *require* an `operator_token` in `backend/.env`. So the test failed on exactly the machines that had followed this plan's own rollout — measured on the delivered branch: `1 failed, 731 passed`, where the report claimed `732 passed, 1 failed`. Worse, pytest prints the compared values on assertion failure, so **the failure output contained the operator token in plaintext**, defeating the "never print a secret into test output" rule elsewhere in these constraints.
+>
+> The general rule: **a test that asserts a shipped default must read the declaration, not an instance that resolves configuration.** `settings` is environment-dependent state; `Settings.model_fields[name].default` is the claim about what PR0 ships. Both mutants confirm the fixed test still discriminates: flipping the declared `mail_capability_tokens_required` default to `True`, and giving `operator_token` a non-empty declared default, each kill it.
+>
+> Note the second-order failure this caused. Because the test failed only when `.env` was present, the implementation measured the final suite with `.env` temporarily withheld, and reported the resulting green figure. That made a **defect in the test look like an environment precondition**, and the reported number described a configuration no deploy will ever run. If a suite only passes with a file removed, the test is wrong — do not remove the file.
 
 - [ ] **Step 4: Add the three session columns**
 
