@@ -190,7 +190,6 @@ def _workspace_response(workspace: GithubWorkspace) -> GithubWorkspaceResponse:
         leased_item_id=workspace.leased_item_id,
         leased_at=workspace.leased_at,
         released_at=workspace.released_at,
-        lease_token=workspace.lease_token,
         lease_last_owner_contact_at=workspace.lease_last_owner_contact_at,
         lease_release_reminded_at=workspace.lease_release_reminded_at,
         lease_age_seconds=lease_age_seconds,
@@ -765,31 +764,46 @@ async def force_release_github_workspace(
             "Workspace is not leased",
             block_code="workspace_not_leased",
         )
-    if workspace.lease_token != request.expected_lease_token:
-        raise _conflict(
-            f"Lease token mismatch: expected {request.expected_lease_token}, "
-            f"current {workspace.lease_token}. Refresh and re-check before forcing.",
-            block_code="lease_token_mismatch",
-        )
 
-    # Capture both risk signals and the item identity before release clears the
-    # lease. The operator override reports potential loss but deliberately does
-    # not gate on it.
+    released_item_id = workspace.leased_item_id
+    inspected_lease_token = workspace.lease_token
+
     discarded_paths, unpushed_commits = await github_workspace_service.pending_work(
         scope, workspace
     )
-    released_item_id = workspace.leased_item_id
+
+    released = await github_workspace_service.force_release_acquisition(
+        db,
+        workspace_id=workspace_id,
+        scope_id=scope_id,
+        item_id=released_item_id,
+        expected_leased_at=request.expected_leased_at,
+        lease_token=inspected_lease_token,
+    )
+    if not released:
+        await db.refresh(workspace)
+        if workspace.leased_item_id is None:
+            current = "the workspace is no longer leased"
+        else:
+            current = f"it now reports leased_at {workspace.leased_at.isoformat()}"
+        raise _conflict(
+            "The workspace lease changed between inspection and release, so "
+            f"nothing was released. You confirmed leased_at "
+            f"{request.expected_leased_at.isoformat()}, but {current}. "
+            "Refresh the workspace and confirm again.",
+            block_code="lease_changed",
+        )
+
     logger.warning(
         "force-release workspace %s (item %s) by %s: %s; discarding: %s dirty "
         "path(s), %s unpushed commit(s)",
-        workspace.id,
+        workspace_id,
         released_item_id,
         request.requested_by or "unknown",
         request.reason,
         len((discarded_paths or "").splitlines()),
         unpushed_commits if unpushed_commits is not None else "unknown",
     )
-    await github_workspace_service.release(db, released_item_id)
     await db.refresh(workspace)
     return GithubWorkspaceForceReleaseResponse(
         workspace=_workspace_response(workspace),

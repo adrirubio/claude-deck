@@ -8,7 +8,7 @@ import pathlib
 import secrets
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -163,6 +163,50 @@ class GithubWorkspaceService:
         workspace.lease_release_reminded_at = None
         workspace.updated_at = now
         await db.commit()
+
+    async def force_release_acquisition(
+        self,
+        db: AsyncSession,
+        *,
+        workspace_id: int,
+        scope_id: int,
+        item_id: int,
+        expected_leased_at: datetime,
+        lease_token: str | None,
+    ) -> bool:
+        """Clear exactly the acquisition described, or nothing at all.
+
+        `release` selects on `leased_item_id` alone, so a caller that inspects
+        a workspace, awaits, and then calls it can clear a lease on a
+        different row. Here the comparison is the write: every part of what
+        the caller inspected is in the WHERE clause.
+        """
+        now = datetime.utcnow()
+        result = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.id == workspace_id,
+                GithubWorkspace.scope_id == scope_id,
+                GithubWorkspace.leased_item_id == item_id,
+                GithubWorkspace.leased_at == expected_leased_at,
+                GithubWorkspace.lease_token == lease_token,
+            )
+            .values(
+                leased_item_id=None,
+                released_at=now,
+                lease_token=None,
+                leased_owner_pid=None,
+                leased_owner_proc_start=None,
+                lease_last_owner_contact_at=None,
+                lease_release_reminded_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return False
+        await db.commit()
+        return True
 
     async def get_leased_workspace(
         self, db: AsyncSession, item_id: int
