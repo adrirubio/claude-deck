@@ -23,6 +23,7 @@ _register_lock = threading.Lock()
 
 _state: dict[str, Any] = {
     "member_id": None,
+    "capability_token": None,
     "session_key": f"mcp:{uuid.uuid4().hex[:12]}",
     "offline_until": 0.0,
     "last_error": None,
@@ -82,6 +83,11 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
         return _unreachable_result(_state.get("last_error") or "Claude Deck is unavailable.")
     normalized_path = path if path.startswith("/") else f"/{path}"
     url = f"{DECK_API}/{api_prefix.strip('/')}{normalized_path}"
+    session_token = _state.get("capability_token")
+    if session_token:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-Deck-Session-Token"] = session_token
+        kwargs["headers"] = headers
     try:
         response = httpx.request(method, url, timeout=DECK_HTTP_TIMEOUT, **kwargs)
         response.raise_for_status()
@@ -158,6 +164,9 @@ def _ensure_registered() -> dict:
         )
         if result["ok"]:
             _state["member_id"] = result["data"]["member"]["id"]
+            minted = result["data"].get("capability_token")
+            if minted:
+                _state["capability_token"] = minted
         return result
 
 
