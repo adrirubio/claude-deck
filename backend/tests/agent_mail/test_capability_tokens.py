@@ -7,13 +7,15 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import app.api.v1.agent_mail as agent_mail_routes
 from app.config import settings
 from app.database import get_db
 from app.main import app
-from app.models.database import AgentPaneBinding, MailAgentSession
+from app.models.database import AgentPaneBinding, AgentTeamPreset, AgentTeamSlot, MailAgentSession
 from app.models.schemas import MailAgentRegisterRequest
 from app.services.agent_mail_service import agent_mail_service
 from app.utils.peer_process import PeerPane
+from app.utils.repo_utils import derive_repo_identity
 
 
 @pytest_asyncio.fixture
@@ -28,6 +30,57 @@ async def client(db):
     app.dependency_overrides.clear()
 
 
+@pytest_asyncio.fixture
+async def team_slots(db, tmp_path):
+    repo = tmp_path / "binding-repo"
+    repo.mkdir()
+    identity = derive_repo_identity(str(repo))
+    preset = AgentTeamPreset(name="Binding team")
+    db.add(preset)
+    await db.flush()
+    slots = [
+        AgentTeamSlot(
+            preset_id=preset.id,
+            position=position,
+            display_name=name,
+            provider="codex-cli",
+            repo_id=identity["repo_id"],
+            repo_path=identity["repo_root"],
+            repo_name=identity["repo_name"],
+        )
+        for position, name in enumerate(("Primary", "Other"))
+    ]
+    db.add_all(slots)
+    await db.commit()
+    for team_slot in slots:
+        await db.refresh(team_slot)
+    return slots
+
+
+@pytest_asyncio.fixture
+async def slot(team_slots):
+    return team_slots[0]
+
+
+@pytest_asyncio.fixture
+async def other_slot(team_slots):
+    return team_slots[1]
+
+
+@pytest.fixture
+def pane_resolver(monkeypatch):
+    """Override route resolution because ASGITransport fakes the peer port."""
+
+    def _set(pane):
+        monkeypatch.setattr(
+            agent_mail_routes,
+            "resolve_request_pane",
+            lambda http_request: pane,
+        )
+
+    return _set
+
+
 def _register(cwd: str, session_key: str = "mcp:abc123") -> MailAgentRegisterRequest:
     return MailAgentRegisterRequest(
         source="mcp",
@@ -39,6 +92,17 @@ def _register(cwd: str, session_key: str = "mcp:abc123") -> MailAgentRegisterReq
 
 def _pane(pid: int = 3000, start: str = "111", target: str | None = "team:0.1") -> PeerPane:
     return PeerPane(pane_pid=pid, pane_proc_start=start, tmux_target=target, peer_pid=pid + 1)
+
+
+def _body(cwd, session_key="mcp:bind", **extra):
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(cwd),
+        "session_key": session_key,
+    }
+    body.update(extra)
+    return body
 
 
 def test_capability_token_settings_default_to_grace_mode():
@@ -372,3 +436,136 @@ async def test_resolve_pane_binding_keeps_a_row_it_cannot_observe(db, monkeypatc
         await db.execute(text("SELECT pane_pid FROM agent_pane_bindings"))
     ).scalars().all()
     assert remaining == [7777]
+
+
+@pytest.mark.asyncio
+async def test_row_with_a_slot_binds_the_session(client, db, tmp_path, pane_resolver, slot):
+    db.add(
+        AgentPaneBinding(
+            pane_pid=3000,
+            pane_proc_start="111",
+            slot_id=slot.id,
+            preset_id=slot.preset_id,
+        )
+    )
+    await db.commit()
+    pane_resolver(_pane())
+
+    # The cwd and provider must satisfy _slot_matches_registration, or
+    # _resolve_team_context discards the derived slot and returns (None, None).
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(slot.repo_path, provider=slot.provider),
+    )
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+
+    row = (
+        await db.execute(
+            text(
+                "SELECT team_slot_id, bound_pane_pid, bound_pane_proc_start "
+                "FROM mail_agent_sessions WHERE session_key = 'mcp:bind'"
+            )
+        )
+    ).first()
+    assert row == (slot.id, 3000, "111")
+
+
+@pytest.mark.asyncio
+async def test_row_with_a_null_slot_mints_unbound(client, db, tmp_path, pane_resolver):
+    db.add(AgentPaneBinding(pane_pid=3000, pane_proc_start="111", slot_id=None, preset_id=None))
+    await db.commit()
+    pane_resolver(_pane())
+
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+    slot_id = (
+        await db.execute(
+            text("SELECT team_slot_id FROM mail_agent_sessions WHERE session_key = 'mcp:bind'")
+        )
+    ).scalar_one()
+    assert slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_no_row_and_no_claim_mints_unbound(client, tmp_path, pane_resolver):
+    """A hand-started pane Deck never launched is an ordinary repo member."""
+    pane_resolver(_pane())
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_no_row_but_a_team_claim_is_bind_pending(
+    client, tmp_path, pane_resolver, slot
+):
+    """Retryable: Deck may not have committed the binding yet."""
+    pane_resolver(_pane())
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=slot.id, team_preset_id=slot.preset_id),
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "bind_pending"
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_slot_claim_is_403(
+    client, db, tmp_path, pane_resolver, slot, other_slot
+):
+    db.add(
+        AgentPaneBinding(
+            pane_pid=3000,
+            pane_proc_start="111",
+            slot_id=slot.id,
+            preset_id=slot.preset_id,
+        )
+    )
+    await db.commit()
+    pane_resolver(_pane())
+
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(
+            tmp_path,
+            team_slot_id=other_slot.id,
+            team_preset_id=other_slot.preset_id,
+        ),
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_no_pane_ancestor_mints_unbound(client, tmp_path, pane_resolver):
+    pane_resolver(None)
+    response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
+    assert response.status_code == 200
+    assert response.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_peer_refuses_under_enforcement(
+    client, tmp_path, pane_resolver, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    pane_resolver(None)
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=1, team_preset_id=1),
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "bind_unverifiable"
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_peer_mints_unbound_in_grace_mode(client, tmp_path, pane_resolver):
+    assert settings.mail_capability_tokens_required is False
+    pane_resolver(None)
+    response = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=_body(tmp_path, team_slot_id=1, team_preset_id=1),
+    )
+    assert response.status_code == 200
+    assert response.json()["capability_token"]

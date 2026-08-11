@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -25,10 +25,20 @@ from app.models.schemas import (
 )
 from app.services import agent_mail_install_service
 from app.services.agent_mail_service import agent_mail_service
+from app.utils import peer_process
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def resolve_request_pane(http_request: Request) -> Optional[peer_process.PeerPane]:
+    """Resolve the calling pane from the live connection."""
+    client = http_request.client
+    if client is None:
+        return None
+    local_port = http_request.scope.get("server", (None, None))[1]
+    return peer_process.resolve_peer_pane(client.host, client.port, local_port=local_port)
 
 
 @router.get("/team", response_model=TeamListResponse)
@@ -119,18 +129,46 @@ async def queue_inbox_check(member_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/agent/register", response_model=MailAgentRegisterResponse)
 async def register_agent(
+    http_request: Request,
     request: MailAgentRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    # This check must run before register_session, which rewrites a known key's
-    # row in place. A hashless existing row cannot prove that this caller owns
-    # it, so never backfill a token for that row in either rollout mode.
     existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
     hashless_rebind = existing is not None and existing.capability_token_hash is None
     if hashless_rebind and settings.mail_capability_tokens_required:
         raise HTTPException(status_code=409, detail="token_required_for_rebind")
 
+    claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
+    pane = resolve_request_pane(http_request)
+
+    binding = None
+    if pane is None:
+        if claims_team_context and settings.mail_capability_tokens_required:
+            raise HTTPException(status_code=409, detail="bind_unverifiable")
+    else:
+        binding = await agent_mail_service.resolve_pane_binding(db, pane)
+        if binding is None and claims_team_context:
+            raise HTTPException(status_code=409, detail="bind_pending")
+
+    derived_slot_id = binding.slot_id if binding is not None else None
+    if (
+        request.team_slot_id is not None
+        and derived_slot_id is not None
+        and request.team_slot_id != derived_slot_id
+    ):
+        raise HTTPException(status_code=403, detail="slot_claim_mismatch")
+
+    request = request.model_copy(
+        update={
+            "team_slot_id": derived_slot_id,
+            "team_preset_id": binding.preset_id if binding is not None else None,
+        }
+    )
     member, session = await agent_mail_service.register_session(db, request)
+    if pane is not None:
+        session.bound_pane_pid = pane.pane_pid
+        session.bound_pane_proc_start = pane.pane_proc_start
+        await db.commit()
     capability_token = (
         None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
     )
