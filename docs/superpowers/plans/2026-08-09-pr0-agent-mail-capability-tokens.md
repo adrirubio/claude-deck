@@ -118,8 +118,10 @@ Eight new files — two in `app/`, four test files, one in `frontend/src/`, one 
 | `backend/app/api/v1/agent_mail.py` | Modify | Binding policy at the `register_agent` route; token dependency on the four write routes |
 | `backend/app/api/v1/agent_teams.py` | Modify | `/dispatch-status` authorization resolver; `require_operator` on operator routes; force-release migration |
 | `backend/app/services/github_workspace_service.py` | Modify | `release_by_token` predicate + the seven-column clear at one `now` |
+| `backend/app/services/external_agent_mail_service.py` | Modify | Task 10 — `reply_in_thread`'s ownership guard admits any root no *other* actor owns; `acknowledge_actor_request` and `_actor_request_status` are new |
+| `backend/app/api/v1/external_agent_mail.py` | Modify | Task 10 — one new route, `POST /requests/{message_id}/actor-ack` |
 | `backend/mcp_shim/agent_mail_server.py` | Modify | Capture the minted token; send `X-Deck-Session-Token` on every bridge call |
-| `frontend/src/features/agent-mail/actorAuth.ts` | **Create** | Per-tab external-actor token: lazy provision into `sessionStorage`, `actorFetch` re-provisioning once on `401` |
+| `frontend/src/features/agent-mail/actorAuth.ts` | **Create** | Per-tab external-actor identity: a stable `actor_key` and a rotating token, both in `sessionStorage`; `actorFetch` re-provisions **that key** once on `401` |
 | `frontend/src/features/agent-mail/api.ts` | Modify | The three write helpers move to the external-actor routes; compose fans out by kind |
 | `frontend/src/features/agent-mail/ThreadDialog.tsx` | Modify | Drop the "Reply as" member select; both ack buttons collapse into one root-scoped ack |
 | `README.md` (after `:114`) | Modify | Linux prerequisite bullet, scoped to pane binding rather than to the app |
@@ -149,7 +151,7 @@ Eight new files — two in `app/`, four test files, one in `frontend/src/`, one 
 | 7 | `/dispatch-status` authorization resolver | §3.5a |
 | 8 | `require_operator` and the operator routes | §3.6a |
 | 9 | Force-release API migration | §4.6a req. 1–4 |
-| 10 | The operator credential reaches the UI (no new route; §3.6's actor mechanism refuted) | §3.6, §3.6a |
+| 10 | External actors reply to and acknowledge agent-created threads; the mail UI writes through a stable per-tab actor identity | §3.6, §3.6b |
 | 11 | README Linux prerequisite; the four-step rollout note | §3.8 |
 
 ### Spec sections this plan deliberately does **not** implement
