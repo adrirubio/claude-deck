@@ -89,3 +89,53 @@ def test_read_proc_stat_survives_a_command_name_containing_spaces(tmp_path, monk
 def test_read_proc_stat_returns_none_for_a_dead_pid(tmp_path, monkeypatch):
     monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
     assert peer_process.read_proc_stat(999999) is None
+
+
+def test_list_tmux_pane_pids_parses_the_format_string(monkeypatch):
+    output = "%3 159009 team:0.0\n%0 149168 team:0.1\n\n"
+    monkeypatch.setattr(peer_process, "_run_tmux", lambda *args, **kwargs: output)
+    assert peer_process.list_tmux_pane_pids() == {159009: "team:0.0", 149168: "team:0.1"}
+
+
+def test_list_tmux_pane_pids_is_empty_when_tmux_is_absent(monkeypatch):
+    monkeypatch.setattr(peer_process, "_run_tmux", lambda *args, **kwargs: None)
+    assert peer_process.list_tmux_pane_pids() == {}
+
+
+def test_resolve_peer_pane_walks_ppids_up_to_a_pane(monkeypatch):
+    """The MCP shim is a grandchild of the pane, not the pane itself."""
+    tree = {5000: (4000, "aaa"), 4000: (3000, "bbb"), 3000: (1, "ccc")}
+    monkeypatch.setattr(
+        peer_process, "find_socket_inode", lambda host, port, local_port=None: 77
+    )
+    monkeypatch.setattr(peer_process, "find_pid_for_inode", lambda inode: 5000)
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: tree.get(pid))
+    monkeypatch.setattr(peer_process, "list_tmux_pane_pids", lambda: {3000: "team:0.2"})
+
+    pane = peer_process.resolve_peer_pane("127.0.0.1", 36253)
+    assert pane is not None
+    assert (pane.pane_pid, pane.pane_proc_start, pane.tmux_target, pane.peer_pid) == (
+        3000,
+        "ccc",
+        "team:0.2",
+        5000,
+    )
+
+
+def test_resolve_peer_pane_is_none_when_no_ancestor_is_a_pane(monkeypatch):
+    tree = {5000: (1, "aaa")}
+    monkeypatch.setattr(
+        peer_process, "find_socket_inode", lambda host, port, local_port=None: 77
+    )
+    monkeypatch.setattr(peer_process, "find_pid_for_inode", lambda inode: 5000)
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: tree.get(pid))
+    monkeypatch.setattr(peer_process, "list_tmux_pane_pids", lambda: {3000: "team:0.2"})
+    assert peer_process.resolve_peer_pane("127.0.0.1", 36253) is None
+
+
+def test_resolve_peer_pane_is_none_when_the_socket_is_gone(monkeypatch):
+    """The TIME_WAIT case: no inode, therefore no pane. Never guess."""
+    monkeypatch.setattr(
+        peer_process, "find_socket_inode", lambda host, port, local_port=None: None
+    )
+    assert peer_process.resolve_peer_pane("127.0.0.1", 36253) is None

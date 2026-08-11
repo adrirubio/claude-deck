@@ -147,3 +147,91 @@ def read_proc_stat(pid: int) -> Optional[tuple[int, str]]:
         return int(fields[1]), fields[19]
     except (ValueError, IndexError):
         return None
+
+
+@dataclass(frozen=True)
+class PeerPane:
+    """The tmux pane a caller's process tree belongs to."""
+
+    pane_pid: int
+    pane_proc_start: str
+    tmux_target: Optional[str]
+    peer_pid: int
+
+
+def _run_tmux(*args: str) -> Optional[str]:
+    """Run a read-only tmux command, or return None if tmux is unavailable."""
+    try:
+        completed = subprocess.run(
+            ["tmux", *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout
+
+
+def list_tmux_pane_pids() -> dict[int, str]:
+    """Map every live pane's pid to its tmux target."""
+    output = _run_tmux(
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pane_id} #{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
+    )
+    if not output:
+        return {}
+    panes: dict[int, str] = {}
+    for line in output.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            panes[int(parts[1])] = parts[2]
+        except ValueError:
+            continue
+    return panes
+
+
+def resolve_peer_pane(
+    host: str, port: int, local_port: Optional[int] = None
+) -> Optional[PeerPane]:
+    """Resolve a TCP peer to the tmux pane it runs under, or None.
+
+    MUST be called synchronously inside the request handler -- see the module
+    docstring. Returns None rather than guessing whenever any link in the chain
+    is missing: an unresolvable caller is not a caller in some other pane.
+    """
+    inode = find_socket_inode(host, port, local_port=local_port)
+    if inode is None:
+        return None
+    peer_pid = find_pid_for_inode(inode)
+    if peer_pid is None:
+        return None
+
+    panes = list_tmux_pane_pids()
+    if not panes:
+        return None
+
+    pid = peer_pid
+    for _ in range(_MAX_PARENT_WALK):
+        stat = read_proc_stat(pid)
+        if stat is None:
+            return None
+        parent_pid, proc_start = stat
+        if pid in panes:
+            return PeerPane(
+                pane_pid=pid,
+                pane_proc_start=proc_start,
+                tmux_target=panes[pid],
+                peer_pid=peer_pid,
+            )
+        if parent_pid <= 1:
+            return None
+        pid = parent_pid
+    return None
