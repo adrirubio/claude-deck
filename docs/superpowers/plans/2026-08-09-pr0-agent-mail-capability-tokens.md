@@ -77,9 +77,9 @@ These apply to **every** task. They are not negotiable and several are safety ru
   | 7 | 33 | 15 | 75 | 526 | 697 |
   | 8 | 33 | 15 | 87 | 538 | 709 |
   | 9 | 33 | 15 | 96 | 547 | 718 |
-  | 10 | 33 | 15 | 109 | 560 | 731 |
+  | 10 | 33 | 15 | 110 | 561 | 732 |
 
-  **Task 10 adds nothing to either watched file.** Its thirteen cases all live in a third new file, `test_actor_thread_capability.py`, so the first column stops moving at Task 9. Measured directly, with only Task 10's changes applied to a clean tree: `pytest tests/agent_teams/ tests/agent_mail/` → **`467 passed`**, the 454 baseline plus exactly 13. The revision at `0490035` had this row reading `35`, because the superseded task appended two cases to `test_capability_tokens.py` and eight to a `test_operator_mail_writes.py` that no longer exists.
+  **Task 10 adds nothing to either watched file.** Its fourteen cases all live in a third new file, `test_actor_thread_capability.py`, so the first column stops moving at Task 9. Measured directly, with only Task 10's changes applied to a clean tree: `pytest tests/agent_teams/ tests/agent_mail/` → **`468 passed`**, the 454 baseline plus exactly 14. The revision at `0490035` had this row reading `35`, because the superseded task appended two cases to `test_capability_tokens.py` and eight to a `test_operator_mail_writes.py` that no longer exists.
 
   `test_capability_tokens.py` is the file to watch, because five different tasks append to it and one of them (Task 3) puts both service-level and route-level tests there — Step 7 says "append to `test_capability_tokens.py`" while naming `test_api.py` only as the place to *copy the `client` fixture from*. Read that instruction carefully; creating a second file there breaks every later per-file figure in this column while leaving the suite totals correct, which is the confusing way to be wrong.
 
@@ -133,7 +133,7 @@ Eight new files — two in `app/`, four test files, one in `frontend/src/`, one 
 | `backend/tests/test_agent_bridge_spawn.py` | Modify | Three of its 13 tests re-authored for the added `-P -F` argv pair (Task 4 names them) |
 | `backend/tests/agent_teams/test_agent_team_service.py` | Modify | Binding-writer tests on both launch paths; 41 tests today |
 | `backend/tests/agent_teams/test_operator_auth.py` | **Create** | Spec §3.7 test 20 — the eight-case matrix, for each of the two operator routes |
-| `backend/tests/agent_mail/test_actor_thread_capability.py` | **Create** | Task 10 — spec §3.7 tests 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m (all but 6c, and 6h's backend half); §3.6 had no test today, which is why its two false claims survived |
+| `backend/tests/agent_mail/test_actor_thread_capability.py` | **Create** | Task 10 — spec §3.7 tests 6a, 6b, 6d, 6e, 6f, 6g, 6h (both halves that a pytest run can reach), 6i, 6j, 6k, 6l, 6m — all but 6c; §3.6 had no test today, which is why its two false claims survived |
 | `backend/tests/agent_teams/test_github_workspace_api.py` | Modify | 8 call sites gain the operator header (Task 8); then the force-release migration — six tests, incl. inverting the disclosure assertion (Task 9) |
 
 ## Task Index
@@ -6007,13 +6007,13 @@ Spec: 2026-08-05-distinct-approver-identity-design.md section 4.6a"
   - `ExternalAgentMailService.acknowledge_actor_request(db, actor, message_id) -> ExternalAgentMailRequestStatus`
   - `ExternalAgentMailService._actor_request_status(db, message_id) -> ExternalAgentMailRequestStatus`
   - `POST /api/v1/external/agent-mail/requests/{message_id}/actor-ack`
-  - `actorAuth.ts`: `actorFetch<T>(path, init?): Promise<T>` and `resetActorToken(): void`
+  - `actorAuth.ts`: `actorFetch<T>(path, init?): Promise<T>`, `resetActorToken(): void` (drops the credential, keeps the identity), and `resetActorIdentity(): void` (drops both; called by nothing in PR0)
   - `api.ts`: `replyInAgentMailThread(rootId, bodyMarkdown)`, `ackAgentMailRequest(rootId)`; `sendAgentMailMessage` keeps its signature and changes its transport
   - No new response fields, no new tables, no change to `mail_session`. PR1's `POST /agent-mail/decisions` (§4.3a) is unaffected.
 
 **This task replaces the one at revision `0490035`, which inverted the spec.** That version widened `mail_session` to admit the operator token and let the browser send an arbitrary `sender_member_id`, so a human typing in the mail UI produced a row indistinguishable from one an agent's authenticated session wrote — the confusion Finding #1 exists to remove. The eighteenth review's blocker 1 rejected it, and its recommendation is what this task implements: *preserve operator attribution and extend external-actor thread capabilities, not let the operator impersonate agent members.*
 
-Spec §3.6b and §3.7's tests 6a–6m are the contract. Step 1 writes **twelve of the thirteen**: 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m. Only **6c** is absent, with its reason recorded under "what is deliberately not touched" — it tests a capability (the actor `answer`) that §3.6b permits and does not require, and that this task does not add. 6h is split: its backend half is automated, its retry-count half is manual, also recorded there. **Spec revision 19 exists because implementing revision 18's three route requirements surfaced three defects in the obvious code**, and this task's steps are ordered around them.
+Spec §3.6b and §3.7's tests 6a–6m are the contract. Step 1 writes **twelve of the thirteen**: 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m — fourteen collected cases, because 6h needs two (which failures are `401`, and that recovery keeps the tab's identity). Only **6c** is absent, with its reason recorded under "what is deliberately not touched" — it tests a capability (the actor `answer`) that §3.6b permits and does not require, and that this task does not add. 6h is split: its backend half is automated, its retry-count half is manual, also recorded there. **Spec revision 19 exists because implementing revision 18's three route requirements surfaced three defects in the obvious code**, and this task's steps are ordered around them.
 
 **Everything the old task built is dropped:** `OperatorPrincipal`, the `mail_session` union, `derive_member_id`'s third caller shape, `frontend/src/lib/operatorToken.ts`, the `apiClient` header injection, `OperatorTokenCard.tsx`, and the `ConfigViewerPage.tsx` mount. `deps.py` and `agent_mail.py` are **not touched by this task at all**; Task 5 owns them and its four write routes are unchanged. `operator_token` stays what Task 8 makes it: the credential for force-release and the workspace listing, which have no frontend caller (§7).
 
@@ -6108,11 +6108,11 @@ The last pair is why `_require_actor_owns_thread` is left alone: the member thre
 - **`mail_session`, `require_mail_session`, `require_session_slot`, `derive_member_id`, and the four member write routes.** Task 5 owns all of them; this task changes none.
 - **`ComposeDialog.tsx`.** It gains no sender field. Measured, today's operator compose stores `(sender_member_id=None, sender_actor_id=None)` for all four kinds, so moving it to the actor routes is strictly *more* attribution. Its `payload` nesting is unwrapped at the **call site** (Step 11), not in the dialog.
 - **`agent_mail_service.py:859`, the actor `answer`.** §3.6b permits PR0 to relax it and does not require it. This task does not: the operator's reply is a `message`, the thread stays readable, and the root's state is moved by the ack instead. Skipping it also keeps the exclusivity check at `:849-850` untouched, which the mutation table flags as the thing an implementer takes with it. **Spec test 6c is therefore not in this task**; it belongs to whoever adds the capability. Recorded so a reviewer sees a decision rather than a gap.
-- **6h's frontend half.** The spec's 6h has two halves: which failures are `401` (and so may re-provision), and that the retry happens **once**. The first half is a backend fact and is tested here — `test_6h_only_a_pruned_token_is_401` measures all three codes. The second half is not automated, because **the repo has no frontend test runner**: measured, `frontend/package.json`'s scripts are `dev`, `build`, `lint`, `preview` only, and there is no vitest, jest, jsdom, happy-dom, or `@testing-library` anywhere in the dependencies or in `node_modules`. Standing up one is a larger decision than this task, and a task that quietly grows a test framework is a task a reviewer cannot gate. So the retry count is **Step 15's manual verification items 7 and 8** — both halves, the `401` that retries once and the `403` that does not retry at all — read off the network tab. The bound is also structural and reviewable by eye: `actorFetch` has no loop, one `if (response.status === 401)`, one re-send. Recorded the same way as 6c: a decision with its reason, not a gap.
+- **6h's retry *count*.** The spec's 6h has three claims: which failures are `401` (and so may re-provision), that recovery keeps the tab's identity, and that the retry happens **once**. The first two are backend facts and both are tested here — `test_6h_only_a_pruned_token_is_401` measures all three codes, and `test_6h_recovery_reuses_the_tab_key_and_keeps_its_own_threads` measures that re-provisioning the same key rotates the token on the same actor row. Only the retry count is not automated, because **the repo has no frontend test runner**: measured, `frontend/package.json`'s scripts are `dev`, `build`, `lint`, `preview` only, and there is no vitest, jest, jsdom, happy-dom, or `@testing-library` anywhere in the dependencies or in `node_modules`. Standing up one is a larger decision than this task, and a task that quietly grows a test framework is a task a reviewer cannot gate. So the retry count is **Step 15's manual verification items 7 and 8** — the `401` that retries exactly once and the `400` that does not retry at all — read off the network tab, with item 7 also checking by eye the two things the automated test cannot see: that the re-`POST` carries the *stored* `actor_key`, and that `sessionStorage`'s key survives while its token changes. The bound is also structural and reviewable by eye: `actorFetch` has no loop, one `if (response.status === 401)`, one re-send. Recorded the same way as 6c: a decision with its reason, not a gap.
 - **`fetchAgentMailInbox` (`:48-55`) and `markAgentMailRead` (`:57-62`).** Both are **dead** — grepped across `src/`, no component calls either. They stay on the member route and stay dead. The old task gave them a header "so a future caller does not acquire a silent 401"; under this design a future caller wants either the actor route or a session token, and guessing which is worse than leaving them alone.
 - **`fetchAgentMailThread` and every read path.** Unchanged, and they keep working with no credential.
 
-- [ ] **Step 1: Write the tests — seven for the capability that does not exist, six to bound the one that does**
+- [ ] **Step 1: Write the tests — seven for the capability that does not exist, seven to bound the one that does**
 
 Create `backend/tests/agent_mail/test_actor_thread_capability.py`. Thirteen tests: seven fail now and pass after Steps 3–5, six pass throughout and exist so that widening the credential's authority breaks the build. The fixtures mirror `test_external_api.py:14-62`, which is the file this one sits beside. `_member`'s `identity_key` is `f"repo:{repo_id}"` and that column is UNIQUE (`app/models/database.py:350`), so **two members need two different `repo_id` values** — a same-`repo_id` pair raises `IntegrityError` on the second commit rather than failing an assertion.
 
@@ -6590,6 +6590,79 @@ async def test_6h_only_a_pruned_token_is_401(client, db):
     assert pruned.status_code == 401
 
 
+async def _actor_row(db, key):
+    return (await db.execute(text(
+        "SELECT id FROM mail_external_actors WHERE actor_key = :k"), {"k": key})).scalar_one_or_none()
+
+
+@pytest.mark.asyncio
+async def test_6h_recovery_reuses_the_tab_key_and_keeps_its_own_threads(client, db):
+    """6h positive half -- re-provisioning must ROTATE, not replace, the identity.
+
+    The tab's durable identity is the actor_key, not the token (spec:802-807).
+    create_actor selects on actor_key: a hit rotates token_hash on the same row,
+    a miss INSERTs a new row with a new id (external_agent_mail_service.py:88-105).
+    So a 401 recovery that mints a fresh key silently abandons every thread the
+    tab created, because the ownership guard then sees a different actor.
+
+    Two details are load-bearing and both look like noise:
+
+    1. A second actor is provisioned first. With only one row, deleting it and
+       inserting a new one hands SQLite the same rowid back, the new identity
+       collides with the old one, and BOTH recovery strategies pass. That is a
+       false negative, not a proof.
+    2. The failure injected is a CORRUPTED token, not a deleted row -- the row
+       must survive, or there is no identity left to preserve.
+    """
+    recipient = await _member(db, "repo-beta", "beta")
+    await _actor(client, key="deck-ui-othertab")  # see docstring, detail 1
+    key = "deck-ui-aaaa1111"
+    auth = await _actor(client, key=key)
+    actor_id = await _actor_row(db, key)
+
+    created = await client.post(
+        "/api/v1/external/agent-mail/context-requests",
+        headers=auth,
+        json={"recipient_member_id": recipient.id, "subject": "the tab's own",
+              "body_markdown": "created in this tab"},
+    )
+    assert created.status_code == 200, created.text
+    root_id = created.json()["message"]["id"]
+    assert created.json()["message"]["sender_actor_id"] == actor_id
+    rows_before = (await db.execute(
+        text("SELECT COUNT(*) FROM mail_external_actors"))).scalar_one()
+
+    # The tab's stored token is corrupted; its actor row is untouched.
+    stale = {"Authorization": "Bearer nope"}
+    first = await client.post(
+        f"/api/v1/external/agent-mail/threads/{root_id}/replies",
+        json={"body_markdown": "reply"}, headers=stale)
+    assert first.status_code == 401
+
+    # Recovery, the specified way: POST the SAME actor_key, then retry once.
+    same = await _actor(client, key=key)
+    retry = await client.post(
+        f"/api/v1/external/agent-mail/threads/{root_id}/replies",
+        json={"body_markdown": "reply"}, headers=same)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["message"]["sender_actor_id"] == actor_id
+    assert await _actor_row(db, key) == actor_id, "re-provision replaced the identity"
+    assert (await db.execute(
+        text("SELECT COUNT(*) FROM mail_external_actors"))).scalar_one() == rows_before
+
+    # The opposite strategy -- a fresh key -- is refused on the tab's own thread.
+    # This half is what makes the assertions above discriminating rather than
+    # decorative; it is the mutant, run inline, because the mutation lives in
+    # frontend code no pytest run can reach.
+    fresh = await _actor(client, key="deck-ui-newkey01")
+    assert await _actor_row(db, "deck-ui-newkey01") != actor_id
+    refused = await client.post(
+        f"/api/v1/external/agent-mail/threads/{root_id}/replies",
+        json={"body_markdown": "reply"}, headers=fresh)
+    assert refused.status_code == 400
+    assert "threads they created" in refused.json()["detail"]
+
+
 @pytest.mark.asyncio
 async def test_actor_read_scope_is_unchanged(client, db):
     """Not a spec test -- a lock that this task did not widen the read scope."""
@@ -6606,7 +6679,7 @@ async def test_actor_read_scope_is_unchanged(client, db):
     assert resp.status_code == 200
 ```
 
-Four notes on tests an implementer may be tempted to change.
+Five notes on tests an implementer may be tempted to change.
 
 **6f asserts what *reads* the credential, not what *refuses* it — because today those routes refuse nobody.** The spec's wording ("it buys no `POST /dispatch-status`, no approval, no lease authority") reads like a behavioural test, and it cannot be one in PR0's starting state. Measured through the real ASGI app, a freshly minted actor token reaches `POST /api/v1/agent-teams/dispatch-status` and gets **`200` with the note landing** — as an `Authorization: Bearer` header *and* as an `X-Deck-Session-Token` header, because that route reads neither:
 
@@ -6619,7 +6692,9 @@ POST /agent-mail/messages/1/ack       -> 200
 
 Those routes are unauthenticated until Task 5 gates them, so `assert refused` would fail on correct code. The honest assertion is the structural one: the actor dependency is not in those endpoints' dependency trees, the actor row and its response carry no member or slot column, and minting writes nothing outside `mail_external_actors`. The spec's "mint it rather than fabricating one" reason survives intact — if a future change wires a credential onto `report_dispatch_status`, `actor_endpoints` grows and this test fails.
 
-**6f's route walk must recurse through `.original_router`, and the `> 100` guard is load-bearing.** FastAPI 0.140.7 keeps an included router as an `_IncludedRouter` node; the real routes hang off its `.original_router`. A flat walk of `app.routes` sees 7 entries — `Counter({'Route': 4, '_IncludedRouter': 1, 'APIRoute': 1, 'Mount': 1})` — finds **one** APIRoute, computes an empty `actor_endpoints`, and passes every `not in` assertion. That is the worst kind of green: a vacuous pass on a test whose whole job is to bound authority. The recursive walk finds **234** APIRoutes and **11** reading `external_actor`. `assert len(routes) > 100` and `assert actor_endpoints` exist so the flat-walk mistake is a failure rather than a pass; Step 7's mutation M-F4 is the flat walk itself.
+State what it proves and no more: **the external-actor dependency is not wired into those six endpoints.** That is an architecture guard, not a complete authorization proof, and the difference matters in two concrete ways. Task 5 leaves a **grace mode** in which an ungated request still succeeds, so "no actor dependency" does not imply "refused". And a route that parsed the `Authorization` header by hand — `request.headers.get("authorization")` inside its body — would grant authority while never appearing in any dependency tree, so this test would stay green. The runtime authorization tests in **Tasks 5, 7 and 8** are the authoritative ones for what is actually refused; 6f's job is to make the *wiring* regression loud, and it is the only test in the plan that does that.
+
+**6f's route walk must recurse through `.original_router`, and the `> 100` guard is load-bearing.** FastAPI 0.140.7 keeps an included router as an `_IncludedRouter` node; the real routes hang off its `.original_router`. A flat walk of `app.routes` sees 7 entries — `Counter({'Route': 4, '_IncludedRouter': 1, 'APIRoute': 1, 'Mount': 1})` — finds **one** APIRoute, computes an empty `actor_endpoints`, and passes every `not in` assertion. That is the worst kind of green: a vacuous pass on a test whose whole job is to bound authority. The recursive walk finds **234** APIRoutes and **11** reading `external_actor`. `assert len(routes) > 100` and `assert actor_endpoints` exist so the flat-walk mistake is a failure rather than a pass; Step 7's mutation 9 is the flat walk itself.
 
 **6f keys on the endpoint function, not on the route path.** A sub-router's `.path` carries no prefix — the eleven actor routes report `/messages`, `/actors/me`, `/threads/{message_id}/replies`, and so on. So `assert not path.startswith("/api/v1/external/agent-mail/")` fails on all eleven legitimate routes: it measures FastAPI's internal path composition, not authority. Importing the six endpoint functions and comparing object identity measures the thing the test is about. Do not "simplify" this back to paths.
 
@@ -6634,7 +6709,7 @@ cd backend && source venv/bin/activate
 pytest tests/agent_mail/test_actor_thread_capability.py -p no:warnings -q
 ```
 
-**Measured: `7 failed, 6 passed`.** Read the count — it is the evidence the tests point at real gaps rather than at typos. Thirteen tests collected; if the collection count differs, a test was dropped or renamed.
+**Measured: `7 failed, 7 passed`.** Read the count — it is the evidence the tests point at real gaps rather than at typos. Fourteen tests collected; if the collection count differs, a test was dropped or renamed.
 
 Failing, and why:
 - `test_6b_...`, `test_6m_...` — `400 "External actors can only reply in threads they created"` (`:258-259`).
@@ -6651,7 +6726,7 @@ Passing already, and each is a lock rather than a gap:
 - `test_6h_...` — the three response codes already hold. It locks the contract Step 10's retry is built on, before Step 10 writes the retry.
 - `test_actor_read_scope_is_unchanged` — the `403` and the `200` are both today's behaviour, which is the point.
 
-Six of thirteen passing in the red phase is expected and correct: seven tests cover the capability this task adds, and six bound what it must not change. A task that only adds tests for new behaviour has no way to fail when it widens something by accident.
+Seven of fourteen passing in the red phase is expected and correct: seven tests cover the capability this task adds, and seven bound what it must not change. `test_6h_recovery_...` is one of the seven that already pass — it exercises a thread the actor created itself, which today's narrow ownership guard already admits. It is here to lock `create_actor`'s reuse semantics, which Step 10's frontend depends on and which nothing else asserts. A task that only adds tests for new behaviour has no way to fail when it widens something by accident.
 
 - [ ] **Step 3: Relax the reply, and fix its routing**
 
@@ -6790,43 +6865,51 @@ cd backend && source venv/bin/activate
 pytest tests/agent_mail/test_actor_thread_capability.py -p no:warnings -q
 ```
 
-**Measured: `13 passed`.**
+**Measured: `14 passed`.**
 
-- [ ] **Step 7: Mutate twelve ways and confirm each named test fails**
+- [ ] **Step 7: Mutate thirteen ways and confirm each named test fails**
 
 Each mutation is one edit, applied and then reverted before the next. This is the step that decides whether the tests are worth having: every one of these mutants is green against some *other* plausible test of the same behaviour. The "measured result" column is what actually happened, not a prediction.
 
-Run after each: `pytest tests/agent_mail/test_actor_thread_capability.py tests/agent_mail/test_external_api.py -p no:warnings -q` (baseline for the pair: **24 passed**).
+Run after each: `pytest tests/agent_mail/test_actor_thread_capability.py tests/agent_mail/test_external_api.py -p no:warnings -q` (baseline for the pair: **25 passed**).
 
 Mutations 1–5 attack the capability this task adds:
 
 | # | Mutation | Measured result |
 |---|---|---|
-| 1 | In `reply_in_thread`, restore `recipient_member_id=root.recipient_member_id` | `1 failed, 23 passed` — `test_6b_...` only, and only on its receipt assertion. The row assertions still pass: the reply is authored correctly and delivered to the wrong agent |
-| 2 | Delete both ownership guards **in full** — the whole `if`/`raise` at `:258-259` and at `:357-358` (the blanket relaxation) | `2 failed, 22 passed` — `test_6i_...` **and `test_6h_...`**. 6i is the test written for this mutant; 6h catches it as a side effect, because its cross-actor write must be a `400` for `actorFetch` not to retry, and the blanket relaxation turns that `400` into a `200`. Two independent tests failing on one mutant is not redundancy: they fail on different assertions, for different reasons. **Delete the whole statement, not just the `sender_actor_id is not None and` clause** — striking only that clause restores the *pre-task* narrow guard, which is mutation 5's shape and produces mutation 5's failures (`test_6b`, `6d`, `6j`, `6k`, `6l`, `6m` — six, measured). Two opposite mistakes look similar in a diff |
-| 3 | In `acknowledge_actor_request`, replace the last line with `return await self.request_status(db, actor, root.id)` | `3 failed, 21 passed` — `test_6d_...`, `test_6j_...`, `test_6k_...`, all with `403`. Their *state* assertions never run; each fails on the response. Remove the route's `PermissionError` handler as well and the same three fail on an uncaught `PermissionError` — the `500` is the uvicorn symptom, not the in-test one |
-| 4 | Narrow the transition to `if root.request_status == "answered":` | `1 failed, 23 passed` — `test_6k_...` only. `test_6d_...` passes: its root is already `answered` |
-| 5 | Narrow the reply guard to `if root.sender_member_id is None: raise ...` | `2 failed, 22 passed` — `test_6m_...` **and the pre-existing `test_external_api.py::test_external_actor_can_reply_in_own_thread` (`:320-352`, asserting at `:343`)**, because that test's root is actor-created and so has a NULL member sender. Worth knowing: the narrow predicate breaks the capability that already shipped, not only the new one |
+| 1 | In `reply_in_thread`, restore `recipient_member_id=root.recipient_member_id` | `1 failed, 24 passed` — `test_6b_...` only, and only on its receipt assertion. The row assertions still pass: the reply is authored correctly and delivered to the wrong agent |
+| 2 | Delete both ownership guards **in full** — the whole `if`/`raise` at `:258-259` and at `:357-358` (the blanket relaxation) | `3 failed, 22 passed` — `test_6i_...`, `test_6h_only_a_pruned_token_is_401`, **and `test_6h_recovery_...`**. 6i is the test written for this mutant; both 6h halves catch it as a side effect, because each needs a cross-actor write to be a `400` — one so `actorFetch` does not retry it, the other to show that a fresh key really does lose the tab's threads. Three independent tests failing on one mutant is not redundancy: they fail on different assertions, for different reasons. **Delete the whole statement, not just the `sender_actor_id is not None and` clause** — striking only that clause restores the *pre-task* narrow guard, which is mutation 5's shape and produces mutation 5's failures (`test_6b`, `6d`, `6j`, `6k`, `6l`, `6m` — six, measured). Two opposite mistakes look similar in a diff |
+| 3 | In `acknowledge_actor_request`, replace the last line with `return await self.request_status(db, actor, root.id)` | `3 failed, 22 passed` — `test_6d_...`, `test_6j_...`, `test_6k_...`, all with `403`. Their *state* assertions never run; each fails on the response. Remove the route's `PermissionError` handler as well and the same three fail on an uncaught `PermissionError` — the `500` is the uvicorn symptom, not the in-test one |
+| 4 | Narrow the transition to `if root.request_status == "answered":` | `1 failed, 24 passed` — `test_6k_...` only. `test_6d_...` passes: its root is already `answered` |
+| 5 | Narrow the reply guard to `if root.sender_member_id is None: raise ...` | `3 failed, 22 passed` — `test_6m_...`, `test_6h_recovery_...`, **and the pre-existing `test_external_api.py::test_external_actor_can_reply_in_own_thread` (`:320-352`, asserting at `:343`)**. All three roots are actor-created and so have a NULL member sender, which this predicate refuses. Worth knowing: the narrow predicate breaks the capability that already shipped, not only the new one |
 
 Mutations 6–9 attack the three locks. A lock that no mutant can break is a comment, not a test, so each was run:
 
 | # | Mutation | Measured result |
 |---|---|---|
-| 6 | In `send_broadcast` (`:202`), change `kind="broadcast"` to `kind="message"` | `1 failed, 23 passed` — `test_6a_...` only, on its kind list. This is 6a's unique discriminator: no other test in either file checks that each compose route produces the kind it names, so a route silently downgraded to a plain message ships |
-| 6′ | Change `kind="context_request"` (`:222`) the same way | `2 failed, 22 passed` — `test_6a_...` **and the pre-existing `test_external_api.py::test_external_request_status_wait_and_ack_lifecycle`**, which needs a real request to have a status. Worth running as well as 6: it shows which kinds already have cover (`context_request`) and which have none (`broadcast`, `handoff`) |
-| 6″ | Set `sender_actor_id=None` at `:174` instead | `9 failed, 15 passed` — six in the new file and three in `test_external_api.py`. **Not a useful mutant**: `:174` is the single shared row-construction path for every external send, so breaking it breaks everything and tells you nothing about which test guards attribution. Recorded because it is the mutation an implementer reaches for first, and its result is misleading in the reassuring direction — nine failures look like strong cover when they are one assertion repeated |
-| 7 | Add `member_id: Optional[int] = None` to `MailExternalActorResponse` | `1 failed, 23 passed` — `test_6f_...` on `"member_id" not in me.json()`. The credential's response shape is part of its authority: a `member_id` field is where impersonation starts |
-| 8 | Add `actor = Depends(external_actor)` to `report_dispatch_status` (`agent_teams.py`), importing it from `external_agent_mail` | `1 failed, 23 passed` — `test_6f_...`, with `AssertionError: report_dispatch_status`; the endpoints reading the credential go **11 → 12**. This is the mutant 6f exists for, and the only one of the twelve that a reviewer might wave through as a plausible improvement |
-| 8′ | Have `create_actor` also insert a `MailTeamMember` keyed to the actor (`identity_key=f'repo:{actor_key}'`) | `3 failed, 21 passed` — `test_6f_...` on `assert count == 0, table` for `mail_team_members`, plus two pre-existing `test_external_api.py::test_external_delivery_reports_tmux_wake_success` parameterizations that now see an unexpected member. Note: keying the injected member on a **constant** instead makes the second mint raise `IntegrityError` on the UNIQUE `identity_key` and fails all 13 — a broken mutation, not a strong test |
-| 9 | Replace `_api_routes`'s body with a flat `for route in getattr(node, "routes", [])` walk, dropping the `else` recursion and the `original_router` tail | `1 failed, 12 passed` — `test_6f_...` on `AssertionError: the route walk found only 1`. **Without that guard this mutant passes**: the flat walk finds no actor endpoint, so all six `not in` assertions are vacuously true. The guard is the test's own self-check, and this row is its evidence |
+| 6 | In `send_broadcast` (`:202`), change `kind="broadcast"` to `kind="message"` | `1 failed, 24 passed` — `test_6a_...` only, on its kind list. This is 6a's unique discriminator: no other test in either file checks that each compose route produces the kind it names, so a route silently downgraded to a plain message ships |
+| 6′ | Change `kind="context_request"` (`:222`) the same way | `2 failed, 23 passed` — `test_6a_...` **and the pre-existing `test_external_api.py::test_external_request_status_wait_and_ack_lifecycle`**, which needs a real request to have a status. Worth running as well as 6: it shows which kinds already have cover (`context_request`) and which have none (`broadcast`, `handoff`) |
+| 6″ | Set `sender_actor_id=None` at `:174` instead | `10 failed, 15 passed` — seven in the new file and three in `test_external_api.py`. **Not a useful mutant**: `:174` is the single shared row-construction path for every external send, so breaking it breaks everything and tells you nothing about which test guards attribution. Recorded because it is the mutation an implementer reaches for first, and its result is misleading in the reassuring direction — ten failures look like strong cover when they are one assertion repeated |
+| 7 | Add `member_id: Optional[int] = None` to `MailExternalActorResponse` | `1 failed, 24 passed` — `test_6f_...` on `"member_id" not in me.json()`. The credential's response shape is part of its authority: a `member_id` field is where impersonation starts |
+| 8 | Add `actor = Depends(external_actor)` to `report_dispatch_status` (`agent_teams.py`), importing it from `external_agent_mail` | `1 failed, 24 passed` — `test_6f_...`, with `AssertionError: report_dispatch_status`; the endpoints reading the credential go **11 → 12**. This is the mutant 6f exists for, and the only one of the thirteen that a reviewer might wave through as a plausible improvement |
+| 8′ | Have `create_actor` also insert a `MailTeamMember` keyed to the actor (`identity_key=f'repo:{actor_key}'`) | `3 failed, 22 passed` — `test_6f_...` on `assert count == 0, table` for `mail_team_members`, plus two pre-existing `test_external_api.py::test_external_delivery_reports_tmux_wake_success` parameterizations that now see an unexpected member. Note: keying the injected member on a **constant** instead makes the second mint raise `IntegrityError` on the UNIQUE `identity_key` and fails all 14 — a broken mutation, not a strong test |
+| 9 | Replace `_api_routes`'s body with a flat `for route in getattr(node, "routes", [])` walk, dropping the `else` recursion and the `original_router` tail | `1 failed, 13 passed` (this one file only) — `test_6f_...` on `AssertionError: the route walk found only 1`. **Without that guard this mutant passes**: the flat walk finds no actor endpoint, so all six `not in` assertions are vacuously true. The guard is the test's own self-check, and this row is its evidence |
 
 Three more mutations bound 6h's codes. Each was run; two of the three also break a pre-existing test, which is worth knowing before you see the count:
 
 | # | Mutation | Measured result |
 |---|---|---|
-| H1 | In `reply_external_agent_mail_thread`, raise the `ValueError` handler as `401` instead of `400` | `2 failed, 22 passed` — `test_6h_...` **and `test_6i_...`**, which asserts that same `400` |
-| H2 | In `get_external_agent_mail_thread`, raise the `PermissionError` handler as `401` instead of `403` | `3 failed, 21 passed` — `test_6h_...`, `test_actor_read_scope_is_unchanged`, and the pre-existing `test_external_api.py::test_external_actor_cannot_read_other_actor_threads` |
-| H3 | In `authenticate_actor`, after the compare loop, return the first actor row instead of raising `Invalid bearer token` | `1 failed, 23 passed` — `test_6h_...` alone. **This is the one that matters**, and the only test in the repo that catches it: it makes the retry unnecessary and the credential meaningless in the same edit, and every other actor test still passes because they all present valid tokens. Insert after the loop, not before it — the earlier `raise` in that method is the *missing*-token case, and mutating that one fails `test_external_api.py::test_external_actor_registration_and_auth` instead |
+| H1 | In `reply_external_agent_mail_thread`, raise the `ValueError` handler as `401` instead of `400` | `3 failed, 22 passed` — both `test_6h_...` halves **and `test_6i_...`**, all three of which assert that same `400` |
+| H2 | In `get_external_agent_mail_thread`, raise the `PermissionError` handler as `401` instead of `403` | `3 failed, 22 passed` — `test_6h_...`, `test_actor_read_scope_is_unchanged`, and the pre-existing `test_external_api.py::test_external_actor_cannot_read_other_actor_threads` |
+| H3 | In `authenticate_actor`, after the compare loop, return the first actor row instead of raising `Invalid bearer token` | `2 failed, 23 passed` — both `test_6h_...` halves, and nothing else in either file. **This is the one that matters**: it makes the retry unnecessary and the credential meaningless in the same edit, and every other actor test still passes because they all present valid tokens. Insert after the loop, not before it — the earlier `raise` in that method is the *missing*-token case, and mutating that one fails `test_external_api.py::test_external_actor_registration_and_auth` instead |
+
+The thirteenth mutation lives in the **test**, not in the source, because the behaviour it guards is a frontend decision (Step 10's `actorKey()`) that no pytest run can reach. Mutating the test's recovery step is the closest faithful stand-in:
+
+| # | Mutation | Measured result |
+|---|---|---|
+| R1 | In `test_6h_recovery_...`, change the recovery line to `same = await _actor(client, key="deck-ui-mutant01")` — a **fresh** key, which is precisely what Step 10 would do if `actorKey()` generated instead of reading | `1 failed, 13 passed` (this one file) — `test_6h_recovery_...` on `assert retry.status_code == 200`, with `AssertionError: {"detail":"External actors can only reply in threads they created"}` and `400 == 200`. The refusal message is the point: the recovery succeeds at authenticating and then fails at *being the same actor* |
+
+Two near-miss mutants for this row are worth knowing, because both look like they test the same thing and neither does. Making `create_actor` always `INSERT` (`if True:` in place of `if actor is None:`) dies on an `IntegrityError` from the UNIQUE `actor_key` — a crash, not the identity claim. Perturbing the stored key (`actor_key=actor_key + secrets.token_hex(2)`) dies on the test's *setup* assertion (`assert 2 == None`) before reaching the recovery at all. A mutant that kills the right test for the wrong reason is not evidence.
 
 If a mutation does not produce the named failures, the test is wrong and not the table — fix the test before continuing. Revert everything before Step 8, and check `git status` rather than trusting the reverts: the test file is new and therefore untracked, so `git checkout` does **not** restore it. A mutation left applied to it silently contaminates every later run.
 
@@ -6837,7 +6920,7 @@ cd backend && source venv/bin/activate
 pytest tests/agent_mail/ tests/agent_teams/ -p no:warnings -q
 ```
 
-**Measured: `467 passed`** — the 454 baseline plus this task's 13. If Tasks 1–9 landed first the arithmetic is that number plus 13; the invariant is that nothing previously passing now fails.
+**Measured: `468 passed`** — the 454 baseline plus this task's 14. If Tasks 1–9 landed first the arithmetic is that number plus 14; the invariant is that nothing previously passing now fails.
 
 - [ ] **Step 9: Commit the backend half**
 
@@ -6876,7 +6959,7 @@ and the UI reads through the member thread route, which has no dependency but
 get_db.
 
 Spec: 2026-08-05-distinct-approver-identity-design.md section 3.6b
-Tests: 6a, 6b, 6d, 6e, 6f, 6g, 6h, 6i, 6j, 6k, 6l, 6m"
+Tests: 6a, 6b, 6d, 6e, 6f, 6g, 6h (both halves), 6i, 6j, 6k, 6l, 6m"
 ```
 
 - [ ] **Step 10: The actor token provisioner**
@@ -6886,17 +6969,31 @@ Create `frontend/src/features/agent-mail/actorAuth.ts`. It lives in the feature 
 ```ts
 import { API_BASE_URL } from '@/lib/constants'
 
-const STORAGE_KEY = 'deck-agent-mail-actor-token'
+const KEY_STORAGE_KEY = 'deck-agent-mail-actor-key'
+const TOKEN_STORAGE_KEY = 'deck-agent-mail-actor-token'
 
 /**
  * One external-actor row per browser tab.
  *
- * sessionStorage, not localStorage: the token dies with the tab, and per-tab
+ * TWO values, not one, and the split is the whole point. `actor_key` is the
+ * tab's durable identity; the token is only a rotating credential for it.
+ * `create_actor` SELECTs on actor_key: a hit rotates token_hash on the same
+ * row, a miss INSERTs a new row with a new id
+ * (external_agent_mail_service.py:88-105). So re-provisioning the SAME key
+ * rotates the credential and keeps the identity, and re-provisioning a NEW key
+ * abandons it -- along with every thread this tab created, because the
+ * ownership guard then sees a different actor and refuses with 400.
+ *
+ * sessionStorage, not localStorage: both values die with the tab, and per-tab
  * keys mean two tabs cannot rotate each other's credential. The cost is one
  * actor row per tab, which is why the key is random rather than fixed.
  */
 function actorKey(): string {
-  return `deck-ui-${crypto.randomUUID().slice(0, 8)}`
+  const existing = sessionStorage.getItem(KEY_STORAGE_KEY)
+  if (existing) return existing
+  const created = `deck-ui-${crypto.randomUUID().slice(0, 8)}`
+  sessionStorage.setItem(KEY_STORAGE_KEY, created)
+  return created
 }
 
 async function provision(): Promise<string> {
@@ -6914,16 +7011,32 @@ async function provision(): Promise<string> {
     throw new Error(`Could not provision an Agent Mail credential (HTTP ${response.status})`)
   }
   const token = (await response.json()).token as string
-  sessionStorage.setItem(STORAGE_KEY, token)
+  sessionStorage.setItem(TOKEN_STORAGE_KEY, token)
   return token
 }
 
 async function token(): Promise<string> {
-  return sessionStorage.getItem(STORAGE_KEY) ?? (await provision())
+  return sessionStorage.getItem(TOKEN_STORAGE_KEY) ?? (await provision())
 }
 
+/**
+ * Discard the credential, keep the identity. This is the ONLY reset
+ * authentication recovery may call.
+ */
 export function resetActorToken(): void {
-  sessionStorage.removeItem(STORAGE_KEY)
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+}
+
+/**
+ * Become a different actor. Nothing in PR0 calls this; it exists so that a
+ * later "start a fresh operator identity" affordance has one obvious place to
+ * live, and so that nobody reaches for `resetActorToken` and adds the key
+ * removal to it. Adding `KEY_STORAGE_KEY` to `resetActorToken` is the exact
+ * regression Step 1's recovery test and Step 15's item 7 exist to catch.
+ */
+export function resetActorIdentity(): void {
+  sessionStorage.removeItem(KEY_STORAGE_KEY)
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
 }
 
 /**
@@ -6949,6 +7062,8 @@ export async function actorFetch<T>(path: string, init?: RequestInit): Promise<T
 
   let response = await send(await token())
   if (response.status === 401) {
+    // The token is gone; the key is not. provision() re-POSTs the stored key,
+    // so this rotates the credential on the tab's existing actor row.
     resetActorToken()
     response = await send(await provision())
   }
@@ -6965,6 +7080,17 @@ export async function actorFetch<T>(path: string, init?: RequestInit): Promise<T
 `API_BASE_URL` is `import.meta.env.VITE_API_URL || '/api/v1/'` (`lib/constants.ts:1`) — it carries a trailing slash, which is why the paths passed to `actorFetch` have no leading one.
 
 The `429` branch is not defensive styling. The external send path is rate-limited at 30 messages per 60 seconds per actor (`external_agent_mail_service.py:32-33`) where the member route has no limit, so this is a refusal the operator can actually reach, and a generic "failed to send" for it is a support ticket. Per-tab actor keys give each tab its own window.
+
+**Why `actorKey()` reads storage before it generates, measured.** An earlier revision of this step generated a fresh key on every `provision()` call, which made a `401` mint a *new* actor row rather than rotate the existing one. Run through the real ASGI app, with the tab first creating its own `context_request` and then having only its stored token corrupted:
+
+| recovery strategy | actor id | retry |
+| --- | --- | --- |
+| re-POST the stored key | `2 → 2` | **200** |
+| generate a new key | `2 → 3` | **400** `External actors can only reply in threads they created` |
+
+The retry fails because the ownership guard is doing its job: actor 3 is not actor 2. Losing the tab's own threads is the cost, and it is invisible in the common case — an *agent*-created root admits any freshly minted actor, so the defect only shows on threads the tab itself created.
+
+One measurement detail is worth carrying, because it produced a false negative first. Triggering the `401` by **deleting** the actor row instead of corrupting the token hides the whole thing: with the row gone the table can be empty, SQLite hands the next `INSERT` the same rowid back, the "new" identity silently collides with the old one, and *both* strategies return 200. The failure to inject is a bad token with the row still present, and there must be a second actor row in existence so the id cannot be recycled. Step 1's recovery test encodes both conditions and says why in its docstring.
 
 - [ ] **Step 11: Point the three write helpers at the external routes**
 
@@ -7183,7 +7309,12 @@ With both servers running and **`mail_capability_tokens_required = True`** — t
 4. Click "Acknowledge answer" → the root reaches `acknowledged`, and neither participant's `MailReceipt.read_at` moved. The UI cannot show you this; check it in the DB.
 5. Have an agent send a `handoff`. Click "Accept handoff" → `acknowledged`.
 6. Open a second tab. Reply in the same thread → works. The two tabs hold different actor rows (`SELECT actor_key FROM mail_external_actors`), and each reply carries its own `sender_actor_id`.
-7. **6h, positive half.** In tab 1's devtools, corrupt the stored token (`sessionStorage.setItem('deck-agent-mail-actor-token','nope')`) and reply. With the network tab open: succeeds, and there are **exactly three** requests — the `401`, the `POST /actors`, and the retried write. Not four, and not a growing list. A *third* actor row appears; that accumulation is the accepted cost of per-tab keys.
+7. **6h, positive half — and it must be a thread tab 1 created.** First, in tab 1, compose a context request; note `sessionStorage.getItem('deck-agent-mail-actor-key')` and `SELECT COUNT(*) FROM mail_external_actors`. Then corrupt **only the token** (`sessionStorage.setItem('deck-agent-mail-actor-token','nope')`) and reply *in that same thread*. With the network tab open: it succeeds, and there are **exactly three** requests — the `401`, the `POST /actors`, and the retried write. Not four, and not a growing list. Then check all three of these, in this order of importance:
+   - the `POST /actors` body carries the **same `actor_key`** noted above;
+   - the actor-row count is **unchanged** — no new row, and in particular no third one;
+   - `sessionStorage`'s `...-actor-key` is unchanged while `...-actor-token` holds a new value.
+
+   Replying in a thread tab 1 *did not* create would pass even if recovery minted a brand-new identity, because an agent-created root admits any actor. Doing it on tab 1's own thread is what makes this check discriminating, and `test_6h_recovery_...` is its automated counterpart.
 8. **6h, negative half — the one worth the trouble.** In tab 1, ack a request tab 2 owns. In the DB: `UPDATE mail_messages SET sender_actor_id = <tab 2's actor id> WHERE id = <the root>`, then click Acknowledge in tab 1. The network tab shows **one** request, a `400`, and a toast carrying the server's message. No re-provision, no second attempt. An unbounded retry here has no visible symptom other than a UI that appears to hang, which is why this is checked by hand rather than assumed from the code.
 
 - [ ] **Step 16: Commit the frontend half**
