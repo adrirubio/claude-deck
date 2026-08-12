@@ -197,7 +197,7 @@ def _counts() -> dict:
         return {}
     result = _request(
         "GET",
-        f"/agent/inbox?member_id={_state['member_id']}&unread_only=true&limit=1",
+        "/agent/inbox?unread_only=true&limit=1",
     )
     if not result["ok"]:
         return {}
@@ -354,6 +354,9 @@ def deck_approve_work_item(
                 "message": "decision must be approved or rejected",
             },
         }
+    err = _guard()
+    if err:
+        return err
     result = _request(
         "POST",
         "/decisions",

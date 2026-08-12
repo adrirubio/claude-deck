@@ -370,6 +370,8 @@ async def report_dispatch_status(
         raise HTTPException(status_code=404, detail="work item not found")
     if not settings.mail_capability_tokens_required:
         raise HTTPException(status_code=409, detail="tokens_not_enforced")
+    if report.status == "revision_requested":
+        raise HTTPException(status_code=409, detail="use_deck_approve_work_item")
     scope = await db.get(TeamGithubScope, item.scope_id)
     await _authorize_dispatch_report(db, item, report, session)
 
@@ -378,8 +380,6 @@ async def report_dispatch_status(
             item.status_note = report.note
             item.updated_at = datetime.utcnow()
             await db.commit()
-    elif report.status == "revision_requested":
-        raise HTTPException(status_code=409, detail="use_deck_approve_work_item")
     elif report.status == "handoff_initiated":
         if report.reassign_to_slot_id is None:
             raise HTTPException(status_code=400, detail="reassign_to_slot_id required")
@@ -429,8 +429,6 @@ async def report_dispatch_status(
     elif report.status == "in_progress":
         now = datetime.utcnow()
         item.last_nudge_at = None
-        if report.pr_number is not None:
-            item.pr_number = report.pr_number
         item.updated_at = now
         await db.commit()
     elif report.status == "workspace_released":

@@ -257,6 +257,102 @@ async def test_rejection_opens_next_round_and_clears_old_ack(
 
 
 @pytest.mark.asyncio
+async def test_decision_route_requires_a_session_token(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _members, _tokens = await _dispatch_approval_fixture(db)
+
+    response = await client.post(
+        "/api/v1/agent-mail/decisions",
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "approved",
+        },
+    )
+
+    assert response.status_code == 401
+    assert (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_decision_route_refuses_the_owner_as_approver(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _members, tokens = await _dispatch_approval_fixture(db)
+
+    response = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "self approval",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "not_designated_leader"
+    assert (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_decision_route_requires_one_current_request(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _members, tokens = await _dispatch_approval_fixture(db)
+    payload = {
+        "work_item_id": item.id,
+        "dispatch_nonce": item.dispatch_nonce,
+        "decision": "approved",
+        "reason": "approved",
+    }
+
+    missing = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=payload,
+    )
+    assert missing.status_code == 404
+
+    owner = _members[1]
+    leader = _members[0]
+    root_ids = []
+    for index in range(2):
+        request = await client.post(
+            "/api/v1/agent-mail/messages",
+            headers={"X-Deck-Session-Token": tokens[1]},
+            json={
+                "kind": "context_request",
+                "sender_member_id": owner.id,
+                "recipient_member_id": leader.id,
+                "body_markdown": f"plan {index}",
+                "payload": {
+                    "work_item_id": item.id,
+                    "dispatch_nonce": item.dispatch_nonce,
+                },
+            },
+        )
+        assert request.status_code == 200
+        root_ids.append(request.json()["id"])
+
+    ambiguous = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=payload,
+    )
+
+    assert ambiguous.status_code == 409
+    assert all(str(root_id) in ambiguous.json()["detail"] for root_id in root_ids)
+    assert (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
 async def test_team_empty(client):
     resp = await client.get("/api/v1/agent-mail/team?sync=false")
     assert resp.status_code == 200

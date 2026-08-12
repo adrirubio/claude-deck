@@ -44,6 +44,48 @@ async def test_compat_migrations_add_capability_columns_idempotently():
 
 
 @pytest.mark.asyncio
+async def test_compat_migrations_add_pr1_approval_columns_idempotently():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE github_work_items (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE mail_messages (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
+                    )
+                    """
+                )
+            )
+            work_item_columns = {
+                "ack_approver_member_id",
+                "ack_evidence_message_id",
+                "dispatch_nonce",
+                "ack_enforcement_epoch",
+                "ack_approval_round",
+                "dispatch_head_ref",
+            }
+            message_columns = {"approval_round", "decision"}
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                assert work_item_columns <= await _sqlite_columns(
+                    conn, "github_work_items"
+                )
+                assert message_columns <= await _sqlite_columns(conn, "mail_messages")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_rebuild_agent_team_slots_removes_legacy_same_repo_unique_constraint():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

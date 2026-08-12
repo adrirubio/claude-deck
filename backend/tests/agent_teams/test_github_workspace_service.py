@@ -257,6 +257,15 @@ async def test_touch_owner_contact_is_owner_and_acquisition_conditional(db, tmp_
     await service.touch_owner_contact(
         db,
         item.id,
+        lease_token=None,
+        owner_slot_id=slot.id,
+    )
+    await db.refresh(workspace)
+    assert workspace.lease_last_owner_contact_at is None
+
+    await service.touch_owner_contact(
+        db,
+        item.id,
         lease_token="wrong-token",
         owner_slot_id=slot.id,
     )

@@ -58,6 +58,30 @@ async def client_and_db():
     await engine.dispose()
 
 
+@pytest_asyncio.fixture
+async def wal_client_and_db(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'dispatch.db'}")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _get_db():
+        async with maker() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = _get_db
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Deck-Session-Token": DEFAULT_TOKEN},
+    ) as ac:
+        yield ac, maker
+    app.dependency_overrides.clear()
+    await engine.dispose()
+
+
 async def _seed_item(maker, **overrides):
     async with maker() as db:
         preset = AgentTeamPreset(name="T", description="", created_by="t")
@@ -391,7 +415,11 @@ async def test_in_progress_records_activity_without_satisfying_ack(client_and_db
     item_id = await _seed_item(maker, last_nudge_at=datetime.utcnow())
     resp = await ac.post(
         "/api/v1/agent-teams/dispatch-status",
-        json={"work_item_id": item_id, "status": "in_progress"},
+        json={
+            "work_item_id": item_id,
+            "status": "in_progress",
+            "pr_number": 9999,
+        },
     )
     assert resp.status_code == 200
     async with maker() as db:
@@ -753,6 +781,41 @@ def test_shim_dispatch_status_omits_caller_slot_claim(monkeypatch):
     assert requests[0][2]["json"]["lease_token"] == "lease-current"
 
 
+def test_shim_inbox_counts_do_not_send_a_member_identity(monkeypatch):
+    import importlib
+
+    shim = importlib.import_module("mcp_shim.agent_mail_server")
+    requests = []
+    monkeypatch.setitem(shim._state, "member_id", 7)
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        return {
+            "ok": True,
+            "data": {"unread_count": 2, "pending_count": 1},
+        }
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+
+    assert shim._counts() == {"unread_count": 2, "pending_count": 1}
+    assert requests == [("GET", "/agent/inbox?unread_only=true&limit=1", {})]
+
+
+def test_shim_approval_requires_registration(monkeypatch):
+    import importlib
+
+    shim = importlib.import_module("mcp_shim.agent_mail_server")
+    refusal = {"ok": False, "error": {"code": "registration_failed"}}
+    monkeypatch.setattr(shim, "_guard", lambda: refusal)
+
+    def unexpected_request(*_args, **_kwargs):
+        raise AssertionError("an unregistered shim must not submit a decision")
+
+    monkeypatch.setattr(shim, "_request", unexpected_request)
+
+    assert shim.deck_approve_work_item(1, "nonce", "approved", "safe") == refusal
+
+
 def test_shim_retry_work_item_posts_reason(monkeypatch):
     import importlib
 
@@ -858,7 +921,6 @@ _OWNER_ONLY_STATUSES = [
     ("in_progress", {}),
     ("blocked", {"note": "n"}),
     ("ack_received", {}),
-    ("revision_requested", {}),
     ("handoff_initiated", {"reassign_to_slot_id": 1}),
     ("pr_opened", {"pr_number": 7}),
 ]
@@ -894,6 +956,27 @@ async def test_non_owner_is_refused_and_changes_nothing(client_and_db, status, e
             column.name: getattr(after, column.name)
             for column in GithubWorkItem.__table__.columns
         } == snapshot
+
+
+@pytest.mark.asyncio
+async def test_revision_requested_is_actionable_for_every_authenticated_slot(
+    client_and_db,
+):
+    ac, maker = client_and_db
+    item_id, _owner_id, other_id, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, other_id, key="mcp:retired-revision")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "revision_requested"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "use_deck_approve_work_item"
 
 
 @pytest.mark.asyncio
@@ -933,6 +1016,162 @@ async def test_handoff_accepted_belongs_to_the_target(client_and_db):
         item = await db.get(GithubWorkItem, item_id)
         assert item.owner_slot_id == other_id
         assert item.handoff_state == "accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_kind", ["missing", "different_preset"])
+async def test_handoff_initiation_rejects_invalid_targets_without_mutation(
+    client_and_db,
+    target_kind,
+):
+    ac, maker = client_and_db
+    item_id, owner_id, _other_id, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    async with maker() as db:
+        if target_kind == "different_preset":
+            preset = AgentTeamPreset(name="Other preset")
+            db.add(preset)
+            await db.flush()
+            target = AgentTeamSlot(
+                preset_id=preset.id,
+                position=0,
+                display_name="Foreign",
+                provider="codex-cli",
+                repo_id="foreign",
+                repo_path="/tmp/foreign",
+                repo_name="foreign",
+                enabled=True,
+            )
+            db.add(target)
+            await db.commit()
+            target_id = target.id
+        else:
+            target_id = 999_999
+    owner_token = await _token_for_slot(maker, owner_id, key=f"mcp:bad-{target_kind}")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "handoff_initiated",
+            "reassign_to_slot_id": target_id,
+        },
+        headers=_auth(owner_token),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "invalid_handoff_target"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.handoff_state is None
+        assert item.handoff_target_slot_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("race", ["owner", "acquisition"])
+async def test_workspace_release_cas_survives_wal_interleaving(
+    wal_client_and_db,
+    monkeypatch,
+    race,
+):
+    ac, maker = wal_client_and_db
+    item_id, owner_id, other_id, workspace_id, _ = await _seed_leased_item(maker)
+    entered_blocker = False
+
+    async def interleaving_blocker(_scope, _workspace):
+        nonlocal entered_blocker
+        entered_blocker = True
+        async with maker() as other_db:
+            if race == "owner":
+                item = await other_db.get(GithubWorkItem, item_id)
+                item.owner_slot_id = other_id
+            else:
+                workspace = await other_db.get(GithubWorkspace, workspace_id)
+                workspace.lease_token = "replacement-token"
+            await other_db.commit()
+        return None
+
+    monkeypatch.setattr(
+        github_workspace_service,
+        "release_blocker",
+        interleaving_blocker,
+    )
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "workspace_released",
+            "lease_token": "lease-current",
+        },
+    )
+
+    assert entered_blocker is True
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "lease_changed"
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id == item_id
+        expected_token = "replacement-token" if race == "acquisition" else "lease-current"
+        assert workspace.lease_token == expected_token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("race", ["owner", "acquisition"])
+async def test_owner_contact_cas_survives_wal_interleaving(
+    wal_client_and_db,
+    monkeypatch,
+    race,
+):
+    ac, maker = wal_client_and_db
+    item_id, owner_id, other_id, workspace_id, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    original_touch = github_workspace_service.touch_owner_contact
+    entered_touch = False
+
+    async def interleaving_touch(db, work_item_id, *, lease_token, owner_slot_id):
+        nonlocal entered_touch
+        entered_touch = True
+        async with maker() as other_db:
+            if race == "owner":
+                item = await other_db.get(GithubWorkItem, item_id)
+                item.owner_slot_id = other_id
+            else:
+                workspace = await other_db.get(GithubWorkspace, workspace_id)
+                workspace.lease_token = "replacement-token"
+            await other_db.commit()
+        await original_touch(
+            db,
+            work_item_id,
+            lease_token=lease_token,
+            owner_slot_id=owner_slot_id,
+        )
+
+    monkeypatch.setattr(
+        github_workspace_service,
+        "touch_owner_contact",
+        interleaving_touch,
+    )
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "lease_token": "lease-current",
+            "note": "still working",
+        },
+    )
+
+    assert entered_touch is True
+    assert response.status_code == 200
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.lease_last_owner_contact_at is None
 
 
 @pytest.mark.asyncio

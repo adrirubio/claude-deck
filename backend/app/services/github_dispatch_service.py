@@ -38,6 +38,7 @@ _LAUNCH_FAILED_STATUSES = {
     "blocked",
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
+    "skipped_disabled",
 }
 _ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref")
 
@@ -1005,10 +1006,10 @@ class GithubDispatchService:
             await self._slot_member(db, leader.id) if leader is not None else None
         )
         if leader_member is None:
-            return AckEvidence(False, "leader_unavailable")
+            return AckEvidence(False, "no_leader")
         owner_member = await self._owner_member(db, item)
         if owner_member is None:
-            return AckEvidence(False, "owner_unavailable")
+            return AckEvidence(False, "no_owner")
         if owner_member.id == leader_member.id:
             return AckEvidence(False, "self_ack")
         roots = (
@@ -1024,9 +1025,12 @@ class GithubDispatchService:
             root
             for root in roots
             if (root.payload or {}).get("work_item_id") == item.id
+            and (root.payload or {}).get("approval_round") is not None
         ]
         if not linked:
-            return AckEvidence(False, "no_linked_request")
+            return AckEvidence(False, "no_linkage")
+        if item.dispatch_nonce is None:
+            return AckEvidence(False, "stale_nonce")
         nonce_matches = [
             root
             for root in linked
@@ -1034,6 +1038,8 @@ class GithubDispatchService:
         ]
         if not nonce_matches:
             return AckEvidence(False, "stale_nonce")
+        if item.approval_round_count < 1:
+            return AckEvidence(False, "stale_round")
         round_matches = [
             root
             for root in nonce_matches
@@ -1049,19 +1055,35 @@ class GithubDispatchService:
                 .where(
                     MailMessage.kind == "answer",
                     MailMessage.thread_root_id.in_(root_ids),
-                    MailMessage.sender_member_id == leader_member.id,
-                    MailMessage.decision == "approved",
-                    MailMessage.approval_round == item.approval_round_count,
                 )
-                .order_by(MailMessage.created_at.desc(), MailMessage.id.desc())
+                .order_by(MailMessage.created_at, MailMessage.id)
             )
         ).scalars().all()
-        if not answers:
-            return AckEvidence(False, "no_approved_decision")
-        answer = answers[0]
+        leader_answers = [
+            answer
+            for answer in answers
+            if answer.sender_member_id == leader_member.id
+        ]
+        approved_answers = [
+            answer
+            for answer in leader_answers
+            if answer.decision == "approved"
+            and answer.approval_round == item.approval_round_count
+        ]
+        if not approved_answers:
+            if any(
+                answer.decision == "rejected"
+                and answer.approval_round == item.approval_round_count
+                for answer in leader_answers
+            ):
+                return AckEvidence(False, "rejected")
+            if leader_answers:
+                return AckEvidence(False, "no_decision")
+            return AckEvidence(False, "not_designated_approver")
+        answer = approved_answers[0]
         return AckEvidence(
             True,
-            "approved",
+            "ok",
             approver_member_id=leader_member.id,
             evidence_message_id=answer.id,
             approval_round=item.approval_round_count,

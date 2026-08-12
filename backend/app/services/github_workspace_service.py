@@ -342,6 +342,8 @@ class GithubWorkspaceService:
         owner_slot_id: int,
     ) -> None:
         """Conditionally stamp contact for the current owner and acquisition."""
+        if lease_token is None:
+            return
         now = datetime.utcnow()
         owner_still_current = exists().where(
             GithubWorkItem.id == item_id,

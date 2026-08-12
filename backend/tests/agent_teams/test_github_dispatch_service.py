@@ -5,7 +5,7 @@ from io import StringIO
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -1004,8 +1004,18 @@ async def test_report_ack_received_records_approved_leader_evidence(
         body_markdown="approved",
         approval_round=1,
         decision="approved",
+        created_at=datetime.utcnow(),
     )
-    db.add(answer)
+    later_answer = MailMessage(
+        kind="answer",
+        thread_root_id=root.id,
+        sender_member_id=leader_member.id,
+        body_markdown="approved again",
+        approval_round=1,
+        decision="approved",
+        created_at=datetime.utcnow() + timedelta(seconds=1),
+    )
+    db.add_all([answer, later_answer])
     await db.commit()
 
     evidence = await github_dispatch_service.record_ack_received(db, item, scope)
@@ -1019,6 +1029,138 @@ async def test_report_ack_received_records_approved_leader_evidence(
     assert item.ack_approval_round == 1
     assert item.last_nudge_at is None
     assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected_reason"),
+    [
+        ("self_ack", "self_ack"),
+        ("non_leader", "not_designated_approver"),
+        ("slotless", "not_designated_approver"),
+        ("no_linkage", "no_linkage"),
+        ("missing_round", "no_linkage"),
+        ("stale_nonce", "stale_nonce"),
+        ("null_item_nonce", "stale_nonce"),
+        ("stale_round", "stale_round"),
+        ("no_leader", "no_leader"),
+        ("no_owner", "no_owner"),
+        ("rejected", "rejected"),
+        ("no_decision", "no_decision"),
+    ],
+)
+async def test_ack_evidence_refusal_matrix(
+    db, monkeypatch, case, expected_reason
+):
+    _preset, slots, scope = await _team(db)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    leader_member = (
+        None
+        if case == "no_leader"
+        else await _create_registered_slot_member(db, slots[0])
+    )
+    if case == "self_ack":
+        owner_slot = slots[0]
+        owner_member = leader_member
+    else:
+        owner_slot = slots[1]
+        owner_member = (
+            None
+            if case == "no_owner"
+            else await _create_registered_slot_member(db, owner_slot)
+        )
+    item_round = 2 if case == "stale_round" else 1
+    item_nonce = None if case == "null_item_nonce" else "0123456789abcdef"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=912,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=owner_slot.id,
+        dispatched_at=datetime.utcnow(),
+        dispatch_nonce=item_nonce,
+        dispatch_head_ref=f"deck/slot-{owner_slot.id}/issue-912-head",
+        approval_round_count=item_round,
+    )
+    db.add(item)
+    await db.flush()
+
+    root = None
+    if case not in {"self_ack", "no_linkage", "no_leader", "no_owner"}:
+        payload = {
+            "work_item_id": item.id,
+            "dispatch_nonce": item_nonce,
+            "approval_round": item_round,
+        }
+        if case == "missing_round":
+            payload.pop("approval_round")
+        elif case == "stale_nonce":
+            payload["dispatch_nonce"] = "previous-attempt"
+        elif case == "null_item_nonce":
+            payload["dispatch_nonce"] = None
+        elif case == "stale_round":
+            payload["approval_round"] = 1
+        root = MailMessage(
+            kind="context_request",
+            sender_member_id=owner_member.id,
+            recipient_member_id=leader_member.id,
+            body_markdown="plan",
+            payload=payload,
+            approval_round=payload.get("approval_round"),
+            request_status="answered",
+        )
+        db.add(root)
+        await db.flush()
+
+    if case in {"non_leader", "slotless", "rejected", "no_decision"}:
+        sender = leader_member
+        decision = "approved"
+        if case == "non_leader":
+            sender = owner_member
+        elif case == "slotless":
+            sender = MailTeamMember(
+                identity_key="repo:slotless-reviewer",
+                repo_id="r",
+                repo_path="/tmp/r",
+                repo_name="r",
+                display_name="Slotless",
+                participant_kind="repo",
+            )
+            db.add(sender)
+            await db.flush()
+        elif case == "rejected":
+            decision = "rejected"
+        elif case == "no_decision":
+            decision = None
+        db.add(
+            MailMessage(
+                kind="answer",
+                thread_root_id=root.id,
+                sender_member_id=sender.id,
+                body_markdown="review",
+                approval_round=item_round,
+                decision=decision,
+            )
+        )
+    await db.commit()
+
+    evidence = await github_dispatch_service.record_ack_received(db, item, scope)
+
+    assert evidence.ok is False
+    assert evidence.reason == expected_reason
+    stored = (
+        await db.execute(
+            text(
+                "SELECT ack_received_at, ack_approver_member_id, "
+                "ack_evidence_message_id, ack_enforcement_epoch, "
+                "ack_approval_round FROM github_work_items WHERE id = :id"
+            ),
+            {"id": item.id},
+        )
+    ).one()
+    assert tuple(stored) == (None, None, None, None, None)
 
 
 @pytest.mark.asyncio
@@ -3891,6 +4033,7 @@ async def test_disabled_prepared_owner_keeps_attempt_and_lease(db):
         "blocked",
         "blocked_provider_unavailable",
         "blocked_agent_mail_not_configured",
+        "skipped_disabled",
     ],
 )
 async def test_known_launch_failure_releases_workspace(db, launch_status):
