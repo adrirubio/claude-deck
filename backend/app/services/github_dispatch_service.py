@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
@@ -51,6 +52,12 @@ class PartiallyPreparedAttempt(ValueError):
         self.item_id = item_id
         self.detail = detail
         super().__init__(f"work item {item_id} has a partial dispatch attempt: {detail}")
+
+
+class ResumeAttemptError(ValueError):
+    def __init__(self, block_code: str, detail: str):
+        self.block_code = block_code
+        super().__init__(detail)
 
 
 @dataclass(frozen=True)
@@ -626,6 +633,102 @@ class GithubDispatchService:
             "prepared_owner_unavailable",
             note,
         )
+        await db.commit()
+
+    async def resume_prepared_attempt(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+        *,
+        reassign_to_slot_id: int | None,
+    ) -> None:
+        if (
+            item.dispatch_status != "escalated"
+            or item.escalation_reason != "prepared_owner_unavailable"
+        ):
+            raise ResumeAttemptError(
+                "not_a_resumable_attempt",
+                "Only a prepared_owner_unavailable attempt can be resumed",
+            )
+        try:
+            prepared = prepared_attempt_from_row(item)
+        except PartiallyPreparedAttempt as exc:
+            raise ResumeAttemptError("not_a_resumable_attempt", exc.detail) from exc
+
+        slots_by_id = {
+            slot.id: slot
+            for slot in preset_slots
+            if slot.preset_id == scope.preset_id
+        }
+        effective_owner_id = (
+            reassign_to_slot_id
+            if reassign_to_slot_id is not None
+            else prepared.owner_slot_id
+        )
+        effective_owner = slots_by_id.get(effective_owner_id)
+        if reassign_to_slot_id is not None and (
+            effective_owner is None or not effective_owner.enabled
+        ):
+            raise ResumeAttemptError(
+                "invalid_resume_target",
+                "The requested resume target is missing, disabled, or outside the preset",
+            )
+        if effective_owner is None or not effective_owner.enabled:
+            raise ResumeAttemptError(
+                "owner_still_unavailable",
+                "The prepared owner is still unavailable",
+            )
+
+        reassigned = effective_owner_id != prepared.owner_slot_id
+        if reassigned:
+            workspace = (
+                await db.execute(
+                    select(GithubWorkspace).where(
+                        GithubWorkspace.leased_item_id == item.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if (
+                workspace is None
+                or workspace.leased_owner_pid is None
+                or workspace.leased_owner_proc_start is None
+            ):
+                raise ResumeAttemptError(
+                    "previous_owner_liveness_unknown",
+                    "The previous owner's pane identity cannot be resolved safely",
+                )
+            binding = (
+                await db.execute(
+                    select(AgentPaneBinding).where(
+                        AgentPaneBinding.pane_pid == workspace.leased_owner_pid,
+                        AgentPaneBinding.pane_proc_start
+                        == workspace.leased_owner_proc_start,
+                    )
+                )
+            ).scalar_one_or_none()
+            if binding is None or binding.slot_id is None:
+                raise ResumeAttemptError(
+                    "previous_owner_liveness_unknown",
+                    "The previous owner's pane identity cannot be resolved safely",
+                )
+            if (
+                binding.slot_id != effective_owner_id
+                and github_workspace_service._owner_process_is_alive(workspace)
+            ):
+                raise ResumeAttemptError(
+                    "previous_owner_still_alive",
+                    "The previous owner process is still alive",
+                )
+
+        item.dispatch_status = "pending"
+        item.escalation_reason = None
+        item.pending_reason = None
+        if reassigned:
+            item.owner_slot_id = effective_owner_id
+            item.routing_method = "operator_resume"
+        item.updated_at = datetime.utcnow()
         await db.commit()
 
     def _build_instructions(

@@ -2225,6 +2225,11 @@ class GithubWorkItemRetryRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class GithubWorkItemResumeAttemptRequest(BaseModel):
+    resume: Literal[True]
+    reassign_to_slot_id: Optional[int] = None
+
+
 class GithubWorkItemAbandonRequest(BaseModel):
     reason: Optional[str] = None
 

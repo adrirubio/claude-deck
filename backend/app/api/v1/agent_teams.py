@@ -37,6 +37,7 @@ from app.models.schemas import (
     DispatchStatusReport,
     GithubWorkItemAbandonRequest,
     GithubWorkItemListResponse,
+    GithubWorkItemResumeAttemptRequest,
     GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
     GithubWorkspaceCreate,
@@ -52,6 +53,7 @@ from app.models.schemas import (
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_dispatch_service import (
     _RELEASABLE_STATUSES,
+    ResumeAttemptError,
     github_dispatch_service,
 )
 from app.services.github_workspace_service import (
@@ -873,6 +875,48 @@ async def retry_github_work_item(
     if request is not None and request.reason:
         item.pending_reason = f"retry requested: {request.reason}"
     await db.commit()
+    await db.refresh(item)
+    return _work_item_response(item, scope)
+
+
+@router.post(
+    "/presets/{preset_id}/work-items/{item_id}/resume-attempt",
+    response_model=GithubWorkItemResponse,
+)
+async def resume_github_work_item_attempt(
+    preset_id: int,
+    item_id: int,
+    request: GithubWorkItemResumeAttemptRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await agent_team_service.require_preset_row(db, preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="GitHub work item not found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None or scope.preset_id != preset_id:
+        raise HTTPException(status_code=404, detail="GitHub work item not found")
+    slots = (
+        await db.execute(
+            select(AgentTeamSlot)
+            .where(AgentTeamSlot.preset_id == preset_id)
+            .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+        )
+    ).scalars().all()
+    try:
+        await github_dispatch_service.resume_prepared_attempt(
+            db,
+            item,
+            scope,
+            list(slots),
+            reassign_to_slot_id=request.reassign_to_slot_id,
+        )
+    except ResumeAttemptError as exc:
+        raise _conflict(str(exc), exc.block_code) from exc
     await db.refresh(item)
     return _work_item_response(item, scope)
 
