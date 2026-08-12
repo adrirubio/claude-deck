@@ -1872,6 +1872,7 @@ class MailMessageCreate(BaseModel):
     subject: Optional[str] = None
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
+    decision: Optional[Literal["approved", "rejected"]] = None
 
 
 class MailMessageResponse(BaseModel):
@@ -1882,6 +1883,8 @@ class MailMessageResponse(BaseModel):
     sender_actor_id: Optional[int] = None
     sender_type: str = "director"
     sender_actor_kind: Optional[str] = None
+    approval_round: Optional[int] = None
+    decision: Optional[str] = None
     sender_name: str
     recipient_member_id: Optional[int] = None
     subject: Optional[str] = None

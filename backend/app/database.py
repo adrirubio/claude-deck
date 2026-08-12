@@ -450,6 +450,18 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_count INTEGER"))
     if work_item_columns and "brief_message_id" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_message_id INTEGER"))
+    if work_item_columns and "ack_approver_member_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approver_member_id INTEGER"))
+    if work_item_columns and "ack_evidence_message_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_evidence_message_id INTEGER"))
+    if work_item_columns and "dispatch_nonce" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_nonce VARCHAR"))
+    if work_item_columns and "ack_enforcement_epoch" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_enforcement_epoch INTEGER"))
+    if work_item_columns and "ack_approval_round" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approval_round INTEGER"))
+    if work_item_columns and "dispatch_head_ref" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_head_ref VARCHAR"))
 
     workspace_columns = await _sqlite_columns(conn, "github_workspaces")
     if workspace_columns and "lease_token" not in workspace_columns:
@@ -482,6 +494,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
     message_columns = {row[1] for row in result.fetchall()}
     if message_columns and "sender_actor_id" not in message_columns:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN sender_actor_id INTEGER"))
+    if message_columns and "approval_round" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN approval_round INTEGER"))
+    if message_columns and "decision" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN decision VARCHAR"))
     await conn.commit()
 
 

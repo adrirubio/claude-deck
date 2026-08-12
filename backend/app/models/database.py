@@ -275,6 +275,12 @@ class GithubWorkItem(Base):
     brief_delivery_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     brief_delivery_nudge_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     brief_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ack_approver_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ack_evidence_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dispatch_nonce: Mapped[str | None] = mapped_column(String, nullable=True)
+    ack_enforcement_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ack_approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dispatch_head_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -458,6 +464,8 @@ class MailMessage(Base):
     sender_actor_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
     )
+    approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision: Mapped[str | None] = mapped_column(String, nullable=True)
     recipient_member_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=True
     )

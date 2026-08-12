@@ -360,6 +360,8 @@ def deck_request_context(
     topic: str,
     why_needed: str = "",
     files_or_symbols: Optional[list[str]] = None,
+    work_item_id: Optional[int] = None,
+    dispatch_nonce: Optional[str] = None,
 ) -> dict:
     """Ask another Agent Mail participant a structured question about something they know.
     Creates a pending context request they will be nudged to answer."""
@@ -370,6 +372,11 @@ def deck_request_context(
     body = topic
     if why_needed:
         body += f"\n\n**Why needed:** {why_needed}"
+    payload = {"why_needed": why_needed, "files_or_symbols": files_or_symbols}
+    if work_item_id is not None:
+        payload["work_item_id"] = work_item_id
+    if dispatch_nonce is not None:
+        payload["dispatch_nonce"] = dispatch_nonce
     result = _request(
         "POST",
         "/messages",
@@ -379,7 +386,7 @@ def deck_request_context(
             "recipient_member_id": to_member_id,
             "subject": topic[:120],
             "body_markdown": body,
-            "payload": {"why_needed": why_needed, "files_or_symbols": files_or_symbols},
+            "payload": payload,
         },
     )
     if not result["ok"]:
