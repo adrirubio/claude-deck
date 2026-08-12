@@ -2303,6 +2303,12 @@ class GithubWorkItemResponse(BaseModel):
     handoff_state: Optional[str] = None
     handoff_target_slot_id: Optional[int] = None
     approval_round_count: int
+    ack_approver_member_id: Optional[int] = None
+    ack_evidence_message_id: Optional[int] = None
+    dispatch_nonce: Optional[str] = None
+    ack_enforcement_epoch: Optional[int] = None
+    ack_approval_round: Optional[int] = None
+    dispatch_head_ref: Optional[str] = None
     pr_number: Optional[int] = None
     retry_count: int
     last_verified_sha: Optional[str] = None

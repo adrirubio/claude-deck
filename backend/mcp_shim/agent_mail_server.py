@@ -723,6 +723,9 @@ def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
                 "dispatch_status": item.get("dispatch_status"),
                 "escalation_reason": item.get("escalation_reason"),
                 "status_note": item.get("status_note"),
+                "ack_approval_round": item.get("ack_approval_round"),
+                "ack_enforcement_epoch": item.get("ack_enforcement_epoch"),
+                "dispatch_head_ref": item.get("dispatch_head_ref"),
             }
             for item in items
         ],
