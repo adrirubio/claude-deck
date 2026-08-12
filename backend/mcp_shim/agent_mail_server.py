@@ -338,6 +338,43 @@ def deck_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def deck_approve_work_item(
+    work_item_id: int,
+    dispatch_nonce: str,
+    decision: str,
+    reason: str,
+) -> dict:
+    """Approve or reject the current dispatch approval round as its designated
+    leader. A rejection opens the next round automatically when one remains."""
+    if decision not in {"approved", "rejected"}:
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_decision",
+                "message": "decision must be approved or rejected",
+            },
+        }
+    result = _request(
+        "POST",
+        "/decisions",
+        json={
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "decision": decision,
+            "reason": reason,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {
+        "ok": True,
+        "message_id": result["data"]["id"],
+        "decision": result["data"].get("decision"),
+        **_counts(),
+    }
+
+
+@mcp.tool()
 def deck_ack_message(message_id: int) -> dict:
     """Acknowledge a message. Acking an answer to your context request closes it; acking
     a handoff addressed to you accepts and closes the handoff."""

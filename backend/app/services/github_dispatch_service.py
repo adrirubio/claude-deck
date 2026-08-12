@@ -18,10 +18,12 @@ from app.models.database import (
     GithubWorkItem,
     GithubWorkspace,
     MailReceipt,
+    MailMessage,
     MailTeamMember,
     TeamGithubScope,
 )
 from app.models.schemas import AgentTeamLaunchRequest
+from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
 from app.services.github_workspace_service import github_workspace_service
@@ -67,6 +69,15 @@ class PreparedAttempt:
     dispatch_nonce: str
     dispatch_head_ref: str
     approval_round: int
+
+
+@dataclass(frozen=True)
+class AckEvidence:
+    ok: bool
+    reason: str
+    approver_member_id: int | None = None
+    evidence_message_id: int | None = None
+    approval_round: int | None = None
 
 
 def attempt_state(item: GithubWorkItem) -> AttemptState:
@@ -925,13 +936,156 @@ class GithubDispatchService:
         item.updated_at = datetime.utcnow()
         await db.commit()
 
+    async def advance_approval_round(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        decision_message: MailMessageCreate,
+        authenticated_sender_member_id: int,
+    ) -> MailMessage:
+        if item.dispatch_status == "escalated":
+            raise ValueError("item_escalated")
+        message, _ = await agent_mail_service._create_message_row(
+            db,
+            decision_message,
+            authenticated_sender_member_id=authenticated_sender_member_id,
+        )
+        if decision_message.decision == "approved":
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return message
+
+        if item.approval_round_count < scope.max_approval_rounds:
+            item.ack_received_at = None
+            item.ack_approver_member_id = None
+            item.ack_evidence_message_id = None
+            item.ack_enforcement_epoch = None
+            item.ack_approval_round = None
+            item.last_nudge_at = None
+            item.approval_round_count += 1
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return message
+
+        self._apply_escalation(item, "approval_rounds_exhausted")
+        await db.commit()
+        try:
+            await self._send_escalation_broadcast(
+                db,
+                item,
+                "approval_rounds_exhausted",
+                None,
+                owner_may_be_active=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to notify after approval rounds exhausted for item %s",
+                item.id,
+            )
+        return message
+
+    async def _ack_evidence(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        preset_slots: list[AgentTeamSlot],
+    ) -> AckEvidence:
+        if not settings.mail_capability_tokens_required:
+            return AckEvidence(False, "tokens_not_enforced")
+        leader = self._leader_slot(preset_slots)
+        leader_member = (
+            await self._slot_member(db, leader.id) if leader is not None else None
+        )
+        if leader_member is None:
+            return AckEvidence(False, "leader_unavailable")
+        owner_member = await self._owner_member(db, item)
+        if owner_member is None:
+            return AckEvidence(False, "owner_unavailable")
+        if owner_member.id == leader_member.id:
+            return AckEvidence(False, "self_ack")
+        roots = (
+            await db.execute(
+                select(MailMessage).where(
+                    MailMessage.kind == "context_request",
+                    MailMessage.sender_member_id == owner_member.id,
+                    MailMessage.recipient_member_id == leader_member.id,
+                )
+            )
+        ).scalars().all()
+        linked = [
+            root
+            for root in roots
+            if (root.payload or {}).get("work_item_id") == item.id
+        ]
+        if not linked:
+            return AckEvidence(False, "no_linked_request")
+        nonce_matches = [
+            root
+            for root in linked
+            if (root.payload or {}).get("dispatch_nonce") == item.dispatch_nonce
+        ]
+        if not nonce_matches:
+            return AckEvidence(False, "stale_nonce")
+        round_matches = [
+            root
+            for root in nonce_matches
+            if (root.payload or {}).get("approval_round")
+            == item.approval_round_count
+        ]
+        if not round_matches:
+            return AckEvidence(False, "stale_round")
+        root_ids = [root.id for root in round_matches]
+        answers = (
+            await db.execute(
+                select(MailMessage)
+                .where(
+                    MailMessage.kind == "answer",
+                    MailMessage.thread_root_id.in_(root_ids),
+                    MailMessage.sender_member_id == leader_member.id,
+                    MailMessage.decision == "approved",
+                    MailMessage.approval_round == item.approval_round_count,
+                )
+                .order_by(MailMessage.created_at.desc(), MailMessage.id.desc())
+            )
+        ).scalars().all()
+        if not answers:
+            return AckEvidence(False, "no_approved_decision")
+        answer = answers[0]
+        return AckEvidence(
+            True,
+            "approved",
+            approver_member_id=leader_member.id,
+            evidence_message_id=answer.id,
+            approval_round=item.approval_round_count,
+        )
+
     async def record_ack_received(
-        self, db: AsyncSession, item: GithubWorkItem
-    ) -> None:
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+    ) -> AckEvidence:
+        preset_slots = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().all()
+        evidence = await self._ack_evidence(db, item, list(preset_slots))
+        if not evidence.ok:
+            return evidence
         item.ack_received_at = datetime.utcnow()
+        item.ack_approver_member_id = evidence.approver_member_id
+        item.ack_evidence_message_id = evidence.evidence_message_id
+        item.ack_enforcement_epoch = 1
+        item.ack_approval_round = evidence.approval_round
         item.last_nudge_at = None
         item.updated_at = datetime.utcnow()
         await db.commit()
+        return evidence
 
     async def initiate_handoff(
         self, db: AsyncSession, item: GithubWorkItem, target_slot_id: int
@@ -953,6 +1107,12 @@ class GithubDispatchService:
         item.handoff_state = "accepted"
         item.handoff_target_slot_id = None
         item.routing_method = "reassigned"
+        item.ack_received_at = None
+        item.ack_approver_member_id = None
+        item.ack_evidence_message_id = None
+        item.ack_enforcement_epoch = None
+        item.ack_approval_round = None
+        item.last_nudge_at = None
         item.updated_at = datetime.utcnow()
         await db.commit()
 

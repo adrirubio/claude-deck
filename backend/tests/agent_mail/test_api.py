@@ -4,10 +4,21 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 
 from app.database import get_db
 from app.main import app
-from app.models.database import MailAgentSession, MailTeamMember
+from app.config import settings
+from app.models.database import (
+    AgentTeamPreset,
+    AgentTeamSlot,
+    GithubWorkItem,
+    MailAgentSession,
+    MailMessage,
+    MailTeamMember,
+    TeamGithubScope,
+)
+from app.services.agent_mail_service import agent_mail_service
 
 
 @pytest_asyncio.fixture
@@ -34,6 +45,180 @@ async def _member(db, repo_id, name):
     await db.commit()
     await db.refresh(member)
     return member
+
+
+async def _dispatch_approval_fixture(db):
+    preset = AgentTeamPreset(name="Approval", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    slots = []
+    members = []
+    sessions = []
+    tokens = []
+    for position, name in enumerate(("Leader", "Owner")):
+        slot = AgentTeamSlot(
+            preset_id=preset.id,
+            position=position,
+            display_name=name,
+            provider="codex-cli",
+            repo_id="approval",
+            repo_path="/tmp/approval",
+            repo_name="approval",
+            launch_mode="plain",
+            launch_options={},
+            enabled=True,
+        )
+        db.add(slot)
+        await db.flush()
+        member = MailTeamMember(
+            identity_key=f"slot:approval:{slot.id}",
+            repo_id="approval",
+            repo_path="/tmp/approval",
+            repo_name="approval",
+            display_name=name,
+            participant_kind="team_slot",
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+        )
+        db.add(member)
+        await db.flush()
+        token = f"token-{position}"
+        session = MailAgentSession(
+            member_id=member.id,
+            provider="codex-cli",
+            source="mcp",
+            session_key=f"mcp:approval:{position}",
+            cwd="/tmp/approval",
+            team_preset_id=preset.id,
+            team_slot_id=slot.id,
+            mailbox_status="connected",
+            last_seen_at=datetime.utcnow(),
+            capability_token_hash=agent_mail_service.hash_capability_token(token),
+        )
+        db.add(session)
+        slots.append(slot)
+        members.append(member)
+        sessions.append(session)
+        tokens.append(token)
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="o",
+        repo_name="approval",
+        repo_path="/tmp/approval",
+    )
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=91,
+        issue_title="approval",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        routing_method="label",
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{slots[1].id}/issue-91-0123456789abcdef",
+        approval_round_count=1,
+    )
+    db.add(item)
+    await db.commit()
+    return item, members, tokens
+
+
+@pytest.mark.asyncio
+async def test_explicit_leader_decision_is_linked_to_current_round(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    leader, owner = members
+    request = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "kind": "context_request",
+            "sender_member_id": owner.id,
+            "recipient_member_id": leader.id,
+            "body_markdown": "plan says no risky changes",
+            "payload": {
+                "work_item_id": item.id,
+                "dispatch_nonce": item.dispatch_nonce,
+            },
+        },
+    )
+    assert request.status_code == 200
+    assert request.json()["approval_round"] == 1
+    assert request.json()["payload"]["approval_round"] == 1
+
+    decision = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "No, this does not need revision; approved.",
+        },
+    )
+
+    assert decision.status_code == 200
+    assert decision.json()["decision"] == "approved"
+    assert decision.json()["approval_round"] == 1
+    stored = (await db.execute(select(MailMessage).where(MailMessage.decision == "approved"))).scalar_one()
+    assert stored.thread_root_id == request.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_rejection_opens_next_round_and_clears_old_ack(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    leader, owner = members
+    item.ack_received_at = datetime.utcnow()
+    item.ack_approver_member_id = leader.id
+    item.ack_evidence_message_id = 99
+    item.ack_enforcement_epoch = 1
+    item.ack_approval_round = 1
+    item.last_nudge_at = datetime.utcnow()
+    await db.commit()
+    await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "kind": "context_request",
+            "sender_member_id": owner.id,
+            "recipient_member_id": leader.id,
+            "body_markdown": "plan",
+            "payload": {
+                "work_item_id": item.id,
+                "dispatch_nonce": item.dispatch_nonce,
+            },
+        },
+    )
+
+    decision = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "rejected",
+            "reason": "Revise the plan",
+        },
+    )
+
+    assert decision.status_code == 200
+    await db.refresh(item)
+    assert item.approval_round_count == 2
+    assert item.dispatch_nonce == "0123456789abcdef"
+    assert item.ack_received_at is None
+    assert item.ack_approver_member_id is None
+    assert item.ack_evidence_message_id is None
+    assert item.ack_enforcement_epoch is None
+    assert item.ack_approval_round is None
+    assert item.last_nudge_at is None
 
 
 @pytest.mark.asyncio

@@ -958,8 +958,13 @@ async def test_ack_prompt_has_no_owner_side_timeout(db):
 
 
 @pytest.mark.asyncio
-async def test_report_ack_received_records_timestamp_and_clears_nudge(db):
+async def test_report_ack_received_records_approved_leader_evidence(
+    db, monkeypatch
+):
     preset, slots, scope = await _team(db)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    leader_member = await _create_registered_slot_member(db, slots[0])
+    owner_member = await _create_registered_slot_member(db, slots[1])
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=911,
@@ -970,14 +975,47 @@ async def test_report_ack_received_records_timestamp_and_clears_nudge(db):
         owner_slot_id=slots[1].id,
         dispatched_at=datetime.utcnow(),
         last_nudge_at=datetime.utcnow(),
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{slots[1].id}/issue-911-0123456789abcdef",
+        approval_round_count=1,
     )
     db.add(item)
+    await db.flush()
+    root = MailMessage(
+        kind="context_request",
+        sender_member_id=owner_member.id,
+        recipient_member_id=leader_member.id,
+        body_markdown="plan",
+        payload={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "approval_round": 1,
+        },
+        approval_round=1,
+        request_status="answered",
+    )
+    db.add(root)
+    await db.flush()
+    answer = MailMessage(
+        kind="answer",
+        thread_root_id=root.id,
+        sender_member_id=leader_member.id,
+        body_markdown="approved",
+        approval_round=1,
+        decision="approved",
+    )
+    db.add(answer)
     await db.commit()
 
-    await github_dispatch_service.record_ack_received(db, item)
+    evidence = await github_dispatch_service.record_ack_received(db, item, scope)
 
     await db.refresh(item)
+    assert evidence.ok is True
     assert item.ack_received_at is not None
+    assert item.ack_approver_member_id == leader_member.id
+    assert item.ack_evidence_message_id == answer.id
+    assert item.ack_enforcement_epoch == 1
+    assert item.ack_approval_round == 1
     assert item.last_nudge_at is None
     assert item.dispatch_status == "dispatched"
 

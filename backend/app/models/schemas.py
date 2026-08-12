@@ -1875,6 +1875,13 @@ class MailMessageCreate(BaseModel):
     decision: Optional[Literal["approved", "rejected"]] = None
 
 
+class MailDecisionRequest(BaseModel):
+    work_item_id: int
+    dispatch_nonce: str
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1)
+
+
 class MailMessageResponse(BaseModel):
     id: int
     thread_root_id: Optional[int] = None

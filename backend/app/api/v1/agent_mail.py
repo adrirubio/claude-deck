@@ -5,18 +5,20 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import derive_member_id, mail_session
+from app.api.v1.deps import derive_member_id, mail_session, require_mail_session
 from app.config import settings
 from app.database import get_db
-from app.models.database import MailAgentSession, MailTeamMember
+from app.models.database import GithubWorkItem, MailAgentSession, MailMessage, MailTeamMember, TeamGithubScope
 from app.models.schemas import (
     AgentMailInstallStatus,
     AgentMailSnippets,
     MailAgentRegisterRequest,
     MailAgentRegisterResponse,
     MailInboxResponse,
+    MailDecisionRequest,
     MailMemberResponse,
     MailMemberUpdate,
     MailMessageCreate,
@@ -25,7 +27,8 @@ from app.models.schemas import (
     TeamListResponse,
 )
 from app.services import agent_mail_install_service
-from app.services.agent_mail_service import agent_mail_service
+from app.services.agent_mail_service import MailAuthorityError, agent_mail_service
+from app.services.github_dispatch_service import github_dispatch_service
 from app.utils import peer_process
 
 logger = logging.getLogger(__name__)
@@ -85,9 +88,80 @@ async def send_message(
             update={"sender_member_id": derive_member_id(session, request.sender_member_id)}
         )
     try:
-        return await agent_mail_service.send_message(db, request)
+        return await agent_mail_service.send_message(
+            db,
+            request,
+            authenticated_sender_member_id=(session.member_id if session is not None else None),
+        )
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/decisions", response_model=MailMessageResponse)
+async def decide_work_item(
+    request: MailDecisionRequest,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, request.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    if item.dispatch_nonce != request.dispatch_nonce:
+        raise HTTPException(status_code=409, detail="stale_nonce")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    owner, leader = await agent_mail_service._dispatch_participants(db, item)
+    if leader is None or leader.id != session.member_id:
+        raise HTTPException(status_code=403, detail="not_designated_leader")
+    if owner is None:
+        raise HTTPException(status_code=409, detail="owner_not_registered")
+    roots = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.kind == "context_request",
+                MailMessage.sender_member_id == owner.id,
+                MailMessage.recipient_member_id == leader.id,
+            )
+        )
+    ).scalars().all()
+    matches = [
+        root
+        for root in roots
+        if (root.payload or {}).get("work_item_id") == item.id
+        and (root.payload or {}).get("dispatch_nonce") == item.dispatch_nonce
+        and (root.payload or {}).get("approval_round") == item.approval_round_count
+    ]
+    if not matches:
+        raise HTTPException(status_code=404, detail="no_current_approval_request")
+    if len(matches) > 1:
+        ids = ", ".join(str(root.id) for root in matches)
+        raise HTTPException(
+            status_code=409,
+            detail=f"ambiguous_current_approval_request: {ids}",
+        )
+    decision_message = MailMessageCreate(
+        kind="answer",
+        sender_member_id=session.member_id,
+        thread_root_id=matches[0].id,
+        body_markdown=request.reason,
+        decision=request.decision,
+    )
+    try:
+        message = await github_dispatch_service.advance_approval_round(
+            db,
+            item,
+            scope,
+            decision_message=decision_message,
+            authenticated_sender_member_id=session.member_id,
+        )
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await agent_mail_service._message_response(db, message, for_member_id=None)
 
 
 @router.get("/messages", response_model=list[MailMessageResponse])

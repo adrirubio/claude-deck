@@ -389,7 +389,9 @@ async def report_dispatch_status(
         await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
         await db.commit()
     elif report.status == "ack_received":
-        await github_dispatch_service.record_ack_received(db, item)
+        evidence = await github_dispatch_service.record_ack_received(db, item, scope)
+        if not evidence.ok:
+            raise HTTPException(status_code=409, detail=evidence.reason)
     elif report.status == "pr_opened":
         if report.pr_number is None:
             raise HTTPException(status_code=400, detail="pr_number required")
