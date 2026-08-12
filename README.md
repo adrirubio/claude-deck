@@ -112,6 +112,7 @@ Claude Deck must run in the same environment where your agent CLIs and credentia
 - Python 3.11+
 - Node.js 18+
 - At least one supported local agent CLI installed on the same host: Claude Code, Codex CLI, GitHub Copilot CLI, or OpenCode CLI
+- **Linux** for agent-team pane binding. Deck reads `/proc/net/tcp` and `/proc/<pid>/stat` to derive which tmux pane a registering agent is running in. On macOS or Windows every other feature works, but agents register unbound, and the Agent Mail capability-token enforcement described in `docs/deploy/pr0-capability-tokens-rollout.md` cannot be turned on
 
 ```bash
 git clone https://github.com/adrirubio/claude-deck.git

@@ -320,6 +320,34 @@ class GithubWorkspace(Base):
     )
 
 
+class AgentPaneBinding(Base):
+    """Which tmux pane a launched slot physically occupies.
+
+    Written by the launcher at launch time and committed on its own, ahead of
+    the slot loop's single commit, because the pane it describes can register
+    with Agent Mail before that loop finishes. A binding that is not visible
+    yet is indistinguishable from a pane that was never launched.
+    """
+
+    __tablename__ = "agent_pane_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pane_pid: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    pane_proc_start: Mapped[str] = mapped_column(String, nullable=False)
+    slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
+    )
+    tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("pane_pid", "pane_proc_start", name="uix_pane_binding"),
+    )
+
+
 class BridgeSessionAttachment(Base):
     """Image attachment uploaded for an Agent Bridge tmux session."""
 
@@ -388,6 +416,9 @@ class MailAgentSession(Base):
     team_slot_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
     )
+    capability_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    bound_pane_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bound_pane_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
     mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
     activity: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(

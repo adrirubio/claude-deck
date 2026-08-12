@@ -1,4 +1,5 @@
 import { apiClient, buildEndpoint } from '@/lib/api'
+import { actorFetch } from './actorAuth'
 import type {
   AgentMailInstallStatus,
   AgentMailSnippets,
@@ -25,11 +26,45 @@ export function updateAgentMailMember(
   })
 }
 
-export function sendAgentMailMessage(message: MailMessageCreate): Promise<MailMessageResponse> {
-  return apiClient<MailMessageResponse>('agent-mail/messages', {
+interface ExternalSendResponse {
+  message: MailMessageResponse
+  delivery_state: string
+}
+
+export async function sendAgentMailMessage(
+  message: MailMessageCreate
+): Promise<MailMessageResponse> {
+  const payload = (message.payload ?? {}) as Record<string, unknown>
+  const base = {
+    recipient_member_id: message.recipient_member_id ?? undefined,
+    subject: message.subject ?? undefined,
+    body_markdown: message.body_markdown,
+  }
+  const routes: Record<string, { path: string; body: Record<string, unknown> }> = {
+    message: { path: 'external/agent-mail/messages', body: base },
+    broadcast: { path: 'external/agent-mail/broadcasts', body: base },
+    context_request: {
+      path: 'external/agent-mail/context-requests',
+      body: {
+        ...base,
+        why_needed: payload.why_needed ?? null,
+        files_or_symbols: payload.files_or_symbols ?? [],
+      },
+    },
+    handoff: {
+      path: 'external/agent-mail/handoffs',
+      body: { ...base, files: payload.files ?? [], next_steps: payload.next_steps ?? [] },
+    },
+  }
+  const route = message.kind ? routes[message.kind] : undefined
+  if (!route) {
+    throw new Error(`The Deck UI cannot send kind "${message.kind ?? 'unset'}"`)
+  }
+  const response = await actorFetch<ExternalSendResponse>(route.path, {
     method: 'POST',
-    body: JSON.stringify(message),
+    body: JSON.stringify(route.body),
   })
+  return response.message
 }
 
 export function fetchAgentMailMessages(): Promise<MailMessageResponse[]> {
@@ -70,11 +105,24 @@ export function queueAgentMailInboxCheck(
   )
 }
 
-export function ackAgentMailMessage(messageId: number, memberId: number): Promise<{ ok: boolean }> {
-  return apiClient<{ ok: boolean }>(`agent-mail/messages/${messageId}/ack`, {
-    method: 'POST',
-    body: JSON.stringify({ member_id: memberId }),
-  })
+export async function replyInAgentMailThread(
+  rootId: number,
+  bodyMarkdown: string
+): Promise<MailMessageResponse> {
+  const response = await actorFetch<ExternalSendResponse>(
+    `external/agent-mail/threads/${rootId}/replies`,
+    { method: 'POST', body: JSON.stringify({ body_markdown: bodyMarkdown }) }
+  )
+  return response.message
+}
+
+export async function ackAgentMailRequest(
+  rootId: number
+): Promise<{ request_status: string }> {
+  return actorFetch<{ request_status: string }>(
+    `external/agent-mail/requests/${rootId}/actor-ack`,
+    { method: 'POST' }
+  )
 }
 
 export function fetchAgentMailInstallStatus(): Promise<AgentMailInstallStatus> {

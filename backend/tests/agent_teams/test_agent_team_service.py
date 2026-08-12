@@ -1754,3 +1754,188 @@ async def test_stale_team_env_does_not_reattach_after_slot_provider_change(db, t
 
     assert session.team_preset_id is None
     assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_launch_writes_a_pane_binding_on_the_spawn_path(db, tmp_path, monkeypatch):
+    """Without this row every Deck-launched pane gets bind_pending forever."""
+    from sqlalchemy import text
+
+    repo = tmp_path / "binding-spawn-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Binding team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Dev agent",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert plan.items[0].action == "spawn"
+
+    def fake_spawn(provider_id, options, *, extra_env=None):
+        return {
+            "session_name": "repo-abcd",
+            "tmux_target": "repo-abcd:0.0",
+            "pane_pid": 4242,
+        }
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", fake_spawn)
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
+    )
+
+    result = await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+    )
+    assert result.items[0].pane_pid == 4242
+
+    rows = (
+        await db.execute(
+            text(
+                "SELECT pane_pid, pane_proc_start, slot_id, preset_id, tmux_target "
+                "FROM agent_pane_bindings"
+            )
+        )
+    ).all()
+    assert rows == [(4242, "120913170", preset.slots[0].id, preset.id, "repo-abcd:0.0")]
+
+
+@pytest.mark.asyncio
+async def test_pane_binding_is_written_before_the_slot_loop_ends(db, tmp_path, monkeypatch):
+    """The first row must exist while the second slot is launching."""
+    from sqlalchemy import text
+
+    repo = tmp_path / "binding-order-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Ordering team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Agent one",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Agent two",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert [item.action for item in plan.items] == ["spawn", "spawn"]
+
+    spawn_calls: list[int] = []
+    observed: list[list] = []
+
+    def fake_spawn(provider_id, options, *, extra_env=None):
+        spawn_calls.append(len(spawn_calls))
+        return {
+            "session_name": f"repo-abc{len(spawn_calls)}",
+            "tmux_target": f"repo-abc{len(spawn_calls)}:0.0",
+            "pane_pid": 4240 + len(spawn_calls),
+        }
+
+    real_bootstrap = agent_team_service._bootstrap_prompt
+
+    async def spy_bootstrap(db_arg, preset_arg, slot_arg):
+        observed.append(
+            (await db_arg.execute(text("SELECT pane_pid FROM agent_pane_bindings"))).all()
+        )
+        return await real_bootstrap(db_arg, preset_arg, slot_arg)
+
+    monkeypatch.setattr("app.services.agent_team_service.spawn_session", fake_spawn)
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
+    )
+    monkeypatch.setattr(agent_team_service, "_bootstrap_prompt", spy_bootstrap)
+
+    await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+    )
+
+    assert observed[0] == []
+    assert observed[1] == [(4241,)]
+    final = (await db.execute(text("SELECT pane_pid FROM agent_pane_bindings"))).all()
+    assert sorted(final) == [(4241,), (4242,)]
+
+
+@pytest.mark.asyncio
+async def test_launch_writes_a_pane_binding_on_the_reuse_path(db, tmp_path, monkeypatch):
+    """Reuse coerces the discovery pid and updates the existing row."""
+    from sqlalchemy import text
+
+    repo = tmp_path / "binding-reuse-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Reuse team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Dev agent",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "session_name": "repo-abcd",
+                "tmux_target": "repo-abcd:0.0",
+                "pid": "4242",
+                "provider": "codex-cli",
+                "cwd": str(repo),
+                "wakeable": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert plan.items[0].action == "reuse", plan.items[0].reasons
+
+    await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+    )
+    rows = (
+        await db.execute(
+            text("SELECT id, pane_pid, typeof(pane_pid), slot_id FROM agent_pane_bindings")
+        )
+    ).all()
+    assert len(rows) == 1
+    first_id = rows[0][0]
+    assert rows[0][1] == 4242
+    assert rows[0][2] == "integer"
+
+    second_plan = await agent_team_service.plan_launch(db, preset.id)
+    await agent_team_service.launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(confirm_plan_hash=second_plan.plan_hash),
+    )
+    second_rows = (
+        await db.execute(text("SELECT id, pane_pid FROM agent_pane_bindings"))
+    ).all()
+    assert second_rows == [(first_id, 4242)]

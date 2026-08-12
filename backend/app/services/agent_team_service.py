@@ -13,6 +13,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamLaunch,
     AgentTeamLaunchItem,
     AgentTeamPreset,
@@ -48,6 +49,7 @@ from app.services.providers.launch_contract import (
     supports_bedrock,
 )
 from app.services.providers.platform_env import PLATFORM_BEDROCK
+from app.utils.peer_process import read_proc_stat
 from app.utils.repo_utils import derive_repo_identity
 
 
@@ -571,6 +573,13 @@ class AgentTeamService:
                 message="A matching wakeable tmux session was reused",
                 warnings=plan_item.warnings,
             )
+            await self._write_pane_binding(
+                db,
+                pane_pid=result.pane_pid,
+                slot=slot,
+                preset=preset,
+                tmux_target=result.tmux_target,
+            )
             self._record_launch_item(db, launch_id, result)
             return result
 
@@ -634,9 +643,16 @@ class AgentTeamService:
                 repo_path=repo_path_override or slot.repo_path,
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
-                pane_pid=spawned.get("pid"),
+                pane_pid=spawned.get("pane_pid"),
                 message="Session spawned; waiting for Agent Mail registration",
                 warnings=plan_item.warnings,
+            )
+            await self._write_pane_binding(
+                db,
+                pane_pid=result.pane_pid,
+                slot=slot,
+                preset=preset,
+                tmux_target=result.tmux_target,
             )
         except Exception as exc:
             result = AgentTeamLaunchResultItem(
@@ -651,6 +667,53 @@ class AgentTeamService:
             )
         self._record_launch_item(db, launch_id, result)
         return result
+
+    async def _write_pane_binding(
+        self,
+        db: AsyncSession,
+        *,
+        pane_pid: int | None,
+        slot: AgentTeamSlot,
+        preset: AgentTeamPreset,
+        tmux_target: str | None,
+    ) -> None:
+        """Record which slot owns a pane so registration can derive it.
+
+        The commit is deliberately mid-loop on the caller's session. It makes
+        the row visible to a shim registering on another connection without
+        deadlocking on the launch transaction's existing SQLite write lock.
+        """
+        if pane_pid is None:
+            return
+        stat = read_proc_stat(pane_pid)
+        if stat is None:
+            return
+        _parent_pid, proc_start = stat
+
+        existing = (
+            await db.execute(
+                select(AgentPaneBinding).where(
+                    AgentPaneBinding.pane_pid == pane_pid,
+                    AgentPaneBinding.pane_proc_start == proc_start,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is None:
+            db.add(
+                AgentPaneBinding(
+                    pane_pid=pane_pid,
+                    pane_proc_start=proc_start,
+                    slot_id=slot.id,
+                    preset_id=preset.id,
+                    tmux_target=tmux_target,
+                )
+            )
+        else:
+            existing.slot_id = slot.id
+            existing.preset_id = preset.id
+            existing.tmux_target = tmux_target
+        await db.commit()
 
     def _record_launch_item(
         self,

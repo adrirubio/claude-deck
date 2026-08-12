@@ -5,10 +5,42 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.database import (
+    _run_sqlite_compat_migrations,
     _sqlite_agent_team_slots_has_unique_preset_repo_index,
     _sqlite_columns,
     _sqlite_rebuild_agent_team_slots,
 )
+
+
+@pytest.mark.asyncio
+async def test_compat_migrations_add_capability_columns_idempotently():
+    """A pre-PR0 mail_agent_sessions table gains the three columns, twice over."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE mail_agent_sessions (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        member_id INTEGER NOT NULL,
+                        provider VARCHAR NOT NULL,
+                        source VARCHAR NOT NULL,
+                        session_key VARCHAR NOT NULL,
+                        mailbox_status VARCHAR NOT NULL,
+                        last_seen_at DATETIME NOT NULL,
+                        created_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            expected = {"capability_token_hash", "bound_pane_pid", "bound_pane_proc_start"}
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                columns = await _sqlite_columns(conn, "mail_agent_sessions")
+                assert expected <= columns
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

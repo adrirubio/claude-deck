@@ -357,6 +357,18 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if session_columns and "team_slot_id" not in session_columns:
         await conn.execute(text("ALTER TABLE mail_agent_sessions ADD COLUMN team_slot_id INTEGER"))
+    if session_columns and "capability_token_hash" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN capability_token_hash TEXT")
+        )
+    if session_columns and "bound_pane_pid" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN bound_pane_pid INTEGER")
+        )
+    if session_columns and "bound_pane_proc_start" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN bound_pane_proc_start TEXT")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
     slot_columns = {row[1] for row in result.fetchall()}

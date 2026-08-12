@@ -201,6 +201,120 @@ def test_mcp_request_uses_short_timeout_and_offline_backoff(monkeypatch):
     assert calls[0].read == 15.0
 
 
+def test_registration_captures_the_capability_token(monkeypatch):
+    """The plaintext arrives once; the shim must keep it."""
+    from mcp_shim import agent_mail_server as shim
+
+    responses = [
+        {
+            "ok": True,
+            "data": {
+                "member": {"id": 4},
+                "session": {"id": 9},
+                "capability_token": "tok-abc",
+            },
+        },
+        {
+            "ok": True,
+            "data": {
+                "member": {"id": 4},
+                "session": {"id": 9},
+                "capability_token": None,
+            },
+        },
+    ]
+    monkeypatch.setattr(shim, "_request", lambda *args, **kwargs: responses.pop(0))
+    shim._state["capability_token"] = None
+    shim._state["member_id"] = None
+
+    shim._ensure_registered()
+    assert shim._state["capability_token"] == "tok-abc"
+
+    shim._ensure_registered()
+    assert shim._state["capability_token"] == "tok-abc"
+
+
+def test_deck_request_sends_the_session_token(monkeypatch):
+    from mcp_shim import agent_mail_server as shim
+
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {}
+
+        return _Response()
+
+    monkeypatch.setattr(shim.httpx, "request", _fake_request)
+    shim._state["capability_token"] = "tok-abc"
+    shim._state["offline_until"] = 0.0
+
+    shim._deck_request("GET", "agent-mail", "/team")
+    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+
+
+def test_deck_request_preserves_a_callers_headers(monkeypatch):
+    from mcp_shim import agent_mail_server as shim
+
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {}
+
+        return _Response()
+
+    monkeypatch.setattr(shim.httpx, "request", _fake_request)
+    shim._state["capability_token"] = "tok-abc"
+    shim._state["offline_until"] = 0.0
+
+    shim._deck_request(
+        "GET",
+        "agent-bridge",
+        "/x",
+        headers={"X-Claude-Deck-Terminal-Token": "term"},
+    )
+    assert captured["headers"]["X-Claude-Deck-Terminal-Token"] == "term"
+    assert captured["headers"]["X-Deck-Session-Token"] == "tok-abc"
+
+
+def test_deck_request_sends_no_header_without_a_token(monkeypatch):
+    from mcp_shim import agent_mail_server as shim
+
+    captured = {}
+
+    def _fake_request(method, url, **kwargs):
+        captured["headers"] = kwargs.get("headers")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {}
+
+        return _Response()
+
+    monkeypatch.setattr(shim.httpx, "request", _fake_request)
+    shim._state["capability_token"] = None
+    shim._state["offline_until"] = 0.0
+
+    shim._deck_request("GET", "agent-mail", "/team")
+    assert "X-Deck-Session-Token" not in (captured["headers"] or {})
+
+
 def test_deck_request_routes_by_api_prefix(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 

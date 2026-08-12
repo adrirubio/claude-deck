@@ -1,4 +1,8 @@
 """Tests for the dispatch-status REST endpoint backing the MCP tool."""
+
+import ast
+import inspect
+import textwrap
 from datetime import datetime
 
 import httpx
@@ -6,6 +10,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.api.v1.agent_teams as agent_teams_routes
 from app.database import Base, get_db
 from app.main import app
 from app.models.database import (
@@ -13,8 +18,11 @@ from app.models.database import (
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
+    MailAgentSession,
+    MailTeamMember,
     TeamGithubScope,
 )
+from app.services.agent_mail_service import agent_mail_service
 from app.services.github_workspace_service import github_workspace_service
 
 
@@ -143,6 +151,53 @@ async def _seed_leased_item(
         db.add(workspace)
         await db.commit()
         return item.id, owner.id, other.id, workspace.id, workspace.path
+
+
+async def _token_for_slot(maker, slot_id: int | None, *, key: str = "mcp:auth") -> str:
+    """Mint a session bound directly to slot_id and return its plaintext token."""
+    token = f"tok-{key}-{slot_id}"
+    async with maker() as db:
+        member = MailTeamMember(
+            identity_key=f"slot:{key}:{slot_id}",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Reporter",
+            participant_kind="team_slot",
+            team_slot_id=slot_id,
+        )
+        db.add(member)
+        await db.flush()
+        db.add(
+            MailAgentSession(
+                member_id=member.id,
+                source="mcp",
+                session_key=key,
+                team_slot_id=slot_id,
+                capability_token_hash=agent_mail_service.hash_capability_token(token),
+            )
+        )
+        await db.commit()
+    return token
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"X-Deck-Session-Token": token}
+
+
+def _statuses_the_route_accepts() -> set[str]:
+    source = textwrap.dedent(inspect.getsource(agent_teams_routes.report_dispatch_status))
+    return {
+        node.comparators[0].value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.Eq)
+        and isinstance(node.left, ast.Attribute)
+        and node.left.attr == "status"
+        and isinstance(node.comparators[0], ast.Constant)
+        and isinstance(node.comparators[0].value, str)
+    }
 
 
 @pytest.mark.asyncio
@@ -650,3 +705,272 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
             {"params": {"limit": 25}},
         )
     ]
+
+
+_OWNER_ONLY_STATUSES = [
+    ("triaging", {"note": "n"}),
+    ("in_progress", {}),
+    ("blocked", {"note": "n"}),
+    ("ack_received", {}),
+    ("revision_requested", {}),
+    ("handoff_initiated", {"reassign_to_slot_id": 1}),
+    ("pr_opened", {"pr_number": 7}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,extra", _OWNER_ONLY_STATUSES)
+async def test_non_owner_is_refused_and_changes_nothing(client_and_db, status, extra):
+    ac, maker = client_and_db
+    item_id, _owner_id, other_id, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, other_id, key=f"mcp:{status}")
+    async with maker() as db:
+        before = await db.get(GithubWorkItem, item_id)
+        snapshot = {
+            column.name: getattr(before, column.name)
+            for column in GithubWorkItem.__table__.columns
+        }
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": status, **extra},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "not_item_owner"
+    async with maker() as db:
+        after = await db.get(GithubWorkItem, item_id)
+        assert {
+            column.name: getattr(after, column.name)
+            for column in GithubWorkItem.__table__.columns
+        } == snapshot
+
+
+@pytest.mark.asyncio
+async def test_handoff_accepted_belongs_to_the_target(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.handoff_target_slot_id = other_id
+        item.handoff_state = "pending"
+        await db.commit()
+
+    owner_token = await _token_for_slot(maker, owner_id, key="mcp:ha-owner")
+    refused = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "handoff_accepted"},
+        headers=_auth(owner_token),
+    )
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "not_handoff_target"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.owner_slot_id == owner_id
+        assert item.handoff_state == "pending"
+
+    target_token = await _token_for_slot(maker, other_id, key="mcp:ha-target")
+    accepted = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "handoff_accepted"},
+        headers=_auth(target_token),
+    )
+    assert accepted.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.owner_slot_id == other_id
+        assert item.handoff_state == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_with_a_stale_token_leaves_pr_number_null(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key="mcp:pr")
+
+    stale = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_opened",
+            "pr_number": 7,
+            "lease_token": "lease-stale",
+        },
+        headers=_auth(token),
+    )
+    assert stale.status_code == 409
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.pr_number is None
+        assert item.dispatch_status == "dispatched"
+
+    current = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_opened",
+            "pr_number": 7,
+            "lease_token": "lease-current",
+        },
+        headers=_auth(token),
+    )
+    assert current.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.pr_number == 7
+
+
+@pytest.mark.asyncio
+async def test_pr_opened_with_no_token_at_all_is_refused(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key="mcp:pr-none")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "pr_opened", "pr_number": 7},
+        headers=_auth(token),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "lease_token required"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.pr_number is None
+
+
+@pytest.mark.asyncio
+async def test_blocked_needs_no_lease_token(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key="mcp:blocked")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "blocked", "note": "stuck"},
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "escalated"
+        assert item.escalation_reason == "plan_blocked"
+        assert item.status_note == "stuck"
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_slot_claim_is_refused(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, other_id, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key="mcp:claim")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "reporting_slot_id": other_id,
+            "note": "n",
+        },
+        headers=_auth(token),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "slot_claim_mismatch"
+
+    agreeing = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "reporting_slot_id": owner_id,
+            "note": "n",
+        },
+        headers=_auth(token),
+    )
+    assert agreeing.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_an_unbound_session_cannot_speak_for_a_slot(client_and_db):
+    ac, maker = client_and_db
+    item_id, _, _, _, _ = await _seed_leased_item(maker, dispatch_status="dispatched")
+    token = await _token_for_slot(maker, None, key="mcp:unbound")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "triaging", "note": "n"},
+        headers=_auth(token),
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "session_not_slot_bound"
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "triaging",
+            "reporting_slot_id": owner_id,
+            "note": "n",
+        },
+        headers=_auth("not-a-real-token"),
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_invalid"
+
+
+def test_every_accepted_status_has_an_authorization_rule():
+    accepted = _statuses_the_route_accepts()
+    assert len(accepted) == 9, f"branch count changed: {sorted(accepted)}"
+    missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
+    assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
+
+
+def test_the_rules_table_has_no_rule_for_a_status_the_route_rejects():
+    stale = set(agent_teams_routes._DISPATCH_STATUS_RULES) - _statuses_the_route_accepts()
+    assert not stale, f"rules for non-existent statuses: {sorted(stale)}"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_status_refuses_rather_than_falling_through(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key="mcp:unknown")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "not_a_real_status"},
+        headers=_auth(token),
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unknown status not_a_real_status"

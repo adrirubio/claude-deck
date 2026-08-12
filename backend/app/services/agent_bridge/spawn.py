@@ -44,6 +44,17 @@ def _env_flags(env: dict[str, str]) -> list[str]:
     return flags
 
 
+def _parse_pane_pid(stdout: str) -> int | None:
+    """Read the pane pid tmux printed for `-F '#{pane_pid}'`."""
+    lines = (stdout or "").strip().splitlines()
+    if not lines:
+        return None
+    try:
+        return int(lines[0].strip())
+    except ValueError:
+        return None
+
+
 def spawn_session(
     provider_id: str,
     options: SpawnCommandOptions,
@@ -77,13 +88,27 @@ def spawn_session(
 
     try:
         result = subprocess.run(
-            ["tmux", "new-session", "-d", "-s", name, "-c", directory, *env_flags, shell_command],
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                name,
+                "-c",
+                directory,
+                "-P",
+                "-F",
+                "#{pane_pid}",
+                *env_flags,
+                shell_command,
+            ],
             capture_output=True,
             text=True,
             timeout=10,
         )
         if result.returncode != 0:
             raise ValueError(f"tmux new-session failed: {result.stderr.strip()}")
+        pane_pid = _parse_pane_pid(result.stdout)
     except FileNotFoundError:
         raise ValueError("tmux is not installed or not in PATH")
     except subprocess.TimeoutExpired:
@@ -103,6 +128,7 @@ def spawn_session(
         "provider_display_name": provider.display_name,
         "tmux_target": f"{name}:0.0",
         "session_name": name,
+        "pane_pid": pane_pid,
     }
 
 

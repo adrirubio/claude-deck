@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     github_stale_lease_backstop_seconds: int = 21600
     github_brief_delivery_max_nudges: int = 2
 
+    # Agent Mail identity settings
+    mail_capability_tokens_required: bool = False
+    operator_token: str = ""
+
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
