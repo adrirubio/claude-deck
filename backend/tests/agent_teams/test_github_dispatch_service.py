@@ -24,6 +24,7 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
+from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_dispatch_service import (
     AttemptState,
@@ -1425,7 +1426,9 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert f"to_member_id={leader_member.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
-    assert "wait for acknowledgment before starting implementation" in prompt
+    assert "wait for the explicit decision before starting implementation" in prompt
+    assert "A prose reply is not approval" in prompt
+    assert "deck_approve_work_item" in prompt
     assert "open a draft PR" in prompt
     assert "Workspace: /tmp/r-ws-1" in prompt
     assert "leased exclusively" in prompt
@@ -1445,7 +1448,7 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert f"Agent Mail member_id={leader_member.id}" in message.body_markdown
     assert f"to_member_id={leader_member.id}" in message.body_markdown
     assert f"slot_id={architect.id}" not in message.body_markdown
-    assert "wait for acknowledgment before starting implementation" in message.body_markdown
+    assert "wait for the explicit decision before starting implementation" in message.body_markdown
     assert item.brief_message_id == message.id
     assert item.brief_delivery_nudge_at is None
     assert item.brief_delivery_nudge_count is None
@@ -2543,7 +2546,7 @@ async def test_scope_concurrency_ignores_human_review_and_escalated_items(db):
 
 
 @pytest.mark.asyncio
-async def test_approval_round_cap_escalates(db):
+async def test_approval_round_cap_escalates(db, monkeypatch):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 3
     item = GithubWorkItem(
@@ -2557,15 +2560,40 @@ async def test_approval_round_cap_escalates(db):
     )
     db.add(item)
     await db.commit()
-    await github_dispatch_service.record_approval_round(db, item, scope)
+
+    async def build_decision(db_, request, **_kwargs):
+        message = MailMessage(
+            kind="answer",
+            body_markdown=request.body_markdown,
+            decision=request.decision,
+            approval_round=item.approval_round_count,
+        )
+        db_.add(message)
+        await db_.flush()
+        return message, set()
+
+    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
+    decision = MailMessageCreate(
+        kind="answer",
+        thread_root_id=1,
+        body_markdown="revise",
+        decision="rejected",
+    )
+    await github_dispatch_service.advance_approval_round(
+        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.approval_round_count == 2
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    await github_dispatch_service.advance_approval_round(
+        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.approval_round_count == 3
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    await github_dispatch_service.advance_approval_round(
+        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    )
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "approval_rounds_exhausted"
@@ -2573,7 +2601,7 @@ async def test_approval_round_cap_escalates(db):
 
 
 @pytest.mark.asyncio
-async def test_escalation_creates_agent_mail_broadcast(db):
+async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 1
     db.add(
@@ -2600,7 +2628,34 @@ async def test_escalation_creates_agent_mail_broadcast(db):
     db.add(item)
     await db.commit()
 
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    original_builder = agent_mail_service._create_message_row
+
+    async def build_decision(db_, request, **kwargs):
+        if request.decision is None:
+            return await original_builder(db_, request, **kwargs)
+        message = MailMessage(
+            kind="answer",
+            body_markdown=request.body_markdown,
+            decision="rejected",
+            approval_round=1,
+        )
+        db_.add(message)
+        await db_.flush()
+        return message, set()
+
+    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
+    await github_dispatch_service.advance_approval_round(
+        db,
+        item,
+        scope,
+        decision_message=MailMessageCreate(
+            kind="answer",
+            thread_root_id=1,
+            body_markdown="revise",
+            decision="rejected",
+        ),
+        authenticated_sender_member_id=1,
+    )
 
     messages = (await db.execute(select(MailMessage))).scalars().all()
     assert any(message.kind == "broadcast" for message in messages)
@@ -2623,6 +2678,19 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
     db.add(item)
     await db.commit()
 
+    async def build_decision(db_, request, **_kwargs):
+        message = MailMessage(
+            kind="answer",
+            body_markdown=request.body_markdown,
+            decision="rejected",
+            approval_round=1,
+        )
+        db_.add(message)
+        await db_.flush()
+        return message, set()
+
+    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
+
     async def fail_broadcast(
         db_, item_, reason, note, *, owner_may_be_active=False
     ):
@@ -2634,7 +2702,18 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
         fail_broadcast,
     )
 
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    await github_dispatch_service.advance_approval_round(
+        db,
+        item,
+        scope,
+        decision_message=MailMessageCreate(
+            kind="answer",
+            thread_root_id=1,
+            body_markdown="revise",
+            decision="rejected",
+        ),
+        authenticated_sender_member_id=1,
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "escalated"

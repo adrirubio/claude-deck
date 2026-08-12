@@ -47,6 +47,24 @@ async def _member(db, repo_id, name):
     return member
 
 
+async def _session_headers(db, member, key):
+    token = f"token-{key}"
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            provider="codex-cli",
+            source="mcp",
+            session_key=f"mcp:{key}",
+            cwd=member.repo_path,
+            mailbox_status="connected",
+            last_seen_at=datetime.utcnow(),
+            capability_token_hash=agent_mail_service.hash_capability_token(token),
+        )
+    )
+    await db.commit()
+    return {"X-Deck-Session-Token": token}
+
+
 async def _dispatch_approval_fixture(db):
     preset = AgentTeamPreset(name="Approval", description="", created_by="test")
     db.add(preset)
@@ -255,8 +273,11 @@ async def test_patch_unknown_member_404(client):
 async def test_send_and_thread_roundtrip(client, db):
     a = await _member(db, "ra", "alpha")
     b = await _member(db, "rb", "beta")
+    a_headers = await _session_headers(db, a, "a")
+    b_headers = await _session_headers(db, b, "b")
     resp = await client.post(
         "/api/v1/agent-mail/messages",
+        headers=a_headers,
         json={
             "kind": "context_request",
             "sender_member_id": a.id,
@@ -270,6 +291,7 @@ async def test_send_and_thread_roundtrip(client, db):
 
     resp = await client.post(
         "/api/v1/agent-mail/messages",
+        headers=b_headers,
         json={
             "kind": "answer",
             "sender_member_id": b.id,
@@ -288,8 +310,10 @@ async def test_send_and_thread_roundtrip(client, db):
 @pytest.mark.asyncio
 async def test_invalid_kind_is_400(client, db):
     b = await _member(db, "rb", "beta")
+    headers = await _session_headers(db, b, "invalid")
     resp = await client.post(
         "/api/v1/agent-mail/messages",
+        headers=headers,
         json={"kind": "bogus", "recipient_member_id": b.id, "body_markdown": "x"},
     )
     assert resp.status_code == 400
@@ -299,20 +323,31 @@ async def test_invalid_kind_is_400(client, db):
 async def test_inbox_read_ack_endpoints(client, db):
     a = await _member(db, "ra", "alpha")
     b = await _member(db, "rb", "beta")
+    a_headers = await _session_headers(db, a, "inbox-a")
+    b_headers = await _session_headers(db, b, "inbox-b")
     resp = await client.post(
         "/api/v1/agent-mail/messages",
+        headers=a_headers,
         json={"sender_member_id": a.id, "recipient_member_id": b.id, "body_markdown": "hi"},
     )
     msg_id = resp.json()["id"]
 
-    resp = await client.get(f"/api/v1/agent-mail/agent/inbox?member_id={b.id}")
+    resp = await client.get("/api/v1/agent-mail/agent/inbox", headers=b_headers)
     assert resp.json()["unread_count"] == 1
 
-    await client.post(f"/api/v1/agent-mail/messages/{msg_id}/read", json={"member_id": b.id})
-    resp = await client.get(f"/api/v1/agent-mail/agent/inbox?member_id={b.id}")
+    await client.post(
+        f"/api/v1/agent-mail/messages/{msg_id}/read",
+        headers=b_headers,
+        json={"member_id": b.id},
+    )
+    resp = await client.get("/api/v1/agent-mail/agent/inbox", headers=b_headers)
     assert resp.json()["unread_count"] == 0
 
-    resp = await client.post(f"/api/v1/agent-mail/messages/{msg_id}/ack", json={"member_id": b.id})
+    resp = await client.post(
+        f"/api/v1/agent-mail/messages/{msg_id}/ack",
+        headers=b_headers,
+        json={"member_id": b.id},
+    )
     assert resp.status_code == 200
 
 
@@ -328,12 +363,16 @@ async def test_agent_inbox_refreshes_stale_mcp_session(client, db):
         cwd=member.repo_path,
         mailbox_status="offline",
         last_seen_at=stale_seen_at,
+        capability_token_hash=agent_mail_service.hash_capability_token("stale-token"),
     )
     db.add(session)
     await db.commit()
     await db.refresh(session)
 
-    resp = await client.get(f"/api/v1/agent-mail/agent/inbox?member_id={member.id}")
+    resp = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": "stale-token"},
+    )
 
     assert resp.status_code == 200
     await db.refresh(session)

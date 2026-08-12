@@ -599,7 +599,12 @@ class GithubDispatchService:
                     "Design pipeline instructions:",
                     "- Treat this as a design/documentation task.",
                     "- Prepare a human-reviewed PR; do not rely on CI or auto-merge.",
-                    self._leader_ack_instruction(leader, leader_member, before="opening the PR"),
+                    self._leader_ack_instruction(
+                        leader,
+                        leader_member,
+                        before="opening the PR",
+                        item=item,
+                    ),
                 ]
             )
         else:
@@ -612,6 +617,7 @@ class GithubDispatchService:
                         leader,
                         leader_member,
                         before="starting implementation",
+                        item=item,
                     ),
                     "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
                     "- Keep the change inside the issue scope, run the issue's requested local verification commands, then open a draft PR.",
@@ -801,12 +807,22 @@ class GithubDispatchService:
         leader_member: MailTeamMember | None,
         *,
         before: str,
+        item: GithubWorkItem | None = None,
     ) -> str:
+        linkage = ""
+        if item is not None:
+            linkage = (
+                f" with work_item_id={item.id} and dispatch_nonce="
+                f'"{item.dispatch_nonce}"'
+            )
         report = (
-            " Once the leader acknowledges, call "
-            '`deck_report_dispatch_status(status="ack_received")` before '
-            f"{before}. Do not set your own deadline for the acknowledgment; "
-            "the brain manages timeouts and will nudge or escalate if needed."
+            " Approval exists only when the designated leader calls "
+            f"`deck_approve_work_item`{linkage} for the current round. A prose "
+            "reply is not approval, and self-approval is refused. After approval, "
+            "call `deck_report_dispatch_status(status=\"ack_received\")` before "
+            f"{before}. A rejection opens the next round automatically; revise the "
+            "plan and call `deck_request_context` again with the same work item and "
+            "nonce. Do not report `revision_requested`."
         )
         if leader_member is not None:
             return (
@@ -814,18 +830,18 @@ class GithubDispatchService:
                 f"`deck_request_context(to_member_id={leader_member.id}, ...)` "
                 "or "
                 f"`deck_send_message(to_member_id={leader_member.id}, ...)`, "
-                f"then wait for acknowledgment before {before}." + report
+                f"then wait for the explicit decision before {before}." + report
             )
         if leader is not None:
             return (
                 "- Send the team leader a short plan via Agent Mail and wait for "
-                f"acknowledgment before {before}; first call `deck_list_team` to "
+                f"an explicit decision before {before}; first call `deck_list_team` to "
                 f"resolve the Agent Mail member id for `{leader.display_name}`."
                 + report
             )
         return (
             "- Send the team leader a short plan via Agent Mail and wait for "
-            f"acknowledgment before {before}; if no leader is registered, report blocked."
+            f"an explicit decision before {before}; if no leader is registered, report blocked."
             + report
         )
 
@@ -925,16 +941,6 @@ class GithubDispatchService:
                 "was expected. Treating zero as unverified rather than empty."
             )
         return None
-
-    async def record_approval_round(
-        self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope
-    ) -> None:
-        if item.approval_round_count >= scope.max_approval_rounds:
-            await self.escalate(db, item, "approval_rounds_exhausted")
-        else:
-            item.approval_round_count += 1
-        item.updated_at = datetime.utcnow()
-        await db.commit()
 
     async def advance_approval_round(
         self,
@@ -1368,9 +1374,12 @@ class GithubDispatchService:
                 recipient_member_id=member.id,
                 subject=f"Ack needed: issue #{item.issue_number}",
                 body_markdown=(
-                    f"The owner is waiting on your acknowledgment for issue "
-                    f"#{item.issue_number} ({item.issue_title}). Please review their "
-                    "plan and acknowledge so work can proceed."
+                    f"The owner is waiting on your explicit decision for issue "
+                    f"#{item.issue_number} ({item.issue_title}). Review the plan, then "
+                    f"call `deck_approve_work_item(work_item_id={item.id}, "
+                    f'dispatch_nonce="{item.dispatch_nonce}", decision="approved", '
+                    "reason=...)` or use `decision=\"rejected\"`. A prose reply does not "
+                    "approve the work."
                 ),
                 payload={
                     "kind": "github_dispatch_ack_nudge",

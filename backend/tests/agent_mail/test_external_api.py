@@ -8,6 +8,7 @@ import pytest_asyncio
 from app.database import get_db
 from app.main import app
 from app.models.database import MailAgentSession, MailTeamMember
+from app.services.agent_mail_service import agent_mail_service
 from app.services.external_agent_mail_service import external_agent_mail_service
 
 
@@ -129,11 +130,8 @@ async def test_legacy_message_create_cannot_spoof_external_actor(client, db):
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["sender_actor_id"] is None
-    assert body["sender_type"] == "director"
-    assert body["sender_name"] == "Director"
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "session_token_required"
 
 
 @pytest.mark.asyncio
@@ -270,6 +268,21 @@ async def test_external_delivery_reports_tmux_wake_success(
 @pytest.mark.asyncio
 async def test_external_request_status_wait_and_ack_lifecycle(client, db):
     recipient = await _member(db, "repo-beta", "beta")
+    recipient_token = "recipient-session-token"
+    db.add(
+        MailAgentSession(
+            member_id=recipient.id,
+            provider="codex-cli",
+            source="mcp",
+            session_key="mcp:external-answer",
+            cwd=recipient.repo_path,
+            mailbox_status="connected",
+            capability_token_hash=agent_mail_service.hash_capability_token(
+                recipient_token
+            ),
+        )
+    )
+    await db.commit()
     token, _ = await _actor_token(client)
     created = await client.post(
         "/api/v1/external/agent-mail/context-requests",
@@ -291,6 +304,7 @@ async def test_external_request_status_wait_and_ack_lifecycle(client, db):
 
     answer = await client.post(
         "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Session-Token": recipient_token},
         json={
             "kind": "answer",
             "sender_member_id": recipient.id,

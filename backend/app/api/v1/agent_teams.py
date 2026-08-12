@@ -302,7 +302,6 @@ class _StatusRule(NamedTuple):
     role: str
     refusal: str
     lease_token_required: bool = False
-    enforced_in_branch: bool = False
 
 
 _OWNER = _StatusRule("owner", "not_item_owner")
@@ -320,7 +319,6 @@ _DISPATCH_STATUS_RULES: dict[str, _StatusRule] = {
         "owner",
         "not_item_owner",
         lease_token_required=True,
-        enforced_in_branch=True,
     ),
 }
 
@@ -333,7 +331,7 @@ async def _authorize_dispatch_report(
 ) -> None:
     """Authorize a dispatch report before any status branch mutates state."""
     if session is None:
-        return
+        raise HTTPException(status_code=401, detail="session_token_required")
 
     slot_id = require_session_slot(session)
     if report.reporting_slot_id is not None and report.reporting_slot_id != slot_id:
@@ -341,8 +339,8 @@ async def _authorize_dispatch_report(
     report.reporting_slot_id = slot_id
 
     rule = _DISPATCH_STATUS_RULES.get(report.status)
-    if rule is None or rule.enforced_in_branch:
-        return
+    if rule is None:
+        raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
 
     authorized = item.owner_slot_id if rule.role == "owner" else item.handoff_target_slot_id
     if authorized is None or slot_id != authorized:
@@ -351,6 +349,8 @@ async def _authorize_dispatch_report(
     if rule.lease_token_required:
         if report.lease_token is None:
             raise HTTPException(status_code=400, detail="lease_token required")
+        if report.status == "workspace_released":
+            return
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
         if workspace is None or workspace.lease_token != report.lease_token:
             raise HTTPException(
@@ -368,6 +368,8 @@ async def report_dispatch_status(
     item = await db.get(GithubWorkItem, report.work_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="work item not found")
+    if not settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=409, detail="tokens_not_enforced")
     scope = await db.get(TeamGithubScope, item.scope_id)
     await _authorize_dispatch_report(db, item, report, session)
 
@@ -377,7 +379,7 @@ async def report_dispatch_status(
             item.updated_at = datetime.utcnow()
             await db.commit()
     elif report.status == "revision_requested":
-        await github_dispatch_service.record_approval_round(db, item, scope)
+        raise HTTPException(status_code=409, detail="use_deck_approve_work_item")
     elif report.status == "handoff_initiated":
         if report.reassign_to_slot_id is None:
             raise HTTPException(status_code=400, detail="reassign_to_slot_id required")

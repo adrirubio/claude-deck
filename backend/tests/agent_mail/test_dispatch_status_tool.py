@@ -8,9 +8,11 @@ from datetime import datetime
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.api.v1.agent_teams as agent_teams_routes
+from app.config import settings
 from app.database import Base, get_db
 from app.main import app
 from app.models.database import (
@@ -24,6 +26,13 @@ from app.models.database import (
 )
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_workspace_service import github_workspace_service
+
+DEFAULT_TOKEN = "default-owner-token"
+
+
+@pytest.fixture(autouse=True)
+def require_capabilities(monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
 
 
 @pytest_asyncio.fixture
@@ -39,7 +48,11 @@ async def client_and_db():
 
     app.dependency_overrides[get_db] = _get_db
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Deck-Session-Token": DEFAULT_TOKEN},
+    ) as ac:
         yield ac, maker
     app.dependency_overrides.clear()
     await engine.dispose()
@@ -59,6 +72,49 @@ async def _seed_item(maker, **overrides):
         )
         db.add(scope)
         await db.flush()
+        owner = AgentTeamSlot(
+            preset_id=preset.id,
+            position=0,
+            display_name="Owner",
+            provider="codex-cli",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+        )
+        db.add(owner)
+        await db.flush()
+        member = MailTeamMember(
+            identity_key=f"default:{owner.id}",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Owner",
+            participant_kind="team_slot",
+            team_preset_id=preset.id,
+            team_slot_id=owner.id,
+        )
+        db.add(member)
+        await db.flush()
+        default_hash = agent_mail_service.hash_capability_token(DEFAULT_TOKEN)
+        existing_session = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.capability_token_hash == default_hash
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_session is None:
+            existing_session = MailAgentSession(
+                source="mcp",
+                session_key=f"default:{owner.id}",
+                capability_token_hash=default_hash,
+            )
+            db.add(existing_session)
+        existing_session.member_id = member.id
+        existing_session.team_preset_id = preset.id
+        existing_session.team_slot_id = owner.id
+        existing_session.bound_pane_pid = 1000 + owner.id
+        existing_session.bound_pane_proc_start = f"start-{owner.id}"
         values = {
             "scope_id": scope.id,
             "issue_number": 1,
@@ -66,6 +122,7 @@ async def _seed_item(maker, **overrides):
             "issue_url": "u",
             "github_updated_at": datetime.utcnow(),
             "dispatch_status": "dispatched",
+            "owner_slot_id": owner.id,
         }
         values.update(overrides)
         item = GithubWorkItem(**values)
@@ -123,6 +180,38 @@ async def _seed_leased_item(
         )
         db.add_all([owner, other])
         await db.flush()
+        member = MailTeamMember(
+            identity_key=f"default:{owner.id}",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Owner",
+            participant_kind="team_slot",
+            team_preset_id=preset.id,
+            team_slot_id=owner.id,
+        )
+        db.add(member)
+        await db.flush()
+        default_hash = agent_mail_service.hash_capability_token(DEFAULT_TOKEN)
+        existing_session = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.capability_token_hash == default_hash
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_session is None:
+            existing_session = MailAgentSession(
+                source="mcp",
+                session_key=f"default:{owner.id}",
+                capability_token_hash=default_hash,
+            )
+            db.add(existing_session)
+        existing_session.member_id = member.id
+        existing_session.team_preset_id = preset.id
+        existing_session.team_slot_id = owner.id
+        existing_session.bound_pane_pid = 1000 + owner.id
+        existing_session.bound_pane_proc_start = f"start-{owner.id}"
         scope = TeamGithubScope(
             preset_id=preset.id,
             repo_owner="o",
@@ -175,6 +264,10 @@ async def _token_for_slot(maker, slot_id: int | None, *, key: str = "mcp:auth") 
                 session_key=key,
                 team_slot_id=slot_id,
                 capability_token_hash=agent_mail_service.hash_capability_token(token),
+                bound_pane_pid=(1000 + slot_id if slot_id is not None else None),
+                bound_pane_proc_start=(
+                    f"start-{slot_id}" if slot_id is not None else None
+                ),
             )
         )
         await db.commit()
@@ -201,6 +294,50 @@ def _statuses_the_route_accepts() -> set[str]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "extra"),
+    [
+        ("triaging", {"note": "n"}),
+        ("revision_requested", {}),
+        ("handoff_initiated", {"reassign_to_slot_id": 2}),
+        ("handoff_accepted", {}),
+        ("blocked", {"note": "n"}),
+        ("ack_received", {}),
+        ("pr_opened", {"pr_number": 7, "lease_token": "lease"}),
+        ("in_progress", {}),
+        ("workspace_released", {"lease_token": "lease"}),
+    ],
+)
+async def test_grace_mode_refuses_every_dispatch_write(
+    client_and_db, monkeypatch, status, extra
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, approval_round_count=1)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        before = {
+            column.name: getattr(item, column.name)
+            for column in GithubWorkItem.__table__.columns
+        }
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": status, **extra},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "tokens_not_enforced"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        after = {
+            column.name: getattr(item, column.name)
+            for column in GithubWorkItem.__table__.columns
+        }
+    assert after == before
+
+
+@pytest.mark.asyncio
 async def test_triaging_does_not_increment_approval_rounds(client_and_db):
     ac, maker = client_and_db
     item_id = await _seed_item(maker, approval_round_count=1)
@@ -217,18 +354,19 @@ async def test_triaging_does_not_increment_approval_rounds(client_and_db):
 
 
 @pytest.mark.asyncio
-async def test_revision_requested_increments_and_caps(client_and_db):
+async def test_revision_requested_requires_explicit_decision_tool(client_and_db):
     ac, maker = client_and_db
     item_id = await _seed_item(maker, approval_round_count=1)
     resp = await ac.post(
         "/api/v1/agent-teams/dispatch-status",
         json={"work_item_id": item_id, "status": "revision_requested"},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "use_deck_approve_work_item"
     async with maker() as db:
         item = await db.get(GithubWorkItem, item_id)
-        assert item.dispatch_status == "escalated"
-        assert item.escalation_reason == "approval_rounds_exhausted"
+        assert item.dispatch_status == "dispatched"
+        assert item.approval_round_count == 1
 
 
 @pytest.mark.asyncio
@@ -270,7 +408,12 @@ async def test_pr_opened_rejected_after_item_escalated(client_and_db):
     item_id = await _seed_item(maker, dispatch_status="escalated")
     resp = await ac.post(
         "/api/v1/agent-teams/dispatch-status",
-        json={"work_item_id": item_id, "status": "pr_opened", "pr_number": 12},
+        json={
+            "work_item_id": item_id,
+            "status": "pr_opened",
+            "pr_number": 12,
+            "lease_token": "no-current-lease",
+        },
     )
     assert resp.status_code == 409
     async with maker() as db:
@@ -317,7 +460,7 @@ async def test_non_owner_cannot_release_workspace(client_and_db, monkeypatch):
         },
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 403
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id == item_id
@@ -362,7 +505,7 @@ async def test_wrong_token_cannot_release_workspace(client_and_db, monkeypatch):
     )
 
     assert response.status_code == 409
-    assert "does not match" in response.json()["detail"]
+    assert response.json()["detail"]["block_code"] == "lease_changed"
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id == item_id
@@ -577,7 +720,7 @@ def test_shim_exposes_dispatch_status_tool():
     assert hasattr(shim, "_dispatch_request")
 
 
-def test_shim_dispatch_status_reports_team_slot(monkeypatch):
+def test_shim_dispatch_status_omits_caller_slot_claim(monkeypatch):
     import importlib
 
     shim = importlib.import_module("mcp_shim.agent_mail_server")
@@ -605,7 +748,7 @@ def test_shim_dispatch_status_reports_team_slot(monkeypatch):
 
     assert result["ok"] is True
     assert requests[0][0:2] == ("POST", "/dispatch-status")
-    assert requests[0][2]["json"]["reporting_slot_id"] == 7
+    assert "reporting_slot_id" not in requests[0][2]["json"]
     assert requests[0][2]["json"]["pr_number"] == 456
     assert requests[0][2]["json"]["lease_token"] == "lease-current"
 
@@ -695,6 +838,9 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                 "dispatch_status": "escalated",
                 "escalation_reason": "plan_blocked",
                 "status_note": "Blocked by #816",
+                "ack_approval_round": None,
+                "ack_enforcement_epoch": None,
+                "dispatch_head_ref": None,
             }
         ],
     }

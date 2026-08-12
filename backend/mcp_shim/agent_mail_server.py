@@ -270,8 +270,8 @@ def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
         return err
     result = _request(
         "GET",
-        f"/agent/inbox?member_id={_state['member_id']}"
-        f"&unread_only={'true' if unread_only else 'false'}&mark_read=true&limit={limit}",
+        f"/agent/inbox?unread_only={'true' if unread_only else 'false'}"
+        f"&mark_read=true&limit={limit}",
     )
     if not result["ok"]:
         return result
@@ -662,21 +662,22 @@ def deck_report_dispatch_status(
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
-    status is one of: triaging, ack_received, revision_requested, in_progress,
+    status is one of: triaging, ack_received, in_progress,
     pr_opened, handoff_initiated (with reassign_to_slot_id), handoff_accepted,
-    blocked, workspace_released. Report ack_received right after the team leader
-    acknowledges your plan. Called by the owner slot the brain dispatched the
-    issue to. Include work_item_id and lease_token from your bootstrap prompt.
+    blocked, workspace_released. Report ack_received only after the designated
+    leader records an explicit approved decision with deck_approve_work_item;
+    prose replies are not approval. Called by the owner slot the brain dispatched
+    the issue to. Include work_item_id and lease_token from your bootstrap prompt.
     """
     identity = _ensure_registered()
-    member = identity.get("data", {}).get("member", {}) if identity.get("ok") else {}
+    if not identity.get("ok"):
+        return identity
     payload = {
         "work_item_id": work_item_id,
         "status": status,
         "pr_number": pr_number,
         "reassign_to_slot_id": reassign_to_slot_id,
         "note": note,
-        "reporting_slot_id": member.get("team_slot_id"),
         "lease_token": lease_token,
     }
     return _dispatch_request("POST", "/dispatch-status", json=payload)
