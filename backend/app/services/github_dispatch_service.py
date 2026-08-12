@@ -827,9 +827,9 @@ class GithubDispatchService:
         if leader_member is not None:
             return (
                 "- Send the team leader a short plan via Agent Mail using "
-                f"`deck_request_context(to_member_id={leader_member.id}, ...)` "
-                "or "
-                f"`deck_send_message(to_member_id={leader_member.id}, ...)`, "
+                f"`deck_request_context(to_member_id={leader_member.id}, "
+                f"work_item_id={item.id if item is not None else '<id>'}, "
+                f"dispatch_nonce=\"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
                 f"then wait for the explicit decision before {before}." + report
             )
         if leader is not None:

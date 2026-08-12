@@ -924,6 +924,8 @@ class AgentMailService:
         authenticated_sender_member_id: Optional[int] = None,
         commit: bool = True,
     ) -> MailMessageResponse:
+        if request.decision is not None:
+            raise MailAuthorityError("use_decisions_route", status_code=409)
         message, recipients = await self._create_message_row(
             db,
             request,

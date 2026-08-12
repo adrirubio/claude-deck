@@ -169,6 +169,23 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
     assert request.json()["approval_round"] == 1
     assert request.json()["payload"]["approval_round"] == 1
 
+    bypass = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "kind": "answer",
+            "sender_member_id": leader.id,
+            "thread_root_id": request.json()["id"],
+            "body_markdown": "approved",
+            "decision": "approved",
+        },
+    )
+    assert bypass.status_code == 409
+    assert bypass.json()["detail"] == "use_decisions_route"
+    assert (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all() == []
+
     decision = await client.post(
         "/api/v1/agent-mail/decisions",
         headers={"X-Deck-Session-Token": tokens[0]},
