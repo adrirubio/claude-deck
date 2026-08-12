@@ -197,7 +197,7 @@ def _counts() -> dict:
         return {}
     result = _request(
         "GET",
-        f"/agent/inbox?member_id={_state['member_id']}&unread_only=true&limit=1",
+        "/agent/inbox?unread_only=true&limit=1",
     )
     if not result["ok"]:
         return {}
@@ -270,8 +270,8 @@ def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
         return err
     result = _request(
         "GET",
-        f"/agent/inbox?member_id={_state['member_id']}"
-        f"&unread_only={'true' if unread_only else 'false'}&mark_read=true&limit={limit}",
+        f"/agent/inbox?unread_only={'true' if unread_only else 'false'}"
+        f"&mark_read=true&limit={limit}",
     )
     if not result["ok"]:
         return result
@@ -338,6 +338,46 @@ def deck_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def deck_approve_work_item(
+    work_item_id: int,
+    dispatch_nonce: str,
+    decision: str,
+    reason: str,
+) -> dict:
+    """Approve or reject the current dispatch approval round as its designated
+    leader. A rejection opens the next round automatically when one remains."""
+    if decision not in {"approved", "rejected"}:
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_decision",
+                "message": "decision must be approved or rejected",
+            },
+        }
+    err = _guard()
+    if err:
+        return err
+    result = _request(
+        "POST",
+        "/decisions",
+        json={
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "decision": decision,
+            "reason": reason,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {
+        "ok": True,
+        "message_id": result["data"]["id"],
+        "decision": result["data"].get("decision"),
+        **_counts(),
+    }
+
+
+@mcp.tool()
 def deck_ack_message(message_id: int) -> dict:
     """Acknowledge a message. Acking an answer to your context request closes it; acking
     a handoff addressed to you accepts and closes the handoff."""
@@ -360,6 +400,8 @@ def deck_request_context(
     topic: str,
     why_needed: str = "",
     files_or_symbols: Optional[list[str]] = None,
+    work_item_id: Optional[int] = None,
+    dispatch_nonce: Optional[str] = None,
 ) -> dict:
     """Ask another Agent Mail participant a structured question about something they know.
     Creates a pending context request they will be nudged to answer."""
@@ -370,6 +412,11 @@ def deck_request_context(
     body = topic
     if why_needed:
         body += f"\n\n**Why needed:** {why_needed}"
+    payload = {"why_needed": why_needed, "files_or_symbols": files_or_symbols}
+    if work_item_id is not None:
+        payload["work_item_id"] = work_item_id
+    if dispatch_nonce is not None:
+        payload["dispatch_nonce"] = dispatch_nonce
     result = _request(
         "POST",
         "/messages",
@@ -379,7 +426,7 @@ def deck_request_context(
             "recipient_member_id": to_member_id,
             "subject": topic[:120],
             "body_markdown": body,
-            "payload": {"why_needed": why_needed, "files_or_symbols": files_or_symbols},
+            "payload": payload,
         },
     )
     if not result["ok"]:
@@ -618,24 +665,42 @@ def deck_report_dispatch_status(
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
-    status is one of: triaging, ack_received, revision_requested, in_progress,
+    status is one of: triaging, ack_received, in_progress,
     pr_opened, handoff_initiated (with reassign_to_slot_id), handoff_accepted,
-    blocked, workspace_released. Report ack_received right after the team leader
-    acknowledges your plan. Called by the owner slot the brain dispatched the
-    issue to. Include work_item_id and lease_token from your bootstrap prompt.
+    blocked, workspace_released. Report ack_received only after the designated
+    leader records an explicit approved decision with deck_approve_work_item;
+    prose replies are not approval. Called by the owner slot the brain dispatched
+    the issue to. Include work_item_id and lease_token from your bootstrap prompt.
     """
     identity = _ensure_registered()
-    member = identity.get("data", {}).get("member", {}) if identity.get("ok") else {}
+    if not identity.get("ok"):
+        return identity
     payload = {
         "work_item_id": work_item_id,
         "status": status,
         "pr_number": pr_number,
         "reassign_to_slot_id": reassign_to_slot_id,
         "note": note,
-        "reporting_slot_id": member.get("team_slot_id"),
         "lease_token": lease_token,
     }
     return _dispatch_request("POST", "/dispatch-status", json=payload)
+
+
+@mcp.tool()
+def deck_get_work_item_context(work_item_id: int) -> dict:
+    """Claim the current owner's continuation context, including the persisted
+    branch, approval round, workspace, and lease capability after a handoff or
+    session restart."""
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/claim-continuation",
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "context": result["data"]}
 
 
 @mcp.tool()
@@ -679,6 +744,9 @@ def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
                 "dispatch_status": item.get("dispatch_status"),
                 "escalation_reason": item.get("escalation_reason"),
                 "status_note": item.get("status_note"),
+                "ack_approval_round": item.get("ack_approval_round"),
+                "ack_enforcement_epoch": item.get("ack_enforcement_epoch"),
+                "dispatch_head_ref": item.get("dispatch_head_ref"),
             }
             for item in items
         ],

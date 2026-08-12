@@ -665,7 +665,7 @@ async def test_an_invalid_token_never_falls_back(client, db, tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_grace_mode_accepts_a_tokenless_write(client, db, tmp_path):
+async def test_agent_mail_write_requires_a_session_even_in_grace_mode(client, db, tmp_path):
     assert settings.mail_capability_tokens_required is False
     sender = await _member(db, "sender-repo", "sender")
     recipient = await _member(db, "other-repo", "other")
@@ -679,8 +679,8 @@ async def test_grace_mode_accepts_a_tokenless_write(client, db, tmp_path):
             "body_markdown": "b",
         },
     )
-    assert response.status_code == 200
-    assert response.json()["sender_member_id"] == sender.id
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_required"
 
 
 @pytest.mark.asyncio
@@ -806,5 +806,5 @@ async def test_inbox_with_a_token_ignores_a_disagreeing_member_id(
         f"/api/v1/agent-mail/agent/inbox?member_id={victim.id}",
         headers={"X-Deck-Session-Token": token},
     )
-    assert response.status_code == 403
-    assert response.json()["detail"] == "member_not_token_holder"
+    assert response.status_code == 200
+    assert response.json()["member_id"] == holder_id

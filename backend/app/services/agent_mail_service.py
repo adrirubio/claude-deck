@@ -17,11 +17,13 @@ from app.models.database import (
     AgentPaneBinding,
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubWorkItem,
     MailAgentSession,
     MailExternalActor,
     MailMessage,
     MailReceipt,
     MailTeamMember,
+    TeamGithubScope,
 )
 from app.models.schemas import (
     MAIL_MESSAGE_KINDS,
@@ -51,6 +53,13 @@ INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: please call `deck_check_inbox(unread_only=False)` now, "
     "then answer any pending context requests or handoffs before continuing."
 )
+
+
+class MailAuthorityError(ValueError):
+    def __init__(self, detail: str, *, status_code: int = 403):
+        self.detail = detail
+        self.status_code = status_code
+        super().__init__(detail)
 
 
 class AgentMailService:
@@ -912,7 +921,36 @@ class AgentMailService:
         auto_nudge: bool = True,
         bypass_nudge_cooldown: bool = False,
         sender_actor_id: Optional[int] = None,
+        authenticated_sender_member_id: Optional[int] = None,
+        commit: bool = True,
     ) -> MailMessageResponse:
+        if request.decision is not None:
+            raise MailAuthorityError("use_decisions_route", status_code=409)
+        message, recipients = await self._create_message_row(
+            db,
+            request,
+            sender_actor_id=sender_actor_id,
+            authenticated_sender_member_id=authenticated_sender_member_id,
+        )
+        if commit:
+            await db.commit()
+            await db.refresh(message)
+            if auto_nudge:
+                await self.auto_nudge_members(
+                    db,
+                    recipients,
+                    bypass_cooldown=bypass_nudge_cooldown,
+                )
+        return await self._message_response(db, message, for_member_id=None)
+
+    async def _create_message_row(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        *,
+        sender_actor_id: Optional[int] = None,
+        authenticated_sender_member_id: Optional[int] = None,
+    ) -> tuple[MailMessage, set[int]]:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
         if request.sender_member_id is not None and sender_actor_id is not None:
@@ -927,8 +965,28 @@ class AgentMailService:
                 raise ValueError("answer messages can only resolve context requests")
             if root.recipient_member_id != request.sender_member_id:
                 raise ValueError("only the context request recipient can answer it")
+        else:
+            root = None
         if request.kind in MAIL_REQUEST_KINDS and request.recipient_member_id is None:
             raise ValueError(f"{request.kind} requires recipient_member_id")
+
+        payload = dict(request.payload or {})
+        linked_item = None
+        if request.kind == "context_request" and "work_item_id" in payload:
+            linked_item = await self._validate_linked_context_request(
+                db,
+                request,
+                payload,
+                authenticated_sender_member_id=authenticated_sender_member_id,
+            )
+            payload["approval_round"] = linked_item.approval_round_count
+        if request.decision is not None:
+            linked_item = await self._validate_decision_message(
+                db,
+                request,
+                root,
+                authenticated_sender_member_id=authenticated_sender_member_id,
+            )
 
         message = MailMessage(
             thread_root_id=request.thread_root_id,
@@ -938,8 +996,12 @@ class AgentMailService:
             recipient_member_id=request.recipient_member_id,
             subject=request.subject,
             body_markdown=request.body_markdown,
-            payload=request.payload,
+            payload=payload or None,
             request_status="pending" if request.kind in MAIL_REQUEST_KINDS else None,
+            approval_round=(
+                linked_item.approval_round_count if linked_item is not None else None
+            ),
+            decision=request.decision,
         )
         db.add(message)
         await db.flush()
@@ -965,15 +1027,103 @@ class AgentMailService:
             if root is not None and root.request_status == "pending":
                 root.request_status = "answered"
 
-        await db.commit()
-        await db.refresh(message)
-        if auto_nudge:
-            await self.auto_nudge_members(
-                db,
-                recipients,
-                bypass_cooldown=bypass_nudge_cooldown,
+        return message, recipients
+
+    async def _slot_member(
+        self, db: AsyncSession, slot_id: int | None
+    ) -> MailTeamMember | None:
+        if slot_id is None:
+            return None
+        return (
+            await db.execute(
+                select(MailTeamMember)
+                .where(MailTeamMember.team_slot_id == slot_id)
+                .order_by(MailTeamMember.updated_at.desc())
+                .limit(1)
             )
-        return await self._message_response(db, message, for_member_id=None)
+        ).scalar_one_or_none()
+
+    async def _dispatch_participants(
+        self, db: AsyncSession, item: GithubWorkItem
+    ) -> tuple[MailTeamMember | None, MailTeamMember | None]:
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        if scope is None:
+            return None, None
+        leader_slot = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(
+                    AgentTeamSlot.preset_id == scope.preset_id,
+                    AgentTeamSlot.enabled.is_(True),
+                )
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return (
+            await self._slot_member(db, item.owner_slot_id),
+            await self._slot_member(db, leader_slot.id if leader_slot is not None else None),
+        )
+
+    async def _validate_linked_context_request(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        payload: dict,
+        *,
+        authenticated_sender_member_id: int | None,
+    ) -> GithubWorkItem:
+        if authenticated_sender_member_id is None:
+            raise MailAuthorityError("session_token_required", status_code=401)
+        if request.sender_member_id != authenticated_sender_member_id:
+            raise MailAuthorityError("sender_not_token_holder")
+        item = await db.get(GithubWorkItem, payload.get("work_item_id"))
+        if item is None:
+            raise MailAuthorityError("work_item_not_found", status_code=404)
+        owner, leader = await self._dispatch_participants(db, item)
+        if owner is None or owner.id != authenticated_sender_member_id:
+            raise MailAuthorityError("not_item_owner")
+        if leader is None or request.recipient_member_id != leader.id:
+            raise MailAuthorityError("not_designated_leader")
+        if item.dispatch_nonce is None or payload.get("dispatch_nonce") != item.dispatch_nonce:
+            raise MailAuthorityError("stale_nonce", status_code=409)
+        supplied_round = payload.get("approval_round")
+        if supplied_round is not None and supplied_round != item.approval_round_count:
+            raise MailAuthorityError("approval_round_mismatch")
+        if item.approval_round_count < 1:
+            raise MailAuthorityError("approval_round_not_open", status_code=409)
+        return item
+
+    async def _validate_decision_message(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        root: MailMessage | None,
+        *,
+        authenticated_sender_member_id: int | None,
+    ) -> GithubWorkItem:
+        if request.kind != "answer" or root is None:
+            raise MailAuthorityError("decision_requires_answer", status_code=400)
+        if authenticated_sender_member_id is None:
+            raise MailAuthorityError("session_token_required", status_code=401)
+        if request.sender_member_id != authenticated_sender_member_id:
+            raise MailAuthorityError("sender_not_token_holder")
+        payload = root.payload or {}
+        item = await db.get(GithubWorkItem, payload.get("work_item_id"))
+        if item is None:
+            raise MailAuthorityError("no_current_approval_request", status_code=404)
+        owner, leader = await self._dispatch_participants(db, item)
+        if leader is None or leader.id != authenticated_sender_member_id:
+            raise MailAuthorityError("not_designated_leader")
+        if owner is None or root.sender_member_id != owner.id:
+            raise MailAuthorityError("stale_approval_owner", status_code=409)
+        if root.recipient_member_id != leader.id:
+            raise MailAuthorityError("stale_approval_recipient", status_code=409)
+        if payload.get("dispatch_nonce") != item.dispatch_nonce:
+            raise MailAuthorityError("stale_nonce", status_code=409)
+        if payload.get("approval_round") != item.approval_round_count:
+            raise MailAuthorityError("approval_round_mismatch", status_code=409)
+        return item
 
     async def send_broadcast(
         self,
@@ -1071,6 +1221,8 @@ class AgentMailService:
             sender_actor_id=message.sender_actor_id,
             sender_type=sender_type,
             sender_actor_kind=sender_actor_kind,
+            approval_round=message.approval_round,
+            decision=message.decision,
             sender_name=sender_name,
             recipient_member_id=message.recipient_member_id,
             subject=message.subject,

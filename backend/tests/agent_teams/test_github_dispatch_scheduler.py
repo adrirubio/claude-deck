@@ -209,6 +209,52 @@ async def test_scheduler_checks_held_leases_with_no_enabled_slots(db):
 
 
 @pytest.mark.asyncio
+async def test_torn_attempt_does_not_skip_scope_monitoring(db, monkeypatch):
+    monkeypatch.setattr(github_dispatch_service, "_available_memory_mb", lambda: 999_999)
+    scope = await _scope(db, autonomy=True, enabled=True)
+    slot = (
+        await db.execute(
+            select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id)
+        )
+    ).scalar_one()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=88,
+        issue_title="torn attempt",
+        issue_url="https://github.com/o/r/issues/88",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+        owner_slot_id=slot.id,
+        dispatch_nonce="0123456789abcdef",
+    )
+    db.add(item)
+    await db.commit()
+
+    class _TornAttemptDispatch(_FakeDispatch):
+        async def dispatch_pending(self, db, scope, slots, **kwargs):
+            self.dispatch_calls.append((scope.id, [slot.id for slot in slots]))
+            await github_dispatch_service.dispatch_pending(db, scope, slots, **kwargs)
+
+    dispatch = _TornAttemptDispatch()
+    verification = _FakeVerification()
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=_FakeWatcher(),
+        dispatch=dispatch,
+        verification=verification,
+    )
+
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "plan_blocked"
+    assert dispatch.monitor_calls == [scope.id]
+    assert dispatch.remind_calls == [scope.id]
+    assert verification.calls == [scope.id]
+
+
+@pytest.mark.asyncio
 async def test_scheduler_promotes_retry_before_fetching_labels_and_routes_by_label(
     db, monkeypatch
 ):

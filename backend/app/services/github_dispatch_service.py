@@ -1,8 +1,11 @@
 """Routing and dispatch lifecycle for autonomous GitHub dispatch."""
 from __future__ import annotations
 
+import enum
 import logging
+import secrets
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -10,31 +13,118 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
     MailReceipt,
+    MailMessage,
     MailTeamMember,
     TeamGithubScope,
 )
 from app.models.schemas import AgentTeamLaunchRequest
+from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
-from app.services.github_workspace_service import github_workspace_service
+from app.services.github_workspace_service import (
+    _RELEASABLE_STATUSES,
+    github_workspace_service,
+)
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
-# These states are terminal for the owner. Failed is included because a failed
-# launch may still have created a live pane that retained the workspace lease.
-_RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 _LAUNCH_FAILED_STATUSES = {
     "failed",
     "blocked",
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
+    "skipped_disabled",
 }
+_ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref")
 
 logger = logging.getLogger(__name__)
+
+
+class AttemptState(enum.Enum):
+    UNPREPARED = "unprepared"
+    PREPARED = "prepared"
+
+
+class PartiallyPreparedAttempt(ValueError):
+    def __init__(self, item_id: int, detail: str):
+        self.item_id = item_id
+        self.detail = detail
+        super().__init__(f"work item {item_id} has a partial dispatch attempt: {detail}")
+
+
+class ResumeAttemptError(ValueError):
+    def __init__(self, block_code: str, detail: str):
+        self.block_code = block_code
+        super().__init__(detail)
+
+
+@dataclass(frozen=True)
+class PreparedAttempt:
+    owner_slot_id: int
+    routing_method: str
+    dispatch_nonce: str
+    dispatch_head_ref: str
+    approval_round: int
+
+
+@dataclass(frozen=True)
+class AckEvidence:
+    ok: bool
+    reason: str
+    approver_member_id: int | None = None
+    evidence_message_id: int | None = None
+    approval_round: int | None = None
+
+
+def attempt_state(item: GithubWorkItem) -> AttemptState:
+    markers = [getattr(item, column) for column in _ATTEMPT_MARKERS]
+    if all(marker is None for marker in markers) and item.approval_round_count == 0:
+        return AttemptState.UNPREPARED
+    markers_complete = (
+        all(marker is not None for marker in markers)
+        and item.approval_round_count >= 1
+    )
+    identity_complete = item.owner_slot_id is not None and bool(item.routing_method)
+    if markers_complete and identity_complete:
+        return AttemptState.PREPARED
+    raise PartiallyPreparedAttempt(
+        item.id,
+        f"nonce={markers[0] is not None} head={markers[1] is not None} "
+        f"round={item.approval_round_count} owner={item.owner_slot_id} "
+        f"routing={item.routing_method!r}",
+    )
+
+
+def attempt_head_ref(item: GithubWorkItem, owner_slot_id: int) -> str:
+    if item.dispatch_nonce is None:
+        raise PartiallyPreparedAttempt(item.id, "head requested before nonce mint")
+    return (
+        f"deck/slot-{owner_slot_id}/issue-{item.issue_number}-"
+        f"{item.dispatch_nonce}"
+    )
+
+
+def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
+    if attempt_state(item) is not AttemptState.PREPARED:
+        raise AssertionError("attempt state changed during prepared-row validation")
+    owner_slot_id = item.owner_slot_id
+    routing_method = item.routing_method
+    dispatch_nonce = item.dispatch_nonce
+    dispatch_head_ref = item.dispatch_head_ref
+    if owner_slot_id is None or not routing_method or dispatch_nonce is None or dispatch_head_ref is None:
+        raise PartiallyPreparedAttempt(item.id, "prepared attempt fields became incomplete")
+    return PreparedAttempt(
+        owner_slot_id=owner_slot_id,
+        routing_method=routing_method,
+        dispatch_nonce=dispatch_nonce,
+        dispatch_head_ref=dispatch_head_ref,
+        approval_round=item.approval_round_count,
+    )
 
 
 class GithubDispatchService:
@@ -67,12 +157,38 @@ class GithubDispatchService:
         item.handoff_state = None
         item.handoff_target_slot_id = None
         item.pr_number = None
+        for column in _ATTEMPT_MARKERS:
+            setattr(item, column, None)
         item.ack_received_at = None
+        item.ack_approver_member_id = None
+        item.ack_evidence_message_id = None
+        item.ack_enforcement_epoch = None
+        item.ack_approval_round = None
         item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
         item.retry_requested_at = None
         item.updated_at = now
+
+    async def prepare_attempt(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        *,
+        owner_slot_id: int,
+        routing_method: str,
+    ) -> PreparedAttempt:
+        state = attempt_state(item)
+        if state is AttemptState.PREPARED:
+            return prepared_attempt_from_row(item)
+        item.owner_slot_id = owner_slot_id
+        item.routing_method = routing_method
+        item.dispatch_nonce = secrets.token_hex(8)
+        item.dispatch_head_ref = attempt_head_ref(item, owner_slot_id)
+        item.approval_round_count = 1
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+        return prepared_attempt_from_row(item)
 
     async def promote_deferred_retries(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -219,6 +335,7 @@ class GithubDispatchService:
         launcher = launcher or agent_team_service.launch
         issue_labels_by_number = issue_labels_by_number or {}
         issue_details_by_number = issue_details_by_number or {}
+        slots_by_id = {slot.id: slot for slot in preset_slots}
         slots_dispatched_this_batch: set[int] = set()
         scope_dispatched_this_batch = 0
         await github_workspace_service.reclaim_stale(db, scope)
@@ -249,9 +366,26 @@ class GithubDispatchService:
                 await db.commit()
                 continue
             issue_labels = issue_labels_by_number.get(item.issue_number, [])
-            owner_slot_id, method = await self.route_item(
-                db, item, preset_slots, issue_labels, classify=classify
-            )
+            try:
+                state = attempt_state(item)
+            except PartiallyPreparedAttempt as exc:
+                await self.escalate(db, item, "plan_blocked", exc.detail)
+                await db.commit()
+                continue
+            if state is AttemptState.PREPARED:
+                prepared = prepared_attempt_from_row(item)
+                owner_slot_id = prepared.owner_slot_id
+                method = prepared.routing_method
+                owner_slot = slots_by_id.get(owner_slot_id)
+                if owner_slot is None or not owner_slot.enabled:
+                    await self._escalate_prepared_owner_unavailable(
+                        db, item, owner_slot
+                    )
+                    continue
+            else:
+                owner_slot_id, method = await self.route_item(
+                    db, item, preset_slots, issue_labels, classify=classify
+                )
             if owner_slot_id is None:
                 await self.escalate(db, item, "plan_blocked")
                 await db.commit()
@@ -282,6 +416,12 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            attempt = await self.prepare_attempt(
+                db,
+                item,
+                owner_slot_id=owner_slot_id,
+                routing_method=method,
+            )
             try:
                 leader = self._leader_slot(preset_slots)
                 leader_member = (
@@ -291,7 +431,7 @@ class GithubDispatchService:
                     item,
                     scope,
                     workspace,
-                    owner_slot_id=owner_slot_id,
+                    owner_slot_id=attempt.owner_slot_id,
                     preset_slots=preset_slots,
                     leader_member=leader_member,
                     issue_details=issue_details_by_number.get(item.issue_number),
@@ -300,37 +440,31 @@ class GithubDispatchService:
                     db,
                     item,
                     preset_slots=preset_slots,
-                    owner_slot_id=owner_slot_id,
+                    owner_slot_id=attempt.owner_slot_id,
                     brief=brief,
                 )
                 result = await launcher(
                     db,
                     scope.preset_id,
                     AgentTeamLaunchRequest(
-                        slot_ids=[owner_slot_id],
+                        slot_ids=[attempt.owner_slot_id],
                         reuse_existing=True,
                         skip_plan_confirmation=True,
                         repo_path_override=workspace.path,
-                        slot_prompt_overrides={owner_slot_id: brief},
+                        slot_prompt_overrides={attempt.owner_slot_id: brief},
                     ),
                 )
             except ValueError:
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
                 item.pending_reason = None
                 await self.escalate(db, item, "plan_blocked")
                 await github_workspace_service.release(db, item.id)
                 await db.commit()
                 continue
             except Exception:
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
                 item.pending_reason = None
                 await self.escalate(db, item, "launch_outcome_unknown")
                 await db.commit()
                 raise
-            item.owner_slot_id = owner_slot_id
-            item.routing_method = method
             item.launch_id = getattr(result, "launch_id", None)
             launch_item = next(iter(getattr(result, "items", []) or []), None)
             launch_status = getattr(launch_item, "status", None)
@@ -361,7 +495,7 @@ class GithubDispatchService:
                             pane_pid,
                             item.id,
                         )
-                slots_dispatched_this_batch.add(owner_slot_id)
+                slots_dispatched_this_batch.add(attempt.owner_slot_id)
                 scope_dispatched_this_batch += 1
             item.pending_reason = None
             item.updated_at = datetime.utcnow()
@@ -407,7 +541,10 @@ class GithubDispatchService:
             lines.extend(
                 [
                     f"- It is a git worktree on a detached HEAD at {scope.base_ref}. "
-                    "Create your own branch with `git switch -c <branch>` before committing.",
+                    "Create the assigned branch before committing.",
+                    f"- Assigned branch: `{item.dispatch_head_ref}`. Run "
+                    f"`git switch -c {item.dispatch_head_ref}` and do not rename or "
+                    "recompose it.",
                     "- Do NOT create, move or remove git worktrees yourself. Claude Deck "
                     "provisions the workspace; you work inside the one you were given.",
                     "- Do NOT work in any other checkout of this repository.",
@@ -463,7 +600,12 @@ class GithubDispatchService:
                     "Design pipeline instructions:",
                     "- Treat this as a design/documentation task.",
                     "- Prepare a human-reviewed PR; do not rely on CI or auto-merge.",
-                    self._leader_ack_instruction(leader, leader_member, before="opening the PR"),
+                    self._leader_ack_instruction(
+                        leader,
+                        leader_member,
+                        before="opening the PR",
+                        item=item,
+                    ),
                 ]
             )
         else:
@@ -476,6 +618,7 @@ class GithubDispatchService:
                         leader,
                         leader_member,
                         before="starting implementation",
+                        item=item,
                     ),
                     "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
                     "- Keep the change inside the issue scope, run the issue's requested local verification commands, then open a draft PR.",
@@ -484,6 +627,127 @@ class GithubDispatchService:
             )
             lines.extend(self._build_instructions(item, scope))
         return "\n".join(lines)
+
+    async def _escalate_prepared_owner_unavailable(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        owner_slot: AgentTeamSlot | None,
+    ) -> None:
+        if owner_slot is None:
+            condition = "is no longer part of this preset"
+        else:
+            condition = "is disabled"
+        note = (
+            f"Prepared owner slot {item.owner_slot_id} {condition}. The preserved "
+            f"attempt uses head {item.dispatch_head_ref} at approval round "
+            f"{item.approval_round_count}. Do not retry or recreate this attempt. "
+            "An operator must use the resume-attempt route after resolving or "
+            "reassigning the owner."
+        )
+        await self.escalate(
+            db,
+            item,
+            "prepared_owner_unavailable",
+            note,
+        )
+        await db.commit()
+
+    async def resume_prepared_attempt(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+        *,
+        reassign_to_slot_id: int | None,
+    ) -> None:
+        if (
+            item.dispatch_status != "escalated"
+            or item.escalation_reason != "prepared_owner_unavailable"
+        ):
+            raise ResumeAttemptError(
+                "not_a_resumable_attempt",
+                "Only a prepared_owner_unavailable attempt can be resumed",
+            )
+        try:
+            prepared = prepared_attempt_from_row(item)
+        except PartiallyPreparedAttempt as exc:
+            raise ResumeAttemptError("not_a_resumable_attempt", exc.detail) from exc
+
+        slots_by_id = {
+            slot.id: slot
+            for slot in preset_slots
+            if slot.preset_id == scope.preset_id
+        }
+        effective_owner_id = (
+            reassign_to_slot_id
+            if reassign_to_slot_id is not None
+            else prepared.owner_slot_id
+        )
+        effective_owner = slots_by_id.get(effective_owner_id)
+        if reassign_to_slot_id is not None and (
+            effective_owner is None or not effective_owner.enabled
+        ):
+            raise ResumeAttemptError(
+                "invalid_resume_target",
+                "The requested resume target is missing, disabled, or outside the preset",
+            )
+        if effective_owner is None or not effective_owner.enabled:
+            raise ResumeAttemptError(
+                "owner_still_unavailable",
+                "The prepared owner is still unavailable",
+            )
+
+        reassigned = effective_owner_id != prepared.owner_slot_id
+        if reassigned:
+            workspace = (
+                await db.execute(
+                    select(GithubWorkspace).where(
+                        GithubWorkspace.leased_item_id == item.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if (
+                workspace is None
+                or workspace.leased_owner_pid is None
+                or workspace.leased_owner_proc_start is None
+            ):
+                raise ResumeAttemptError(
+                    "previous_owner_liveness_unknown",
+                    "The previous owner's pane identity cannot be resolved safely",
+                )
+            binding = (
+                await db.execute(
+                    select(AgentPaneBinding).where(
+                        AgentPaneBinding.pane_pid == workspace.leased_owner_pid,
+                        AgentPaneBinding.pane_proc_start
+                        == workspace.leased_owner_proc_start,
+                    )
+                )
+            ).scalar_one_or_none()
+            if binding is None or binding.slot_id is None:
+                raise ResumeAttemptError(
+                    "previous_owner_liveness_unknown",
+                    "The previous owner's pane identity cannot be resolved safely",
+                )
+            if (
+                binding.slot_id != effective_owner_id
+                and github_workspace_service._owner_process_is_alive(workspace)
+            ):
+                raise ResumeAttemptError(
+                    "previous_owner_still_alive",
+                    "The previous owner process is still alive",
+                )
+
+        item.dispatch_status = "pending"
+        item.escalation_reason = None
+        item.pending_reason = None
+        if reassigned:
+            item.owner_slot_id = effective_owner_id
+            item.routing_method = "operator_resume"
+        item.updated_at = datetime.utcnow()
+        await db.commit()
 
     def _build_instructions(
         self,
@@ -544,31 +808,41 @@ class GithubDispatchService:
         leader_member: MailTeamMember | None,
         *,
         before: str,
+        item: GithubWorkItem | None = None,
     ) -> str:
+        linkage = ""
+        if item is not None:
+            linkage = (
+                f" with work_item_id={item.id} and dispatch_nonce="
+                f'"{item.dispatch_nonce}"'
+            )
         report = (
-            " Once the leader acknowledges, call "
-            '`deck_report_dispatch_status(status="ack_received")` before '
-            f"{before}. Do not set your own deadline for the acknowledgment; "
-            "the brain manages timeouts and will nudge or escalate if needed."
+            " Approval exists only when the designated leader calls "
+            f"`deck_approve_work_item`{linkage} for the current round. A prose "
+            "reply is not approval, and self-approval is refused. After approval, "
+            "call `deck_report_dispatch_status(status=\"ack_received\")` before "
+            f"{before}. A rejection opens the next round automatically; revise the "
+            "plan and call `deck_request_context` again with the same work item and "
+            "nonce. Do not report `revision_requested`."
         )
         if leader_member is not None:
             return (
                 "- Send the team leader a short plan via Agent Mail using "
-                f"`deck_request_context(to_member_id={leader_member.id}, ...)` "
-                "or "
-                f"`deck_send_message(to_member_id={leader_member.id}, ...)`, "
-                f"then wait for acknowledgment before {before}." + report
+                f"`deck_request_context(to_member_id={leader_member.id}, "
+                f"work_item_id={item.id if item is not None else '<id>'}, "
+                f"dispatch_nonce=\"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
+                f"then wait for the explicit decision before {before}." + report
             )
         if leader is not None:
             return (
                 "- Send the team leader a short plan via Agent Mail and wait for "
-                f"acknowledgment before {before}; first call `deck_list_team` to "
+                f"an explicit decision before {before}; first call `deck_list_team` to "
                 f"resolve the Agent Mail member id for `{leader.display_name}`."
                 + report
             )
         return (
             "- Send the team leader a short plan via Agent Mail and wait for "
-            f"acknowledgment before {before}; if no leader is registered, report blocked."
+            f"an explicit decision before {before}; if no leader is registered, report blocked."
             + report
         )
 
@@ -669,33 +943,212 @@ class GithubDispatchService:
             )
         return None
 
-    async def record_approval_round(
-        self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope
-    ) -> None:
-        item.approval_round_count += 1
-        if item.approval_round_count >= scope.max_approval_rounds:
-            await self.escalate(db, item, "approval_rounds_exhausted")
-        item.updated_at = datetime.utcnow()
+    async def advance_approval_round(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        decision_message: MailMessageCreate,
+        authenticated_sender_member_id: int,
+    ) -> MailMessage:
+        if item.dispatch_status == "escalated":
+            raise ValueError("item_escalated")
+        message, _ = await agent_mail_service._create_message_row(
+            db,
+            decision_message,
+            authenticated_sender_member_id=authenticated_sender_member_id,
+        )
+        if decision_message.decision == "approved":
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return message
+
+        if item.approval_round_count < scope.max_approval_rounds:
+            item.ack_received_at = None
+            item.ack_approver_member_id = None
+            item.ack_evidence_message_id = None
+            item.ack_enforcement_epoch = None
+            item.ack_approval_round = None
+            item.last_nudge_at = None
+            item.approval_round_count += 1
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return message
+
+        self._apply_escalation(item, "approval_rounds_exhausted")
         await db.commit()
+        try:
+            await self._send_escalation_broadcast(
+                db,
+                item,
+                "approval_rounds_exhausted",
+                None,
+                owner_may_be_active=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to notify after approval rounds exhausted for item %s",
+                item.id,
+            )
+        return message
+
+    async def _ack_evidence(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        preset_slots: list[AgentTeamSlot],
+    ) -> AckEvidence:
+        if not settings.mail_capability_tokens_required:
+            return AckEvidence(False, "tokens_not_enforced")
+        leader = self._leader_slot(preset_slots)
+        leader_member = (
+            await self._slot_member(db, leader.id) if leader is not None else None
+        )
+        if leader_member is None:
+            return AckEvidence(False, "no_leader")
+        owner_member = await self._owner_member(db, item)
+        if owner_member is None:
+            return AckEvidence(False, "no_owner")
+        if owner_member.id == leader_member.id:
+            return AckEvidence(False, "self_ack")
+        roots = (
+            await db.execute(
+                select(MailMessage).where(
+                    MailMessage.kind == "context_request",
+                    MailMessage.sender_member_id == owner_member.id,
+                    MailMessage.recipient_member_id == leader_member.id,
+                )
+            )
+        ).scalars().all()
+        linked = [
+            root
+            for root in roots
+            if (root.payload or {}).get("work_item_id") == item.id
+            and (root.payload or {}).get("approval_round") is not None
+        ]
+        if not linked:
+            return AckEvidence(False, "no_linkage")
+        if item.dispatch_nonce is None:
+            return AckEvidence(False, "stale_nonce")
+        nonce_matches = [
+            root
+            for root in linked
+            if (root.payload or {}).get("dispatch_nonce") == item.dispatch_nonce
+        ]
+        if not nonce_matches:
+            return AckEvidence(False, "stale_nonce")
+        if item.approval_round_count < 1:
+            return AckEvidence(False, "stale_round")
+        round_matches = [
+            root
+            for root in nonce_matches
+            if (root.payload or {}).get("approval_round")
+            == item.approval_round_count
+        ]
+        if not round_matches:
+            return AckEvidence(False, "stale_round")
+        root_ids = [root.id for root in round_matches]
+        answers = (
+            await db.execute(
+                select(MailMessage)
+                .where(
+                    MailMessage.kind == "answer",
+                    MailMessage.thread_root_id.in_(root_ids),
+                )
+                .order_by(MailMessage.created_at, MailMessage.id)
+            )
+        ).scalars().all()
+        leader_answers = [
+            answer
+            for answer in answers
+            if answer.sender_member_id == leader_member.id
+        ]
+        approved_answers = [
+            answer
+            for answer in leader_answers
+            if answer.decision == "approved"
+            and answer.approval_round == item.approval_round_count
+        ]
+        if not approved_answers:
+            if any(
+                answer.decision == "rejected"
+                and answer.approval_round == item.approval_round_count
+                for answer in leader_answers
+            ):
+                return AckEvidence(False, "rejected")
+            if leader_answers:
+                return AckEvidence(False, "no_decision")
+            return AckEvidence(False, "not_designated_approver")
+        answer = approved_answers[0]
+        return AckEvidence(
+            True,
+            "ok",
+            approver_member_id=leader_member.id,
+            evidence_message_id=answer.id,
+            approval_round=item.approval_round_count,
+        )
 
     async def record_ack_received(
-        self, db: AsyncSession, item: GithubWorkItem
-    ) -> None:
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+    ) -> AckEvidence:
+        preset_slots = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().all()
+        evidence = await self._ack_evidence(db, item, list(preset_slots))
+        if not evidence.ok:
+            return evidence
         item.ack_received_at = datetime.utcnow()
+        item.ack_approver_member_id = evidence.approver_member_id
+        item.ack_evidence_message_id = evidence.evidence_message_id
+        item.ack_enforcement_epoch = 1
+        item.ack_approval_round = evidence.approval_round
         item.last_nudge_at = None
         item.updated_at = datetime.utcnow()
         await db.commit()
+        return evidence
 
     async def initiate_handoff(
-        self, db: AsyncSession, item: GithubWorkItem, target_slot_id: int
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        initiating_slot_id: int,
+        target_slot_id: int,
     ) -> None:
+        if item.owner_slot_id != initiating_slot_id:
+            raise ResumeAttemptError("not_item_owner", "Only the current owner may initiate a handoff")
+        target = await db.get(AgentTeamSlot, target_slot_id)
+        if (
+            target is None
+            or target.preset_id != scope.preset_id
+            or not target.enabled
+        ):
+            raise ResumeAttemptError(
+                "invalid_handoff_target",
+                "Handoff target must be an enabled slot in the same preset",
+            )
         item.handoff_state = "pending"
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()
         await db.commit()
 
     async def accept_handoff(
-        self, db: AsyncSession, item: GithubWorkItem, accepting_slot_id: int
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        accepting_slot_id: int,
+        *,
+        accepting_pane_pid: int,
+        accepting_pane_proc_start: str,
     ) -> None:
         if item.handoff_target_slot_id != accepting_slot_id:
             raise ValueError(
@@ -706,7 +1159,20 @@ class GithubDispatchService:
         item.handoff_state = "accepted"
         item.handoff_target_slot_id = None
         item.routing_method = "reassigned"
-        item.updated_at = datetime.utcnow()
+        item.ack_received_at = None
+        item.ack_approver_member_id = None
+        item.ack_evidence_message_id = None
+        item.ack_enforcement_epoch = None
+        item.ack_approval_round = None
+        item.last_nudge_at = None
+        now = datetime.utcnow()
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None:
+            workspace.leased_owner_pid = accepting_pane_pid
+            workspace.leased_owner_proc_start = accepting_pane_proc_start
+            workspace.lease_last_owner_contact_at = now
+            workspace.updated_at = now
+        item.updated_at = now
         await db.commit()
 
     async def monitor_dispatched(
@@ -930,9 +1396,12 @@ class GithubDispatchService:
                 recipient_member_id=member.id,
                 subject=f"Ack needed: issue #{item.issue_number}",
                 body_markdown=(
-                    f"The owner is waiting on your acknowledgment for issue "
-                    f"#{item.issue_number} ({item.issue_title}). Please review their "
-                    "plan and acknowledge so work can proceed."
+                    f"The owner is waiting on your explicit decision for issue "
+                    f"#{item.issue_number} ({item.issue_title}). Review the plan, then "
+                    f"call `deck_approve_work_item(work_item_id={item.id}, "
+                    f'dispatch_nonce="{item.dispatch_nonce}", decision="approved", '
+                    "reason=...)` or use `decision=\"rejected\"`. A prose reply does not "
+                    "approve the work."
                 ),
                 payload={
                     "kind": "github_dispatch_ack_nudge",

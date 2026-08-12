@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import mail_session, require_operator, require_session_slot
+from app.config import settings
 from app.database import get_db
 from app.models.database import (
     AgentTeamSlot,
@@ -36,7 +37,9 @@ from app.models.schemas import (
     AgentTeamSlotUpdate,
     DispatchStatusReport,
     GithubWorkItemAbandonRequest,
+    GithubWorkItemContinuationResponse,
     GithubWorkItemListResponse,
+    GithubWorkItemResumeAttemptRequest,
     GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
     GithubWorkspaceCreate,
@@ -50,13 +53,10 @@ from app.models.schemas import (
     TeamGithubScopeUpdate,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
-from app.services.github_dispatch_service import (
-    _RELEASABLE_STATUSES,
-    github_dispatch_service,
-)
+from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
 from app.services.github_workspace_service import (
+    _RELEASABLE_STATUSES,
     GithubWorkspaceError,
-    GithubWorkspaceLeaseTokenMismatch,
     GithubWorkspaceResetError,
     github_workspace_service,
 )
@@ -223,6 +223,12 @@ def _work_item_response(
         handoff_state=item.handoff_state,
         handoff_target_slot_id=item.handoff_target_slot_id,
         approval_round_count=item.approval_round_count,
+        ack_approver_member_id=item.ack_approver_member_id,
+        ack_evidence_message_id=item.ack_evidence_message_id,
+        dispatch_nonce=item.dispatch_nonce,
+        ack_enforcement_epoch=item.ack_enforcement_epoch,
+        ack_approval_round=item.ack_approval_round,
+        dispatch_head_ref=item.dispatch_head_ref,
         pr_number=item.pr_number,
         retry_count=item.retry_count,
         last_verified_sha=item.last_verified_sha,
@@ -296,7 +302,6 @@ class _StatusRule(NamedTuple):
     role: str
     refusal: str
     lease_token_required: bool = False
-    enforced_in_branch: bool = False
 
 
 _OWNER = _StatusRule("owner", "not_item_owner")
@@ -314,7 +319,6 @@ _DISPATCH_STATUS_RULES: dict[str, _StatusRule] = {
         "owner",
         "not_item_owner",
         lease_token_required=True,
-        enforced_in_branch=True,
     ),
 }
 
@@ -327,7 +331,7 @@ async def _authorize_dispatch_report(
 ) -> None:
     """Authorize a dispatch report before any status branch mutates state."""
     if session is None:
-        return
+        raise HTTPException(status_code=401, detail="session_token_required")
 
     slot_id = require_session_slot(session)
     if report.reporting_slot_id is not None and report.reporting_slot_id != slot_id:
@@ -335,8 +339,8 @@ async def _authorize_dispatch_report(
     report.reporting_slot_id = slot_id
 
     rule = _DISPATCH_STATUS_RULES.get(report.status)
-    if rule is None or rule.enforced_in_branch:
-        return
+    if rule is None:
+        raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
 
     authorized = item.owner_slot_id if rule.role == "owner" else item.handoff_target_slot_id
     if authorized is None or slot_id != authorized:
@@ -345,6 +349,8 @@ async def _authorize_dispatch_report(
     if rule.lease_token_required:
         if report.lease_token is None:
             raise HTTPException(status_code=400, detail="lease_token required")
+        if report.status == "workspace_released":
+            return
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
         if workspace is None or workspace.lease_token != report.lease_token:
             raise HTTPException(
@@ -362,6 +368,10 @@ async def report_dispatch_status(
     item = await db.get(GithubWorkItem, report.work_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="work item not found")
+    if not settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=409, detail="tokens_not_enforced")
+    if report.status == "revision_requested":
+        raise HTTPException(status_code=409, detail="use_deck_approve_work_item")
     scope = await db.get(TeamGithubScope, item.scope_id)
     await _authorize_dispatch_report(db, item, report, session)
 
@@ -370,24 +380,45 @@ async def report_dispatch_status(
             item.status_note = report.note
             item.updated_at = datetime.utcnow()
             await db.commit()
-    elif report.status == "revision_requested":
-        await github_dispatch_service.record_approval_round(db, item, scope)
     elif report.status == "handoff_initiated":
         if report.reassign_to_slot_id is None:
             raise HTTPException(status_code=400, detail="reassign_to_slot_id required")
-        await github_dispatch_service.initiate_handoff(db, item, report.reassign_to_slot_id)
-    elif report.status == "handoff_accepted":
-        if report.reporting_slot_id is None:
-            raise HTTPException(status_code=400, detail="reporting_slot_id required")
+        if session is None:
+            raise HTTPException(status_code=401, detail="session_token_required")
         try:
-            await github_dispatch_service.accept_handoff(db, item, report.reporting_slot_id)
+            await github_dispatch_service.initiate_handoff(
+                db,
+                item,
+                scope,
+                initiating_slot_id=require_session_slot(session),
+                target_slot_id=report.reassign_to_slot_id,
+            )
+        except ResumeAttemptError as exc:
+            status_code = 403 if exc.block_code == "not_item_owner" else 409
+            raise HTTPException(status_code=status_code, detail=exc.block_code) from exc
+    elif report.status == "handoff_accepted":
+        if session is None:
+            raise HTTPException(status_code=401, detail="session_token_required")
+        accepting_slot_id = require_session_slot(session)
+        if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+            raise HTTPException(status_code=403, detail="bind_unverifiable")
+        try:
+            await github_dispatch_service.accept_handoff(
+                db,
+                item,
+                accepting_slot_id,
+                accepting_pane_pid=session.bound_pane_pid,
+                accepting_pane_proc_start=session.bound_pane_proc_start,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
         await github_dispatch_service.escalate(db, item, "plan_blocked", report.note)
         await db.commit()
     elif report.status == "ack_received":
-        await github_dispatch_service.record_ack_received(db, item)
+        evidence = await github_dispatch_service.record_ack_received(db, item, scope)
+        if not evidence.ok:
+            raise HTTPException(status_code=409, detail=evidence.reason)
     elif report.status == "pr_opened":
         if report.pr_number is None:
             raise HTTPException(status_code=400, detail="pr_number required")
@@ -398,14 +429,12 @@ async def report_dispatch_status(
     elif report.status == "in_progress":
         now = datetime.utcnow()
         item.last_nudge_at = None
-        if report.pr_number is not None:
-            item.pr_number = report.pr_number
         item.updated_at = now
         await db.commit()
     elif report.status == "workspace_released":
         if report.reporting_slot_id != item.owner_slot_id:
             raise HTTPException(
-                status_code=409,
+                status_code=403,
                 detail="only the owner slot may release its workspace",
             )
         if report.lease_token is None:
@@ -420,7 +449,15 @@ async def report_dispatch_status(
                 ),
             )
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
-        if workspace is not None:
+        if workspace is None:
+            current_owner = (
+                await db.execute(
+                    select(GithubWorkItem.owner_slot_id).where(GithubWorkItem.id == item.id)
+                )
+            ).scalar_one()
+            if current_owner != report.reporting_slot_id:
+                raise HTTPException(status_code=403, detail="not_item_owner")
+        else:
             blocker = await github_workspace_service.release_blocker(scope, workspace)
             if blocker is not None:
                 raise HTTPException(
@@ -431,12 +468,36 @@ async def report_dispatch_status(
                         "the lease held."
                     ),
                 )
-        try:
-            await github_workspace_service.release_by_token(
-                db, item.id, lease_token=report.lease_token
+            released = await github_workspace_service.release_by_owner(
+                db,
+                item.id,
+                lease_token=report.lease_token,
+                workspace_id=workspace.id,
+                scope_id=scope.id,
+                owner_slot_id=int(report.reporting_slot_id),
             )
-        except GithubWorkspaceLeaseTokenMismatch as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if not released:
+                current_owner = (
+                    await db.execute(
+                        select(GithubWorkItem.owner_slot_id).where(
+                            GithubWorkItem.id == item.id
+                        )
+                    )
+                ).scalar_one()
+                current_lease = (
+                    await db.execute(
+                        select(GithubWorkspace.id).where(
+                            GithubWorkspace.leased_item_id == item.id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if current_lease is None and current_owner == report.reporting_slot_id:
+                    pass
+                else:
+                    raise _conflict(
+                        "The workspace lease or owner changed before release",
+                        "lease_changed",
+                    )
     else:
         raise HTTPException(status_code=400, detail=f"unknown status {report.status}")
 
@@ -445,7 +506,10 @@ async def report_dispatch_status(
         and report.reporting_slot_id == item.owner_slot_id
     ):
         await github_workspace_service.touch_owner_contact(
-            db, item.id, lease_token=report.lease_token
+            db,
+            item.id,
+            lease_token=report.lease_token,
+            owner_slot_id=int(report.reporting_slot_id),
         )
 
     await db.refresh(item)
@@ -455,6 +519,75 @@ async def report_dispatch_status(
         "escalation_reason": item.escalation_reason,
         "handoff_state": item.handoff_state,
     }
+
+
+@router.post(
+    "/github-work-items/{item_id}/claim-continuation",
+    response_model=GithubWorkItemContinuationResponse,
+)
+async def claim_github_work_item_continuation(
+    item_id: int,
+    response: Response,
+    session: MailAgentSession | None = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=409, detail="tokens_not_enforced")
+    if session is None:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    slot_id = require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work item not found")
+    if item.owner_slot_id != slot_id:
+        raise HTTPException(status_code=403, detail="not_item_owner")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+    if workspace is not None:
+        if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+            raise HTTPException(status_code=403, detail="bind_unverifiable")
+        now = datetime.utcnow()
+        workspace.leased_owner_pid = session.bound_pane_pid
+        workspace.leased_owner_proc_start = session.bound_pane_proc_start
+        workspace.lease_last_owner_contact_at = now
+        workspace.updated_at = now
+        await db.commit()
+    leader = github_dispatch_service._leader_slot(
+        list(
+            (
+                await db.execute(
+                    select(AgentTeamSlot)
+                    .where(AgentTeamSlot.preset_id == scope.preset_id)
+                    .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                )
+            ).scalars().all()
+        )
+    )
+    leader_member = (
+        await github_dispatch_service._slot_member(db, leader.id)
+        if leader is not None
+        else None
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return GithubWorkItemContinuationResponse(
+        work_item_id=item.id,
+        issue_number=item.issue_number,
+        issue_title=item.issue_title,
+        issue_url=item.issue_url,
+        issue_type=item.issue_type,
+        repo_owner=scope.repo_owner,
+        repo_name=scope.repo_name,
+        dispatch_status=item.dispatch_status,
+        approval_round_count=item.approval_round_count,
+        dispatch_nonce=item.dispatch_nonce,
+        dispatch_head_ref=item.dispatch_head_ref,
+        workspace_path=workspace.path if workspace is not None else None,
+        lease_token=workspace.lease_token if workspace is not None else None,
+        leader_member_id=leader_member.id if leader_member is not None else None,
+        status_note=item.status_note,
+    )
 
 
 @router.get("/presets", response_model=AgentTeamPresetListResponse)
@@ -873,6 +1006,48 @@ async def retry_github_work_item(
     if request is not None and request.reason:
         item.pending_reason = f"retry requested: {request.reason}"
     await db.commit()
+    await db.refresh(item)
+    return _work_item_response(item, scope)
+
+
+@router.post(
+    "/presets/{preset_id}/work-items/{item_id}/resume-attempt",
+    response_model=GithubWorkItemResponse,
+)
+async def resume_github_work_item_attempt(
+    preset_id: int,
+    item_id: int,
+    request: GithubWorkItemResumeAttemptRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await agent_team_service.require_preset_row(db, preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="GitHub work item not found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None or scope.preset_id != preset_id:
+        raise HTTPException(status_code=404, detail="GitHub work item not found")
+    slots = (
+        await db.execute(
+            select(AgentTeamSlot)
+            .where(AgentTeamSlot.preset_id == preset_id)
+            .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+        )
+    ).scalars().all()
+    try:
+        await github_dispatch_service.resume_prepared_attempt(
+            db,
+            item,
+            scope,
+            list(slots),
+            reassign_to_slot_id=request.reassign_to_slot_id,
+        )
+    except ResumeAttemptError as exc:
+        raise _conflict(str(exc), exc.block_code) from exc
     await db.refresh(item)
     return _work_item_response(item, scope)
 

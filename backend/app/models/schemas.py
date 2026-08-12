@@ -1872,6 +1872,14 @@ class MailMessageCreate(BaseModel):
     subject: Optional[str] = None
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
+    decision: Optional[Literal["approved", "rejected"]] = None
+
+
+class MailDecisionRequest(BaseModel):
+    work_item_id: int
+    dispatch_nonce: str
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1)
 
 
 class MailMessageResponse(BaseModel):
@@ -1882,6 +1890,8 @@ class MailMessageResponse(BaseModel):
     sender_actor_id: Optional[int] = None
     sender_type: str = "director"
     sender_actor_kind: Optional[str] = None
+    approval_round: Optional[int] = None
+    decision: Optional[str] = None
     sender_name: str
     recipient_member_id: Optional[int] = None
     subject: Optional[str] = None
@@ -2222,6 +2232,11 @@ class GithubWorkItemRetryRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class GithubWorkItemResumeAttemptRequest(BaseModel):
+    resume: Literal[True]
+    reassign_to_slot_id: Optional[int] = None
+
+
 class GithubWorkItemAbandonRequest(BaseModel):
     reason: Optional[str] = None
 
@@ -2288,6 +2303,12 @@ class GithubWorkItemResponse(BaseModel):
     handoff_state: Optional[str] = None
     handoff_target_slot_id: Optional[int] = None
     approval_round_count: int
+    ack_approver_member_id: Optional[int] = None
+    ack_evidence_message_id: Optional[int] = None
+    dispatch_nonce: Optional[str] = None
+    ack_enforcement_epoch: Optional[int] = None
+    ack_approval_round: Optional[int] = None
+    dispatch_head_ref: Optional[str] = None
     pr_number: Optional[int] = None
     retry_count: int
     last_verified_sha: Optional[str] = None
@@ -2302,6 +2323,24 @@ class GithubWorkItemResponse(BaseModel):
 
 class GithubWorkItemListResponse(BaseModel):
     items: List[GithubWorkItemResponse] = Field(default_factory=list)
+
+
+class GithubWorkItemContinuationResponse(BaseModel):
+    work_item_id: int
+    issue_number: int
+    issue_title: str
+    issue_url: str
+    issue_type: str
+    repo_owner: str
+    repo_name: str
+    dispatch_status: str
+    approval_round_count: int
+    dispatch_nonce: Optional[str] = None
+    dispatch_head_ref: Optional[str] = None
+    workspace_path: Optional[str] = None
+    lease_token: Optional[str] = None
+    leader_member_id: Optional[int] = None
+    status_note: Optional[str] = None
 
 
 class AgentTeamLaunchPlanItem(BaseModel):

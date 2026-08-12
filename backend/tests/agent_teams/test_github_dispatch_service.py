@@ -5,7 +5,7 @@ from io import StringIO
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -24,8 +24,15 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
+from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
-from app.services.github_dispatch_service import GithubDispatchService, github_dispatch_service
+from app.services.github_dispatch_service import (
+    AttemptState,
+    GithubDispatchService,
+    PartiallyPreparedAttempt,
+    attempt_state,
+    github_dispatch_service,
+)
 from app.services.github_workspace_service import github_workspace_service
 
 
@@ -479,6 +486,155 @@ def test_ack_lifecycle_settings_present():
     assert settings.github_nudge_grace_seconds > 0
 
 
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        (
+            {
+                "dispatch_nonce": None,
+                "dispatch_head_ref": None,
+                "approval_round_count": 0,
+                "owner_slot_id": 9,
+                "routing_method": "old-route",
+            },
+            AttemptState.UNPREPARED,
+        ),
+        (
+            {
+                "dispatch_nonce": "0123456789abcdef",
+                "dispatch_head_ref": "deck/slot-9/issue-42-0123456789abcdef",
+                "approval_round_count": 1,
+                "owner_slot_id": 9,
+                "routing_method": "label",
+            },
+            AttemptState.PREPARED,
+        ),
+        (
+            {
+                "dispatch_nonce": None,
+                "dispatch_head_ref": "head",
+                "approval_round_count": 1,
+                "owner_slot_id": 9,
+                "routing_method": "label",
+            },
+            PartiallyPreparedAttempt,
+        ),
+        (
+            {
+                "dispatch_nonce": "0123456789abcdef",
+                "dispatch_head_ref": None,
+                "approval_round_count": 1,
+                "owner_slot_id": 9,
+                "routing_method": "label",
+            },
+            PartiallyPreparedAttempt,
+        ),
+        (
+            {
+                "dispatch_nonce": "0123456789abcdef",
+                "dispatch_head_ref": "head",
+                "approval_round_count": 0,
+                "owner_slot_id": 9,
+                "routing_method": "label",
+            },
+            PartiallyPreparedAttempt,
+        ),
+        (
+            {
+                "dispatch_nonce": "0123456789abcdef",
+                "dispatch_head_ref": "head",
+                "approval_round_count": 1,
+                "owner_slot_id": None,
+                "routing_method": "label",
+            },
+            PartiallyPreparedAttempt,
+        ),
+        (
+            {
+                "dispatch_nonce": "0123456789abcdef",
+                "dispatch_head_ref": "head",
+                "approval_round_count": 1,
+                "owner_slot_id": 9,
+                "routing_method": None,
+            },
+            PartiallyPreparedAttempt,
+        ),
+    ],
+)
+def test_attempt_state_requires_one_complete_identity(values, expected):
+    item = GithubWorkItem(
+        scope_id=1,
+        issue_number=42,
+        issue_title="attempt",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+        **values,
+    )
+
+    if isinstance(expected, AttemptState):
+        assert attempt_state(item) is expected
+    else:
+        original_nonce = item.dispatch_nonce
+        with pytest.raises(expected):
+            attempt_state(item)
+        assert item.dispatch_nonce == original_nonce
+
+
+@pytest.mark.asyncio
+async def test_prepare_attempt_commits_exact_identity_and_reuses_it(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=42,
+        issue_title="attempt",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    calls = 0
+
+    def fixed_nonce(size):
+        nonlocal calls
+        calls += 1
+        assert size == 8
+        return "0123456789abcdef"
+
+    monkeypatch.setattr(
+        "app.services.github_dispatch_service.secrets.token_hex", fixed_nonce
+    )
+    prepared = await github_dispatch_service.prepare_attempt(
+        db,
+        item,
+        owner_slot_id=slots[1].id,
+        routing_method="label",
+    )
+
+    assert prepared.dispatch_head_ref == (
+        f"deck/slot-{slots[1].id}/issue-42-0123456789abcdef"
+    )
+    assert calls == 1
+    maker = async_sessionmaker(db.bind, expire_on_commit=False)
+    async with maker() as second:
+        persisted = await second.get(GithubWorkItem, item.id)
+        assert persisted.owner_slot_id == slots[1].id
+        assert persisted.routing_method == "label"
+        assert persisted.dispatch_nonce == "0123456789abcdef"
+        assert persisted.dispatch_head_ref == prepared.dispatch_head_ref
+        assert persisted.approval_round_count == 1
+
+    reused = await github_dispatch_service.prepare_attempt(
+        db,
+        item,
+        owner_slot_id=slots[0].id,
+        routing_method="leader_fallback",
+    )
+    assert reused == prepared
+    assert calls == 1
+
+
 @pytest.mark.asyncio
 async def test_reset_for_retry_clears_ack_received_at(db):
     _, _, scope = await _team(db)
@@ -492,6 +648,13 @@ async def test_reset_for_retry_clears_ack_received_at(db):
         dispatch_status="escalated",
         escalation_reason="plan_blocked",
         ack_received_at=datetime(2026, 7, 24, 17, 30, 5),
+        ack_approver_member_id=11,
+        ack_evidence_message_id=12,
+        ack_enforcement_epoch=1,
+        ack_approval_round=2,
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref="deck/slot-1/issue-819-0123456789abcdef",
+        approval_round_count=2,
         dispatched_at=datetime(2026, 7, 24, 17, 12, 0),
     )
     db.add(item)
@@ -500,6 +663,12 @@ async def test_reset_for_retry_clears_ack_received_at(db):
     await github_dispatch_service.reset_for_retry(db, item)
 
     assert item.ack_received_at is None
+    assert item.ack_approver_member_id is None
+    assert item.ack_evidence_message_id is None
+    assert item.ack_enforcement_epoch is None
+    assert item.ack_approval_round is None
+    assert item.dispatch_nonce is None
+    assert item.dispatch_head_ref is None
 
 
 @pytest.mark.asyncio
@@ -513,6 +682,9 @@ async def test_reset_for_retry_defers_while_a_lease_is_held(db):
         github_updated_at=datetime.utcnow(),
         dispatch_status="escalated",
         escalation_reason="plan_blocked",
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref="deck/slot-1/issue-909-0123456789abcdef",
+        approval_round_count=1,
     )
     db.add(item)
     await db.flush()
@@ -533,6 +705,8 @@ async def test_reset_for_retry_defers_while_a_lease_is_held(db):
     assert item.retry_requested_at is not None
     assert workspace.leased_item_id == item.id
     assert item.escalation_reason == "plan_blocked"
+    assert item.dispatch_nonce == "0123456789abcdef"
+    assert item.dispatch_head_ref == "deck/slot-1/issue-909-0123456789abcdef"
 
 
 @pytest.mark.asyncio
@@ -785,8 +959,13 @@ async def test_ack_prompt_has_no_owner_side_timeout(db):
 
 
 @pytest.mark.asyncio
-async def test_report_ack_received_records_timestamp_and_clears_nudge(db):
+async def test_report_ack_received_records_approved_leader_evidence(
+    db, monkeypatch
+):
     preset, slots, scope = await _team(db)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    leader_member = await _create_registered_slot_member(db, slots[0])
+    owner_member = await _create_registered_slot_member(db, slots[1])
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=911,
@@ -797,16 +976,191 @@ async def test_report_ack_received_records_timestamp_and_clears_nudge(db):
         owner_slot_id=slots[1].id,
         dispatched_at=datetime.utcnow(),
         last_nudge_at=datetime.utcnow(),
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{slots[1].id}/issue-911-0123456789abcdef",
+        approval_round_count=1,
     )
     db.add(item)
+    await db.flush()
+    root = MailMessage(
+        kind="context_request",
+        sender_member_id=owner_member.id,
+        recipient_member_id=leader_member.id,
+        body_markdown="plan",
+        payload={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "approval_round": 1,
+        },
+        approval_round=1,
+        request_status="answered",
+    )
+    db.add(root)
+    await db.flush()
+    answer = MailMessage(
+        kind="answer",
+        thread_root_id=root.id,
+        sender_member_id=leader_member.id,
+        body_markdown="approved",
+        approval_round=1,
+        decision="approved",
+        created_at=datetime.utcnow(),
+    )
+    later_answer = MailMessage(
+        kind="answer",
+        thread_root_id=root.id,
+        sender_member_id=leader_member.id,
+        body_markdown="approved again",
+        approval_round=1,
+        decision="approved",
+        created_at=datetime.utcnow() + timedelta(seconds=1),
+    )
+    db.add_all([answer, later_answer])
     await db.commit()
 
-    await github_dispatch_service.record_ack_received(db, item)
+    evidence = await github_dispatch_service.record_ack_received(db, item, scope)
 
     await db.refresh(item)
+    assert evidence.ok is True
     assert item.ack_received_at is not None
+    assert item.ack_approver_member_id == leader_member.id
+    assert item.ack_evidence_message_id == answer.id
+    assert item.ack_enforcement_epoch == 1
+    assert item.ack_approval_round == 1
     assert item.last_nudge_at is None
     assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected_reason"),
+    [
+        ("self_ack", "self_ack"),
+        ("non_leader", "not_designated_approver"),
+        ("slotless", "not_designated_approver"),
+        ("no_linkage", "no_linkage"),
+        ("missing_round", "no_linkage"),
+        ("stale_nonce", "stale_nonce"),
+        ("null_item_nonce", "stale_nonce"),
+        ("stale_round", "stale_round"),
+        ("no_leader", "no_leader"),
+        ("no_owner", "no_owner"),
+        ("rejected", "rejected"),
+        ("no_decision", "no_decision"),
+    ],
+)
+async def test_ack_evidence_refusal_matrix(
+    db, monkeypatch, case, expected_reason
+):
+    _preset, slots, scope = await _team(db)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    leader_member = (
+        None
+        if case == "no_leader"
+        else await _create_registered_slot_member(db, slots[0])
+    )
+    if case == "self_ack":
+        owner_slot = slots[0]
+        owner_member = leader_member
+    else:
+        owner_slot = slots[1]
+        owner_member = (
+            None
+            if case == "no_owner"
+            else await _create_registered_slot_member(db, owner_slot)
+        )
+    item_round = 2 if case == "stale_round" else 1
+    item_nonce = None if case == "null_item_nonce" else "0123456789abcdef"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=912,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=owner_slot.id,
+        dispatched_at=datetime.utcnow(),
+        dispatch_nonce=item_nonce,
+        dispatch_head_ref=f"deck/slot-{owner_slot.id}/issue-912-head",
+        approval_round_count=item_round,
+    )
+    db.add(item)
+    await db.flush()
+
+    root = None
+    if case not in {"self_ack", "no_linkage", "no_leader", "no_owner"}:
+        payload = {
+            "work_item_id": item.id,
+            "dispatch_nonce": item_nonce,
+            "approval_round": item_round,
+        }
+        if case == "missing_round":
+            payload.pop("approval_round")
+        elif case == "stale_nonce":
+            payload["dispatch_nonce"] = "previous-attempt"
+        elif case == "null_item_nonce":
+            payload["dispatch_nonce"] = None
+        elif case == "stale_round":
+            payload["approval_round"] = 1
+        root = MailMessage(
+            kind="context_request",
+            sender_member_id=owner_member.id,
+            recipient_member_id=leader_member.id,
+            body_markdown="plan",
+            payload=payload,
+            approval_round=payload.get("approval_round"),
+            request_status="answered",
+        )
+        db.add(root)
+        await db.flush()
+
+    if case in {"non_leader", "slotless", "rejected", "no_decision"}:
+        sender = leader_member
+        decision = "approved"
+        if case == "non_leader":
+            sender = owner_member
+        elif case == "slotless":
+            sender = MailTeamMember(
+                identity_key="repo:slotless-reviewer",
+                repo_id="r",
+                repo_path="/tmp/r",
+                repo_name="r",
+                display_name="Slotless",
+                participant_kind="repo",
+            )
+            db.add(sender)
+            await db.flush()
+        elif case == "rejected":
+            decision = "rejected"
+        elif case == "no_decision":
+            decision = None
+        db.add(
+            MailMessage(
+                kind="answer",
+                thread_root_id=root.id,
+                sender_member_id=sender.id,
+                body_markdown="review",
+                approval_round=item_round,
+                decision=decision,
+            )
+        )
+    await db.commit()
+
+    evidence = await github_dispatch_service.record_ack_received(db, item, scope)
+
+    assert evidence.ok is False
+    assert evidence.reason == expected_reason
+    stored = (
+        await db.execute(
+            text(
+                "SELECT ack_received_at, ack_approver_member_id, "
+                "ack_evidence_message_id, ack_enforcement_epoch, "
+                "ack_approval_round FROM github_work_items WHERE id = :id"
+            ),
+            {"id": item.id},
+        )
+    ).one()
+    assert tuple(stored) == (None, None, None, None, None)
 
 
 @pytest.mark.asyncio
@@ -1214,7 +1568,9 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert f"to_member_id={leader_member.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
-    assert "wait for acknowledgment before starting implementation" in prompt
+    assert "wait for the explicit decision before starting implementation" in prompt
+    assert "A prose reply is not approval" in prompt
+    assert "deck_approve_work_item" in prompt
     assert "open a draft PR" in prompt
     assert "Workspace: /tmp/r-ws-1" in prompt
     assert "leased exclusively" in prompt
@@ -1234,7 +1590,7 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert f"Agent Mail member_id={leader_member.id}" in message.body_markdown
     assert f"to_member_id={leader_member.id}" in message.body_markdown
     assert f"slot_id={architect.id}" not in message.body_markdown
-    assert "wait for acknowledgment before starting implementation" in message.body_markdown
+    assert "wait for the explicit decision before starting implementation" in message.body_markdown
     assert item.brief_message_id == message.id
     assert item.brief_delivery_nudge_at is None
     assert item.brief_delivery_nudge_count is None
@@ -2332,9 +2688,9 @@ async def test_scope_concurrency_ignores_human_review_and_escalated_items(db):
 
 
 @pytest.mark.asyncio
-async def test_approval_round_cap_escalates(db):
+async def test_approval_round_cap_escalates(db, monkeypatch):
     preset, slots, scope = await _team(db)
-    scope.max_approval_rounds = 2
+    scope.max_approval_rounds = 3
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=30,
@@ -2342,21 +2698,52 @@ async def test_approval_round_cap_escalates(db):
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
-        approval_round_count=0,
+        approval_round_count=1,
     )
     db.add(item)
     await db.commit()
-    await github_dispatch_service.record_approval_round(db, item, scope)
+
+    async def build_decision(db_, request, **_kwargs):
+        message = MailMessage(
+            kind="answer",
+            body_markdown=request.body_markdown,
+            decision=request.decision,
+            approval_round=item.approval_round_count,
+        )
+        db_.add(message)
+        await db_.flush()
+        return message, set()
+
+    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
+    decision = MailMessageCreate(
+        kind="answer",
+        thread_root_id=1,
+        body_markdown="revise",
+        decision="rejected",
+    )
+    await github_dispatch_service.advance_approval_round(
+        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    assert item.approval_round_count == 2
+    await github_dispatch_service.advance_approval_round(
+        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    )
+    await db.refresh(item)
+    assert item.dispatch_status == "dispatched"
+    assert item.approval_round_count == 3
+    await github_dispatch_service.advance_approval_round(
+        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    )
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "approval_rounds_exhausted"
+    assert item.approval_round_count == 3
 
 
 @pytest.mark.asyncio
-async def test_escalation_creates_agent_mail_broadcast(db):
+async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 1
     db.add(
@@ -2378,11 +2765,39 @@ async def test_escalation_creates_agent_mail_broadcast(db):
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
+        approval_round_count=1,
     )
     db.add(item)
     await db.commit()
 
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    original_builder = agent_mail_service._create_message_row
+
+    async def build_decision(db_, request, **kwargs):
+        if request.decision is None:
+            return await original_builder(db_, request, **kwargs)
+        message = MailMessage(
+            kind="answer",
+            body_markdown=request.body_markdown,
+            decision="rejected",
+            approval_round=1,
+        )
+        db_.add(message)
+        await db_.flush()
+        return message, set()
+
+    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
+    await github_dispatch_service.advance_approval_round(
+        db,
+        item,
+        scope,
+        decision_message=MailMessageCreate(
+            kind="answer",
+            thread_root_id=1,
+            body_markdown="revise",
+            decision="rejected",
+        ),
+        authenticated_sender_member_id=1,
+    )
 
     messages = (await db.execute(select(MailMessage))).scalars().all()
     assert any(message.kind == "broadcast" for message in messages)
@@ -2400,11 +2815,27 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
+        approval_round_count=1,
     )
     db.add(item)
     await db.commit()
 
-    async def fail_broadcast(db_, item_, reason, note):
+    async def build_decision(db_, request, **_kwargs):
+        message = MailMessage(
+            kind="answer",
+            body_markdown=request.body_markdown,
+            decision="rejected",
+            approval_round=1,
+        )
+        db_.add(message)
+        await db_.flush()
+        return message, set()
+
+    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
+
+    async def fail_broadcast(
+        db_, item_, reason, note, *, owner_may_be_active=False
+    ):
         raise RuntimeError("mail down")
 
     monkeypatch.setattr(
@@ -2413,7 +2844,18 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
         fail_broadcast,
     )
 
-    await github_dispatch_service.record_approval_round(db, item, scope)
+    await github_dispatch_service.advance_approval_round(
+        db,
+        item,
+        scope,
+        decision_message=MailMessageCreate(
+            kind="answer",
+            thread_root_id=1,
+            body_markdown="revise",
+            decision="rejected",
+        ),
+        authenticated_sender_member_id=1,
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
@@ -2432,25 +2874,75 @@ async def test_two_phase_handoff(db):
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
         owner_slot_id=architect.id,
+        routing_method="label",
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{architect.id}/issue-40-0123456789abcdef",
+        approval_round_count=2,
+        ack_received_at=datetime.utcnow(),
+        ack_approver_member_id=55,
+        ack_evidence_message_id=56,
+        ack_enforcement_epoch=1,
+        ack_approval_round=2,
     )
     db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/handoff-workspace",
+        leased_item_id=item.id,
+        lease_token="lease-kept",
+        leased_owner_pid=101,
+        leased_owner_proc_start="1001",
+    )
+    db.add(workspace)
     await db.commit()
 
-    await github_dispatch_service.initiate_handoff(db, item, backend.id)
+    await github_dispatch_service.initiate_handoff(
+        db,
+        item,
+        scope,
+        initiating_slot_id=architect.id,
+        target_slot_id=backend.id,
+    )
     await db.refresh(item)
     assert item.handoff_state == "pending"
     assert item.handoff_target_slot_id == backend.id
     assert item.owner_slot_id == architect.id
 
     with pytest.raises(ValueError):
-        await github_dispatch_service.accept_handoff(db, item, architect.id)
+        await github_dispatch_service.accept_handoff(
+            db,
+            item,
+            architect.id,
+            accepting_pane_pid=101,
+            accepting_pane_proc_start="1001",
+        )
 
-    await github_dispatch_service.accept_handoff(db, item, backend.id)
+    await github_dispatch_service.accept_handoff(
+        db,
+        item,
+        backend.id,
+        accepting_pane_pid=202,
+        accepting_pane_proc_start="2002",
+    )
     await db.refresh(item)
     assert item.owner_slot_id == backend.id
     assert item.handoff_state == "accepted"
     assert item.handoff_target_slot_id is None
     assert item.routing_method == "reassigned"
+    assert item.dispatch_nonce == "0123456789abcdef"
+    assert item.dispatch_head_ref.endswith("0123456789abcdef")
+    assert item.approval_round_count == 2
+    assert item.ack_received_at is None
+    assert item.ack_approver_member_id is None
+    assert item.ack_evidence_message_id is None
+    assert item.ack_enforcement_epoch is None
+    assert item.ack_approval_round is None
+    await db.refresh(workspace)
+    assert workspace.lease_token == "lease-kept"
+    assert workspace.leased_owner_pid == 202
+    assert workspace.leased_owner_proc_start == "2002"
+    assert workspace.lease_last_owner_contact_at is not None
 
 
 @pytest.mark.asyncio
@@ -3393,6 +3885,147 @@ async def test_dispatch_pending_queues_when_no_workspace_is_available(db):
 
 
 @pytest.mark.asyncio
+async def test_prepared_dispatch_reuses_persisted_owner_head_and_route(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    owner = slots[1]
+    nonce = "0123456789abcdef"
+    head = f"deck/slot-{owner.id}/issue-960-{nonce}"
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=960,
+        issue_title="Prepared",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+        owner_slot_id=owner.id,
+        routing_method="label",
+        dispatch_nonce=nonce,
+        dispatch_head_ref=head,
+        approval_round_count=1,
+    )
+    db.add(item)
+    await db.commit()
+
+    async def forbidden_route(*_args, **_kwargs):
+        raise AssertionError("prepared attempts must not be re-routed")
+
+    monkeypatch.setattr(github_dispatch_service, "route_item", forbidden_route)
+    captured = {}
+
+    class _Result:
+        launch_id = 960
+        items = []
+
+    async def fake_launcher(db_, preset_id, request):
+        captured["request"] = request
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={960: ["changed-label"]},
+    )
+
+    request = captured["request"]
+    assert request.slot_ids == [owner.id]
+    assert request.slot_prompt_overrides[owner.id].count(head) >= 1
+    assert item.owner_slot_id == owner.id
+    assert item.routing_method == "label"
+    assert item.dispatch_nonce == nonce
+    assert item.dispatch_head_ref == head
+
+
+@pytest.mark.asyncio
+async def test_torn_attempt_escalates_without_aborting_next_item(db):
+    _, slots, scope = await _team(db)
+    torn = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=961,
+        issue_title="Torn",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+        owner_slot_id=slots[1].id,
+        routing_method="label",
+        dispatch_nonce="0123456789abcdef",
+        approval_round_count=1,
+    )
+    healthy = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=962,
+        issue_title="Healthy",
+        issue_url="u",
+        github_updated_at=datetime.utcnow() + timedelta(microseconds=1),
+        dispatch_status="pending",
+    )
+    db.add_all([torn, healthy])
+    await db.commit()
+
+    class _Result:
+        launch_id = 962
+        items = []
+
+    async def fake_launcher(*_args, **_kwargs):
+        return _Result()
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=fake_launcher,
+        issue_labels_by_number={962: ["area:backend"]},
+    )
+
+    assert torn.dispatch_status == "escalated"
+    assert torn.escalation_reason == "plan_blocked"
+    assert torn.dispatch_nonce == "0123456789abcdef"
+    assert torn.dispatch_head_ref is None
+    assert healthy.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_disabled_prepared_owner_keeps_attempt_and_lease(db):
+    _, slots, scope = await _team(db)
+    owner = slots[1]
+    owner.enabled = False
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=963,
+        issue_title="Unavailable owner",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+        owner_slot_id=owner.id,
+        routing_method="label",
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{owner.id}/issue-963-0123456789abcdef",
+        approval_round_count=1,
+    )
+    db.add(item)
+    await db.flush()
+    workspace = await github_workspace_service.acquire(db, scope, item)
+    await db.commit()
+
+    async def forbidden_launcher(*_args, **_kwargs):
+        raise AssertionError("unavailable prepared owners must not launch")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=forbidden_launcher,
+    )
+
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "prepared_owner_unavailable"
+    assert "Do not retry" in item.status_note
+    assert item.dispatch_head_ref in item.status_note
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "launch_status",
     [
@@ -3400,6 +4033,7 @@ async def test_dispatch_pending_queues_when_no_workspace_is_available(db):
         "blocked",
         "blocked_provider_unavailable",
         "blocked_agent_mail_not_configured",
+        "skipped_disabled",
     ],
 )
 async def test_known_launch_failure_releases_workspace(db, launch_status):
