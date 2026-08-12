@@ -234,6 +234,15 @@ class GithubVerificationService:
             return
         if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
             return
+        approval_reason = await self._approval_gate_reason(db, scope, item)
+        if approval_reason is not None:
+            await self._fallback_to_human_merge(
+                db,
+                item,
+                "Auto-merge blocked: distinct current-round leader approval is "
+                f"required ({approval_reason}).",
+            )
+            return
         if await self._auto_merge_budget_exhausted(db, scope):
             await self._fallback_to_human_merge(
                 db,
@@ -286,6 +295,41 @@ class GithubVerificationService:
         item.auto_merged_at = datetime.utcnow()
         await db.commit()
         await self._notify_blocker_merged(db, scope, item)
+
+    async def _approval_gate_reason(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+    ) -> str | None:
+        if not settings.mail_capability_tokens_required:
+            return "capability token enforcement is disabled"
+        if item.ack_enforcement_epoch != 1:
+            return "approval was not recorded under enforced identity"
+        if item.ack_approval_round != item.approval_round_count:
+            return "approval is missing or belongs to a stale round"
+        leader_slot = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(
+                    AgentTeamSlot.preset_id == scope.preset_id,
+                    AgentTeamSlot.enabled.is_(True),
+                )
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if leader_slot is None:
+            return "no enabled leader slot exists"
+        leader_member = await github_dispatch_service._slot_member(db, leader_slot.id)
+        if leader_member is None or item.ack_approver_member_id != leader_member.id:
+            return "approver is not the current designated leader"
+        owner_member = await github_dispatch_service._owner_member(db, item)
+        if owner_member is None:
+            return "current owner is not registered"
+        if owner_member.id == item.ack_approver_member_id:
+            return "owner and approver are not distinct"
+        return None
 
     async def _record_transient_merge_failure(
         self,

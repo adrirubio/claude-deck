@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
+from app.config import settings
 from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
@@ -63,12 +64,73 @@ async def _item(db, scope, **kwargs):
         "dispatch_status": "dispatched",
     }
     values.update(kwargs)
+    if scope.merge_policy == "auto" and "ack_approver_member_id" not in values:
+        slots = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().all()
+        if len(slots) < 2:
+            slots = []
+            for position, name in enumerate(("Leader", "Owner")):
+                slot = AgentTeamSlot(
+                    preset_id=scope.preset_id,
+                    position=position,
+                    display_name=name,
+                    provider="codex-cli",
+                    repo_id="r",
+                    repo_path="/tmp/r",
+                    repo_name="r",
+                    enabled=True,
+                )
+                db.add(slot)
+                slots.append(slot)
+            await db.flush()
+        leader_slot, owner_slot = slots[:2]
+        members = {}
+        for slot in (leader_slot, owner_slot):
+            member = (
+                await db.execute(
+                    select(MailTeamMember)
+                    .where(MailTeamMember.team_slot_id == slot.id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if member is None:
+                member = MailTeamMember(
+                    identity_key=f"auto:{slot.id}",
+                    repo_id="r",
+                    repo_path="/tmp/r",
+                    repo_name="r",
+                    display_name=slot.display_name,
+                    participant_kind="team_slot",
+                    team_preset_id=scope.preset_id,
+                    team_slot_id=slot.id,
+                )
+                db.add(member)
+                await db.flush()
+            members[slot.id] = member
+        leader_member = members[leader_slot.id]
+        values.update(
+            owner_slot_id=owner_slot.id,
+            approval_round_count=1,
+            ack_approver_member_id=leader_member.id,
+            ack_enforcement_epoch=1,
+            ack_approval_round=1,
+        )
     item = GithubWorkItem(
         **values,
     )
     db.add(item)
     await db.commit()
     return item
+
+
+@pytest.fixture(autouse=True)
+def capability_enforcement(monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
 
 
 async def _owner(db, scope):
@@ -698,6 +760,40 @@ async def test_auto_merge_success_sets_merged_and_budget_timestamp(db):
     assert item.dispatch_status == "merged"
     assert item.auto_merged_at is not None
     assert client.merge_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_merge_without_current_approval_falls_back_stickily(db):
+    scope = await _scope(db, merge_policy="auto")
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        last_verified_sha="sha",
+    )
+    item.ack_approval_round = None
+    await db.commit()
+    client = _Client(
+        pull={
+            "number": 5,
+            "node_id": "node",
+            "draft": False,
+            "merged": False,
+            "mergeable_state": "clean",
+            "head": {"sha": "sha"},
+        },
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+
+    assert item.dispatch_status == "ready_for_review"
+    assert item.escalation_reason is None
+    assert item.status_note.startswith("Auto-merge blocked")
+    assert client.merge_calls == 0
 
 
 @pytest.mark.asyncio
