@@ -1,8 +1,11 @@
 """Routing and dispatch lifecycle for autonomous GitHub dispatch."""
 from __future__ import annotations
 
+import enum
 import logging
+import secrets
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -33,8 +36,76 @@ _LAUNCH_FAILED_STATUSES = {
     "blocked_provider_unavailable",
     "blocked_agent_mail_not_configured",
 }
+_ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref")
 
 logger = logging.getLogger(__name__)
+
+
+class AttemptState(enum.Enum):
+    UNPREPARED = "unprepared"
+    PREPARED = "prepared"
+
+
+class PartiallyPreparedAttempt(ValueError):
+    def __init__(self, item_id: int, detail: str):
+        self.item_id = item_id
+        self.detail = detail
+        super().__init__(f"work item {item_id} has a partial dispatch attempt: {detail}")
+
+
+@dataclass(frozen=True)
+class PreparedAttempt:
+    owner_slot_id: int
+    routing_method: str
+    dispatch_nonce: str
+    dispatch_head_ref: str
+    approval_round: int
+
+
+def attempt_state(item: GithubWorkItem) -> AttemptState:
+    markers = [getattr(item, column) for column in _ATTEMPT_MARKERS]
+    if all(marker is None for marker in markers) and item.approval_round_count == 0:
+        return AttemptState.UNPREPARED
+    markers_complete = (
+        all(marker is not None for marker in markers)
+        and item.approval_round_count >= 1
+    )
+    identity_complete = item.owner_slot_id is not None and bool(item.routing_method)
+    if markers_complete and identity_complete:
+        return AttemptState.PREPARED
+    raise PartiallyPreparedAttempt(
+        item.id,
+        f"nonce={markers[0] is not None} head={markers[1] is not None} "
+        f"round={item.approval_round_count} owner={item.owner_slot_id} "
+        f"routing={item.routing_method!r}",
+    )
+
+
+def attempt_head_ref(item: GithubWorkItem, owner_slot_id: int) -> str:
+    if item.dispatch_nonce is None:
+        raise PartiallyPreparedAttempt(item.id, "head requested before nonce mint")
+    return (
+        f"deck/slot-{owner_slot_id}/issue-{item.issue_number}-"
+        f"{item.dispatch_nonce}"
+    )
+
+
+def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
+    if attempt_state(item) is not AttemptState.PREPARED:
+        raise AssertionError("attempt state changed during prepared-row validation")
+    owner_slot_id = item.owner_slot_id
+    routing_method = item.routing_method
+    dispatch_nonce = item.dispatch_nonce
+    dispatch_head_ref = item.dispatch_head_ref
+    if owner_slot_id is None or not routing_method or dispatch_nonce is None or dispatch_head_ref is None:
+        raise PartiallyPreparedAttempt(item.id, "prepared attempt fields became incomplete")
+    return PreparedAttempt(
+        owner_slot_id=owner_slot_id,
+        routing_method=routing_method,
+        dispatch_nonce=dispatch_nonce,
+        dispatch_head_ref=dispatch_head_ref,
+        approval_round=item.approval_round_count,
+    )
 
 
 class GithubDispatchService:
@@ -67,12 +138,38 @@ class GithubDispatchService:
         item.handoff_state = None
         item.handoff_target_slot_id = None
         item.pr_number = None
+        for column in _ATTEMPT_MARKERS:
+            setattr(item, column, None)
         item.ack_received_at = None
+        item.ack_approver_member_id = None
+        item.ack_evidence_message_id = None
+        item.ack_enforcement_epoch = None
+        item.ack_approval_round = None
         item.last_verified_sha = None
         item.retry_count = 0
         item.approval_round_count = 0
         item.retry_requested_at = None
         item.updated_at = now
+
+    async def prepare_attempt(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        *,
+        owner_slot_id: int,
+        routing_method: str,
+    ) -> PreparedAttempt:
+        state = attempt_state(item)
+        if state is AttemptState.PREPARED:
+            return prepared_attempt_from_row(item)
+        item.owner_slot_id = owner_slot_id
+        item.routing_method = routing_method
+        item.dispatch_nonce = secrets.token_hex(8)
+        item.dispatch_head_ref = attempt_head_ref(item, owner_slot_id)
+        item.approval_round_count = 1
+        item.updated_at = datetime.utcnow()
+        await db.commit()
+        return prepared_attempt_from_row(item)
 
     async def promote_deferred_retries(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -219,6 +316,7 @@ class GithubDispatchService:
         launcher = launcher or agent_team_service.launch
         issue_labels_by_number = issue_labels_by_number or {}
         issue_details_by_number = issue_details_by_number or {}
+        slots_by_id = {slot.id: slot for slot in preset_slots}
         slots_dispatched_this_batch: set[int] = set()
         scope_dispatched_this_batch = 0
         await github_workspace_service.reclaim_stale(db, scope)
@@ -249,9 +347,26 @@ class GithubDispatchService:
                 await db.commit()
                 continue
             issue_labels = issue_labels_by_number.get(item.issue_number, [])
-            owner_slot_id, method = await self.route_item(
-                db, item, preset_slots, issue_labels, classify=classify
-            )
+            try:
+                state = attempt_state(item)
+            except PartiallyPreparedAttempt as exc:
+                await self.escalate(db, item, "plan_blocked", exc.detail)
+                await db.commit()
+                continue
+            if state is AttemptState.PREPARED:
+                prepared = prepared_attempt_from_row(item)
+                owner_slot_id = prepared.owner_slot_id
+                method = prepared.routing_method
+                owner_slot = slots_by_id.get(owner_slot_id)
+                if owner_slot is None or not owner_slot.enabled:
+                    await self._escalate_prepared_owner_unavailable(
+                        db, item, owner_slot
+                    )
+                    continue
+            else:
+                owner_slot_id, method = await self.route_item(
+                    db, item, preset_slots, issue_labels, classify=classify
+                )
             if owner_slot_id is None:
                 await self.escalate(db, item, "plan_blocked")
                 await db.commit()
@@ -282,6 +397,12 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
+            attempt = await self.prepare_attempt(
+                db,
+                item,
+                owner_slot_id=owner_slot_id,
+                routing_method=method,
+            )
             try:
                 leader = self._leader_slot(preset_slots)
                 leader_member = (
@@ -291,7 +412,7 @@ class GithubDispatchService:
                     item,
                     scope,
                     workspace,
-                    owner_slot_id=owner_slot_id,
+                    owner_slot_id=attempt.owner_slot_id,
                     preset_slots=preset_slots,
                     leader_member=leader_member,
                     issue_details=issue_details_by_number.get(item.issue_number),
@@ -300,37 +421,31 @@ class GithubDispatchService:
                     db,
                     item,
                     preset_slots=preset_slots,
-                    owner_slot_id=owner_slot_id,
+                    owner_slot_id=attempt.owner_slot_id,
                     brief=brief,
                 )
                 result = await launcher(
                     db,
                     scope.preset_id,
                     AgentTeamLaunchRequest(
-                        slot_ids=[owner_slot_id],
+                        slot_ids=[attempt.owner_slot_id],
                         reuse_existing=True,
                         skip_plan_confirmation=True,
                         repo_path_override=workspace.path,
-                        slot_prompt_overrides={owner_slot_id: brief},
+                        slot_prompt_overrides={attempt.owner_slot_id: brief},
                     ),
                 )
             except ValueError:
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
                 item.pending_reason = None
                 await self.escalate(db, item, "plan_blocked")
                 await github_workspace_service.release(db, item.id)
                 await db.commit()
                 continue
             except Exception:
-                item.owner_slot_id = owner_slot_id
-                item.routing_method = method
                 item.pending_reason = None
                 await self.escalate(db, item, "launch_outcome_unknown")
                 await db.commit()
                 raise
-            item.owner_slot_id = owner_slot_id
-            item.routing_method = method
             item.launch_id = getattr(result, "launch_id", None)
             launch_item = next(iter(getattr(result, "items", []) or []), None)
             launch_status = getattr(launch_item, "status", None)
@@ -361,7 +476,7 @@ class GithubDispatchService:
                             pane_pid,
                             item.id,
                         )
-                slots_dispatched_this_batch.add(owner_slot_id)
+                slots_dispatched_this_batch.add(attempt.owner_slot_id)
                 scope_dispatched_this_batch += 1
             item.pending_reason = None
             item.updated_at = datetime.utcnow()
@@ -407,7 +522,10 @@ class GithubDispatchService:
             lines.extend(
                 [
                     f"- It is a git worktree on a detached HEAD at {scope.base_ref}. "
-                    "Create your own branch with `git switch -c <branch>` before committing.",
+                    "Create the assigned branch before committing.",
+                    f"- Assigned branch: `{item.dispatch_head_ref}`. Run "
+                    f"`git switch -c {item.dispatch_head_ref}` and do not rename or "
+                    "recompose it.",
                     "- Do NOT create, move or remove git worktrees yourself. Claude Deck "
                     "provisions the workspace; you work inside the one you were given.",
                     "- Do NOT work in any other checkout of this repository.",
@@ -484,6 +602,31 @@ class GithubDispatchService:
             )
             lines.extend(self._build_instructions(item, scope))
         return "\n".join(lines)
+
+    async def _escalate_prepared_owner_unavailable(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        owner_slot: AgentTeamSlot | None,
+    ) -> None:
+        if owner_slot is None:
+            condition = "is no longer part of this preset"
+        else:
+            condition = "is disabled"
+        note = (
+            f"Prepared owner slot {item.owner_slot_id} {condition}. The preserved "
+            f"attempt uses head {item.dispatch_head_ref} at approval round "
+            f"{item.approval_round_count}. Do not retry or recreate this attempt. "
+            "An operator must use the resume-attempt route after resolving or "
+            "reassigning the owner."
+        )
+        await self.escalate(
+            db,
+            item,
+            "prepared_owner_unavailable",
+            note,
+        )
+        await db.commit()
 
     def _build_instructions(
         self,
@@ -672,9 +815,10 @@ class GithubDispatchService:
     async def record_approval_round(
         self, db: AsyncSession, item: GithubWorkItem, scope: TeamGithubScope
     ) -> None:
-        item.approval_round_count += 1
         if item.approval_round_count >= scope.max_approval_rounds:
             await self.escalate(db, item, "approval_rounds_exhausted")
+        else:
+            item.approval_round_count += 1
         item.updated_at = datetime.utcnow()
         await db.commit()
 
