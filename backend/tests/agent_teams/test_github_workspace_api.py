@@ -7,6 +7,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
+from app.api.v1.deps import mail_session
 from app.config import settings
 from app.database import get_db
 from app.main import app
@@ -15,6 +16,8 @@ from app.models.database import (
     AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
+    MailAgentSession,
+    MailTeamMember,
     TeamGithubScope,
 )
 from app.services.github_workspace_service import (
@@ -243,6 +246,99 @@ async def test_resume_reassignment_refuses_unknown_previous_owner_liveness(
     )
     assert item.dispatch_status == "escalated"
     assert item.owner_slot_id == owner.id
+
+
+@pytest.mark.asyncio
+async def test_owner_claims_persisted_continuation_with_no_store(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    preset, scope = await _scope(db, tmp_path / "continuation-repo")
+    leader = await _slot(db, preset, 0)
+    owner = await _slot(db, preset, 1)
+    leader_member = MailTeamMember(
+        identity_key=f"leader:{leader.id}",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Leader",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=leader.id,
+    )
+    owner_member = MailTeamMember(
+        identity_key=f"owner:{owner.id}",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Owner",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=owner.id,
+    )
+    db.add_all([leader_member, owner_member])
+    await db.flush()
+    session = MailAgentSession(
+        member_id=owner_member.id,
+        provider="codex-cli",
+        source="mcp",
+        session_key="mcp:continuation",
+        cwd="/tmp/r",
+        team_preset_id=preset.id,
+        team_slot_id=owner.id,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
+        bound_pane_pid=4321,
+        bound_pane_proc_start="9876",
+    )
+    db.add(session)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=72,
+        issue_title="continue",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        issue_type="code",
+        dispatch_status="dispatched",
+        owner_slot_id=owner.id,
+        routing_method="reassigned",
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{owner.id}/issue-72-0123456789abcdef",
+        approval_round_count=2,
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "continuation-worktree"),
+        leased_item_id=item.id,
+        lease_token="lease-secret",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    assert body["dispatch_nonce"] == item.dispatch_nonce
+    assert body["dispatch_head_ref"] == item.dispatch_head_ref
+    assert body["approval_round_count"] == 2
+    assert body["workspace_path"] == workspace.path
+    assert body["lease_token"] == "lease-secret"
+    assert body["leader_member_id"] == leader_member.id
+    assert "lease-secret" not in item.status_note if item.status_note else True
+    await db.refresh(workspace)
+    assert workspace.leased_owner_pid == 4321
+    assert workspace.leased_owner_proc_start == "9876"
+    assert workspace.lease_last_owner_contact_at is not None
 
 
 @pytest.mark.asyncio

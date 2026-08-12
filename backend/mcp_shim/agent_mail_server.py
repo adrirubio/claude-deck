@@ -683,6 +683,23 @@ def deck_report_dispatch_status(
 
 
 @mcp.tool()
+def deck_get_work_item_context(work_item_id: int) -> dict:
+    """Claim the current owner's continuation context, including the persisted
+    branch, approval round, workspace, and lease capability after a handoff or
+    session restart."""
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/claim-continuation",
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "context": result["data"]}
+
+
+@mcp.tool()
 def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
     """Leader-only: list this team's GitHub dispatch work items with their
     work_item_id and issue_number. Defaults to escalated items (pass status=""

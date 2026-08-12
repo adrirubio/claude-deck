@@ -2653,25 +2653,75 @@ async def test_two_phase_handoff(db):
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
         owner_slot_id=architect.id,
+        routing_method="label",
+        dispatch_nonce="0123456789abcdef",
+        dispatch_head_ref=f"deck/slot-{architect.id}/issue-40-0123456789abcdef",
+        approval_round_count=2,
+        ack_received_at=datetime.utcnow(),
+        ack_approver_member_id=55,
+        ack_evidence_message_id=56,
+        ack_enforcement_epoch=1,
+        ack_approval_round=2,
     )
     db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/handoff-workspace",
+        leased_item_id=item.id,
+        lease_token="lease-kept",
+        leased_owner_pid=101,
+        leased_owner_proc_start="1001",
+    )
+    db.add(workspace)
     await db.commit()
 
-    await github_dispatch_service.initiate_handoff(db, item, backend.id)
+    await github_dispatch_service.initiate_handoff(
+        db,
+        item,
+        scope,
+        initiating_slot_id=architect.id,
+        target_slot_id=backend.id,
+    )
     await db.refresh(item)
     assert item.handoff_state == "pending"
     assert item.handoff_target_slot_id == backend.id
     assert item.owner_slot_id == architect.id
 
     with pytest.raises(ValueError):
-        await github_dispatch_service.accept_handoff(db, item, architect.id)
+        await github_dispatch_service.accept_handoff(
+            db,
+            item,
+            architect.id,
+            accepting_pane_pid=101,
+            accepting_pane_proc_start="1001",
+        )
 
-    await github_dispatch_service.accept_handoff(db, item, backend.id)
+    await github_dispatch_service.accept_handoff(
+        db,
+        item,
+        backend.id,
+        accepting_pane_pid=202,
+        accepting_pane_proc_start="2002",
+    )
     await db.refresh(item)
     assert item.owner_slot_id == backend.id
     assert item.handoff_state == "accepted"
     assert item.handoff_target_slot_id is None
     assert item.routing_method == "reassigned"
+    assert item.dispatch_nonce == "0123456789abcdef"
+    assert item.dispatch_head_ref.endswith("0123456789abcdef")
+    assert item.approval_round_count == 2
+    assert item.ack_received_at is None
+    assert item.ack_approver_member_id is None
+    assert item.ack_evidence_message_id is None
+    assert item.ack_enforcement_epoch is None
+    assert item.ack_approval_round is None
+    await db.refresh(workspace)
+    assert workspace.lease_token == "lease-kept"
+    assert workspace.leased_owner_pid == 202
+    assert workspace.leased_owner_proc_start == "2002"
+    assert workspace.lease_last_owner_contact_at is not None
 
 
 @pytest.mark.asyncio

@@ -2325,6 +2325,24 @@ class GithubWorkItemListResponse(BaseModel):
     items: List[GithubWorkItemResponse] = Field(default_factory=list)
 
 
+class GithubWorkItemContinuationResponse(BaseModel):
+    work_item_id: int
+    issue_number: int
+    issue_title: str
+    issue_url: str
+    issue_type: str
+    repo_owner: str
+    repo_name: str
+    dispatch_status: str
+    approval_round_count: int
+    dispatch_nonce: Optional[str] = None
+    dispatch_head_ref: Optional[str] = None
+    workspace_path: Optional[str] = None
+    lease_token: Optional[str] = None
+    leader_member_id: Optional[int] = None
+    status_note: Optional[str] = None
+
+
 class AgentTeamLaunchPlanItem(BaseModel):
     slot_id: int
     slot_name: str

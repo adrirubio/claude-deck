@@ -8,7 +8,7 @@ import pathlib
 import secrets
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -26,6 +26,7 @@ _GIT_ENV = {
 }
 
 _RECLAIMABLE_STATUSES = ("escalated", "failed", "merged", "completed")
+_RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +238,49 @@ class GithubWorkspaceService:
             )
         await self.release(db, item_id)
 
+    async def release_by_owner(
+        self,
+        db: AsyncSession,
+        item_id: int,
+        *,
+        lease_token: str,
+        workspace_id: int,
+        scope_id: int,
+        owner_slot_id: int,
+    ) -> bool:
+        """Release only while acquisition and item ownership still match."""
+        now = datetime.utcnow()
+        owner_still_current = exists().where(
+            GithubWorkItem.id == item_id,
+            GithubWorkItem.owner_slot_id == owner_slot_id,
+            GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+        )
+        result = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.id == workspace_id,
+                GithubWorkspace.scope_id == scope_id,
+                GithubWorkspace.leased_item_id == item_id,
+                GithubWorkspace.lease_token == lease_token,
+                owner_still_current,
+            )
+            .values(
+                leased_item_id=None,
+                released_at=now,
+                lease_token=None,
+                leased_owner_pid=None,
+                leased_owner_proc_start=None,
+                lease_last_owner_contact_at=None,
+                lease_release_reminded_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return False
+        await db.commit()
+        return True
+
     async def release_blocker(
         self, scope: TeamGithubScope, workspace: GithubWorkspace
     ) -> str | None:
@@ -294,27 +338,30 @@ class GithubWorkspaceService:
         db: AsyncSession,
         item_id: int,
         *,
-        lease_token: str | None = None,
+        lease_token: str | None,
+        owner_slot_id: int,
     ) -> None:
-        """Stamp contact evidence only on the matching workspace acquisition.
-
-        A stale token is a deliberate no-op because contact recording is only a
-        side effect of a status report whose primary state change already
-        succeeded.
-        """
-        workspace = await self.get_leased_workspace(db, item_id)
-        if workspace is None:
-            return
-        if workspace.lease_token is not None and lease_token != workspace.lease_token:
-            logger.info(
-                "ignoring owner contact for item %s: token mismatch (lease is on "
-                "a different attempt)",
-                item_id,
+        """Conditionally stamp contact for the current owner and acquisition."""
+        now = datetime.utcnow()
+        owner_still_current = exists().where(
+            GithubWorkItem.id == item_id,
+            GithubWorkItem.owner_slot_id == owner_slot_id,
+        )
+        result = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.leased_item_id == item_id,
+                GithubWorkspace.lease_token == lease_token,
+                owner_still_current,
             )
-            return
-        workspace.lease_last_owner_contact_at = datetime.utcnow()
-        workspace.updated_at = workspace.lease_last_owner_contact_at
-        await db.commit()
+            .values(
+                lease_last_owner_contact_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount:
+            await db.commit()
 
     async def reclaim_stale(self, db: AsyncSession, scope: TeamGithubScope) -> int:
         threshold = datetime.utcnow() - timedelta(

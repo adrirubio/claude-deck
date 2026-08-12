@@ -169,6 +169,120 @@ def test_read_proc_start_handles_comm_containing_spaces_and_parens():
 
 
 @pytest.mark.asyncio
+async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
+    scope, slot, item = await _context(db, tmp_path / "repo")
+    item.dispatch_status = "merged"
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        lease_token="current-token",
+        leased_owner_pid=123,
+        leased_owner_proc_start="456",
+        lease_last_owner_contact_at=datetime.utcnow(),
+        lease_release_reminded_at=datetime.utcnow(),
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert await service.release_by_owner(
+        db,
+        item.id,
+        lease_token="wrong-token",
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        owner_slot_id=slot.id,
+    ) is False
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item.id
+
+    other = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=1,
+        display_name="Replacement",
+        provider="codex-cli",
+        repo_id="repo",
+        repo_path=str(tmp_path / "repo"),
+        repo_name="repo",
+        launch_mode="plain",
+        launch_options={},
+        enabled=True,
+    )
+    db.add(other)
+    await db.flush()
+    item.owner_slot_id = other.id
+    await db.commit()
+    assert await service.release_by_owner(
+        db,
+        item.id,
+        lease_token="current-token",
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        owner_slot_id=slot.id,
+    ) is False
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item.id
+
+    assert await service.release_by_owner(
+        db,
+        item.id,
+        lease_token="current-token",
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        owner_slot_id=other.id,
+    ) is True
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+    assert workspace.lease_token is None
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+    assert workspace.lease_last_owner_contact_at is None
+    assert workspace.lease_release_reminded_at is None
+
+
+@pytest.mark.asyncio
+async def test_touch_owner_contact_is_owner_and_acquisition_conditional(db, tmp_path):
+    scope, slot, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        leased_item_id=item.id,
+        lease_token="current-token",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    await service.touch_owner_contact(
+        db,
+        item.id,
+        lease_token="wrong-token",
+        owner_slot_id=slot.id,
+    )
+    await db.refresh(workspace)
+    assert workspace.lease_last_owner_contact_at is None
+
+    await service.touch_owner_contact(
+        db,
+        item.id,
+        lease_token="current-token",
+        owner_slot_id=slot.id + 999,
+    )
+    await db.refresh(workspace)
+    assert workspace.lease_last_owner_contact_at is None
+
+    await service.touch_owner_contact(
+        db,
+        item.id,
+        lease_token="current-token",
+        owner_slot_id=slot.id,
+    )
+    await db.refresh(workspace)
+    assert workspace.lease_last_owner_contact_at is not None
+
+
+@pytest.mark.asyncio
 async def test_owner_process_alive_is_true_when_pid_is_null(db, tmp_path):
     scope, _, item = await _context(db, tmp_path / "repo")
     workspace = GithubWorkspace(

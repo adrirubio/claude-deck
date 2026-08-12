@@ -26,13 +26,13 @@ from app.models.schemas import AgentTeamLaunchRequest
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
-from app.services.github_workspace_service import github_workspace_service
+from app.services.github_workspace_service import (
+    _RELEASABLE_STATUSES,
+    github_workspace_service,
+)
 
 _BUSY_STATUSES = ("dispatched", "verifying")
 _SCOPE_CONCURRENCY_STATUSES = ("dispatched", "verifying")
-# These states are terminal for the owner. Failed is included because a failed
-# launch may still have created a live pane that retained the workspace lease.
-_RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 _LAUNCH_FAILED_STATUSES = {
     "failed",
     "blocked",
@@ -1088,15 +1088,39 @@ class GithubDispatchService:
         return evidence
 
     async def initiate_handoff(
-        self, db: AsyncSession, item: GithubWorkItem, target_slot_id: int
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        initiating_slot_id: int,
+        target_slot_id: int,
     ) -> None:
+        if item.owner_slot_id != initiating_slot_id:
+            raise ResumeAttemptError("not_item_owner", "Only the current owner may initiate a handoff")
+        target = await db.get(AgentTeamSlot, target_slot_id)
+        if (
+            target is None
+            or target.preset_id != scope.preset_id
+            or not target.enabled
+        ):
+            raise ResumeAttemptError(
+                "invalid_handoff_target",
+                "Handoff target must be an enabled slot in the same preset",
+            )
         item.handoff_state = "pending"
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()
         await db.commit()
 
     async def accept_handoff(
-        self, db: AsyncSession, item: GithubWorkItem, accepting_slot_id: int
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        accepting_slot_id: int,
+        *,
+        accepting_pane_pid: int,
+        accepting_pane_proc_start: str,
     ) -> None:
         if item.handoff_target_slot_id != accepting_slot_id:
             raise ValueError(
@@ -1113,7 +1137,14 @@ class GithubDispatchService:
         item.ack_enforcement_epoch = None
         item.ack_approval_round = None
         item.last_nudge_at = None
-        item.updated_at = datetime.utcnow()
+        now = datetime.utcnow()
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if workspace is not None:
+            workspace.leased_owner_pid = accepting_pane_pid
+            workspace.leased_owner_proc_start = accepting_pane_proc_start
+            workspace.lease_last_owner_contact_at = now
+            workspace.updated_at = now
+        item.updated_at = now
         await db.commit()
 
     async def monitor_dispatched(
