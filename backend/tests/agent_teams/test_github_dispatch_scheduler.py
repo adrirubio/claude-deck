@@ -261,7 +261,11 @@ async def test_scheduler_promotes_retry_before_fetching_labels_and_routes_by_lab
     async def reset_succeeds(*_args, **_kwargs):
         return None
 
+    async def git_succeeds(_args):
+        return 0, ""
+
     monkeypatch.setattr(github_workspace_service, "reset_workspace", reset_succeeds)
+    monkeypatch.setattr(github_workspace_service, "_runner", git_succeeds)
     monkeypatch.setattr(
         github_dispatch_service, "_available_memory_mb", lambda: 999_999
     )
