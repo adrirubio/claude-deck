@@ -62,6 +62,7 @@ async def _item(db, scope, **kwargs):
         "issue_url": "u",
         "github_updated_at": datetime.utcnow(),
         "dispatch_status": "dispatched",
+        "dispatch_head_ref": "deck/slot-1/issue-1/attempt",
     }
     values.update(kwargs)
     if scope.merge_policy == "auto" and "ack_approver_member_id" not in values:
@@ -190,14 +191,22 @@ class _Client:
         merge_error: httpx.HTTPStatusError | None = None,
         ready_error: httpx.HTTPStatusError | None = None,
     ):
-        self.pull = pull or {
-            "number": 5,
-            "node_id": "node",
-            "draft": True,
-            "merged": False,
-            "mergeable_state": "clean",
-            "head": {"sha": "sha"},
-        }
+        self.pull = dict(
+            pull
+            or {
+                "number": 5,
+                "node_id": "node",
+                "draft": True,
+                "merged": False,
+                "mergeable_state": "clean",
+                "head": {"sha": "sha"},
+            }
+        )
+        merged = bool(self.pull.get("merged"))
+        self.pull.setdefault("state", "closed" if merged else "open")
+        self.pull.setdefault(
+            "merged_at", "2026-08-14T12:00:00Z" if merged else None
+        )
         self.check_runs = check_runs if check_runs is not None else []
         self.combined_status = (
             combined_status
@@ -234,10 +243,234 @@ class _Client:
         return self.merge_result
 
 
+def _reported_client(scope, item, pr_number):
+    full_name = f"{scope.repo_owner}/{scope.repo_name}"
+    return _Client(
+        pull={
+            "number": pr_number,
+            "node_id": f"node-{pr_number}",
+            "draft": True,
+            "merged": False,
+            "state": "open",
+            "merged_at": None,
+            "mergeable_state": "clean",
+            "head": {
+                "sha": "sha",
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": full_name},
+            },
+            "base": {"repo": {"full_name": full_name}},
+            "user": {"login": "human"},
+        }
+    )
+
+
 def _http_error(status_code: int) -> httpx.HTTPStatusError:
     request = httpx.Request("PUT", "https://api.github.com/repos/o/r/pulls/5/merge")
     response = httpx.Response(status_code, request=request, json={"message": "blocked"})
     return httpx.HTTPStatusError("blocked", request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    ("pull", "expected"),
+    [
+        ({"state": "open", "merged_at": None}, "open"),
+        ({"state": "closed", "merged_at": "2026-08-14T12:00:00Z"}, "merged"),
+        ({"state": "closed", "merged_at": None}, "closed_unmerged"),
+        ({"state": "open", "merged_at": "2026-08-14T12:00:00Z"}, None),
+        ({"state": "unknown", "merged_at": None}, None),
+        ({"merged_at": None}, None),
+        ({"state": "closed"}, None),
+    ],
+)
+def test_pull_classifier_uses_only_state_and_merged_at(pull, expected):
+    poisoned = {
+        **pull,
+        "merged": expected != "merged",
+        "merge_commit_sha": "looks-merged-but-is-not-authoritative",
+    }
+
+    assert github_verification_service._classify_pull(poisoned) == expected
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_enforces_app_repo_head_and_author(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    scope = await _scope(
+        db,
+        github_auth_mode="app",
+        github_app_installation_id=55,
+    )
+    item = await _item(db, scope)
+    client = _reported_client(scope, item, 7)
+
+    client.pull["base"]["repo"]["full_name"] = "other/repo"
+    with pytest.raises(ValueError, match="repository"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client = _reported_client(scope, item, 7)
+    client.pull["head"]["ref"] = "deck/wrong-attempt"
+    with pytest.raises(ValueError, match="head"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client = _reported_client(scope, item, 7)
+    with pytest.raises(ValueError, match="author"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client.pull["user"]["login"] = "deck[bot]"
+    await github_verification_service.report_pr_opened(db, item, scope, 7, client)
+    assert item.pr_number == 7
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_app_mode_requires_bot_login(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "")
+    scope = await _scope(
+        db,
+        github_auth_mode="app",
+        github_app_installation_id=55,
+    )
+    item = await _item(db, scope)
+
+    with pytest.raises(ValueError, match="app_mode_bot_login_unset"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, _reported_client(scope, item, 7)
+        )
+    assert item.pr_number is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ambient", "unknown"])
+async def test_report_pr_opened_non_app_modes_skip_author(db, mode):
+    scope = await _scope(db, github_auth_mode=mode)
+    item = await _item(db, scope)
+
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 7, _reported_client(scope, item, 7)
+    )
+
+    assert item.pr_number == 7
+    assert item.dispatch_status == "verifying"
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_merged_design_skips_review_mail(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, issue_type="design")
+    client = _reported_client(scope, item, 8)
+    client.pull.update(
+        state="closed",
+        merged=True,
+        merged_at="2026-08-14T12:00:00Z",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 8, client)
+
+    assert item.pr_number == 8
+    assert item.dispatch_status == "merged"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not any(message.subject == "Design PR ready for review" for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_closed_unmerged_is_silent(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, issue_type="design")
+    client = _reported_client(scope, item, 9)
+    client.pull.update(
+        state="closed",
+        merged=False,
+        merged_at=None,
+        merge_commit_sha="not-proof-of-merge",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 9, client)
+
+    assert item.pr_number is None
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "pr_closed_unmerged"
+    assert "#9" in item.status_note
+    assert (await db.execute(select(MailMessage))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_verifier_classifies_closed_before_checks(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        pull={
+            "number": 5,
+            "state": "closed",
+            "merged_at": None,
+            "merge_commit_sha": "not-proof-of-merge",
+            "draft": True,
+            "head": {"sha": "sha"},
+        },
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "pr_closed_unmerged"
+    assert client.ready_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unclassifiable_pull_consumes_retry_budget(db):
+    scope = await _scope(db, max_verification_retries=2)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client()
+    del client.pull["merged_at"]
+
+    for _ in range(3):
+        item.dispatch_status = "verifying"
+        await db.commit()
+        await github_verification_service.process_scope(db, scope, client=client)
+
+    assert item.retry_count == 3
+    assert item.last_verified_sha is None
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_outer_http_failure_preserves_human_merge_reservation(db):
+    scope = await _scope(db, merge_policy="auto")
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        status_note="Auto-merge blocked: human owns this merge.",
+    )
+
+    class _FailOnce(_Client):
+        async def get_pull(self, owner, repo, pr_number):
+            if self.pull_calls == 0:
+                self.pull_calls += 1
+                raise _http_error(503)
+            return await super().get_pull(owner, repo, pr_number)
+
+    client = _FailOnce()
+    expected = item.status_note
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    assert item.status_note == expected
+    assert client.merge_calls == 0
 
 
 async def _ready_review_messages(db):
@@ -381,8 +614,16 @@ async def test_report_pr_opened_routes_code_and_design(db):
     code_item = await _item(db, code_scope, issue_type="code")
     design_item = await _item(db, design_scope, issue_type="design")
 
-    await github_verification_service.report_pr_opened(db, code_item, code_scope, 10)
-    await github_verification_service.report_pr_opened(db, design_item, design_scope, 11)
+    await github_verification_service.report_pr_opened(
+        db, code_item, code_scope, 10, _reported_client(code_scope, code_item, 10)
+    )
+    await github_verification_service.report_pr_opened(
+        db,
+        design_item,
+        design_scope,
+        11,
+        _reported_client(design_scope, design_item, 11),
+    )
 
     await db.refresh(code_item)
     await db.refresh(design_item)
@@ -403,7 +644,9 @@ async def test_pr_opened_accepted_from_recoverable_escalation(db):
         issue_type="code",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 865)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 865, _reported_client(scope, item, 865)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "verifying"
@@ -422,7 +665,9 @@ async def test_pr_opened_accepted_from_brief_unread_escalation(db):
         issue_type="code",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 867)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 867, _reported_client(scope, item, 867)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "verifying"
@@ -442,7 +687,9 @@ async def test_pr_opened_recovery_clears_deferred_retry_stamp(db):
         issue_type="code",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 866)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 866, _reported_client(scope, item, 866)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "verifying"
@@ -461,7 +708,9 @@ async def test_pr_opened_accepted_from_recoverable_escalation_design_item(db):
         issue_type="design",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 865)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 865, _reported_client(scope, item, 865)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "awaiting_human_review"
@@ -480,7 +729,9 @@ async def test_pr_opened_rejected_after_label_removed(db):
     )
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -494,7 +745,9 @@ async def test_pr_opened_rejected_after_retry_budget_exhausted(db):
     )
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -508,7 +761,9 @@ async def test_pr_opened_rejected_from_unattributed_escalation(db):
     )
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -517,7 +772,9 @@ async def test_pr_opened_still_rejected_from_merged(db):
     item = await _item(db, scope, dispatch_status="merged")
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -877,6 +1134,8 @@ async def test_unexpected_merge_status_is_transient_and_does_not_abort_batch(db)
             return {
                 "number": pr_number,
                 "merged": False,
+                "state": "open",
+                "merged_at": None,
                 "mergeable_state": "clean",
                 "head": {"sha": f"sha-{pr_number}"},
             }
@@ -915,6 +1174,8 @@ async def test_draft_pr_is_refetched_before_auto_merge_decision(db):
                     "node_id": "node",
                     "draft": True,
                     "merged": False,
+                    "state": "open",
+                    "merged_at": None,
                     "mergeable_state": "unknown",
                     "head": {"sha": "sha"},
                 }
@@ -923,6 +1184,8 @@ async def test_draft_pr_is_refetched_before_auto_merge_decision(db):
                 "node_id": "node",
                 "draft": False,
                 "merged": False,
+                "state": "open",
+                "merged_at": None,
                 "mergeable_state": "clean",
                 "head": {"sha": "sha"},
             }

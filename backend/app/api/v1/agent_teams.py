@@ -63,6 +63,7 @@ from app.models.schemas import (
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
+from app.services.github_client import github_client
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
     GithubAppNotInstalled,
@@ -581,7 +582,9 @@ async def report_dispatch_status(
         if report.pr_number is None:
             raise HTTPException(status_code=400, detail="pr_number required")
         try:
-            await github_verification_service.report_pr_opened(db, item, scope, report.pr_number)
+            await github_verification_service.report_pr_opened(
+                db, item, scope, report.pr_number, github_client
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "in_progress":

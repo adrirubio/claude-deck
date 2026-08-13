@@ -1617,6 +1617,17 @@ class GithubDispatchService:
             await db.rollback()
             self._apply_escalation(item, reason, note, preserve_existing_reason=False)
 
+    async def escalate_without_notification(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        reason: str,
+        note: str | None = None,
+    ) -> None:
+        """Persist an escalation whose contract explicitly forbids mail."""
+        self._apply_escalation(item, reason, note, preserve_existing_reason=False)
+        await db.commit()
+
     def _apply_escalation(
         self,
         item: GithubWorkItem,

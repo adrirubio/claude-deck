@@ -41,12 +41,52 @@ logger = logging.getLogger(__name__)
 
 
 class GithubVerificationService:
+    @staticmethod
+    def _classify_pull(pull: dict) -> str | None:
+        """Classify fields present in both list and single-pull responses."""
+        if "merged_at" not in pull:
+            return None
+        state = pull.get("state")
+        merged_at = pull["merged_at"]
+        if state == "open" and merged_at is None:
+            return "open"
+        if state == "closed" and merged_at is not None:
+            return "merged"
+        if state == "closed" and merged_at is None:
+            return "closed_unmerged"
+        return None
+
+    @staticmethod
+    def _verify_pull_identity(
+        pull: dict,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        *,
+        verify_author: bool = True,
+    ) -> None:
+        expected_repo = f"{scope.repo_owner}/{scope.repo_name}"
+        base_repo = ((pull.get("base") or {}).get("repo") or {}).get("full_name")
+        head = pull.get("head") or {}
+        head_repo = (head.get("repo") or {}).get("full_name")
+        if base_repo != expected_repo or head_repo != expected_repo:
+            raise ValueError(
+                f"PR repository does not match {expected_repo}"
+            )
+        if item.dispatch_head_ref is None or head.get("ref") != item.dispatch_head_ref:
+            raise ValueError("PR head does not match the prepared dispatch head")
+        if verify_author and scope.github_auth_mode == "app":
+            if not settings.github_app_bot_login:
+                raise ValueError("app_mode_bot_login_unset")
+            if (pull.get("user") or {}).get("login") != settings.github_app_bot_login:
+                raise ValueError("PR author does not match the configured GitHub App bot")
+
     async def report_pr_opened(
         self,
         db: AsyncSession,
         item: GithubWorkItem,
         scope: TeamGithubScope,
         pr_number: int,
+        client: GithubClient,
     ) -> None:
         recoverable = (
             item.dispatch_status == "escalated"
@@ -58,11 +98,29 @@ class GithubVerificationService:
                 f"items with a recoverable reason; current status is "
                 f"{item.dispatch_status} ({item.escalation_reason})"
             )
+        pull = await client.get_pull(scope.repo_owner, scope.repo_name, pr_number)
+        self._verify_pull_identity(pull, scope, item)
+        verdict = self._classify_pull(pull)
+        if verdict is None:
+            raise ValueError("GitHub returned a pull request state Deck cannot classify")
         if recoverable:
             item.escalation_reason = None
             item.retry_requested_at = None
+        if verdict == "closed_unmerged":
+            await github_dispatch_service.escalate_without_notification(
+                db,
+                item,
+                "pr_closed_unmerged",
+                f"PR #{pr_number} was closed without being merged.",
+            )
+            return
         item.pr_number = pr_number
         item.last_verified_sha = None
+        if verdict == "merged":
+            self._mark_merged(item)
+            await db.commit()
+            await self._notify_blocker_merged(db, scope, item)
+            return
         if item.issue_type == "design":
             item.dispatch_status = "awaiting_human_review"
             item.status_note = f"Design PR #{pr_number} is ready for human review."
@@ -119,7 +177,9 @@ class GithubVerificationService:
                 logger.exception(
                     "GitHub verification failed for work item %s", item.id
                 )
-                item.status_note = f"GitHub verification failed; will retry: {exc}"
+                self._set_failure_note(
+                    item, f"GitHub verification failed; will retry: {exc}"
+                )
                 item.updated_at = datetime.utcnow()
                 await db.commit()
 
@@ -161,10 +221,38 @@ class GithubVerificationService:
         client: GithubClient,
     ) -> None:
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
-        if pull.get("merged"):
+        verdict = self._classify_pull(pull)
+        if verdict is None:
+            note = f"PR #{item.pr_number} returned a state Deck cannot classify."
+            await self._record_failed_verification_attempt(
+                db,
+                scope,
+                item,
+                None,
+                note,
+                subject="GitHub verification could not classify the PR",
+                body_markdown=note,
+                payload={
+                    "kind": "github_dispatch_pr_unclassifiable",
+                    "work_item_id": item.id,
+                    "pr_number": item.pr_number,
+                    "pull_state": pull.get("state"),
+                },
+                retry_status="dispatched",
+            )
+            return
+        if verdict == "merged":
             self._mark_merged(item)
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
+            return
+        if verdict == "closed_unmerged":
+            await github_dispatch_service.escalate_without_notification(
+                db,
+                item,
+                "pr_closed_unmerged",
+                f"PR #{item.pr_number} was closed without being merged.",
+            )
             return
 
         head_sha = self._head_sha(pull)
@@ -206,6 +294,7 @@ class GithubVerificationService:
                     "work_item_id": item.id,
                     "pr_number": item.pr_number,
                 },
+                retry_status="dispatched",
             )
             return
         if pending:
@@ -225,10 +314,38 @@ class GithubVerificationService:
         pull: dict | None = None,
     ) -> None:
         pull = pull or await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
-        if pull.get("merged"):
+        verdict = self._classify_pull(pull)
+        if verdict is None:
+            note = f"PR #{item.pr_number} returned a state Deck cannot classify."
+            await self._record_failed_verification_attempt(
+                db,
+                scope,
+                item,
+                None,
+                note,
+                subject="GitHub review could not classify the PR",
+                body_markdown=note,
+                payload={
+                    "kind": "github_dispatch_pr_unclassifiable",
+                    "work_item_id": item.id,
+                    "pr_number": item.pr_number,
+                    "pull_state": pull.get("state"),
+                },
+                retry_status=item.dispatch_status,
+            )
+            return
+        if verdict == "merged":
             self._mark_merged(item)
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
+            return
+        if verdict == "closed_unmerged":
+            await github_dispatch_service.escalate_without_notification(
+                db,
+                item,
+                "pr_closed_unmerged",
+                f"PR #{item.pr_number} was closed without being merged.",
+            )
             return
         if item.issue_type == "design" or scope.merge_policy != "auto":
             return
@@ -346,7 +463,9 @@ class GithubVerificationService:
                 f"Auto-merge retry budget exhausted after transient merge failure: {note}",
             )
         else:
-            item.status_note = f"Transient merge failure; will retry: {note}"
+            self._set_failure_note(
+                item, f"Transient merge failure; will retry: {note}"
+            )
             item.updated_at = datetime.utcnow()
         await db.commit()
 
@@ -389,6 +508,7 @@ class GithubVerificationService:
                     "work_item_id": item.id,
                     "pr_number": item.pr_number,
                 },
+                retry_status="dispatched",
             )
             return True
         item.status_note = "GitHub commit statuses are still pending."
@@ -506,6 +626,13 @@ class GithubVerificationService:
         names = ", ".join(str(check.get("name") or check.get("id")) for check in checks)
         return f"GitHub check failed: {names}"
 
+    @staticmethod
+    def _set_failure_note(item: GithubWorkItem, note: str) -> str:
+        if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
+            return item.status_note
+        item.status_note = note
+        return note
+
     async def _record_failed_verification_attempt(
         self,
         db: AsyncSession,
@@ -517,18 +644,19 @@ class GithubVerificationService:
         subject: str,
         body_markdown: str,
         payload: dict,
+        retry_status: str,
     ) -> None:
         if head_sha and item.last_verified_sha == head_sha:
-            if item.dispatch_status == "verifying":
-                item.dispatch_status = "dispatched"
-                item.status_note = note
+            if item.dispatch_status != retry_status:
+                item.dispatch_status = retry_status
+                self._set_failure_note(item, note)
                 item.updated_at = datetime.utcnow()
                 await db.commit()
             return
 
         item.last_verified_sha = head_sha
         item.retry_count += 1
-        item.status_note = note
+        self._set_failure_note(item, note)
         await github_dispatch_service.notify_owner(
             db,
             item,
@@ -545,10 +673,10 @@ class GithubVerificationService:
                 db,
                 item,
                 "retry_count_exhausted",
-                item.status_note,
+                note,
             )
         else:
-            item.dispatch_status = "dispatched"
+            item.dispatch_status = retry_status
             item.updated_at = datetime.utcnow()
         await db.commit()
 

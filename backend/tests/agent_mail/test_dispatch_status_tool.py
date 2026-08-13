@@ -35,6 +35,27 @@ def require_capabilities(monkeypatch):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
 
 
+@pytest.fixture(autouse=True)
+def stub_reported_pull(monkeypatch):
+    async def get_pull(owner, repo, pr_number):
+        full_name = f"{owner}/{repo}"
+        return {
+            "number": pr_number,
+            "state": "open",
+            "merged_at": None,
+            "merged": False,
+            "head": {
+                "sha": "sha",
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": full_name},
+            },
+            "base": {"repo": {"full_name": full_name}},
+            "user": {"login": "human"},
+        }
+
+    monkeypatch.setattr(agent_teams_routes.github_client, "get_pull", get_pull)
+
+
 @pytest_asyncio.fixture
 async def client_and_db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -147,6 +168,7 @@ async def _seed_item(maker, **overrides):
             "github_updated_at": datetime.utcnow(),
             "dispatch_status": "dispatched",
             "owner_slot_id": owner.id,
+            "dispatch_head_ref": "deck/test-attempt",
         }
         values.update(overrides)
         item = GithubWorkItem(**values)
@@ -252,6 +274,7 @@ async def _seed_leased_item(
             github_updated_at=datetime.utcnow(),
             dispatch_status=dispatch_status,
             owner_slot_id=owner.id,
+            dispatch_head_ref="deck/test-attempt",
         )
         db.add(item)
         await db.flush()
@@ -428,6 +451,7 @@ async def test_in_progress_records_activity_without_satisfying_ack(client_and_db
         assert item.ack_received_at is None
         assert item.last_nudge_at is None
         assert item.pr_number is None
+        assert agent_teams_routes.github_dispatch_service._ack_satisfied(item) is False
 
 
 @pytest.mark.asyncio
