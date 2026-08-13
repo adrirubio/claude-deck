@@ -48,6 +48,49 @@ _LAUNCH_FAILED_STATUSES = {
 }
 _ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref")
 
+DISPATCH_STATUSES = frozenset(
+    {
+        "pending",
+        "dispatched",
+        "verifying",
+        "ready_for_review",
+        "awaiting_human_review",
+        "merged",
+        "completed",
+        "escalated",
+        "failed",
+    }
+)
+
+ESCALATION_REASONS = frozenset(
+    {
+        "plan_blocked",
+        "launch_outcome_unknown",
+        "approval_rounds_exhausted",
+        "leader_offline",
+        "owner_offline",
+        "brief_unread",
+        "leader_ack_timeout",
+        "owner_idle_timeout",
+        "retry_count_exhausted",
+        "dispatch_label_removed",
+        "abandoned_by_operator",
+        "prepared_owner_unavailable",
+        "pr_closed_unmerged",
+    }
+)
+
+PENDING_REASONS = frozenset(
+    {
+        "queued_repo_cap",
+        "queued_low_memory",
+        "queued_slot_busy",
+        "queued_ambiguous_sessions",
+        "queued_no_workspace",
+        "queued_auth_mode_unresolved",
+    }
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -1766,6 +1809,8 @@ class GithubDispatchService:
         *,
         preserve_existing_reason: bool = True,
     ) -> bool:
+        if reason not in ESCALATION_REASONS:
+            raise ValueError(f"undeclared escalation reason: {reason}")
         if (
             preserve_existing_reason
             and item.dispatch_status == "escalated"
