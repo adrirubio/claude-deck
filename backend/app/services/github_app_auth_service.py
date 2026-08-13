@@ -81,7 +81,7 @@ class GithubAppAuthService:
     def require_configuration(self, *, require_bot_login: bool = False) -> None:
         if not self.configured(require_bot_login=require_bot_login):
             raise GithubAppUnconfigured()
-        self._private_key()
+        self._jwt()
 
     def _private_key(self) -> str:
         path = self._config.github_app_private_key_path

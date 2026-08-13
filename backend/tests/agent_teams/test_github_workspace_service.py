@@ -1,5 +1,6 @@
 """Workspace lease, provisioning, adoption, and reset tests."""
 import os
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
+from app.config import settings
 from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
@@ -19,6 +21,7 @@ from app.models.database import (
 from app.services.github_workspace_service import (
     GIT_TIMEOUT_SECONDS,
     GithubWorkspaceError,
+    GithubWorkspaceRemoteError,
     GithubWorkspaceResetError,
     GithubWorkspaceService,
 )
@@ -498,6 +501,262 @@ async def test_non_dispatchable_primary_never_wins_acquire(db, tmp_path):
     acquired = await GithubWorkspaceService(runner=FakeGitRunner()).acquire(db, scope, item)
 
     assert acquired.id == worktree.id
+
+
+@pytest.mark.asyncio
+async def test_dispatchable_primary_is_skipped_by_default(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    primary = GithubWorkspace(
+        scope_id=scope.id,
+        path=scope.repo_path,
+        kind="primary",
+        dispatchable=True,
+    )
+    worktree = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add_all([primary, worktree])
+    await db.commit()
+
+    acquired = await GithubWorkspaceService(runner=FakeGitRunner()).acquire(
+        db, scope, item
+    )
+
+    assert acquired.id == worktree.id
+    assert primary.leased_item_id is None
+    assert primary.lease_token is None
+
+
+@pytest.mark.asyncio
+async def test_allow_primary_is_the_only_positive_primary_path(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    primary = GithubWorkspace(
+        scope_id=scope.id,
+        path=scope.repo_path,
+        kind="primary",
+        dispatchable=True,
+    )
+    db.add(primary)
+    await db.commit()
+
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    assert await service.acquire(db, scope, item) is None
+    acquired = await service.acquire(db, scope, item, allow_primary=True)
+
+    assert acquired.id == primary.id
+    assert acquired.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_held_primary_is_metadata_released_before_worktree_selection(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    primary = GithubWorkspace(
+        scope_id=scope.id,
+        path=scope.repo_path,
+        kind="primary",
+        dispatchable=True,
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="legacy-primary",
+    )
+    worktree = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "ws"))
+    db.add_all([primary, worktree])
+    await db.commit()
+    runner = FakeGitRunner()
+
+    acquired = await GithubWorkspaceService(runner=runner).acquire(db, scope, item)
+
+    assert acquired.id == worktree.id
+    assert primary.leased_item_id is None
+    assert all(call[1] != primary.path for call in runner.calls if len(call) > 1)
+
+
+def test_slot_email_is_ascii_bounded_and_has_a_safe_fallback():
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert service.slot_email("Backend SME", 12) == (
+        "backend-sme+slot12@claude-deck.local"
+    )
+    assert service.slot_email("... !!!", 3) == "agent+slot3@claude-deck.local"
+    assert service.slot_email("工程師", 4) == "agent+slot4@claude-deck.local"
+    email = service.slot_email("A" * 200, 987)
+    assert len(email.split("@", 1)[0].encode()) <= 64
+
+
+def test_credential_helper_uses_configured_loopback_port(monkeypatch):
+    monkeypatch.setattr(settings, "port", 9123)
+
+    command = GithubWorkspaceService._credential_helper_command("lease-value")
+
+    assert "http://127.0.0.1:9123" in command
+    assert "0.0.0.0" not in command
+    assert "127.0.0.1:8000" not in command
+
+
+def _git(env, *args, cwd=None):
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+
+
+@pytest.mark.asyncio
+async def test_worktree_identity_and_app_helper_are_isolated(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    sibling = tmp_path / "sibling"
+    _git(env, "init", "-b", "main", str(repo))
+    _git(env, "config", "user.name", "Human", cwd=repo)
+    _git(env, "config", "user.email", "human@example.com", cwd=repo)
+    (repo / "README").write_text("base\n")
+    _git(env, "add", "README", cwd=repo)
+    _git(env, "commit", "-m", "base", cwd=repo)
+    _git(env, "worktree", "add", "--detach", str(worktree), cwd=repo)
+    _git(env, "worktree", "add", "--detach", str(sibling), cwd=repo)
+    _git(
+        env,
+        "config",
+        "--global",
+        "credential.https://github.com.helper",
+        "ambient-helper",
+    )
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**env, "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+    workspace = GithubWorkspace(
+        id=42,
+        scope_id=1,
+        path=str(worktree),
+        kind="worktree",
+        lease_token="lease-value",
+    )
+    service = GithubWorkspaceService()
+
+    await service.configure_dispatch_worktree(
+        workspace,
+        display_name="Backend SME",
+        slot_id=12,
+        app_mode=True,
+    )
+
+    assert _git(env, "config", "--worktree", "--get", "user.name", cwd=worktree).strip() == (
+        "Backend SME (Deck agent)"
+    )
+    assert _git(env, "config", "--worktree", "--get", "user.email", cwd=worktree).strip() == (
+        "backend-sme+slot12@claude-deck.local"
+    )
+    helper_values = _git(
+        env,
+        "config",
+        "--worktree",
+        "--get-all",
+        "credential.https://github.com.helper",
+        cwd=worktree,
+    ).splitlines()
+    assert helper_values[0] == ""
+    assert "127.0.0.1" in helper_values[1]
+    assert "--lease lease-value" in helper_values[1]
+    assert _git(env, "config", "--get", "user.name", cwd=repo).strip() == "Human"
+    assert _git(env, "config", "--get", "user.name", cwd=sibling).strip() == "Human"
+
+
+@pytest.mark.asyncio
+async def test_ambient_identity_does_not_shadow_global_helper(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    _git(env, "init", "-b", "main", str(repo))
+    _git(env, "config", "user.name", "Human", cwd=repo)
+    _git(env, "config", "user.email", "human@example.com", cwd=repo)
+    (repo / "README").write_text("base\n")
+    _git(env, "add", "README", cwd=repo)
+    _git(env, "commit", "-m", "base", cwd=repo)
+    _git(env, "worktree", "add", "--detach", str(worktree), cwd=repo)
+    _git(
+        env,
+        "config",
+        "--global",
+        "credential.https://github.com.helper",
+        "ambient-helper",
+    )
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**env, "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+    workspace = GithubWorkspace(
+        id=43,
+        scope_id=1,
+        path=str(worktree),
+        kind="worktree",
+        lease_token="lease-value",
+    )
+
+    await GithubWorkspaceService().configure_dispatch_worktree(
+        workspace,
+        display_name="Architect",
+        slot_id=1,
+        app_mode=False,
+    )
+
+    result = subprocess.run(
+        [
+            "git",
+            "config",
+            "--worktree",
+            "--get-all",
+            "credential.https://github.com.helper",
+        ],
+        cwd=worktree,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    assert _git(
+        env,
+        "config",
+        "--get",
+        "credential.https://github.com.helper",
+        cwd=worktree,
+    ).strip() == "ambient-helper"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@github.com:owner/repo.git",
+        "https://github.com/other/repo.git",
+        "https://user@github.com/owner/repo.git",
+        "https://github.com:443/owner/repo.git",
+        "https://github.com/owner/repo.git?x=1",
+    ],
+)
+async def test_app_remote_validation_refuses_unsafe_urls(url):
+    async def remote_runner(args):
+        return 0, f"{url}\n"
+
+    scope = TeamGithubScope(repo_owner="owner", repo_name="repo")
+    workspace = GithubWorkspace(path="/tmp/worktree")
+
+    with pytest.raises(GithubWorkspaceRemoteError) as exc_info:
+        await GithubWorkspaceService(runner=remote_runner).validate_app_remote(
+            scope, workspace
+        )
+    assert "origin" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

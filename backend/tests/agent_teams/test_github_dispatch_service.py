@@ -28,12 +28,14 @@ from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_dispatch_service import (
     AttemptState,
+    GithubAuthModeUnresolved,
     GithubDispatchService,
     PartiallyPreparedAttempt,
     attempt_state,
     github_dispatch_service,
 )
 from app.services.github_workspace_service import github_workspace_service
+from app.services.github_app_auth_service import github_app_auth_service
 
 
 @pytest_asyncio.fixture
@@ -59,7 +61,23 @@ def host_has_enough_memory(monkeypatch):
     async def reset_succeeds(*_args, **_kwargs):
         return None
 
+    async def configure_succeeds(*_args, **_kwargs):
+        return None
+
+    async def remote_succeeds(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(github_workspace_service, "reset_workspace", reset_succeeds)
+    monkeypatch.setattr(
+        github_workspace_service,
+        "configure_dispatch_worktree",
+        configure_succeeds,
+    )
+    monkeypatch.setattr(
+        github_workspace_service,
+        "validate_app_remote",
+        remote_succeeds,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -208,6 +226,140 @@ def _item(scope_id, number, labels):
         ),
         [{"name": name} for name in labels],
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "installation_id", "expected_mode", "expected_id"),
+    [
+        ("unknown", None, "ambient", None),
+        ("unknown", 42, "ambient", None),
+        ("ambient", None, "ambient", None),
+        ("ambient", 42, "ambient", None),
+    ],
+)
+async def test_auth_mode_normalizes_without_app_configuration(
+    db,
+    monkeypatch,
+    mode,
+    installation_id,
+    expected_mode,
+    expected_id,
+):
+    _, _, scope = await _team(db)
+    scope.github_auth_mode = mode
+    scope.github_app_installation_id = installation_id
+    await db.commit()
+    monkeypatch.setattr(settings, "github_app_id", "")
+    monkeypatch.setattr(settings, "github_app_private_key_path", "")
+    monkeypatch.setattr(settings, "github_app_bot_login", "")
+
+    resolved = await github_dispatch_service._resolve_scope_auth_mode(db, scope)
+
+    await db.refresh(scope)
+    assert resolved == expected_mode
+    assert scope.github_auth_mode == expected_mode
+    assert scope.github_app_installation_id == expected_id
+
+
+@pytest.mark.asyncio
+async def test_stored_app_mode_does_not_re_resolve(db, monkeypatch):
+    _, _, scope = await _team(db)
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 42
+    await db.commit()
+    calls = []
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def unexpected_lookup(*_args):
+        calls.append(True)
+        return 99
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "resolve_installation",
+        unexpected_lookup,
+    )
+
+    assert await github_dispatch_service._resolve_scope_auth_mode(db, scope) == "app"
+    assert calls == []
+    assert scope.github_app_installation_id == 42
+
+
+@pytest.mark.asyncio
+async def test_app_without_installation_id_refuses_without_lookup(db, monkeypatch):
+    _, _, scope = await _team(db)
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = None
+    await db.commit()
+    called = False
+
+    async def unexpected_lookup(*_args):
+        nonlocal called
+        called = True
+        return 99
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "resolve_installation",
+        unexpected_lookup,
+    )
+
+    with pytest.raises(GithubAuthModeUnresolved):
+        await github_dispatch_service._resolve_scope_auth_mode(db, scope)
+    assert called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("resolved_id", "expected"), [(55, "app"), (None, "ambient")])
+async def test_unknown_mode_persists_lookup_answer(
+    db, monkeypatch, resolved_id, expected
+):
+    _, _, scope = await _team(db)
+    monkeypatch.setattr(settings, "github_app_id", "123")
+    monkeypatch.setattr(settings, "github_app_private_key_path", "/tmp/app.pem")
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def lookup(*_args):
+        return resolved_id
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", lookup)
+
+    assert await github_dispatch_service._resolve_scope_auth_mode(db, scope) == expected
+    await db.refresh(scope)
+    assert scope.github_auth_mode == expected
+    assert scope.github_app_installation_id == resolved_id
+
+
+@pytest.mark.asyncio
+async def test_partial_app_configuration_refuses_without_lookup(db, monkeypatch):
+    _, _, scope = await _team(db)
+    monkeypatch.setattr(settings, "github_app_id", "123")
+    monkeypatch.setattr(settings, "github_app_private_key_path", "")
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    called = False
+
+    async def lookup(*_args):
+        nonlocal called
+        called = True
+        return 55
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", lookup)
+
+    with pytest.raises(GithubAuthModeUnresolved):
+        await github_dispatch_service._resolve_scope_auth_mode(db, scope)
+    assert called is False
+    assert scope.github_auth_mode == "unknown"
 
 
 async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMember:

@@ -5,8 +5,13 @@ import asyncio
 import logging
 import os
 import pathlib
+import re
 import secrets
+import shlex
+import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.agent_bridge.discovery import discover_agent_sessions
+from app.services.agent_mail_install_service import deck_base_url
 
 GIT_TIMEOUT_SECONDS = 300
 
@@ -29,6 +35,19 @@ _RECLAIMABLE_STATUSES = ("escalated", "failed", "merged", "completed")
 _RELEASABLE_STATUSES = ("merged", "completed", "escalated", "failed")
 
 logger = logging.getLogger(__name__)
+
+_GITHUB_CREDENTIAL_PREFIX = "credential.https://github.com"
+_MANAGED_WORKTREE_KEYS = (
+    "user.name",
+    "user.email",
+    f"{_GITHUB_CREDENTIAL_PREFIX}.useHttpPath",
+    f"{_GITHUB_CREDENTIAL_PREFIX}.helper",
+)
+
+
+@dataclass(frozen=True)
+class WorktreeConfigSnapshot:
+    values: dict[str, tuple[str, ...]]
 
 
 class GithubWorkspaceError(RuntimeError):
@@ -48,9 +67,24 @@ class GithubWorkspaceLeaseTokenMismatch(GithubWorkspaceError):
         super().__init__(message, "lease_token_mismatch")
 
 
+class GithubWorkspaceConfigError(GithubWorkspaceError):
+    def __init__(self, message: str, *, restoration_failed: bool = False):
+        super().__init__(message, "workspace_config_failed")
+        self.restoration_failed = restoration_failed
+
+
+class GithubWorkspaceRemoteError(GithubWorkspaceError):
+    def __init__(self, message: str):
+        super().__init__(message, "workspace_remote_invalid")
+
+
 class GithubWorkspaceService:
     def __init__(self, runner=None):
         self._runner = runner or self._run_git
+        self._config_locks: dict[int, asyncio.Lock] = {}
+
+    def config_lock(self, workspace_id: int) -> asyncio.Lock:
+        return self._config_locks.setdefault(workspace_id, asyncio.Lock())
 
     async def _run_git(self, args: list[str]) -> tuple[int, str]:
         process = await asyncio.create_subprocess_exec(
@@ -100,6 +134,8 @@ class GithubWorkspaceService:
         db: AsyncSession,
         scope: TeamGithubScope,
         item: GithubWorkItem,
+        *,
+        allow_primary: bool = False,
     ) -> GithubWorkspace | None:
         held = (
             await db.execute(
@@ -107,17 +143,33 @@ class GithubWorkspaceService:
             )
         ).scalar_one_or_none()
         if held is not None:
-            return held
+            if held.kind != "primary" or allow_primary:
+                return held
+            if held.leased_at is None:
+                return None
+            released = await self.force_release_acquisition(
+                db,
+                workspace_id=held.id,
+                scope_id=scope.id,
+                item_id=item.id,
+                expected_leased_at=held.leased_at,
+                lease_token=held.lease_token,
+            )
+            if not released:
+                return None
 
+        clauses = [
+            GithubWorkspace.scope_id == scope.id,
+            GithubWorkspace.enabled.is_(True),
+            GithubWorkspace.dispatchable.is_(True),
+            GithubWorkspace.leased_item_id.is_(None),
+        ]
+        if not allow_primary:
+            clauses.append(GithubWorkspace.kind != "primary")
         workspace = (
             await db.execute(
                 select(GithubWorkspace)
-                .where(
-                    GithubWorkspace.scope_id == scope.id,
-                    GithubWorkspace.enabled.is_(True),
-                    GithubWorkspace.dispatchable.is_(True),
-                    GithubWorkspace.leased_item_id.is_(None),
-                )
+                .where(*clauses)
                 .order_by(GithubWorkspace.id)
             )
         ).scalars().first()
@@ -140,11 +192,243 @@ class GithubWorkspaceService:
             try:
                 await self.reset_workspace(db, scope, workspace)
             except GithubWorkspaceResetError:
-                await self.release(db, item.id)
+                if workspace.leased_at is not None:
+                    await self.force_release_acquisition(
+                        db,
+                        workspace_id=workspace.id,
+                        scope_id=scope.id,
+                        item_id=item.id,
+                        expected_leased_at=workspace.leased_at,
+                        lease_token=workspace.lease_token,
+                    )
                 return None
             workspace.updated_at = datetime.utcnow()
             await db.commit()
         return workspace
+
+    async def skipped_primary_count(
+        self, db: AsyncSession, scope_id: int
+    ) -> int:
+        result = await db.execute(
+            select(GithubWorkspace.id).where(
+                GithubWorkspace.scope_id == scope_id,
+                GithubWorkspace.kind == "primary",
+                GithubWorkspace.enabled.is_(True),
+                GithubWorkspace.dispatchable.is_(True),
+            )
+        )
+        return len(result.scalars().all())
+
+    @staticmethod
+    def slot_email(display_name: str, slot_id: int) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "-", display_name.lower()).strip("-")
+        if not slug:
+            slug = "agent"
+        suffix = f"+slot{slot_id}"
+        slug = slug[: 64 - len(suffix)].rstrip("-") or "agent"
+        return f"{slug}{suffix}@claude-deck.local"
+
+    @staticmethod
+    def slot_name(display_name: str) -> str:
+        return f"{display_name} (Deck agent)"
+
+    @staticmethod
+    def _credential_helper_command(lease_token: str) -> str:
+        helper_path = pathlib.Path(__file__).resolve().parents[2] / "mcp_shim" / "git_credential_helper.py"
+        return shlex.join(
+            [
+                sys.executable,
+                str(helper_path),
+                "--deck-url",
+                deck_base_url(),
+                "--lease",
+                lease_token,
+            ]
+        )
+
+    async def _config_values(
+        self, workspace: GithubWorkspace, key: str
+    ) -> tuple[str, ...]:
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "config", "--worktree", "--null", "--get-all", key]
+        )
+        if return_code == 1:
+            return ()
+        if return_code != 0:
+            raise GithubWorkspaceConfigError(
+                output.strip() or f"Unable to read worktree config {key}"
+            )
+        values = output.split("\0")
+        if values and values[-1] == "":
+            values.pop()
+        return tuple(values)
+
+    async def snapshot_worktree_config(
+        self, workspace: GithubWorkspace
+    ) -> WorktreeConfigSnapshot:
+        values: dict[str, tuple[str, ...]] = {}
+        for key in _MANAGED_WORKTREE_KEYS:
+            values[key] = await self._config_values(workspace, key)
+        return WorktreeConfigSnapshot(values)
+
+    async def _clear_config_key(self, workspace: GithubWorkspace, key: str) -> None:
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "config", "--worktree", "--unset-all", key]
+        )
+        if return_code not in {0, 5}:
+            raise GithubWorkspaceConfigError(
+                output.strip() or f"Unable to clear worktree config {key}"
+            )
+
+    async def restore_worktree_config(
+        self,
+        workspace: GithubWorkspace,
+        snapshot: WorktreeConfigSnapshot,
+    ) -> None:
+        for key in _MANAGED_WORKTREE_KEYS:
+            await self._clear_config_key(workspace, key)
+            for value in snapshot.values[key]:
+                return_code, output = await self._runner(
+                    ["-C", workspace.path, "config", "--worktree", "--add", key, value]
+                )
+                if return_code != 0:
+                    raise GithubWorkspaceConfigError(
+                        output.strip() or f"Unable to restore worktree config {key}",
+                        restoration_failed=True,
+                    )
+
+    async def remove_managed_worktree_config(
+        self, workspace: GithubWorkspace
+    ) -> None:
+        if workspace.kind == "primary":
+            return
+        for key in _MANAGED_WORKTREE_KEYS:
+            await self._clear_config_key(workspace, key)
+
+    async def validate_app_remote(
+        self, scope: TeamGithubScope, workspace: GithubWorkspace
+    ) -> None:
+        return_code, output = await self._runner(
+            ["-C", workspace.path, "remote", "get-url", "--push", "--all", "origin"]
+        )
+        urls = [line.strip() for line in output.splitlines() if line.strip()]
+        if return_code != 0 or len(urls) != 1:
+            raise GithubWorkspaceRemoteError(
+                output.strip() or "origin must have exactly one push URL"
+            )
+        parsed = urlsplit(urls[0])
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise GithubWorkspaceRemoteError("origin push URL has an invalid port") from exc
+        normalized_path = parsed.path.removeprefix("/")
+        if normalized_path.endswith(".git"):
+            normalized_path = normalized_path[:-4]
+        expected_path = f"{scope.repo_owner}/{scope.repo_name}"
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "github.com"
+            or parsed.username is not None
+            or parsed.password is not None
+            or port is not None
+            or parsed.query
+            or parsed.fragment
+            or normalized_path != expected_path
+        ):
+            raise GithubWorkspaceRemoteError(
+                f"origin push URL does not match https://github.com/{expected_path}.git"
+            )
+
+    async def configure_dispatch_worktree(
+        self,
+        workspace: GithubWorkspace,
+        *,
+        display_name: str,
+        slot_id: int,
+        app_mode: bool,
+    ) -> WorktreeConfigSnapshot | None:
+        if workspace.kind == "primary":
+            return None
+        if workspace.lease_token is None:
+            raise GithubWorkspaceConfigError("Workspace lease token is missing")
+        async with self.config_lock(workspace.id):
+            return_code, output = await self._runner(
+                ["-C", workspace.path, "config", "extensions.worktreeConfig", "true"]
+            )
+            if return_code != 0:
+                raise GithubWorkspaceConfigError(
+                    output.strip() or "Unable to enable worktree config"
+                )
+            snapshot = await self.snapshot_worktree_config(workspace)
+            commands = [
+                [
+                    "-C",
+                    workspace.path,
+                    "config",
+                    "--worktree",
+                    "--replace-all",
+                    "user.name",
+                    self.slot_name(display_name),
+                ],
+                [
+                    "-C",
+                    workspace.path,
+                    "config",
+                    "--worktree",
+                    "--replace-all",
+                    "user.email",
+                    self.slot_email(display_name, slot_id),
+                ],
+            ]
+            if app_mode:
+                commands.extend(
+                    [
+                        [
+                            "-C",
+                            workspace.path,
+                            "config",
+                            "--worktree",
+                            "--replace-all",
+                            f"{_GITHUB_CREDENTIAL_PREFIX}.useHttpPath",
+                            "true",
+                        ],
+                        [
+                            "-C",
+                            workspace.path,
+                            "config",
+                            "--worktree",
+                            "--replace-all",
+                            f"{_GITHUB_CREDENTIAL_PREFIX}.helper",
+                            "",
+                        ],
+                        [
+                            "-C",
+                            workspace.path,
+                            "config",
+                            "--worktree",
+                            "--add",
+                            f"{_GITHUB_CREDENTIAL_PREFIX}.helper",
+                            self._credential_helper_command(workspace.lease_token),
+                        ],
+                    ]
+                )
+            try:
+                for command in commands:
+                    return_code, output = await self._runner(command)
+                    if return_code != 0:
+                        raise GithubWorkspaceConfigError(
+                            output.strip() or f"git {' '.join(command)} failed"
+                        )
+            except GithubWorkspaceConfigError as exc:
+                try:
+                    await self.restore_worktree_config(workspace, snapshot)
+                except GithubWorkspaceConfigError as restore_exc:
+                    raise GithubWorkspaceConfigError(
+                        f"{exc}; worktree config restoration failed: {restore_exc}",
+                        restoration_failed=True,
+                    ) from restore_exc
+                raise
+            return snapshot
 
     async def release(self, db: AsyncSession, item_id: int) -> None:
         workspace = (
@@ -202,7 +486,7 @@ class GithubWorkspaceService:
                 lease_release_reminded_at=None,
                 updated_at=now,
             )
-            .execution_options(synchronize_session=False)
+            .execution_options(synchronize_session="fetch")
         )
         if result.rowcount != 1:
             return False

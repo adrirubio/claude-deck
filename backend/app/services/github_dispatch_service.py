@@ -26,8 +26,14 @@ from app.models.schemas import AgentTeamLaunchRequest
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
+from app.services.github_app_auth_service import (
+    GithubAppAuthError,
+    github_app_auth_service,
+)
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
+    GithubWorkspaceConfigError,
+    GithubWorkspaceRemoteError,
     github_workspace_service,
 )
 
@@ -61,6 +67,10 @@ class ResumeAttemptError(ValueError):
     def __init__(self, block_code: str, detail: str):
         self.block_code = block_code
         super().__init__(detail)
+
+
+class GithubAuthModeUnresolved(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -128,6 +138,83 @@ def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
 
 
 class GithubDispatchService:
+    async def _resolve_scope_auth_mode(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+    ) -> str:
+        mode = scope.github_auth_mode
+        installation_id = scope.github_app_installation_id
+        if mode not in {"unknown", "app", "ambient"}:
+            raise GithubAuthModeUnresolved(f"Unsupported GitHub auth mode: {mode}")
+        if mode in {"unknown", "ambient"} and installation_id is not None:
+            scope.github_app_installation_id = None
+            scope.updated_at = datetime.utcnow()
+            await db.commit()
+            installation_id = None
+        if mode == "ambient":
+            return mode
+        if mode == "app":
+            if installation_id is None:
+                raise GithubAuthModeUnresolved(
+                    "Stored App authentication has no installation id"
+                )
+            try:
+                github_app_auth_service.require_configuration(require_bot_login=True)
+            except GithubAppAuthError as exc:
+                raise GithubAuthModeUnresolved(str(exc)) from exc
+            return mode
+
+        app_id = settings.github_app_id
+        key_path = settings.github_app_private_key_path
+        bot_login = settings.github_app_bot_login
+        if not app_id and not key_path:
+            scope.github_auth_mode = "ambient"
+            scope.github_app_installation_id = None
+            scope.updated_at = datetime.utcnow()
+            await db.commit()
+            return "ambient"
+        if not app_id or not key_path or not bot_login:
+            raise GithubAuthModeUnresolved(
+                "GitHub App settings are only partially configured"
+            )
+        try:
+            github_app_auth_service.require_configuration(require_bot_login=True)
+            resolved_id = await github_app_auth_service.resolve_installation(
+                scope.repo_owner, scope.repo_name
+            )
+        except GithubAppAuthError as exc:
+            raise GithubAuthModeUnresolved(str(exc)) from exc
+        scope.github_auth_mode = "app" if resolved_id is not None else "ambient"
+        scope.github_app_installation_id = resolved_id
+        scope.updated_at = datetime.utcnow()
+        await db.commit()
+        return scope.github_auth_mode
+
+    async def _release_auth_refusal(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        workspace: GithubWorkspace,
+        detail: str,
+        *,
+        keep_lease: bool = False,
+    ) -> None:
+        item.pending_reason = "queued_auth_mode_unresolved"
+        item.status_note = f"GitHub authentication unresolved for {scope.repo_owner}/{scope.repo_name}: {detail}"
+        item.updated_at = datetime.utcnow()
+        if not keep_lease and workspace.leased_at is not None:
+            await github_workspace_service.force_release_acquisition(
+                db,
+                workspace_id=workspace.id,
+                scope_id=scope.id,
+                item_id=item.id,
+                expected_leased_at=workspace.leased_at,
+                lease_token=workspace.lease_token,
+            )
+        await db.commit()
+
     async def reset_for_retry(self, db: AsyncSession, item: GithubWorkItem) -> None:
         """Request re-dispatch, deferring while the item still holds a lease.
 
@@ -390,6 +477,7 @@ class GithubDispatchService:
                 await self.escalate(db, item, "plan_blocked")
                 await db.commit()
                 continue
+            owner_slot = slots_by_id.get(owner_slot_id)
             if owner_slot_id in slots_dispatched_this_batch or await self.slot_is_busy(
                 db, owner_slot_id
             ):
@@ -413,8 +501,51 @@ class GithubDispatchService:
                 item.owner_slot_id = owner_slot_id
                 item.routing_method = method
                 item.pending_reason = "queued_no_workspace"
+                skipped_primary = await github_workspace_service.skipped_primary_count(
+                    db, scope.id
+                )
+                item.status_note = (
+                    f"No dispatch worktree is available; skipped {skipped_primary} "
+                    "dispatchable primary workspace(s)."
+                    if skipped_primary
+                    else item.status_note
+                )
                 item.updated_at = datetime.utcnow()
                 await db.commit()
+                continue
+            try:
+                auth_mode = await self._resolve_scope_auth_mode(db, scope)
+                if auth_mode == "app":
+                    await github_workspace_service.validate_app_remote(scope, workspace)
+                if owner_slot is None:
+                    raise GithubWorkspaceConfigError(
+                        f"Owner slot {owner_slot_id} is unavailable"
+                    )
+                await github_workspace_service.configure_dispatch_worktree(
+                    workspace,
+                    display_name=owner_slot.display_name,
+                    slot_id=owner_slot.id,
+                    app_mode=auth_mode == "app",
+                )
+            except GithubWorkspaceRemoteError as exc:
+                workspace.enabled = False
+                workspace.provision_error = str(exc)
+                workspace.updated_at = datetime.utcnow()
+                await db.commit()
+                await self._release_auth_refusal(db, scope, item, workspace, str(exc))
+                continue
+            except GithubAuthModeUnresolved as exc:
+                await self._release_auth_refusal(db, scope, item, workspace, str(exc))
+                continue
+            except GithubWorkspaceConfigError as exc:
+                await self._release_auth_refusal(
+                    db,
+                    scope,
+                    item,
+                    workspace,
+                    str(exc),
+                    keep_lease=exc.restoration_failed,
+                )
                 continue
             attempt = await self.prepare_attempt(
                 db,

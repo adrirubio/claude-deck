@@ -1124,6 +1124,8 @@ async def test_launch_requires_confirmed_plan_hash_and_passes_team_env(db, tmp_p
     assert calls[0][2]["CLAUDE_DECK_TEAM_PRESET_ID"] == str(preset.id)
     assert calls[0][2]["CLAUDE_DECK_TEAM_SLOT_ID"] == str(preset.slots[0].id)
     assert calls[0][2]["CLAUDE_DECK_TEAM_SLOT_COLOR"] == "green"
+    assert "GH_TOKEN" not in calls[0][2]
+    assert "GITHUB_TOKEN" not in calls[0][2]
 
 
 @pytest.mark.asyncio
