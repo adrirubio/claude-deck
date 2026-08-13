@@ -427,6 +427,14 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(
             text("ALTER TABLE team_github_scopes ADD COLUMN max_build_parallelism INTEGER DEFAULT 4 NOT NULL")
         )
+    if scope_columns and "github_auth_mode" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN github_auth_mode VARCHAR DEFAULT 'unknown' NOT NULL")
+        )
+    if scope_columns and "github_app_installation_id" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN github_app_installation_id INTEGER")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
     work_item_columns = {row[1] for row in result.fetchall()}

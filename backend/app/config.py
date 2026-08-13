@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 
     # GitHub integration (autonomous dispatch)
     github_token: str = ""
+    github_app_id: str = ""
+    github_app_private_key_path: str = ""
+    github_app_bot_login: str = ""
+    github_app_token_refresh_margin_seconds: int = 300
     github_dispatch_interval_seconds: int = 60
     github_check_signal_grace_seconds: int = 120
     github_owner_registration_grace_seconds: int = 120

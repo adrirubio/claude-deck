@@ -227,6 +227,8 @@ class TeamGithubScope(Base):
     build_dir_template: Mapped[str | None] = mapped_column(String, default="build", nullable=True)
     build_command_hint: Mapped[str | None] = mapped_column(String, nullable=True)
     max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    github_auth_mode: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
+    github_app_installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -86,6 +86,45 @@ async def test_compat_migrations_add_pr1_approval_columns_idempotently():
 
 
 @pytest.mark.asyncio
+async def test_compat_migrations_add_pr2_github_auth_columns_idempotently():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE team_github_scopes (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        repo_owner VARCHAR NOT NULL,
+                        repo_name VARCHAR NOT NULL
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO team_github_scopes (repo_owner, repo_name) "
+                    "VALUES ('owner', 'repo')"
+                )
+            )
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                columns = await _sqlite_columns(conn, "team_github_scopes")
+                assert {"github_auth_mode", "github_app_installation_id"} <= columns
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT github_auth_mode, github_app_installation_id "
+                        "FROM team_github_scopes"
+                    )
+                )
+            ).one()
+            assert row == ("unknown", None)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_rebuild_agent_team_slots_removes_legacy_same_repo_unique_constraint():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
