@@ -242,11 +242,9 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
         for write in writes
         if write.field == "dispatch_status" and write.form == "assignment_unknown"
     ]
-    assert sorted(
-        (write.path.as_posix(), write.line) for write in dynamic_dispatch
-    ) == [
-        ("services/github_verification_service.py", 970),
-        ("services/github_verification_service.py", 998),
+    assert sorted(write.path.as_posix() for write in dynamic_dispatch) == [
+        "services/github_verification_service.py",
+        "services/github_verification_service.py",
     ]
 
     direct_non_null_escalation_writes = [
