@@ -159,6 +159,16 @@ class PeerPane:
     peer_pid: int
 
 
+@dataclass(frozen=True)
+class PeerPaneResolution:
+    """Detailed peer-to-pane resolution for security-sensitive callers."""
+
+    pane: Optional[PeerPane]
+    walked_pids: tuple[int, ...]
+    stop_reason: str
+    max_parent_walk: int
+
+
 def _run_tmux(*args: str) -> Optional[str]:
     """Run a read-only tmux command, or return None if tmux is unavailable."""
     try:
@@ -198,6 +208,55 @@ def list_tmux_pane_pids() -> dict[int, str]:
     return panes
 
 
+def resolve_peer_pane_detailed(
+    host: str,
+    port: int,
+    local_port: Optional[int] = None,
+    *,
+    max_parent_walk: int = _MAX_PARENT_WALK,
+) -> PeerPaneResolution:
+    """Resolve a TCP peer and retain why resolution stopped."""
+    inode = find_socket_inode(host, port, local_port=local_port)
+    if inode is None:
+        return PeerPaneResolution(None, (), "socket_not_found", max_parent_walk)
+    peer_pid = find_pid_for_inode(inode)
+    if peer_pid is None:
+        return PeerPaneResolution(None, (), "peer_pid_not_found", max_parent_walk)
+
+    panes = list_tmux_pane_pids()
+    if not panes:
+        return PeerPaneResolution(None, (peer_pid,), "no_tmux_panes", max_parent_walk)
+
+    walked: list[int] = []
+    pid = peer_pid
+    for _ in range(max_parent_walk):
+        walked.append(pid)
+        stat = read_proc_stat(pid)
+        if stat is None:
+            return PeerPaneResolution(
+                None, tuple(walked), "process_gone", max_parent_walk
+            )
+        parent_pid, proc_start = stat
+        if pid in panes:
+            return PeerPaneResolution(
+                PeerPane(
+                    pane_pid=pid,
+                    pane_proc_start=proc_start,
+                    tmux_target=panes[pid],
+                    peer_pid=peer_pid,
+                ),
+                tuple(walked),
+                "resolved",
+                max_parent_walk,
+            )
+        if parent_pid <= 1:
+            return PeerPaneResolution(
+                None, tuple(walked), "root_reached", max_parent_walk
+            )
+        pid = parent_pid
+    return PeerPaneResolution(None, tuple(walked), "walk_limit", max_parent_walk)
+
+
 def resolve_peer_pane(
     host: str, port: int, local_port: Optional[int] = None
 ) -> Optional[PeerPane]:
@@ -207,34 +266,12 @@ def resolve_peer_pane(
     docstring. Returns None rather than guessing whenever any link in the chain
     is missing: an unresolvable caller is not a caller in some other pane.
     """
-    inode = find_socket_inode(host, port, local_port=local_port)
-    if inode is None:
-        return None
-    peer_pid = find_pid_for_inode(inode)
-    if peer_pid is None:
-        return None
-
-    panes = list_tmux_pane_pids()
-    if not panes:
-        return None
-
-    pid = peer_pid
-    for _ in range(_MAX_PARENT_WALK):
-        stat = read_proc_stat(pid)
-        if stat is None:
-            return None
-        parent_pid, proc_start = stat
-        if pid in panes:
-            return PeerPane(
-                pane_pid=pid,
-                pane_proc_start=proc_start,
-                tmux_target=panes[pid],
-                peer_pid=peer_pid,
-            )
-        if parent_pid <= 1:
-            return None
-        pid = parent_pid
-    return None
+    return resolve_peer_pane_detailed(
+        host,
+        port,
+        local_port,
+        max_parent_walk=_MAX_PARENT_WALK,
+    ).pane
 
 
 def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:

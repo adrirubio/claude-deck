@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import require_mail_session
+from app.api.v1.deps import require_mail_session, resolve_request_pane
 from app.config import settings
 from app.database import get_db
 from app.models.database import (
@@ -35,20 +35,10 @@ from app.models.schemas import (
 from app.services import agent_mail_install_service
 from app.services.agent_mail_service import MailAuthorityError, agent_mail_service
 from app.services.github_dispatch_service import github_dispatch_service
-from app.utils import peer_process
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def resolve_request_pane(http_request: Request) -> Optional[peer_process.PeerPane]:
-    """Resolve the calling pane from the live connection."""
-    client = http_request.client
-    if client is None:
-        return None
-    local_port = http_request.scope.get("server", (None, None))[1]
-    return peer_process.resolve_peer_pane(client.host, client.port, local_port=local_port)
 
 
 @router.get("/team", response_model=TeamListResponse)

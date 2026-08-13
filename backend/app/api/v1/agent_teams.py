@@ -2,21 +2,28 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
 from datetime import datetime
 from string import Formatter
 from typing import NamedTuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import mail_session, require_operator, require_session_slot
+from app.api.v1.deps import (
+    mail_session,
+    require_operator,
+    require_session_slot,
+    resolve_request_pane_detailed,
+)
 from app.config import settings
 from app.database import get_db
 from app.models.database import (
     AgentTeamSlot,
+    AgentPaneBinding,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
@@ -43,6 +50,8 @@ from app.models.schemas import (
     GithubWorkItemRetryRequest,
     GithubWorkItemResponse,
     GithubWorkspaceCreate,
+    GithubCredentialRequest,
+    GithubCredentialResponse,
     GithubWorkspaceForceReleaseRequest,
     GithubWorkspaceForceReleaseResponse,
     GithubWorkspaceListResponse,
@@ -54,6 +63,11 @@ from app.models.schemas import (
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
+from app.services.github_app_auth_service import (
+    GithubAppAuthError,
+    GithubAppNotInstalled,
+    github_app_auth_service,
+)
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceError,
@@ -78,6 +92,23 @@ _WORKSPACE_CONFLICT_CODES = {
     "workspace_reset_failed",
     "work_item_not_abandonable",
 }
+
+
+def _is_loopback_request(request: Request) -> bool:
+    client = request.client
+    if client is None:
+        return False
+    try:
+        return ipaddress.ip_address(client.host).is_loopback
+    except ValueError:
+        return False
+
+
+def _normalized_credential_repo(path: str) -> str:
+    normalized = path[1:] if path.startswith("/") else path
+    if normalized.endswith(".git"):
+        normalized = normalized[:-4]
+    return normalized
 
 
 def _bad_request(exc: ValueError) -> HTTPException:
@@ -357,6 +388,133 @@ async def _authorize_dispatch_report(
                 status_code=409,
                 detail=f"lease_token does not match the current lease for item {item.id}",
             )
+
+
+@router.post("/git-credential", response_model=GithubCredentialResponse)
+async def get_github_credential(
+    credential: GithubCredentialRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Mint a repository-scoped credential for the kernel-derived owner."""
+    if not _is_loopback_request(http_request):
+        raise HTTPException(status_code=403, detail="loopback_required")
+    if credential.path is None or not credential.path.strip():
+        raise HTTPException(status_code=400, detail="credential_path_required")
+    if credential.protocol != "https" or credential.host != "github.com":
+        raise HTTPException(status_code=403, detail="credential_target_refused")
+
+    leased = (
+        await db.execute(
+            select(GithubWorkspace, GithubWorkItem, TeamGithubScope)
+            .join(GithubWorkItem, GithubWorkspace.leased_item_id == GithubWorkItem.id)
+            .join(TeamGithubScope, GithubWorkspace.scope_id == TeamGithubScope.id)
+            .where(GithubWorkspace.lease_token == credential.workspace_token)
+        )
+    ).one_or_none()
+    if leased is None:
+        raise HTTPException(status_code=403, detail="workspace_lease_not_current")
+    workspace, item, scope = leased
+    requested_repo = _normalized_credential_repo(credential.path)
+    expected_repo = f"{scope.repo_owner}/{scope.repo_name}"
+    if requested_repo != expected_repo:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "credential_repo_mismatch",
+                "message": (
+                    f"Credential requested for {requested_repo}; lease covers "
+                    f"{expected_repo}"
+                ),
+            },
+        )
+    if scope.github_auth_mode != "app" or scope.github_app_installation_id is None:
+        raise HTTPException(status_code=501, detail="app_auth_not_available")
+    try:
+        github_app_auth_service.require_configuration(require_bot_login=True)
+    except GithubAppAuthError as exc:
+        raise HTTPException(status_code=503, detail="app_auth_unconfigured") from exc
+
+    resolution = resolve_request_pane_detailed(http_request, max_parent_walk=16)
+    if resolution.pane is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "pane_unresolved",
+                "stop_reason": resolution.stop_reason,
+                "max_parent_walk": resolution.max_parent_walk,
+                "walked_pids": list(resolution.walked_pids),
+            },
+        )
+    pane = resolution.pane
+
+    async with github_workspace_service.config_lock(workspace.id):
+        current = (
+            await db.execute(
+                select(GithubWorkspace, GithubWorkItem, TeamGithubScope)
+                .join(
+                    GithubWorkItem,
+                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
+                )
+                .join(TeamGithubScope, GithubWorkspace.scope_id == TeamGithubScope.id)
+                .where(
+                    GithubWorkspace.id == workspace.id,
+                    GithubWorkspace.lease_token == credential.workspace_token,
+                )
+            )
+        ).one_or_none()
+        if current is None:
+            raise HTTPException(status_code=403, detail="workspace_lease_not_current")
+        current_workspace, current_item, current_scope = current
+        if (
+            current_scope.github_auth_mode != "app"
+            or current_scope.github_app_installation_id is None
+        ):
+            raise HTTPException(status_code=501, detail="app_auth_not_available")
+        binding = (
+            await db.execute(
+                select(AgentPaneBinding).where(
+                    AgentPaneBinding.pane_pid == pane.pane_pid,
+                    AgentPaneBinding.pane_proc_start == pane.pane_proc_start,
+                )
+            )
+        ).scalar_one_or_none()
+        if binding is None or binding.slot_id != current_item.owner_slot_id:
+            raise HTTPException(status_code=403, detail="not_item_owner")
+        try:
+            password = await github_app_auth_service.mint_repository_token(
+                int(current_scope.github_app_installation_id),
+                current_scope.repo_owner,
+                current_scope.repo_name,
+            )
+        except GithubAppNotInstalled as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubAppAuthError as exc:
+            raise HTTPException(status_code=502, detail=exc.code) from exc
+
+        after = (
+            await db.execute(
+                select(
+                    GithubWorkspace.lease_token,
+                    GithubWorkspace.leased_item_id,
+                    GithubWorkItem.owner_slot_id,
+                )
+                .join(
+                    GithubWorkItem,
+                    GithubWorkspace.leased_item_id == GithubWorkItem.id,
+                )
+                .where(GithubWorkspace.id == current_workspace.id)
+            )
+        ).one_or_none()
+        if (
+            after is None
+            or after.lease_token != credential.workspace_token
+            or after.leased_item_id != current_item.id
+        ):
+            raise HTTPException(status_code=409, detail="workspace_lease_changed")
+        if after.owner_slot_id != binding.slot_id:
+            raise HTTPException(status_code=403, detail="not_item_owner")
+    return GithubCredentialResponse(username="x-access-token", password=password)
 
 
 @router.post("/dispatch-status")

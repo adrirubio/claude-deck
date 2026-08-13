@@ -12,6 +12,7 @@ from app.config import settings
 from app.database import get_db
 from app.main import app
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
@@ -20,11 +21,17 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
+from app.services.github_app_auth_service import (
+    GithubAppNotInstalled,
+    GithubAppUnconfigured,
+    github_app_auth_service,
+)
 from app.services.github_workspace_service import (
     GithubWorkspaceError,
     GithubWorkspaceResetError,
     github_workspace_service,
 )
+from app.utils.peer_process import PeerPane, PeerPaneResolution
 
 OPERATOR_TOKEN = "test-operator-token-for-workspace-api"
 
@@ -140,6 +147,349 @@ async def _slot(db, preset, position, *, enabled=True):
     db.add(slot)
     await db.flush()
     return slot
+
+
+async def _credential_context(db, tmp_path):
+    preset, scope = await _scope(db, tmp_path / "credential-repo")
+    slot = await _slot(db, preset, 0)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=99,
+        issue_title="credential",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=slot.id,
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "credential-worktree"),
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="workspace-secret",
+    )
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 55
+    binding = AgentPaneBinding(
+        pane_pid=4321,
+        pane_proc_start="proc-start",
+        slot_id=slot.id,
+        preset_id=preset.id,
+        tmux_target="team:0.0",
+    )
+    db.add_all([workspace, binding])
+    await db.commit()
+    return preset, scope, slot, item, workspace
+
+
+def _credential_resolution(start="proc-start"):
+    pane = PeerPane(
+        pane_pid=4321,
+        pane_proc_start=start,
+        tmux_target="team:0.0",
+        peer_pid=5000,
+    )
+    return PeerPaneResolution(pane, (5000, 4321), "resolved", 16)
+
+
+@pytest.mark.asyncio
+async def test_git_credential_mints_only_for_kernel_derived_owner(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+    calls = []
+
+    async def mint(installation_id, owner, repo):
+        calls.append((installation_id, owner, repo))
+        return "installation-secret"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "username": "x-access-token",
+        "password": "installation-secret",
+    }
+    assert calls == [(55, "owner", scope.repo_name)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("updates", "status", "detail"),
+    [
+        ({"path": None}, 400, "credential_path_required"),
+        ({"protocol": "ssh"}, 403, "credential_target_refused"),
+        ({"host": "example.com"}, 403, "credential_target_refused"),
+        ({"workspace_token": "stale"}, 403, "workspace_lease_not_current"),
+    ],
+)
+async def test_git_credential_refuses_invalid_target_before_mint(
+    client, db, tmp_path, monkeypatch, updates, status, detail
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def unexpected_mint(*_args):
+        raise AssertionError("mint must not run")
+
+    monkeypatch.setattr(
+        github_app_auth_service, "mint_repository_token", unexpected_mint
+    )
+    payload = {
+        "workspace_token": "workspace-secret",
+        "protocol": "https",
+        "host": "github.com",
+        "path": f"owner/{scope.repo_name}.git",
+    }
+    payload.update(updates)
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential", json=payload
+    )
+
+    assert response.status_code == status
+    assert response.json()["detail"] == detail
+
+
+@pytest.mark.asyncio
+async def test_git_credential_repo_mismatch_names_both_repositories(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("pane resolution must follow repo authorization")
+        ),
+    )
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": "other/repository.git",
+        },
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "credential_repo_mismatch"
+    assert "other/repository" in detail["message"]
+    assert f"owner/{scope.repo_name}" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_git_credential_missing_token_refuses_before_pane_walk(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    called = False
+
+    def resolve(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return _credential_resolution()
+
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed", resolve
+    )
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 422
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_git_credential_non_loopback_refuses_before_database_or_mint(
+    db, tmp_path, monkeypatch
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    calls = []
+
+    async def _override():
+        calls.append("db")
+        yield db
+
+    app.dependency_overrides[get_db] = _override
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "mint_repository_token",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("mint must not run")),
+    )
+    transport = httpx.ASGITransport(app=app, client=("10.0.0.2", 32100))
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as remote:
+            response = await remote.post(
+                "/api/v1/agent-teams/git-credential",
+                json={
+                    "workspace_token": "workspace-secret",
+                    "protocol": "https",
+                    "host": "github.com",
+                    "path": f"owner/{scope.repo_name}.git",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "loopback_required"
+    assert calls == ["db"]
+
+
+@pytest.mark.asyncio
+async def test_git_credential_requires_full_pane_identity(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution("reused-pid"),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "not_item_owner"
+
+
+@pytest.mark.asyncio
+async def test_git_credential_rechecks_owner_after_mint(
+    client, db, tmp_path, monkeypatch
+):
+    preset, scope, _, item, _ = await _credential_context(db, tmp_path)
+    replacement = await _slot(db, preset, 1)
+    await db.commit()
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def mint(*_args):
+        item.owner_slot_id = replacement.id
+        await db.commit()
+        return "must-not-escape"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "not_item_owner"
+    assert "must-not-escape" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_git_credential_distinguishes_stale_app_and_missing_config(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: (_ for _ in ()).throw(GithubAppUnconfigured()),
+    )
+    payload = {
+        "workspace_token": "workspace-secret",
+        "protocol": "https",
+        "host": "github.com",
+        "path": f"owner/{scope.repo_name}.git",
+    }
+
+    unconfigured = await client.post(
+        "/api/v1/agent-teams/git-credential", json=payload
+    )
+    assert unconfigured.status_code == 503
+    assert unconfigured.json()["detail"] == "app_auth_unconfigured"
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def gone(*_args):
+        raise GithubAppNotInstalled("owner", scope.repo_name, 55)
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", gone)
+    not_installed = await client.post(
+        "/api/v1/agent-teams/git-credential", json=payload
+    )
+    assert not_installed.status_code == 409
+    assert not_installed.json()["detail"] == "app_not_installed"
+    await db.refresh(scope)
+    assert scope.github_auth_mode == "app"
+    assert scope.github_app_installation_id == 55
 
 
 @pytest.mark.asyncio

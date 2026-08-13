@@ -2285,6 +2285,18 @@ class GithubWorkspaceListResponse(BaseModel):
     workspaces: List[GithubWorkspaceResponse] = Field(default_factory=list)
 
 
+class GithubCredentialRequest(BaseModel):
+    workspace_token: str
+    protocol: str
+    host: str
+    path: Optional[str] = None
+
+
+class GithubCredentialResponse(BaseModel):
+    username: str
+    password: str
+
+
 class GithubWorkItemResponse(BaseModel):
     id: int
     scope_id: int

@@ -133,6 +133,48 @@ def test_resolve_peer_pane_is_none_when_no_ancestor_is_a_pane(monkeypatch):
     assert peer_process.resolve_peer_pane("127.0.0.1", 36253) is None
 
 
+def test_detailed_resolution_reports_walk_limit_and_chain(monkeypatch):
+    tree = {
+        5000: (4000, "a"),
+        4000: (3000, "b"),
+        3000: (2000, "c"),
+        2000: (1, "d"),
+    }
+    monkeypatch.setattr(
+        peer_process, "find_socket_inode", lambda host, port, local_port=None: 77
+    )
+    monkeypatch.setattr(peer_process, "find_pid_for_inode", lambda inode: 5000)
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda pid: tree.get(pid))
+    monkeypatch.setattr(peer_process, "list_tmux_pane_pids", lambda: {2000: "team:0.2"})
+
+    refused = peer_process.resolve_peer_pane_detailed(
+        "127.0.0.1", 36253, max_parent_walk=3
+    )
+    resolved = peer_process.resolve_peer_pane_detailed(
+        "127.0.0.1", 36253, max_parent_walk=4
+    )
+
+    assert refused.pane is None
+    assert refused.stop_reason == "walk_limit"
+    assert refused.walked_pids == (5000, 4000, 3000)
+    assert resolved.pane is not None
+    assert resolved.pane.pane_pid == 2000
+    assert resolved.max_parent_walk == 4
+
+
+def test_compatibility_wrapper_keeps_default_budget(monkeypatch):
+    seen = []
+
+    def detailed(host, port, local_port=None, *, max_parent_walk):
+        seen.append(max_parent_walk)
+        return peer_process.PeerPaneResolution(None, (), "test", max_parent_walk)
+
+    monkeypatch.setattr(peer_process, "resolve_peer_pane_detailed", detailed)
+
+    assert peer_process.resolve_peer_pane("127.0.0.1", 1) is None
+    assert seen == [32]
+
+
 def test_resolve_peer_pane_is_none_when_the_socket_is_gone(monkeypatch):
     """The TIME_WAIT case: no inode, therefore no pane. Never guess."""
     monkeypatch.setattr(
