@@ -27,10 +27,11 @@ class GithubClient:
             return self._http
         return httpx.AsyncClient(base_url=_GITHUB_API, timeout=30.0)
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, token: str | None = None) -> dict[str, str]:
         headers = {"Accept": "application/vnd.github+json"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        authorization = self._token if token is None else token
+        if authorization:
+            headers["Authorization"] = f"Bearer {authorization}"
         return headers
 
     async def list_issues_with_label(self, owner: str, repo: str, label: str) -> list[dict]:
