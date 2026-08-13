@@ -188,17 +188,22 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
     db.add(workspace)
     await db.commit()
     service = GithubWorkspaceService(runner=FakeGitRunner())
+    item_id = item.id
 
     assert await service.release_by_owner(
         db,
-        item.id,
+        item_id,
         lease_token="wrong-token",
         workspace_id=workspace.id,
         scope_id=scope.id,
         owner_slot_id=slot.id,
+        expected_leased_at=workspace.leased_at,
     ) is False
     await db.refresh(workspace)
-    assert workspace.leased_item_id == item.id
+    await db.refresh(item)
+    await db.refresh(scope)
+    await db.refresh(slot)
+    assert workspace.leased_item_id == item_id
 
     other = AgentTeamSlot(
         preset_id=scope.preset_id,
@@ -218,22 +223,27 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
     await db.commit()
     assert await service.release_by_owner(
         db,
-        item.id,
+        item_id,
         lease_token="current-token",
         workspace_id=workspace.id,
         scope_id=scope.id,
         owner_slot_id=slot.id,
+        expected_leased_at=workspace.leased_at,
     ) is False
     await db.refresh(workspace)
-    assert workspace.leased_item_id == item.id
+    await db.refresh(item)
+    await db.refresh(scope)
+    await db.refresh(other)
+    assert workspace.leased_item_id == item_id
 
     assert await service.release_by_owner(
         db,
-        item.id,
+        item_id,
         lease_token="current-token",
         workspace_id=workspace.id,
         scope_id=scope.id,
         owner_slot_id=other.id,
+        expected_leased_at=workspace.leased_at,
     ) is True
     await db.refresh(workspace)
     assert workspace.leased_item_id is None
@@ -732,6 +742,67 @@ async def test_ambient_identity_does_not_shadow_global_helper(tmp_path, monkeypa
         "credential.https://github.com.helper",
         cwd=worktree,
     ).strip() == "ambient-helper"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("app_mode", [False, True])
+async def test_release_removes_managed_worktree_identity_and_helper(
+    db, tmp_path, monkeypatch, app_mode
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    _git(env, "init", "-b", "main", str(repo))
+    _git(env, "config", "user.name", "Human", cwd=repo)
+    _git(env, "config", "user.email", "human@example.com", cwd=repo)
+    (repo / "README").write_text("base\n")
+    _git(env, "add", "README", cwd=repo)
+    _git(env, "commit", "-m", "base", cwd=repo)
+    _git(env, "worktree", "add", "--detach", str(worktree), cwd=repo)
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**env, "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+    scope, slot, item = await _context(db, repo)
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(worktree),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-value",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService()
+    await service.configure_dispatch_worktree(
+        workspace,
+        display_name=slot.display_name,
+        slot_id=slot.id,
+        app_mode=app_mode,
+    )
+
+    assert await service.release(db, item.id) is True
+
+    for key in (
+        "user.name",
+        "user.email",
+        "credential.https://github.com.useHttpPath",
+        "credential.https://github.com.helper",
+    ):
+        result = subprocess.run(
+            ["git", "config", "--worktree", "--get-all", key],
+            cwd=worktree,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 1
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+    assert workspace.lease_token is None
 
 
 @pytest.mark.asyncio

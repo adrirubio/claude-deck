@@ -612,7 +612,9 @@ async def report_dispatch_status(
         item.updated_at = now
         await db.commit()
     elif report.status == "workspace_released":
-        if report.reporting_slot_id != item.owner_slot_id:
+        item_id = item.id
+        owner_slot_id = item.owner_slot_id
+        if report.reporting_slot_id != owner_slot_id:
             raise HTTPException(
                 status_code=403,
                 detail="only the owner slot may release its workspace",
@@ -628,11 +630,13 @@ async def report_dispatch_status(
                     f"{', '.join(_RELEASABLE_STATUSES)}"
                 ),
             )
-        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        workspace = await github_workspace_service.get_leased_workspace(db, item_id)
         if workspace is None:
             current_owner = (
                 await db.execute(
-                    select(GithubWorkItem.owner_slot_id).where(GithubWorkItem.id == item.id)
+                    select(GithubWorkItem.owner_slot_id).where(
+                        GithubWorkItem.id == item_id
+                    )
                 )
             ).scalar_one()
             if current_owner != report.reporting_slot_id:
@@ -650,24 +654,25 @@ async def report_dispatch_status(
                 )
             released = await github_workspace_service.release_by_owner(
                 db,
-                item.id,
+                item_id,
                 lease_token=report.lease_token,
                 workspace_id=workspace.id,
                 scope_id=scope.id,
                 owner_slot_id=int(report.reporting_slot_id),
+                expected_leased_at=workspace.leased_at,
             )
             if not released:
                 current_owner = (
                     await db.execute(
                         select(GithubWorkItem.owner_slot_id).where(
-                            GithubWorkItem.id == item.id
+                            GithubWorkItem.id == item_id
                         )
                     )
                 ).scalar_one()
                 current_lease = (
                     await db.execute(
                         select(GithubWorkspace.id).where(
-                            GithubWorkspace.leased_item_id == item.id
+                            GithubWorkspace.leased_item_id == item_id
                         )
                     )
                 ).scalar_one_or_none()

@@ -64,6 +64,9 @@ def host_has_enough_memory(monkeypatch):
     async def configure_succeeds(*_args, **_kwargs):
         return None
 
+    async def config_runner_succeeds(_args):
+        return 0, ""
+
     async def remote_succeeds(*_args, **_kwargs):
         return None
 
@@ -73,6 +76,7 @@ def host_has_enough_memory(monkeypatch):
         "configure_dispatch_worktree",
         configure_succeeds,
     )
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner_succeeds)
     monkeypatch.setattr(
         github_workspace_service,
         "validate_app_remote",
@@ -1785,6 +1789,46 @@ async def test_every_report_instruction_carries_the_lease_token(db):
 
 
 @pytest.mark.asyncio
+async def test_app_brief_uses_persisted_head_and_deck_owned_pr_contract(db):
+    _, slots, scope = await _team(db)
+    scope.github_auth_mode = "app"
+    workspace = (
+        await db.execute(select(GithubWorkspace).order_by(GithubWorkspace.id))
+    ).scalars().first()
+    workspace.lease_token = "tok-app-brief"
+    owner = slots[1]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=95,
+        issue_title="App PR",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=owner.id,
+        dispatch_head_ref=f"deck/slot-{owner.id}/issue-95-persisted",
+    )
+    db.add(item)
+    await db.commit()
+
+    brief = github_dispatch_service._dispatch_brief(
+        item,
+        scope,
+        workspace,
+        owner_slot_id=owner.id,
+        preset_slots=slots,
+    )
+
+    assert item.dispatch_head_ref in brief
+    assert f"Deck-Agent-Slot: {owner.id} ({owner.display_name})" in brief
+    assert f"Deck-Work-Item: {item.id}" in brief
+    assert f"git push -u origin {item.dispatch_head_ref}" in brief
+    assert f'head_ref="{item.dispatch_head_ref}"' in brief
+    assert 'status="pr_ready"' in brief
+    assert "pr_opened" not in brief
+    assert "Deck owns the PR title and body" in brief
+
+
+@pytest.mark.asyncio
 async def test_design_dispatch_brief_uses_design_pipeline_language(db):
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")
@@ -3015,7 +3059,14 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_two_phase_handoff(db):
+async def test_two_phase_handoff(db, monkeypatch):
+    config_calls = []
+
+    async def config_runner(args):
+        config_calls.append(args)
+        return 0, ""
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]
     item = GithubWorkItem(
@@ -3095,6 +3146,91 @@ async def test_two_phase_handoff(db):
     assert workspace.leased_owner_pid == 202
     assert workspace.leased_owner_proc_start == "2002"
     assert workspace.lease_last_owner_contact_at is not None
+    assert any(
+        call[-2:] == ["user.name", "Backend SME (Deck agent)"]
+        for call in config_calls
+    )
+    target_member = (
+        await db.execute(
+            select(MailTeamMember).where(MailTeamMember.team_slot_id == backend.id)
+        )
+    ).scalar_one()
+    handoff_message = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.recipient_member_id == target_member.id,
+                MailMessage.subject.like("GitHub dispatch handoff:%"),
+            )
+        )
+    ).scalar_one()
+    assert "Do not work" in handoff_message.body_markdown
+    assert "wait for a 200 response" in handoff_message.body_markdown
+
+
+@pytest.mark.asyncio
+async def test_handoff_config_failure_keeps_old_owner_and_identity(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    old_owner, target = slots[:2]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=41,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=old_owner.id,
+        handoff_state="pending",
+        handoff_target_slot_id=target.id,
+        dispatch_nonce="nonce",
+        dispatch_head_ref="deck/preserved",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/handoff-failure",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-kept",
+    )
+    db.add(workspace)
+    await db.commit()
+    item_id = item.id
+    workspace_id = workspace.id
+    old_owner_id = old_owner.id
+    target_id = target.id
+    restored = False
+
+    async def snapshot(_workspace):
+        return object()
+
+    async def fail_identity(*args, **kwargs):
+        raise RuntimeError("config failed")
+
+    async def restore(_workspace, _snapshot):
+        nonlocal restored
+        restored = True
+
+    monkeypatch.setattr(github_workspace_service, "snapshot_worktree_config", snapshot)
+    monkeypatch.setattr(github_workspace_service, "apply_slot_identity", fail_identity)
+    monkeypatch.setattr(github_workspace_service, "restore_worktree_config", restore)
+
+    with pytest.raises(ValueError, match="handoff identity update failed"):
+        await github_dispatch_service.accept_handoff(
+            db,
+            item,
+            target_id,
+            accepting_pane_pid=202,
+            accepting_pane_proc_start="2002",
+        )
+
+    fresh_item = await db.get(GithubWorkItem, item_id)
+    fresh_workspace = await db.get(GithubWorkspace, workspace_id)
+    assert fresh_item.owner_slot_id == old_owner_id
+    assert fresh_item.handoff_state == "pending"
+    assert fresh_item.dispatch_head_ref == "deck/preserved"
+    assert fresh_workspace.lease_token == "lease-kept"
+    assert restored is True
 
 
 @pytest.mark.asyncio

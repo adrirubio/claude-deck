@@ -305,6 +305,41 @@ class GithubWorkspaceService:
         for key in _MANAGED_WORKTREE_KEYS:
             await self._clear_config_key(workspace, key)
 
+    async def apply_slot_identity(
+        self,
+        workspace: GithubWorkspace,
+        *,
+        display_name: str,
+        slot_id: int,
+    ) -> None:
+        """Write the managed commit identity while the caller holds config_lock."""
+        commands = [
+            [
+                "-C",
+                workspace.path,
+                "config",
+                "--worktree",
+                "--replace-all",
+                "user.name",
+                self.slot_name(display_name),
+            ],
+            [
+                "-C",
+                workspace.path,
+                "config",
+                "--worktree",
+                "--replace-all",
+                "user.email",
+                self.slot_email(display_name, slot_id),
+            ],
+        ]
+        for command in commands:
+            return_code, output = await self._runner(command)
+            if return_code != 0:
+                raise GithubWorkspaceConfigError(
+                    output.strip() or f"git {' '.join(command)} failed"
+                )
+
     async def validate_app_remote(
         self, scope: TeamGithubScope, workspace: GithubWorkspace
     ) -> None:
@@ -360,26 +395,7 @@ class GithubWorkspaceService:
                     output.strip() or "Unable to enable worktree config"
                 )
             snapshot = await self.snapshot_worktree_config(workspace)
-            commands = [
-                [
-                    "-C",
-                    workspace.path,
-                    "config",
-                    "--worktree",
-                    "--replace-all",
-                    "user.name",
-                    self.slot_name(display_name),
-                ],
-                [
-                    "-C",
-                    workspace.path,
-                    "config",
-                    "--worktree",
-                    "--replace-all",
-                    "user.email",
-                    self.slot_email(display_name, slot_id),
-                ],
-            ]
+            commands = []
             if app_mode:
                 commands.extend(
                     [
@@ -413,6 +429,11 @@ class GithubWorkspaceService:
                     ]
                 )
             try:
+                await self.apply_slot_identity(
+                    workspace,
+                    display_name=display_name,
+                    slot_id=slot_id,
+                )
                 for command in commands:
                     return_code, output = await self._runner(command)
                     if return_code != 0:
@@ -430,24 +451,136 @@ class GithubWorkspaceService:
                 raise
             return snapshot
 
-    async def release(self, db: AsyncSession, item_id: int) -> None:
+    @staticmethod
+    def _released_values(now: datetime) -> dict[str, object | None]:
+        return {
+            "leased_item_id": None,
+            "released_at": now,
+            "lease_token": None,
+            "leased_owner_pid": None,
+            "leased_owner_proc_start": None,
+            "lease_last_owner_contact_at": None,
+            "lease_release_reminded_at": None,
+            "updated_at": now,
+        }
+
+    async def _record_config_repair_note(
+        self,
+        db: AsyncSession,
+        *,
+        workspace_id: int,
+        item_id: int,
+        detail: str,
+    ) -> None:
+        try:
+            workspace = await db.get(GithubWorkspace, workspace_id)
+            item = await db.get(GithubWorkItem, item_id)
+            if workspace is not None:
+                workspace.provision_error = detail
+                workspace.updated_at = datetime.utcnow()
+            if item is not None:
+                item.status_note = detail
+                item.updated_at = datetime.utcnow()
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "Unable to persist worktree config repair note for workspace %s",
+                workspace_id,
+            )
+            await db.rollback()
+
+    async def _release_acquisition(
+        self,
+        db: AsyncSession,
+        *,
+        workspace_id: int,
+        scope_id: int,
+        item_id: int,
+        expected_leased_at: datetime | None,
+        lease_token: str | None,
+        owner_slot_id: int | None = None,
+    ) -> bool:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        if workspace is None:
+            return False
+        config_workspace = GithubWorkspace(
+            id=workspace.id,
+            path=workspace.path,
+            kind=workspace.kind,
+        )
+        async with self.config_lock(workspace_id):
+            snapshot = (
+                None
+                if config_workspace.kind == "primary"
+                else await self.snapshot_worktree_config(config_workspace)
+            )
+            predicates = [
+                GithubWorkspace.id == workspace_id,
+                GithubWorkspace.scope_id == scope_id,
+                GithubWorkspace.leased_item_id == item_id,
+                GithubWorkspace.leased_at == expected_leased_at,
+                GithubWorkspace.lease_token == lease_token,
+            ]
+            if owner_slot_id is not None:
+                predicates.append(
+                    exists().where(
+                        GithubWorkItem.id == item_id,
+                        GithubWorkItem.owner_slot_id == owner_slot_id,
+                        GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+                    )
+                )
+            result = await db.execute(
+                update(GithubWorkspace)
+                .where(*predicates)
+                .values(**self._released_values(datetime.utcnow()))
+                .execution_options(synchronize_session="fetch")
+            )
+            if result.rowcount != 1:
+                await db.rollback()
+                return False
+            try:
+                if config_workspace.kind != "primary":
+                    await self.remove_managed_worktree_config(config_workspace)
+                await db.commit()
+                return True
+            except Exception as exc:
+                await db.rollback()
+                if snapshot is not None:
+                    try:
+                        await self.restore_worktree_config(config_workspace, snapshot)
+                    except GithubWorkspaceConfigError as restore_exc:
+                        detail = (
+                            "Worktree release failed and managed config restoration "
+                            f"also failed: {restore_exc}"
+                        )
+                        await self._record_config_repair_note(
+                            db,
+                            workspace_id=workspace_id,
+                            item_id=item_id,
+                            detail=detail,
+                        )
+                        raise GithubWorkspaceConfigError(
+                            detail,
+                            restoration_failed=True,
+                        ) from restore_exc
+                raise exc
+
+    async def release(self, db: AsyncSession, item_id: int) -> bool:
         workspace = (
             await db.execute(
                 select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item_id)
             )
         ).scalar_one_or_none()
         if workspace is None:
-            return
-        now = datetime.utcnow()
-        workspace.leased_item_id = None
-        workspace.released_at = now
-        workspace.lease_token = None
-        workspace.leased_owner_pid = None
-        workspace.leased_owner_proc_start = None
-        workspace.lease_last_owner_contact_at = None
-        workspace.lease_release_reminded_at = None
-        workspace.updated_at = now
-        await db.commit()
+            return False
+        return await self._release_acquisition(
+            db,
+            workspace_id=workspace.id,
+            scope_id=workspace.scope_id,
+            item_id=item_id,
+            expected_leased_at=workspace.leased_at,
+            lease_token=workspace.lease_token,
+        )
 
     async def force_release_acquisition(
         self,
@@ -466,32 +599,14 @@ class GithubWorkspaceService:
         different row. Here the comparison is the write: every part of what
         the caller inspected is in the WHERE clause.
         """
-        now = datetime.utcnow()
-        result = await db.execute(
-            update(GithubWorkspace)
-            .where(
-                GithubWorkspace.id == workspace_id,
-                GithubWorkspace.scope_id == scope_id,
-                GithubWorkspace.leased_item_id == item_id,
-                GithubWorkspace.leased_at == expected_leased_at,
-                GithubWorkspace.lease_token == lease_token,
-            )
-            .values(
-                leased_item_id=None,
-                released_at=now,
-                lease_token=None,
-                leased_owner_pid=None,
-                leased_owner_proc_start=None,
-                lease_last_owner_contact_at=None,
-                lease_release_reminded_at=None,
-                updated_at=now,
-            )
-            .execution_options(synchronize_session="fetch")
+        return await self._release_acquisition(
+            db,
+            workspace_id=workspace_id,
+            scope_id=scope_id,
+            item_id=item_id,
+            expected_leased_at=expected_leased_at,
+            lease_token=lease_token,
         )
-        if result.rowcount != 1:
-            return False
-        await db.commit()
-        return True
 
     async def get_leased_workspace(
         self, db: AsyncSession, item_id: int
@@ -506,7 +621,7 @@ class GithubWorkspaceService:
 
     async def release_by_token(
         self, db: AsyncSession, item_id: int, *, lease_token: str
-    ) -> None:
+    ) -> bool:
         """Release only the workspace acquisition named by the token.
 
         Item identity alone cannot distinguish a stale report from an earlier
@@ -515,12 +630,19 @@ class GithubWorkspaceService:
         """
         workspace = await self.get_leased_workspace(db, item_id)
         if workspace is None:
-            return
+            return False
         if workspace.lease_token != lease_token:
             raise GithubWorkspaceLeaseTokenMismatch(
                 f"lease_token does not match the current lease for item {item_id}"
             )
-        await self.release(db, item_id)
+        return await self._release_acquisition(
+            db,
+            workspace_id=workspace.id,
+            scope_id=workspace.scope_id,
+            item_id=item_id,
+            expected_leased_at=workspace.leased_at,
+            lease_token=lease_token,
+        )
 
     async def release_by_owner(
         self,
@@ -531,39 +653,18 @@ class GithubWorkspaceService:
         workspace_id: int,
         scope_id: int,
         owner_slot_id: int,
+        expected_leased_at: datetime | None,
     ) -> bool:
         """Release only while acquisition and item ownership still match."""
-        now = datetime.utcnow()
-        owner_still_current = exists().where(
-            GithubWorkItem.id == item_id,
-            GithubWorkItem.owner_slot_id == owner_slot_id,
-            GithubWorkItem.dispatch_status.in_(_RELEASABLE_STATUSES),
+        return await self._release_acquisition(
+            db,
+            workspace_id=workspace_id,
+            scope_id=scope_id,
+            item_id=item_id,
+            expected_leased_at=expected_leased_at,
+            lease_token=lease_token,
+            owner_slot_id=owner_slot_id,
         )
-        result = await db.execute(
-            update(GithubWorkspace)
-            .where(
-                GithubWorkspace.id == workspace_id,
-                GithubWorkspace.scope_id == scope_id,
-                GithubWorkspace.leased_item_id == item_id,
-                GithubWorkspace.lease_token == lease_token,
-                owner_still_current,
-            )
-            .values(
-                leased_item_id=None,
-                released_at=now,
-                lease_token=None,
-                leased_owner_pid=None,
-                leased_owner_proc_start=None,
-                lease_last_owner_contact_at=None,
-                lease_release_reminded_at=None,
-                updated_at=now,
-            )
-            .execution_options(synchronize_session=False)
-        )
-        if result.rowcount != 1:
-            return False
-        await db.commit()
-        return True
 
     async def release_blocker(
         self, scope: TeamGithubScope, workspace: GithubWorkspace
@@ -679,8 +780,16 @@ class GithubWorkspaceService:
                 continue
             if not await self._worktree_is_quiescent(scope, workspace):
                 continue
-            await self.release(db, workspace.leased_item_id)
-            released += 1
+            released_now = await self._release_acquisition(
+                db,
+                workspace_id=workspace.id,
+                scope_id=scope.id,
+                item_id=item.id,
+                expected_leased_at=workspace.leased_at,
+                lease_token=workspace.lease_token,
+            )
+            if released_now:
+                released += 1
         return released
 
     async def _worktree_is_quiescent(

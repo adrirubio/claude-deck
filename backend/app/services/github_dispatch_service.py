@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -705,18 +705,34 @@ class GithubDispatchService:
                 )
         if labels:
             lines.append(f"- Labels: {', '.join(labels)}")
-        lines.extend(
-            [
-                "",
-                "Issue body:",
-                body,
-                "",
-                "Required status reporting:",
-                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
-                f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
+        lines.extend(["", "Issue body:", body, "", "Required status reporting:"])
+        lines.append(
+            f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
+            f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`."
+        )
+        if scope.github_auth_mode == "app":
+            lines.extend(
+                [
+                    "- Claude Deck opens the pull request with its GitHub App identity; "
+                    "do not create the PR yourself.",
+                    f"- Add commit trailers `Deck-Agent-Slot: {owner_slot_id} "
+                    f"({owner.display_name if owner else owner_slot_id})` and "
+                    f"`Deck-Work-Item: {item.id}`.",
+                    f"- Push the exact assigned branch with `git push -u origin "
+                    f"{item.dispatch_head_ref}`.",
+                    f"- After the push, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                    f"status=\"pr_ready\", lease_token=\"{workspace.lease_token}\", "
+                    f"head_ref=\"{item.dispatch_head_ref}\")`. Deck owns the PR title and body.",
+                ]
+            )
+        else:
+            lines.append(
                 f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"pr_opened\", lease_token=\"{workspace.lease_token}\", "
-                "pr_number=<PR number>)`.",
+                "pr_number=<PR number>)`."
+            )
+        lines.extend(
+            [
                 f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"blocked\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
                 f"- Once the item reaches a terminal state, commit and push all work, then call "
@@ -752,10 +768,26 @@ class GithubDispatchService:
                         item=item,
                     ),
                     "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
-                    "- Keep the change inside the issue scope, run the issue's requested local verification commands, then open a draft PR.",
-                    "- After opening the draft PR, report `pr_opened` with the PR number and wait for CI verification.",
                 ]
             )
+            if scope.github_auth_mode == "app":
+                lines.extend(
+                    [
+                        "- Keep the change inside the issue scope and run the issue's "
+                        "requested local verification commands.",
+                        "- Push the assigned branch and report `pr_ready`; Claude Deck "
+                        "creates the draft PR and starts CI verification.",
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        "- Keep the change inside the issue scope, run the issue's "
+                        "requested local verification commands, then open a draft PR.",
+                        "- After opening the draft PR, report `pr_opened` with the PR "
+                        "number and wait for CI verification.",
+                    ]
+                )
             lines.extend(self._build_instructions(item, scope))
         return "\n".join(lines)
 
@@ -1271,6 +1303,26 @@ class GithubDispatchService:
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()
         await db.commit()
+        target_member = await agent_mail_service.get_or_create_slot_member(db, target)
+        await agent_mail_service.send_direct_message(
+            db,
+            recipient_member_id=target_member.id,
+            subject=f"GitHub dispatch handoff: work item {item.id}",
+            body_markdown=(
+                f"Work item {item.id} is being handed to your slot. Do not work in "
+                "the workspace yet. First call "
+                f"`deck_report_dispatch_status(work_item_id={item.id}, "
+                "status=\"handoff_accepted\")` and wait for a 200 response. Then "
+                "call `deck_get_work_item_context` to receive the preserved branch "
+                "and lease capability."
+            ),
+            payload={
+                "kind": "github_dispatch_handoff",
+                "work_item_id": item.id,
+                "target_slot_id": target_slot_id,
+            },
+            bypass_nudge_cooldown=True,
+        )
 
     async def accept_handoff(
         self,
@@ -1286,25 +1338,103 @@ class GithubDispatchService:
                 f"slot {accepting_slot_id} cannot accept a handoff targeted at "
                 f"{item.handoff_target_slot_id}"
             )
-        item.owner_slot_id = accepting_slot_id
-        item.handoff_state = "accepted"
-        item.handoff_target_slot_id = None
-        item.routing_method = "reassigned"
-        item.ack_received_at = None
-        item.ack_approver_member_id = None
-        item.ack_evidence_message_id = None
-        item.ack_enforcement_epoch = None
-        item.ack_approval_round = None
-        item.last_nudge_at = None
-        now = datetime.utcnow()
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
-        if workspace is not None:
-            workspace.leased_owner_pid = accepting_pane_pid
-            workspace.leased_owner_proc_start = accepting_pane_proc_start
-            workspace.lease_last_owner_contact_at = now
-            workspace.updated_at = now
-        item.updated_at = now
-        await db.commit()
+        target = await db.get(AgentTeamSlot, accepting_slot_id)
+        if workspace is None or target is None:
+            raise ValueError("handoff workspace or target slot is unavailable")
+        old_owner_slot_id = item.owner_slot_id
+        item_id = item.id
+        workspace_id = workspace.id
+        expected_leased_at = workspace.leased_at
+        lease_token = workspace.lease_token
+        config_workspace = GithubWorkspace(
+            id=workspace.id,
+            path=workspace.path,
+            kind=workspace.kind,
+        )
+        async with github_workspace_service.config_lock(workspace.id):
+            snapshot = (
+                None
+                if workspace.kind == "primary"
+                else await github_workspace_service.snapshot_worktree_config(
+                    config_workspace
+                )
+            )
+            now = datetime.utcnow()
+            item_result = await db.execute(
+                update(GithubWorkItem)
+                .where(
+                    GithubWorkItem.id == item.id,
+                    GithubWorkItem.owner_slot_id == old_owner_slot_id,
+                    GithubWorkItem.handoff_state == "pending",
+                    GithubWorkItem.handoff_target_slot_id == accepting_slot_id,
+                )
+                .values(
+                    owner_slot_id=accepting_slot_id,
+                    handoff_state="accepted",
+                    handoff_target_slot_id=None,
+                    routing_method="reassigned",
+                    ack_received_at=None,
+                    ack_approver_member_id=None,
+                    ack_evidence_message_id=None,
+                    ack_enforcement_epoch=None,
+                    ack_approval_round=None,
+                    last_nudge_at=None,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            workspace_result = await db.execute(
+                update(GithubWorkspace)
+                .where(
+                    GithubWorkspace.id == workspace.id,
+                    GithubWorkspace.scope_id == item.scope_id,
+                    GithubWorkspace.leased_item_id == item.id,
+                    GithubWorkspace.lease_token == lease_token,
+                    GithubWorkspace.leased_at == expected_leased_at,
+                )
+                .values(
+                    leased_owner_pid=accepting_pane_pid,
+                    leased_owner_proc_start=accepting_pane_proc_start,
+                    lease_last_owner_contact_at=now,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if item_result.rowcount != 1 or workspace_result.rowcount != 1:
+                await db.rollback()
+                raise ValueError("handoff state changed before acceptance")
+            try:
+                if workspace.kind != "primary":
+                    await github_workspace_service.apply_slot_identity(
+                        config_workspace,
+                        display_name=target.display_name,
+                        slot_id=target.id,
+                    )
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                if snapshot is not None:
+                    try:
+                        await github_workspace_service.restore_worktree_config(
+                            config_workspace,
+                            snapshot,
+                        )
+                    except GithubWorkspaceConfigError as restore_exc:
+                        detail = (
+                            "Handoff failed and the prior worktree identity could "
+                            f"not be restored: {restore_exc}"
+                        )
+                        await github_workspace_service._record_config_repair_note(
+                            db,
+                            workspace_id=workspace_id,
+                            item_id=item_id,
+                            detail=detail,
+                        )
+                        raise ValueError(detail) from restore_exc
+                raise ValueError(f"handoff identity update failed: {exc}") from exc
+        await db.refresh(item)
+        await db.refresh(workspace)
 
     async def monitor_dispatched(
         self,

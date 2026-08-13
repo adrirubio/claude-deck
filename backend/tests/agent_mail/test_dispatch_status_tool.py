@@ -793,8 +793,8 @@ def test_shim_dispatch_status_omits_caller_slot_claim(monkeypatch):
 
     result = shim.deck_report_dispatch_status(
         123,
-        "pr_opened",
-        pr_number=456,
+        "pr_ready",
+        head_ref="deck/slot-7/issue-123/attempt",
         note="opened",
         lease_token="lease-current",
     )
@@ -802,7 +802,8 @@ def test_shim_dispatch_status_omits_caller_slot_claim(monkeypatch):
     assert result["ok"] is True
     assert requests[0][0:2] == ("POST", "/dispatch-status")
     assert "reporting_slot_id" not in requests[0][2]["json"]
-    assert requests[0][2]["json"]["pr_number"] == 456
+    assert requests[0][2]["json"]["pr_number"] is None
+    assert requests[0][2]["json"]["head_ref"] == "deck/slot-7/issue-123/attempt"
     assert requests[0][2]["json"]["lease_token"] == "lease-current"
 
 
@@ -1005,8 +1006,9 @@ async def test_revision_requested_is_actionable_for_every_authenticated_slot(
 
 
 @pytest.mark.asyncio
-async def test_handoff_accepted_belongs_to_the_target(client_and_db):
+async def test_handoff_accepted_belongs_to_the_target(client_and_db, monkeypatch):
     ac, maker = client_and_db
+    monkeypatch.setattr(github_workspace_service, "_runner", _FakeGitRunner())
     item_id, owner_id, other_id, _, _ = await _seed_leased_item(
         maker,
         dispatch_status="dispatched",
@@ -1102,6 +1104,7 @@ async def test_workspace_release_cas_survives_wal_interleaving(
     race,
 ):
     ac, maker = wal_client_and_db
+    monkeypatch.setattr(github_workspace_service, "_runner", _FakeGitRunner())
     item_id, owner_id, other_id, workspace_id, _ = await _seed_leased_item(maker)
     entered_blocker = False
 

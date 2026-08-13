@@ -659,15 +659,17 @@ def deck_report_dispatch_status(
     work_item_id: int,
     status: str,
     pr_number: Optional[int] = None,
+    head_ref: Optional[str] = None,
     reassign_to_slot_id: Optional[int] = None,
     note: Optional[str] = None,
     lease_token: Optional[str] = None,
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
-    status is one of: triaging, ack_received, in_progress,
-    pr_opened, handoff_initiated (with reassign_to_slot_id), handoff_accepted,
-    blocked, workspace_released. Report ack_received only after the designated
+    status is one of: triaging, ack_received, in_progress, pr_ready (with
+    head_ref), pr_opened (with pr_number), handoff_initiated (with
+    reassign_to_slot_id), handoff_accepted, blocked, workspace_released. Never
+    send both head_ref and pr_number. Report ack_received only after the designated
     leader records an explicit approved decision with deck_approve_work_item;
     prose replies are not approval. Called by the owner slot the brain dispatched
     the issue to. Include work_item_id and lease_token from your bootstrap prompt.
@@ -679,6 +681,7 @@ def deck_report_dispatch_status(
         "work_item_id": work_item_id,
         "status": status,
         "pr_number": pr_number,
+        "head_ref": head_ref,
         "reassign_to_slot_id": reassign_to_slot_id,
         "note": note,
         "lease_token": lease_token,

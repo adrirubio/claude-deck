@@ -795,6 +795,7 @@ async def test_force_release_refusal_names_no_lease_token(
     repo_path = tmp_path / "repo"
     _, scope = await _scope(db, repo_path)
     item, workspace, _ = await _leased_workspace(db, scope, tmp_path / "ws")
+    item_id = item.id
     monkeypatch.setattr(github_workspace_service, "_runner", ApiGitRunner(repo_path))
 
     response = await client.post(
@@ -812,7 +813,7 @@ async def test_force_release_refusal_names_no_lease_token(
     assert response.json()["detail"]["block_code"] == "lease_changed"
     assert "lease-current" not in response.text
     await db.refresh(workspace)
-    assert workspace.leased_item_id == item.id
+    assert workspace.leased_item_id == item_id
 
 
 @pytest.mark.asyncio
