@@ -1,12 +1,14 @@
 """GitHub REST client for autonomous dispatch.
 
-Mostly read-only, but NOT entirely: `merge_pull` and `mark_pull_ready_for_review`
-both write. `merge_pull` is gated on `scope.merge_policy == "auto"` by its only
-caller; `mark_pull_ready_for_review` is currently ungated. Deployments that must
-not write to GitHub should enforce that with a read-only token rather than
-relying on this module.
+Mostly read-only, but NOT entirely: `create_pull`, `merge_pull`, and
+`mark_pull_ready_for_review` write. `merge_pull` is gated on
+`scope.merge_policy == "auto"` by its only caller; the other writes have their
+own dispatch-stage gates. Deployments that must not write to GitHub should
+enforce that with a read-only token rather than relying on this module.
 """
 from __future__ import annotations
+
+from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 
@@ -96,15 +98,168 @@ class GithubClient:
             if self._http is None:
                 await client.aclose()
 
-    async def get_pull(self, owner: str, repo: str, pr_number: int) -> dict:
+    async def get_pull(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        *,
+        token: str | None = None,
+    ) -> dict:
         client = self._client()
         try:
             resp = await client.get(
                 f"/repos/{owner}/{repo}/pulls/{pr_number}",
-                headers=self._headers(),
+                headers=self._headers(token),
             )
             resp.raise_for_status()
             return resp.json()
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def get_ref(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        *,
+        token: str,
+    ) -> dict | None:
+        client = self._client()
+        encoded_ref = quote(f"heads/{head}", safe="")
+        try:
+            response = await client.get(
+                f"/repos/{owner}/{repo}/git/ref/{encoded_ref}",
+                headers=self._headers(token),
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return response.json()
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def get_repository(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        token: str,
+    ) -> dict:
+        client = self._client()
+        try:
+            response = await client.get(
+                f"/repos/{owner}/{repo}",
+                headers=self._headers(token),
+            )
+            response.raise_for_status()
+            return response.json()
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def list_pulls_for_head(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        head: str,
+        base: str | None = None,
+        state: str = "all",
+        token: str,
+    ) -> list[dict]:
+        client = self._client()
+        endpoint = f"/repos/{owner}/{repo}/pulls"
+        params = {
+            "head": head,
+            "state": state,
+            "per_page": "100",
+        }
+        if base is not None:
+            params["base"] = base
+        pulls: list[dict] = []
+        seen_urls: set[str] = set()
+        next_url: str | None = endpoint
+        first = True
+        try:
+            while next_url is not None:
+                if first:
+                    response = await client.get(
+                        next_url,
+                        params=params,
+                        headers=self._headers(token),
+                    )
+                    first = False
+                else:
+                    response = await client.get(
+                        next_url,
+                        headers=self._headers(token),
+                    )
+                response.raise_for_status()
+                current_url = str(response.request.url)
+                if current_url in seen_urls:
+                    raise ValueError("GitHub pull pagination cycle detected")
+                seen_urls.add(current_url)
+                body = response.json()
+                if not isinstance(body, list):
+                    raise ValueError("GitHub pull list response was not a list")
+                pulls.extend(body)
+                next_link = response.links.get("next", {}).get("url")
+                if not next_link:
+                    next_url = None
+                    continue
+                candidate = response.request.url.join(next_link)
+                parsed = urlsplit(str(candidate))
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                expected_query = {key: [value] for key, value in params.items()}
+                if (
+                    parsed.scheme != "https"
+                    or parsed.hostname != "api.github.com"
+                    or parsed.port is not None
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.path != endpoint
+                    or any(query.get(key) != value for key, value in expected_query.items())
+                ):
+                    raise ValueError("Unsafe GitHub pull pagination link")
+                candidate_text = str(candidate)
+                if candidate_text in seen_urls:
+                    raise ValueError("GitHub pull pagination cycle detected")
+                next_url = candidate_text
+            return pulls
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def create_pull(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        title: str,
+        head: str,
+        base: str,
+        body: str,
+        draft: bool,
+        token: str,
+    ) -> dict:
+        client = self._client()
+        try:
+            response = await client.post(
+                f"/repos/{owner}/{repo}/pulls",
+                headers=self._headers(token),
+                json={
+                    "title": title,
+                    "head": head,
+                    "base": base,
+                    "body": body,
+                    "draft": draft,
+                },
+            )
+            response.raise_for_status()
+            return response.json()
         finally:
             if self._http is None:
                 await client.aclose()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from datetime import datetime, timedelta
 
 import httpx
@@ -41,6 +42,65 @@ logger = logging.getLogger(__name__)
 
 
 class GithubVerificationService:
+    async def normalize_base_ref(
+        self,
+        scope: TeamGithubScope,
+        client: GithubClient,
+        *,
+        token: str,
+    ) -> str:
+        base_ref = scope.base_ref
+        if base_ref == "origin/HEAD":
+            repository = await client.get_repository(
+                scope.repo_owner, scope.repo_name, token=token
+            )
+            candidate = repository.get("default_branch")
+            if not isinstance(candidate, str) or not candidate:
+                raise ValueError("GitHub repository has no default branch")
+        elif base_ref.startswith("origin/"):
+            candidate = base_ref.removeprefix("origin/")
+        else:
+            candidate = base_ref
+        if not candidate or candidate == "HEAD" or candidate.startswith("refs/"):
+            raise ValueError(f"Unsupported GitHub base ref: {base_ref}")
+        try:
+            result = subprocess.run(
+                ["git", "check-ref-format", "--branch", candidate],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError("Unable to validate GitHub base branch") from exc
+        if result.returncode != 0:
+            raise ValueError(f"Invalid GitHub base branch: {candidate}")
+        return candidate
+
+    @staticmethod
+    def pull_title(item: GithubWorkItem, owner_slot: AgentTeamSlot) -> str:
+        return (
+            f"[{owner_slot.display_name}] {item.issue_title} "
+            f"(#{item.issue_number})"
+        )
+
+    @staticmethod
+    def pull_body(item: GithubWorkItem, *, head_ref: str) -> str:
+        return (
+            f"Closes #{item.issue_number}\n\n"
+            f"{item.issue_title}\n\n"
+            "---\n"
+            "Claude Deck provenance\n"
+            f"- Work item: {item.id}\n"
+            f"- Owner slot: {item.owner_slot_id}\n"
+            f"- Dispatch nonce: {item.dispatch_nonce}\n"
+            f"- Head ref: {head_ref}"
+        )
+
+    @staticmethod
+    def pull_is_draft(item: GithubWorkItem) -> bool:
+        return item.issue_type != "design"
+
     @staticmethod
     def _classify_pull(pull: dict) -> str | None:
         """Classify fields present in both list and single-pull responses."""

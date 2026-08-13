@@ -473,6 +473,83 @@ async def test_outer_http_failure_preserves_human_merge_reservation(db):
     assert client.merge_calls == 0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_ref", "expected", "default_branch", "expected_calls"),
+    [
+        ("origin/main", "main", "unused", 0),
+        ("release/v2", "release/v2", "unused", 0),
+        ("origin/HEAD", "trunk", "trunk", 1),
+    ],
+)
+async def test_base_ref_normalization(
+    db, base_ref, expected, default_branch, expected_calls
+):
+    scope = await _scope(db, base_ref=base_ref)
+
+    class _RepositoryClient:
+        calls = 0
+
+        async def get_repository(self, owner, repo, *, token):
+            self.calls += 1
+            assert token == "app-token"
+            return {"default_branch": default_branch}
+
+    client = _RepositoryClient()
+
+    assert await github_verification_service.normalize_base_ref(
+        scope, client, token="app-token"
+    ) == expected
+    assert client.calls == expected_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_ref", ["HEAD", "refs/heads/main", "origin/", "bad ref"])
+async def test_base_ref_normalization_refuses_unsupported_values(db, base_ref):
+    scope = await _scope(db, base_ref=base_ref)
+
+    class _NoNetwork:
+        async def get_repository(self, *_args, **_kwargs):
+            raise AssertionError("invalid static refs must refuse before network")
+
+    with pytest.raises(ValueError):
+        await github_verification_service.normalize_base_ref(
+            scope, _NoNetwork(), token="app-token"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("issue_type", "draft"), [("code", True), ("design", False)])
+async def test_pull_presentation_is_deterministic(db, issue_type, draft):
+    scope = await _scope(db)
+    owner, _ = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        owner_slot_id=owner.id,
+        issue_number=42,
+        issue_title="Make identity explicit",
+        issue_type=issue_type,
+        dispatch_nonce="0123456789abcdef",
+    )
+    head = "deck/slot-1/issue-42/0123456789abcdef"
+
+    assert github_verification_service.pull_title(item, owner) == (
+        "[Owner] Make identity explicit (#42)"
+    )
+    assert github_verification_service.pull_body(item, head_ref=head) == (
+        "Closes #42\n\n"
+        "Make identity explicit\n\n"
+        "---\n"
+        "Claude Deck provenance\n"
+        f"- Work item: {item.id}\n"
+        f"- Owner slot: {owner.id}\n"
+        "- Dispatch nonce: 0123456789abcdef\n"
+        f"- Head ref: {head}"
+    )
+    assert github_verification_service.pull_is_draft(item) is draft
+
+
 async def _ready_review_messages(db):
     messages = (await db.execute(select(MailMessage))).scalars().all()
     return [message for message in messages if message.subject == "Code PR ready for review"]
