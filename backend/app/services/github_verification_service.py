@@ -233,6 +233,8 @@ class GithubVerificationService:
                 raise ValueError("pr_ready requires GitHub App authentication")
             if scope.github_app_installation_id is None:
                 raise ValueError("app_installation_id_missing")
+            if not settings.github_app_bot_login:
+                raise ValueError("app_mode_bot_login_unset")
 
             try:
                 github_app_auth_service.require_configuration(require_bot_login=True)

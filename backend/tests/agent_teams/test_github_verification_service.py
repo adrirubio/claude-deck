@@ -441,6 +441,20 @@ async def test_pr_ready_mint_404_preserves_persisted_app_mode(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_pr_ready_names_missing_app_bot_login(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "")
+    scope, _, item = await _pr_ready_item(db)
+    client = _PrReadyClient(scope, item)
+
+    with pytest.raises(ValueError, match="app_mode_bot_login_unset"):
+        await github_verification_service.report_pr_ready(
+            db, item, scope, item.dispatch_head_ref, "lease", client
+        )
+
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_pr_ready_cheap_return_still_authorizes_head_and_lease(
     db, monkeypatch
 ):
