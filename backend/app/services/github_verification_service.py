@@ -1,6 +1,7 @@
 """GitHub PR verification and merge loop for autonomous dispatch."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 from datetime import datetime, timedelta
@@ -10,7 +11,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.database import AgentTeamSlot, GithubWorkItem, TeamGithubScope
+from app.models.database import (
+    AgentTeamSlot,
+    GithubWorkItem,
+    GithubWorkspace,
+    TeamGithubScope,
+)
+from app.services.github_app_auth_service import (
+    GithubAppAuthError,
+    github_app_auth_service,
+)
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
 
@@ -42,6 +52,9 @@ logger = logging.getLogger(__name__)
 
 
 class GithubVerificationService:
+    def __init__(self) -> None:
+        self._pr_ready_locks: dict[int, asyncio.Lock] = {}
+
     async def normalize_base_ref(
         self,
         scope: TeamGithubScope,
@@ -163,9 +176,6 @@ class GithubVerificationService:
         verdict = self._classify_pull(pull)
         if verdict is None:
             raise ValueError("GitHub returned a pull request state Deck cannot classify")
-        if recoverable:
-            item.escalation_reason = None
-            item.retry_requested_at = None
         if verdict == "closed_unmerged":
             await github_dispatch_service.escalate_without_notification(
                 db,
@@ -174,6 +184,255 @@ class GithubVerificationService:
                 f"PR #{pr_number} was closed without being merged.",
             )
             return
+        if recoverable:
+            item.escalation_reason = None
+            item.retry_requested_at = None
+        await self._record_selected_pull(db, scope, item, pull, verdict)
+
+    async def report_pr_ready(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        head_ref: str,
+        lease_token: str,
+        client: GithubClient,
+    ) -> int:
+        lock = self._pr_ready_locks.setdefault(item.id, asyncio.Lock())
+        async with lock:
+            item = (
+                await db.execute(
+                    select(GithubWorkItem)
+                    .where(GithubWorkItem.id == item.id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            workspace = (
+                await db.execute(
+                    select(GithubWorkspace).where(
+                        GithubWorkspace.scope_id == scope.id,
+                        GithubWorkspace.leased_item_id == item.id,
+                        GithubWorkspace.lease_token == lease_token,
+                    )
+                )
+            ).scalar_one_or_none()
+            if workspace is None:
+                raise ValueError("workspace_lease_changed")
+            if item.dispatch_head_ref is None:
+                raise ValueError("prepared dispatch head is missing")
+            if head_ref != item.dispatch_head_ref:
+                raise ValueError("reported head does not match the prepared dispatch head")
+            if item.pr_number is not None:
+                return int(item.pr_number)
+            if item.dispatch_status != "dispatched":
+                raise ValueError(
+                    f"pr_ready is only valid for dispatched work items; current status is "
+                    f"{item.dispatch_status}"
+                )
+            if scope.github_auth_mode != "app":
+                raise ValueError("pr_ready requires GitHub App authentication")
+            if scope.github_app_installation_id is None:
+                raise ValueError("app_installation_id_missing")
+
+            try:
+                github_app_auth_service.require_configuration(require_bot_login=True)
+                token = await github_app_auth_service.mint_repository_token(
+                    scope.github_app_installation_id,
+                    scope.repo_owner,
+                    scope.repo_name,
+                )
+            except GithubAppAuthError as exc:
+                raise ValueError(exc.code) from exc
+
+            remote_ref = await client.get_ref(
+                scope.repo_owner,
+                scope.repo_name,
+                head_ref,
+                token=token,
+            )
+            if remote_ref is None:
+                raise ValueError("remote_head_not_found")
+            if remote_ref.get("ref") != f"refs/heads/{head_ref}":
+                raise ValueError("remote_head_mismatch")
+
+            base = await self.normalize_base_ref(scope, client, token=token)
+            pulls = await self._list_attempt_pulls(
+                scope,
+                client,
+                head_ref=head_ref,
+                base=base,
+                token=token,
+            )
+            selected = await self._reconcile_attempt_pulls(
+                db,
+                scope,
+                item,
+                pulls,
+                verify_author=True,
+            )
+            if selected is not None:
+                return selected
+
+            owner_slot = await db.get(AgentTeamSlot, item.owner_slot_id)
+            if owner_slot is None:
+                raise ValueError("owner_slot_missing")
+            try:
+                created = await client.create_pull(
+                    scope.repo_owner,
+                    scope.repo_name,
+                    title=self.pull_title(item, owner_slot),
+                    head=head_ref,
+                    base=base,
+                    body=self.pull_body(item, head_ref=head_ref),
+                    draft=self.pull_is_draft(item),
+                    token=token,
+                )
+            except httpx.TimeoutException:
+                created = None
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 422:
+                    raise
+                created = None
+
+            if created is None:
+                pulls = await self._list_attempt_pulls(
+                    scope,
+                    client,
+                    head_ref=head_ref,
+                    base=base,
+                    token=token,
+                )
+                selected = await self._reconcile_attempt_pulls(
+                    db,
+                    scope,
+                    item,
+                    pulls,
+                    verify_author=True,
+                )
+                if selected is None:
+                    raise ValueError("pull_creation_outcome_unresolved")
+                return selected
+
+            selected = await self._reconcile_attempt_pulls(
+                db,
+                scope,
+                item,
+                [created],
+                verify_author=False,
+            )
+            if selected is None:
+                raise ValueError("pull_creation_returned_no_pull")
+            return selected
+
+    async def _list_attempt_pulls(
+        self,
+        scope: TeamGithubScope,
+        client: GithubClient,
+        *,
+        head_ref: str,
+        base: str,
+        token: str,
+    ) -> list[dict]:
+        return await client.list_pulls_for_head(
+            scope.repo_owner,
+            scope.repo_name,
+            head=f"{scope.repo_owner}:{head_ref}",
+            base=base,
+            state="all",
+            token=token,
+        )
+
+    @staticmethod
+    def _pull_number(pull: dict) -> int:
+        number = pull.get("number")
+        if not isinstance(number, int) or number <= 0:
+            raise ValueError("GitHub returned a pull request without a valid number")
+        return number
+
+    async def _reconcile_attempt_pulls(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        pulls: list[dict],
+        *,
+        verify_author: bool,
+    ) -> int | None:
+        classified: list[tuple[dict, str]] = []
+        invalid: list[str] = []
+        for index, pull in enumerate(pulls):
+            verdict = self._classify_pull(pull)
+            if verdict is None:
+                invalid.append(str(pull.get("number", f"index {index}")))
+            else:
+                classified.append((pull, verdict))
+        if invalid:
+            raise ValueError(
+                "GitHub returned unclassifiable pull request(s): " + ", ".join(invalid)
+            )
+
+        for verdict in ("open", "merged", "closed_unmerged"):
+            selected = [pull for pull, state in classified if state == verdict]
+            if not selected:
+                continue
+            for pull in selected:
+                self._verify_pull_identity(
+                    pull,
+                    scope,
+                    item,
+                    verify_author=verify_author,
+                )
+                self._pull_number(pull)
+
+            numbers = sorted(self._pull_number(pull) for pull in selected)
+            if verdict == "open":
+                if len(selected) > 1:
+                    item.status_note = (
+                        "Multiple open pull requests match this dispatch head: "
+                        + ", ".join(f"#{number}" for number in numbers)
+                    )
+                    item.updated_at = datetime.utcnow()
+                    await db.commit()
+                    raise ValueError(item.status_note)
+                await self._record_selected_pull(
+                    db,
+                    scope,
+                    item,
+                    selected[0],
+                    "open",
+                )
+                return numbers[0]
+            if verdict == "merged":
+                chosen = max(selected, key=self._pull_number)
+                item.pr_number = self._pull_number(chosen)
+                self._mark_merged(item)
+                item.status_note = (
+                    "Merged pull requests found for this dispatch head: "
+                    + ", ".join(f"#{number}" for number in numbers)
+                )
+                await db.commit()
+                await self._notify_blocker_merged(db, scope, item)
+                return int(item.pr_number)
+
+            await github_dispatch_service.escalate_without_notification(
+                db,
+                item,
+                "pr_closed_unmerged",
+                "Pull requests closed without merge for this dispatch head: "
+                + ", ".join(f"#{number}" for number in numbers),
+            )
+            raise ValueError(item.status_note or "pr_closed_unmerged")
+        return None
+
+    async def _record_selected_pull(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        pull: dict,
+        verdict: str,
+    ) -> None:
+        pr_number = self._pull_number(pull)
         item.pr_number = pr_number
         item.last_verified_sha = None
         if verdict == "merged":

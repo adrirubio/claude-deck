@@ -347,6 +347,7 @@ _DISPATCH_STATUS_RULES: dict[str, _StatusRule] = {
     "revision_requested": _OWNER,
     "handoff_accepted": _StatusRule("target", "not_handoff_target"),
     "pr_opened": _StatusRule("owner", "not_item_owner", lease_token_required=True),
+    "pr_ready": _StatusRule("owner", "not_item_owner", lease_token_required=True),
     "workspace_released": _StatusRule(
         "owner",
         "not_item_owner",
@@ -581,9 +582,27 @@ async def report_dispatch_status(
     elif report.status == "pr_opened":
         if report.pr_number is None:
             raise HTTPException(status_code=400, detail="pr_number required")
+        if report.head_ref is not None:
+            raise HTTPException(status_code=400, detail="head_ref is not valid for pr_opened")
         try:
             await github_verification_service.report_pr_opened(
                 db, item, scope, report.pr_number, github_client
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    elif report.status == "pr_ready":
+        if report.pr_number is not None:
+            raise HTTPException(status_code=400, detail="pr_number is not valid for pr_ready")
+        if report.head_ref is None or not report.head_ref.strip():
+            raise HTTPException(status_code=400, detail="head_ref required")
+        try:
+            await github_verification_service.report_pr_ready(
+                db,
+                item,
+                scope,
+                report.head_ref,
+                report.lease_token or "",
+                github_client,
             )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -679,6 +698,7 @@ async def report_dispatch_status(
         "dispatch_status": item.dispatch_status,
         "escalation_reason": item.escalation_reason,
         "handoff_state": item.handoff_state,
+        "pr_number": item.pr_number,
     }
 
 

@@ -351,6 +351,7 @@ def _statuses_the_route_accepts() -> set[str]:
         ("blocked", {"note": "n"}),
         ("ack_received", {}),
         ("pr_opened", {"pr_number": 7, "lease_token": "lease"}),
+        ("pr_ready", {"head_ref": "deck/test-attempt", "lease_token": "lease"}),
         ("in_progress", {}),
         ("workspace_released", {"lease_token": "lease"}),
     ],
@@ -1357,7 +1358,7 @@ async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_d
 
 def test_every_accepted_status_has_an_authorization_rule():
     accepted = _statuses_the_route_accepts()
-    assert len(accepted) == 9, f"branch count changed: {sorted(accepted)}"
+    assert len(accepted) == 10, f"branch count changed: {sorted(accepted)}"
     missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
     assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
 
@@ -1383,3 +1384,63 @@ async def test_an_unknown_status_refuses_rather_than_falling_through(client_and_
     )
     assert response.status_code == 400
     assert response.json()["detail"] == "unknown status not_a_real_status"
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_cheap_path_returns_the_stored_number(client_and_db):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="verifying",
+    )
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.pr_number = 42
+        await db.commit()
+    token = await _token_for_slot(maker, owner_id, key="mcp:pr-ready-cheap")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_ready",
+            "head_ref": "deck/test-attempt",
+            "lease_token": "lease-current",
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pr_number"] == 42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "pr_ready", "pr_number": 9, "head_ref": "deck/test-attempt"},
+        {"status": "pr_ready", "head_ref": ""},
+        {"status": "pr_opened", "pr_number": 9, "head_ref": "deck/test-attempt"},
+    ],
+)
+async def test_pr_status_payload_authorities_cannot_be_mixed(
+    client_and_db, payload
+):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key=f"mcp:mixed:{payload['status']}")
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "lease_token": "lease-current",
+            **payload,
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == 400
