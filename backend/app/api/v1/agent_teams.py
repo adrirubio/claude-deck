@@ -90,6 +90,7 @@ logger = logging.getLogger(__name__)
 
 _WORKSPACE_CONFLICT_CODES = {
     "workspace_path_registered",
+    "workspace_path_outside_root",
     "workspace_not_a_worktree",
     "workspace_is_primary",
     "workspace_dirty",
