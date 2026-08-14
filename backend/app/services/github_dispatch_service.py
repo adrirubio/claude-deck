@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -26,8 +26,15 @@ from app.models.schemas import AgentTeamLaunchRequest
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
+from app.services.github_app_auth_service import (
+    GithubAppAuthError,
+    github_app_auth_service,
+)
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
+    GithubWorkspaceConfigError,
+    GithubWorkspaceCredentialRevokeError,
+    GithubWorkspaceRemoteError,
     github_workspace_service,
 )
 
@@ -40,7 +47,50 @@ _LAUNCH_FAILED_STATUSES = {
     "blocked_agent_mail_not_configured",
     "skipped_disabled",
 }
-_ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref")
+_ATTEMPT_MARKERS = ("dispatch_nonce", "dispatch_head_ref", "dispatch_base_ref")
+
+DISPATCH_STATUSES = frozenset(
+    {
+        "pending",
+        "dispatched",
+        "verifying",
+        "ready_for_review",
+        "awaiting_human_review",
+        "merged",
+        "completed",
+        "escalated",
+        "failed",
+    }
+)
+
+ESCALATION_REASONS = frozenset(
+    {
+        "plan_blocked",
+        "launch_outcome_unknown",
+        "approval_rounds_exhausted",
+        "leader_offline",
+        "owner_offline",
+        "brief_unread",
+        "leader_ack_timeout",
+        "owner_idle_timeout",
+        "retry_count_exhausted",
+        "dispatch_label_removed",
+        "abandoned_by_operator",
+        "prepared_owner_unavailable",
+        "pr_closed_unmerged",
+    }
+)
+
+PENDING_REASONS = frozenset(
+    {
+        "queued_repo_cap",
+        "queued_low_memory",
+        "queued_slot_busy",
+        "queued_ambiguous_sessions",
+        "queued_no_workspace",
+        "queued_auth_mode_unresolved",
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +113,17 @@ class ResumeAttemptError(ValueError):
         super().__init__(detail)
 
 
+class GithubAuthModeUnresolved(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class PreparedAttempt:
     owner_slot_id: int
     routing_method: str
     dispatch_nonce: str
     dispatch_head_ref: str
+    dispatch_base_ref: str
     approval_round: int
 
 
@@ -95,6 +150,7 @@ def attempt_state(item: GithubWorkItem) -> AttemptState:
     raise PartiallyPreparedAttempt(
         item.id,
         f"nonce={markers[0] is not None} head={markers[1] is not None} "
+        f"base={markers[2] is not None} "
         f"round={item.approval_round_count} owner={item.owner_slot_id} "
         f"routing={item.routing_method!r}",
     )
@@ -116,18 +172,106 @@ def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
     routing_method = item.routing_method
     dispatch_nonce = item.dispatch_nonce
     dispatch_head_ref = item.dispatch_head_ref
-    if owner_slot_id is None or not routing_method or dispatch_nonce is None or dispatch_head_ref is None:
+    dispatch_base_ref = item.dispatch_base_ref
+    if (
+        owner_slot_id is None
+        or not routing_method
+        or dispatch_nonce is None
+        or dispatch_head_ref is None
+        or dispatch_base_ref is None
+    ):
         raise PartiallyPreparedAttempt(item.id, "prepared attempt fields became incomplete")
     return PreparedAttempt(
         owner_slot_id=owner_slot_id,
         routing_method=routing_method,
         dispatch_nonce=dispatch_nonce,
         dispatch_head_ref=dispatch_head_ref,
+        dispatch_base_ref=dispatch_base_ref,
         approval_round=item.approval_round_count,
     )
 
 
 class GithubDispatchService:
+    async def _resolve_scope_auth_mode(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+    ) -> str:
+        mode = scope.github_auth_mode
+        installation_id = scope.github_app_installation_id
+        if mode not in {"unknown", "app", "ambient"}:
+            raise GithubAuthModeUnresolved(f"Unsupported GitHub auth mode: {mode}")
+        if mode in {"unknown", "ambient"} and installation_id is not None:
+            scope.github_app_installation_id = None
+            scope.updated_at = datetime.utcnow()
+            await db.commit()
+            installation_id = None
+        if mode == "ambient":
+            return mode
+        if mode == "app":
+            if installation_id is None:
+                raise GithubAuthModeUnresolved(
+                    "Stored App authentication has no installation id"
+                )
+            try:
+                github_app_auth_service.require_configuration(require_bot_login=True)
+            except GithubAppAuthError as exc:
+                raise GithubAuthModeUnresolved(str(exc)) from exc
+            return mode
+
+        app_id = settings.github_app_id
+        key_path = settings.github_app_private_key_path
+        bot_login = settings.github_app_bot_login
+        if not app_id and not key_path:
+            scope.github_auth_mode = "ambient"
+            scope.github_app_installation_id = None
+            scope.updated_at = datetime.utcnow()
+            await db.commit()
+            return "ambient"
+        if not app_id or not key_path or not bot_login:
+            raise GithubAuthModeUnresolved(
+                "GitHub App settings are only partially configured"
+            )
+        try:
+            github_app_auth_service.require_configuration(require_bot_login=True)
+            resolved_id = await github_app_auth_service.resolve_installation(
+                scope.repo_owner, scope.repo_name
+            )
+        except GithubAppAuthError as exc:
+            raise GithubAuthModeUnresolved(str(exc)) from exc
+        scope.github_auth_mode = "app" if resolved_id is not None else "ambient"
+        scope.github_app_installation_id = resolved_id
+        scope.updated_at = datetime.utcnow()
+        await db.commit()
+        return scope.github_auth_mode
+
+    async def _release_auth_refusal(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        workspace: GithubWorkspace,
+        detail: str,
+        *,
+        keep_lease: bool = False,
+    ) -> None:
+        item.pending_reason = "queued_auth_mode_unresolved"
+        item.status_note = f"GitHub authentication unresolved for {scope.repo_owner}/{scope.repo_name}: {detail}"
+        item.updated_at = datetime.utcnow()
+        if not keep_lease and workspace.leased_at is not None:
+            try:
+                await github_workspace_service.force_release_acquisition(
+                    db,
+                    workspace_id=workspace.id,
+                    scope_id=scope.id,
+                    item_id=item.id,
+                    expected_leased_at=workspace.leased_at,
+                    lease_token=workspace.lease_token,
+                )
+            except GithubWorkspaceCredentialRevokeError as exc:
+                item.status_note = str(exc)
+        await db.commit()
+
     async def reset_for_retry(self, db: AsyncSession, item: GithubWorkItem) -> None:
         """Request re-dispatch, deferring while the item still holds a lease.
 
@@ -177,6 +321,7 @@ class GithubDispatchService:
         *,
         owner_slot_id: int,
         routing_method: str,
+        base_ref: str,
     ) -> PreparedAttempt:
         state = attempt_state(item)
         if state is AttemptState.PREPARED:
@@ -185,6 +330,7 @@ class GithubDispatchService:
         item.routing_method = routing_method
         item.dispatch_nonce = secrets.token_hex(8)
         item.dispatch_head_ref = attempt_head_ref(item, owner_slot_id)
+        item.dispatch_base_ref = base_ref
         item.approval_round_count = 1
         item.updated_at = datetime.utcnow()
         await db.commit()
@@ -390,6 +536,7 @@ class GithubDispatchService:
                 await self.escalate(db, item, "plan_blocked")
                 await db.commit()
                 continue
+            owner_slot = slots_by_id.get(owner_slot_id)
             if owner_slot_id in slots_dispatched_this_batch or await self.slot_is_busy(
                 db, owner_slot_id
             ):
@@ -413,14 +560,64 @@ class GithubDispatchService:
                 item.owner_slot_id = owner_slot_id
                 item.routing_method = method
                 item.pending_reason = "queued_no_workspace"
+                skipped_primary = await github_workspace_service.skipped_primary_count(
+                    db, scope.id
+                )
+                item.status_note = (
+                    f"No dispatch worktree is available; skipped {skipped_primary} "
+                    "dispatchable primary workspace(s)."
+                    if skipped_primary
+                    else item.status_note
+                )
                 item.updated_at = datetime.utcnow()
                 await db.commit()
+                continue
+            try:
+                auth_mode = await self._resolve_scope_auth_mode(db, scope)
+                if auth_mode == "app":
+                    await github_workspace_service.validate_app_remote(scope, workspace)
+                if owner_slot is None:
+                    raise GithubWorkspaceConfigError(
+                        f"Owner slot {owner_slot_id} is unavailable"
+                    )
+                await github_workspace_service.configure_dispatch_worktree(
+                    workspace,
+                    display_name=owner_slot.display_name,
+                    slot_id=owner_slot.id,
+                    app_mode=auth_mode == "app",
+                )
+                attempt_base_ref = (
+                    await github_workspace_service.resolve_attempt_base_ref(
+                        scope,
+                        workspace,
+                    )
+                )
+            except GithubWorkspaceRemoteError as exc:
+                workspace.enabled = False
+                workspace.provision_error = str(exc)
+                workspace.updated_at = datetime.utcnow()
+                await db.commit()
+                await self._release_auth_refusal(db, scope, item, workspace, str(exc))
+                continue
+            except GithubAuthModeUnresolved as exc:
+                await self._release_auth_refusal(db, scope, item, workspace, str(exc))
+                continue
+            except GithubWorkspaceConfigError as exc:
+                await self._release_auth_refusal(
+                    db,
+                    scope,
+                    item,
+                    workspace,
+                    str(exc),
+                    keep_lease=exc.restoration_failed,
+                )
                 continue
             attempt = await self.prepare_attempt(
                 db,
                 item,
                 owner_slot_id=owner_slot_id,
                 routing_method=method,
+                base_ref=attempt_base_ref,
             )
             try:
                 leader = self._leader_slot(preset_slots)
@@ -457,7 +654,10 @@ class GithubDispatchService:
             except ValueError:
                 item.pending_reason = None
                 await self.escalate(db, item, "plan_blocked")
-                await github_workspace_service.release(db, item.id)
+                try:
+                    await github_workspace_service.release(db, item.id)
+                except GithubWorkspaceCredentialRevokeError as exc:
+                    item.status_note = str(exc)
                 await db.commit()
                 continue
             except Exception:
@@ -472,7 +672,10 @@ class GithubDispatchService:
             if launch_status in _LAUNCH_FAILED_STATUSES:
                 item.dispatch_status = "failed"
                 if tmux_target is None:
-                    await github_workspace_service.release(db, item.id)
+                    try:
+                        await github_workspace_service.release(db, item.id)
+                    except GithubWorkspaceCredentialRevokeError as exc:
+                        item.status_note = str(exc)
             else:
                 item.dispatch_status = "dispatched"
                 item.dispatched_at = datetime.utcnow()
@@ -540,7 +743,8 @@ class GithubDispatchService:
         if workspace.kind == "worktree":
             lines.extend(
                 [
-                    f"- It is a git worktree on a detached HEAD at {scope.base_ref}. "
+                    "- It is a git worktree on a detached HEAD at "
+                    f"{item.dispatch_base_ref}. "
                     "Create the assigned branch before committing.",
                     f"- Assigned branch: `{item.dispatch_head_ref}`. Run "
                     f"`git switch -c {item.dispatch_head_ref}` and do not rename or "
@@ -574,18 +778,34 @@ class GithubDispatchService:
                 )
         if labels:
             lines.append(f"- Labels: {', '.join(labels)}")
-        lines.extend(
-            [
-                "",
-                "Issue body:",
-                body,
-                "",
-                "Required status reporting:",
-                f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
-                f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
+        lines.extend(["", "Issue body:", body, "", "Required status reporting:"])
+        lines.append(
+            f"- When triaging, call `deck_report_dispatch_status(work_item_id={item.id}, "
+            f"status=\"triaging\", lease_token=\"{workspace.lease_token}\", note=\"...\")`."
+        )
+        if scope.github_auth_mode == "app":
+            lines.extend(
+                [
+                    "- Claude Deck opens the pull request with its GitHub App identity; "
+                    "do not create the PR yourself.",
+                    f"- Add commit trailers `Deck-Agent-Slot: {owner_slot_id} "
+                    f"({owner.display_name if owner else owner_slot_id})` and "
+                    f"`Deck-Work-Item: {item.id}`.",
+                    f"- Push the exact assigned branch with `git push -u origin "
+                    f"{item.dispatch_head_ref}`.",
+                    f"- After the push, call `deck_report_dispatch_status(work_item_id={item.id}, "
+                    f"status=\"pr_ready\", lease_token=\"{workspace.lease_token}\", "
+                    f"head_ref=\"{item.dispatch_head_ref}\")`. Deck owns the PR title and body.",
+                ]
+            )
+        else:
+            lines.append(
                 f"- When you open a PR, call `deck_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"pr_opened\", lease_token=\"{workspace.lease_token}\", "
-                "pr_number=<PR number>)`.",
+                "pr_number=<PR number>)`."
+            )
+        lines.extend(
+            [
                 f"- If blocked, call `deck_report_dispatch_status(work_item_id={item.id}, "
                 f"status=\"blocked\", lease_token=\"{workspace.lease_token}\", note=\"...\")`.",
                 f"- Once the item reaches a terminal state, commit and push all work, then call "
@@ -621,10 +841,26 @@ class GithubDispatchService:
                         item=item,
                     ),
                     "- Use `deck_request_context` when you need an explicit answer from the leader/approver.",
-                    "- Keep the change inside the issue scope, run the issue's requested local verification commands, then open a draft PR.",
-                    "- After opening the draft PR, report `pr_opened` with the PR number and wait for CI verification.",
                 ]
             )
+            if scope.github_auth_mode == "app":
+                lines.extend(
+                    [
+                        "- Keep the change inside the issue scope and run the issue's "
+                        "requested local verification commands.",
+                        "- Push the assigned branch and report `pr_ready`; Claude Deck "
+                        "creates the draft PR and starts CI verification.",
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        "- Keep the change inside the issue scope, run the issue's "
+                        "requested local verification commands, then open a draft PR.",
+                        "- After opening the draft PR, report `pr_opened` with the PR "
+                        "number and wait for CI verification.",
+                    ]
+                )
             lines.extend(self._build_instructions(item, scope))
         return "\n".join(lines)
 
@@ -1140,6 +1376,26 @@ class GithubDispatchService:
         item.handoff_target_slot_id = target_slot_id
         item.updated_at = datetime.utcnow()
         await db.commit()
+        target_member = await agent_mail_service.get_or_create_slot_member(db, target)
+        await agent_mail_service.send_direct_message(
+            db,
+            recipient_member_id=target_member.id,
+            subject=f"GitHub dispatch handoff: work item {item.id}",
+            body_markdown=(
+                f"Work item {item.id} is being handed to your slot. Do not work in "
+                "the workspace yet. First call "
+                f"`deck_report_dispatch_status(work_item_id={item.id}, "
+                "status=\"handoff_accepted\")` and wait for a 200 response. Then "
+                "call `deck_get_work_item_context` to receive the preserved branch "
+                "and lease capability."
+            ),
+            payload={
+                "kind": "github_dispatch_handoff",
+                "work_item_id": item.id,
+                "target_slot_id": target_slot_id,
+            },
+            bypass_nudge_cooldown=True,
+        )
 
     async def accept_handoff(
         self,
@@ -1155,25 +1411,142 @@ class GithubDispatchService:
                 f"slot {accepting_slot_id} cannot accept a handoff targeted at "
                 f"{item.handoff_target_slot_id}"
             )
-        item.owner_slot_id = accepting_slot_id
-        item.handoff_state = "accepted"
-        item.handoff_target_slot_id = None
-        item.routing_method = "reassigned"
-        item.ack_received_at = None
-        item.ack_approver_member_id = None
-        item.ack_evidence_message_id = None
-        item.ack_enforcement_epoch = None
-        item.ack_approval_round = None
-        item.last_nudge_at = None
-        now = datetime.utcnow()
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
-        if workspace is not None:
-            workspace.leased_owner_pid = accepting_pane_pid
-            workspace.leased_owner_proc_start = accepting_pane_proc_start
-            workspace.lease_last_owner_contact_at = now
-            workspace.updated_at = now
-        item.updated_at = now
+        target = await db.get(AgentTeamSlot, accepting_slot_id)
+        if workspace is None or target is None:
+            raise ValueError("handoff workspace or target slot is unavailable")
+        item_id = item.id
+        expected_old_owner_slot_id = item.owner_slot_id
+        workspace_id = workspace.id
         await db.commit()
+        async with github_workspace_service.config_lock(workspace.id):
+            workspace = (
+                await db.execute(
+                    select(GithubWorkspace)
+                    .where(GithubWorkspace.id == workspace_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            item = (
+                await db.execute(
+                    select(GithubWorkItem)
+                    .where(GithubWorkItem.id == item_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            if workspace is None or item is None:
+                raise ValueError("handoff workspace or work item is unavailable")
+            scope = (
+                await db.execute(
+                    select(TeamGithubScope)
+                    .where(TeamGithubScope.id == item.scope_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            if scope is None:
+                raise ValueError("handoff scope is unavailable")
+            old_owner_slot_id = expected_old_owner_slot_id
+            expected_leased_at = workspace.leased_at
+            lease_token = workspace.lease_token
+            config_workspace = GithubWorkspace(
+                id=workspace.id,
+                path=workspace.path,
+                kind=workspace.kind,
+            )
+            snapshot = (
+                None
+                if workspace.kind == "primary"
+                else await github_workspace_service.snapshot_worktree_config(
+                    config_workspace
+                )
+            )
+            now = datetime.utcnow()
+            item_result = await db.execute(
+                update(GithubWorkItem)
+                .where(
+                    GithubWorkItem.id == item.id,
+                    GithubWorkItem.owner_slot_id == old_owner_slot_id,
+                    GithubWorkItem.handoff_state == "pending",
+                    GithubWorkItem.handoff_target_slot_id == accepting_slot_id,
+                )
+                .values(
+                    owner_slot_id=accepting_slot_id,
+                    handoff_state="accepted",
+                    handoff_target_slot_id=None,
+                    routing_method="reassigned",
+                    ack_received_at=None,
+                    ack_approver_member_id=None,
+                    ack_evidence_message_id=None,
+                    ack_enforcement_epoch=None,
+                    ack_approval_round=None,
+                    last_nudge_at=None,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            workspace_result = await db.execute(
+                update(GithubWorkspace)
+                .where(
+                    GithubWorkspace.id == workspace.id,
+                    GithubWorkspace.scope_id == item.scope_id,
+                    GithubWorkspace.leased_item_id == item.id,
+                    GithubWorkspace.lease_token == lease_token,
+                    GithubWorkspace.leased_at == expected_leased_at,
+                )
+                .values(
+                    leased_owner_pid=accepting_pane_pid,
+                    leased_owner_proc_start=accepting_pane_proc_start,
+                    lease_last_owner_contact_at=now,
+                    push_token_expires_at=None,
+                    updated_at=now,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if item_result.rowcount != 1 or workspace_result.rowcount != 1:
+                await db.rollback()
+                raise ValueError("handoff state changed before acceptance")
+            try:
+                await github_workspace_service.revoke_push_token(
+                    scope,
+                    workspace,
+                    owner_slot_id=old_owner_slot_id,
+                )
+                if workspace.kind != "primary":
+                    await github_workspace_service.apply_slot_identity(
+                        config_workspace,
+                        display_name=target.display_name,
+                        slot_id=target.id,
+                    )
+                await db.commit()
+            except BaseException as exc:
+                await db.rollback()
+                if snapshot is not None:
+                    try:
+                        await github_workspace_service.restore_worktree_config(
+                            config_workspace,
+                            snapshot,
+                        )
+                    except GithubWorkspaceConfigError as restore_exc:
+                        detail = (
+                            "Handoff failed and the prior worktree identity could "
+                            f"not be restored: {restore_exc}"
+                        )
+                        await github_workspace_service._record_config_repair_note(
+                            db,
+                            workspace_id=workspace_id,
+                            item_id=item_id,
+                            detail=detail,
+                        )
+                        if not isinstance(exc, Exception):
+                            raise exc from restore_exc
+                        raise ValueError(detail) from restore_exc
+                if not isinstance(exc, Exception):
+                    raise
+                if isinstance(exc, GithubWorkspaceCredentialRevokeError):
+                    raise
+                raise ValueError(f"handoff identity update failed: {exc}") from exc
+        await db.refresh(item)
+        await db.refresh(workspace)
 
     async def monitor_dispatched(
         self,
@@ -1486,6 +1859,17 @@ class GithubDispatchService:
             await db.rollback()
             self._apply_escalation(item, reason, note, preserve_existing_reason=False)
 
+    async def escalate_without_notification(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        reason: str,
+        note: str | None = None,
+    ) -> None:
+        """Persist an escalation whose contract explicitly forbids mail."""
+        self._apply_escalation(item, reason, note, preserve_existing_reason=False)
+        await db.commit()
+
     def _apply_escalation(
         self,
         item: GithubWorkItem,
@@ -1494,6 +1878,8 @@ class GithubDispatchService:
         *,
         preserve_existing_reason: bool = True,
     ) -> bool:
+        if reason not in ESCALATION_REASONS:
+            raise ValueError(f"undeclared escalation reason: {reason}")
         if (
             preserve_existing_reason
             and item.dispatch_status == "escalated"

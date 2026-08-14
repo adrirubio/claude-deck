@@ -168,7 +168,7 @@ async def test_preset_autonomy_and_slot_routing_fields_round_trip(client, monkey
 
 
 @pytest.mark.asyncio
-async def test_github_scope_crud_endpoints(client, monkeypatch, tmp_path):
+async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     sync_calls = 0
@@ -236,6 +236,64 @@ async def test_github_scope_crud_endpoints(client, monkeypatch, tmp_path):
     assert update_response.json()["build_dir_template"] == "build"
     assert update_response.json()["max_build_parallelism"] == 4
     assert update_response.json()["enabled"] is False
+
+    item = GithubWorkItem(
+        scope_id=scope["id"],
+        issue_number=1,
+        issue_title="leased",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/1",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope["id"],
+        path=str(tmp_path / "leased-worktree"),
+        leased_item_id=item.id,
+        lease_token="lease",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    blocked_update = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"repo_name": "renamed-while-leased"},
+    )
+    assert blocked_update.status_code == 409
+    assert blocked_update.json()["detail"] == "scope_identity_in_use"
+
+    blocked_delete = await client.delete(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}"
+    )
+    assert blocked_delete.status_code == 409
+    assert blocked_delete.json()["detail"] == "scope_identity_in_use"
+
+    workspace.leased_item_id = None
+    workspace.lease_token = None
+    await db.commit()
+
+    blocked_pending = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"repo_owner": "other-owner"},
+    )
+    assert blocked_pending.status_code == 409
+    assert blocked_pending.json()["detail"] == "scope_identity_in_use"
+
+    item.dispatch_status = "verifying"
+    item.dispatch_nonce = "nonce"
+    item.dispatch_head_ref = "deck/slot-1/issue-1-nonce"
+    item.dispatch_base_ref = "origin/master"
+    await db.commit()
+
+    blocked_without_lease = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"base_ref": "origin/release"},
+    )
+    assert blocked_without_lease.status_code == 409
+    assert blocked_without_lease.json()["detail"] == "scope_identity_in_use"
+
+    item.dispatch_status = "completed"
+    await db.commit()
 
     delete_response = await client.delete(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}"

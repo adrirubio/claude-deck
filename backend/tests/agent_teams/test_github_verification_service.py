@@ -1,6 +1,7 @@
 """GitHub PR verification and merge pipeline tests."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 
 import httpx
@@ -22,6 +23,10 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.services.github_verification_service import github_verification_service
+from app.services.github_app_auth_service import (
+    GithubAppNotInstalled,
+    github_app_auth_service,
+)
 
 
 @pytest_asyncio.fixture
@@ -62,6 +67,8 @@ async def _item(db, scope, **kwargs):
         "issue_url": "u",
         "github_updated_at": datetime.utcnow(),
         "dispatch_status": "dispatched",
+        "dispatch_head_ref": "deck/slot-1/issue-1/attempt",
+        "dispatch_base_ref": "origin/master",
     }
     values.update(kwargs)
     if scope.merge_policy == "auto" and "ack_approver_member_id" not in values:
@@ -190,14 +197,35 @@ class _Client:
         merge_error: httpx.HTTPStatusError | None = None,
         ready_error: httpx.HTTPStatusError | None = None,
     ):
-        self.pull = pull or {
-            "number": 5,
-            "node_id": "node",
-            "draft": True,
-            "merged": False,
-            "mergeable_state": "clean",
-            "head": {"sha": "sha"},
-        }
+        self.pull = dict(
+            pull
+            or {
+                "number": 5,
+                "node_id": "node",
+                "draft": True,
+                "merged": False,
+                "mergeable_state": "clean",
+                "head": {
+                    "sha": "sha",
+                    "ref": "deck/slot-1/issue-1/attempt",
+                    "repo": {"full_name": "o/r"},
+                },
+                "base": {"ref": "master", "repo": {"full_name": "o/r"}},
+                "user": {"login": "human"},
+            }
+        )
+        merged = bool(self.pull.get("merged"))
+        self.pull.setdefault("state", "closed" if merged else "open")
+        self.pull.setdefault(
+            "merged_at", "2026-08-14T12:00:00Z" if merged else None
+        )
+        head = self.pull.setdefault("head", {})
+        head.setdefault("ref", "deck/slot-1/issue-1/attempt")
+        head.setdefault("repo", {"full_name": "o/r"})
+        base = self.pull.setdefault("base", {})
+        base.setdefault("ref", "master")
+        base.setdefault("repo", {"full_name": "o/r"})
+        self.pull.setdefault("user", {"login": "human"})
         self.check_runs = check_runs if check_runs is not None else []
         self.combined_status = (
             combined_status
@@ -234,10 +262,840 @@ class _Client:
         return self.merge_result
 
 
+def _reported_client(scope, item, pr_number):
+    full_name = f"{scope.repo_owner}/{scope.repo_name}"
+    return _Client(
+        pull={
+            "number": pr_number,
+            "node_id": f"node-{pr_number}",
+            "draft": True,
+            "merged": False,
+            "state": "open",
+            "merged_at": None,
+            "mergeable_state": "clean",
+            "head": {
+                "sha": "sha",
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": full_name},
+            },
+            "base": {"ref": "master", "repo": {"full_name": full_name}},
+            "user": {"login": "human"},
+        }
+    )
+
+
+def _attempt_pull(scope, item, number, *, state="open", merged_at=None, author="deck[bot]"):
+    full_name = f"{scope.repo_owner}/{scope.repo_name}"
+    return {
+        "number": number,
+        "state": state,
+        "merged_at": merged_at,
+        "draft": item.issue_type != "design",
+        "head": {
+            "sha": f"sha-{number}",
+            "ref": item.dispatch_head_ref,
+            "repo": {"full_name": full_name},
+        },
+        "base": {"ref": "master", "repo": {"full_name": full_name}},
+        "user": {"login": author},
+    }
+
+
+class _PrReadyClient:
+    def __init__(self, scope, item, *, pulls=None, created=None, create_error=None):
+        self.scope = scope
+        self.item = item
+        self.pull_batches = list(pulls or [[]])
+        self.created = created or _attempt_pull(scope, item, 21, author="unexpected")
+        self.create_error = create_error
+        self.calls = []
+        self.create_calls = 0
+
+    async def get_ref(self, owner, repo, head, *, token):
+        self.calls.append(("ref", token, head))
+        return {"ref": f"refs/heads/{head}"}
+
+    async def get_repository(self, owner, repo, *, token):
+        self.calls.append(("repository", token))
+        return {"default_branch": "master"}
+
+    async def list_pulls_for_head(self, owner, repo, *, head, base, state, token):
+        self.calls.append(("list", token, head, base, state))
+        return list(self.pull_batches.pop(0) if self.pull_batches else [])
+
+    async def create_pull(self, owner, repo, **kwargs):
+        self.create_calls += 1
+        self.calls.append(("create", kwargs["token"], kwargs))
+        if self.create_error is not None:
+            raise self.create_error
+        return dict(self.created)
+
+
+async def _pr_ready_item(db, *, issue_type="code", base_ref="origin/master"):
+    scope = await _scope(
+        db,
+        github_auth_mode="app",
+        github_app_installation_id=55,
+        base_ref=base_ref,
+    )
+    owner, _ = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        issue_type=issue_type,
+        owner_slot_id=owner.id,
+        dispatch_nonce="nonce",
+    )
+    db.add(
+        GithubWorkspace(
+            scope_id=scope.id,
+            path=f"/tmp/pr-ready-{item.id}",
+            leased_item_id=item.id,
+            lease_token="lease",
+        )
+    )
+    await db.commit()
+    return scope, owner, item
+
+
 def _http_error(status_code: int) -> httpx.HTTPStatusError:
     request = httpx.Request("PUT", "https://api.github.com/repos/o/r/pulls/5/merge")
     response = httpx.Response(status_code, request=request, json={"message": "blocked"})
     return httpx.HTTPStatusError("blocked", request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    ("pull", "expected"),
+    [
+        ({"state": "open", "merged_at": None}, "open"),
+        ({"state": "closed", "merged_at": "2026-08-14T12:00:00Z"}, "merged"),
+        ({"state": "closed", "merged_at": None}, "closed_unmerged"),
+        ({"state": "open", "merged_at": "2026-08-14T12:00:00Z"}, None),
+        ({"state": "unknown", "merged_at": None}, None),
+        ({"merged_at": None}, None),
+        ({"state": "closed"}, None),
+    ],
+)
+def test_pull_classifier_uses_only_state_and_merged_at(pull, expected):
+    poisoned = {
+        **pull,
+        "merged": expected != "merged",
+        "merge_commit_sha": "looks-merged-but-is-not-authoritative",
+    }
+
+    assert github_verification_service._classify_pull(poisoned) == expected
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_creates_with_one_explicit_token_and_records_response(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **kwargs: None,
+    )
+
+    async def mint(installation_id, owner, repo, **kwargs):
+        assert (installation_id, owner, repo) == (55, "o", "r")
+        assert kwargs == {"purpose": "pull_request", "cache_subject": "backend"}
+        return "installation-token"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+    scope, owner, item = await _pr_ready_item(db, base_ref="origin/HEAD")
+    client = _PrReadyClient(scope, item)
+
+    number = await github_verification_service.report_pr_ready(
+        db,
+        item,
+        scope,
+        item.dispatch_head_ref,
+        "lease",
+        client,
+    )
+
+    assert number == 21
+    assert item.pr_number == 21
+    assert item.dispatch_status == "verifying"
+    assert client.create_calls == 1
+    assert {call[1] for call in client.calls} == {"installation-token"}
+    create = next(call[2] for call in client.calls if call[0] == "create")
+    assert create["head"] == item.dispatch_head_ref
+    assert create["base"] == "master"
+    assert create["draft"] is True
+    assert create["title"] == f"[{owner.display_name}] x (#1)"
+    assert "Work item" in create["body"]
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_uses_the_attempt_base_after_scope_configuration_changes(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **kwargs: None,
+    )
+
+    async def mint(*args, **kwargs):
+        return "installation-token"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+    scope, _, item = await _pr_ready_item(db, base_ref="origin/master")
+    scope.base_ref = "origin/release"
+    await db.commit()
+    client = _PrReadyClient(scope, item)
+
+    await github_verification_service.report_pr_ready(
+        db, item, scope, item.dispatch_head_ref, "lease", client
+    )
+
+    create = next(call[2] for call in client.calls if call[0] == "create")
+    assert item.dispatch_base_ref == "origin/master"
+    assert create["base"] == "master"
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_mint_404_preserves_persisted_app_mode(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **kwargs: None,
+    )
+
+    async def missing(installation_id, owner, repo, **_kwargs):
+        raise GithubAppNotInstalled(owner, repo, installation_id)
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", missing)
+    scope, _, item = await _pr_ready_item(db)
+    client = _PrReadyClient(scope, item)
+
+    with pytest.raises(GithubAppNotInstalled):
+        await github_verification_service.report_pr_ready(
+            db, item, scope, item.dispatch_head_ref, "lease", client
+        )
+
+    await db.refresh(scope)
+    assert scope.github_auth_mode == "app"
+    assert scope.github_app_installation_id == 55
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_names_missing_app_bot_login(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "")
+    scope, _, item = await _pr_ready_item(db)
+    client = _PrReadyClient(scope, item)
+
+    with pytest.raises(ValueError, match="app_mode_bot_login_unset"):
+        await github_verification_service.report_pr_ready(
+            db, item, scope, item.dispatch_head_ref, "lease", client
+        )
+
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_cheap_return_still_authorizes_head_and_lease(
+    db, monkeypatch
+):
+    scope, _, item = await _pr_ready_item(db)
+    item.pr_number = 31
+    item.dispatch_status = "verifying"
+    await db.commit()
+    client = _PrReadyClient(scope, item)
+
+    async def should_not_mint(*args, **kwargs):
+        raise AssertionError("cheap return must not mint")
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "mint_repository_token",
+        should_not_mint,
+    )
+
+    assert await github_verification_service.report_pr_ready(
+        db, item, scope, item.dispatch_head_ref, "lease", client
+    ) == 31
+    with pytest.raises(ValueError, match="prepared dispatch head"):
+        await github_verification_service.report_pr_ready(
+            db, item, scope, "deck/wrong", "lease", client
+        )
+    with pytest.raises(ValueError, match="workspace_lease_changed"):
+        await github_verification_service.report_pr_ready(
+            db, item, scope, item.dispatch_head_ref, "stale", client
+        )
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_reconciliation_precedence_and_diagnostics(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    scope, _, item = await _pr_ready_item(db)
+    open_pull = _attempt_pull(scope, item, 8)
+    closed_irrelevant_author = _attempt_pull(
+        scope, item, 7, state="closed", author="someone-else"
+    )
+
+    selected = await github_verification_service._reconcile_attempt_pulls(
+        db,
+        scope,
+        item,
+        [closed_irrelevant_author, open_pull],
+        expected_base="master",
+        verify_author=True,
+    )
+
+    assert selected == 8
+    assert item.pr_number == 8
+    assert item.dispatch_status == "verifying"
+
+    scope2, _, item2 = await _pr_ready_item(db)
+    first = _attempt_pull(scope2, item2, 10)
+    second = _attempt_pull(scope2, item2, 11)
+    with pytest.raises(ValueError, match="#10, #11"):
+        await github_verification_service._reconcile_attempt_pulls(
+            db,
+            scope2,
+            item2,
+            [first, second],
+            expected_base="master",
+            verify_author=True,
+        )
+    assert item2.pr_number is None
+    assert item2.dispatch_status == "dispatched"
+    assert item2.status_note.endswith("#10, #11")
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_deduplicates_identical_pages_but_rejects_conflicts(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    scope, _, item = await _pr_ready_item(db)
+    pull = _attempt_pull(scope, item, 8)
+
+    selected = await github_verification_service._reconcile_attempt_pulls(
+        db,
+        scope,
+        item,
+        [pull, dict(pull)],
+        expected_base="master",
+        verify_author=True,
+    )
+
+    assert selected == 8
+    assert item.dispatch_status == "verifying"
+
+    scope2, _, item2 = await _pr_ready_item(db)
+    first = _attempt_pull(scope2, item2, 9)
+    conflicting = {
+        **first,
+        "head": {**first["head"], "ref": "deck/different-attempt"},
+    }
+    with pytest.raises(ValueError, match="conflicting representations for PR #9"):
+        await github_verification_service._reconcile_attempt_pulls(
+            db,
+            scope2,
+            item2,
+            [first, conflicting],
+            expected_base="master",
+            verify_author=True,
+        )
+    assert item2.pr_number is None
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_rejects_any_unclassifiable_result_without_writes(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    scope, _, item = await _pr_ready_item(db)
+    valid = _attempt_pull(scope, item, 8)
+    invalid = {**_attempt_pull(scope, item, 9), "state": "mystery"}
+    before = {
+        column.name: getattr(item, column.name)
+        for column in GithubWorkItem.__table__.columns
+    }
+
+    with pytest.raises(ValueError, match="unclassifiable.*9"):
+        await github_verification_service._reconcile_attempt_pulls(
+            db,
+            scope,
+            item,
+            [valid, invalid],
+            expected_base="master",
+            verify_author=True,
+        )
+
+    after = {
+        column.name: getattr(item, column.name)
+        for column in GithubWorkItem.__table__.columns
+    }
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_timeout_reconciles_without_blind_create(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **kwargs: None,
+    )
+
+    async def mint(*args, **kwargs):
+        return "installation-token"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+    scope, _, item = await _pr_ready_item(db)
+    timeout = httpx.ReadTimeout(
+        "timed out",
+        request=httpx.Request("POST", "https://api.github.com"),
+    )
+    client = _PrReadyClient(
+        scope,
+        item,
+        pulls=[[], [_attempt_pull(scope, item, 33)]],
+        create_error=timeout,
+    )
+
+    number = await github_verification_service.report_pr_ready(
+        db, item, scope, item.dispatch_head_ref, "lease", client
+    )
+
+    assert number == 33
+    assert client.create_calls == 1
+    assert [call[0] for call in client.calls].count("list") == 2
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_terminal_history_uses_precedence_and_keeps_diagnostics(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    scope, _, item = await _pr_ready_item(db)
+    closed = _attempt_pull(scope, item, 12, state="closed")
+    merged_low = _attempt_pull(
+        scope,
+        item,
+        13,
+        state="closed",
+        merged_at="2026-08-14T12:00:00Z",
+    )
+    merged_high = _attempt_pull(
+        scope,
+        item,
+        15,
+        state="closed",
+        merged_at="2026-08-14T12:01:00Z",
+    )
+
+    selected = await github_verification_service._reconcile_attempt_pulls(
+        db,
+        scope,
+        item,
+        [closed, merged_low, merged_high],
+        expected_base="master",
+        verify_author=True,
+    )
+
+    assert selected == 15
+    assert item.dispatch_status == "merged"
+    assert item.pr_number == 15
+    assert item.status_note.endswith("#13, #15")
+
+    scope2, _, item2 = await _pr_ready_item(db)
+    only_closed = _attempt_pull(scope2, item2, 18, state="closed")
+    with pytest.raises(ValueError, match="#18"):
+        await github_verification_service._reconcile_attempt_pulls(
+            db,
+            scope2,
+            item2,
+            [only_closed],
+            expected_base="master",
+            verify_author=True,
+        )
+    assert item2.dispatch_status == "escalated"
+    assert item2.escalation_reason == "pr_closed_unmerged"
+    assert item2.pr_number is None
+
+
+@pytest.mark.asyncio
+async def test_pr_ready_serializes_same_item_creation(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **kwargs: None,
+    )
+
+    async def mint(*args, **kwargs):
+        return "installation-token"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'pr-ready.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as setup:
+        scope, _, item = await _pr_ready_item(setup)
+        scope_id = scope.id
+        item_id = item.id
+
+    create_entered = asyncio.Event()
+    allow_create = asyncio.Event()
+
+    class YieldingClient(_PrReadyClient):
+        async def create_pull(self, owner, repo, **kwargs):
+            self.create_calls += 1
+            self.calls.append(("create", kwargs["token"], kwargs))
+            create_entered.set()
+            await allow_create.wait()
+            return dict(self.created)
+
+    async with maker() as first_db, maker() as second_db:
+        first_scope = await first_db.get(TeamGithubScope, scope_id)
+        first_item = await first_db.get(GithubWorkItem, item_id)
+        second_scope = await second_db.get(TeamGithubScope, scope_id)
+        second_item = await second_db.get(GithubWorkItem, item_id)
+        client = YieldingClient(first_scope, first_item)
+
+        first = asyncio.create_task(
+            github_verification_service.report_pr_ready(
+                first_db,
+                first_item,
+                first_scope,
+                first_item.dispatch_head_ref,
+                "lease",
+                client,
+            )
+        )
+        await create_entered.wait()
+        second = asyncio.create_task(
+            github_verification_service.report_pr_ready(
+                second_db,
+                second_item,
+                second_scope,
+                second_item.dispatch_head_ref,
+                "lease",
+                client,
+            )
+        )
+        await asyncio.sleep(0)
+        allow_create.set()
+        assert await asyncio.gather(first, second) == [21, 21]
+
+    assert client.create_calls == 1
+    assert [call[0] for call in client.calls].count("list") == 1
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_enforces_app_repo_head_and_author(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_app_bot_login", "deck[bot]")
+    scope = await _scope(
+        db,
+        github_auth_mode="app",
+        github_app_installation_id=55,
+    )
+    item = await _item(db, scope)
+    client = _reported_client(scope, item, 7)
+
+    client.pull["base"]["repo"]["full_name"] = "other/repo"
+    with pytest.raises(ValueError, match="repository"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client = _reported_client(scope, item, 7)
+    client.pull["head"]["ref"] = "deck/wrong-attempt"
+    with pytest.raises(ValueError, match="head"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client = _reported_client(scope, item, 7)
+    client.pull["base"]["ref"] = "release"
+    with pytest.raises(ValueError, match="base"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client = _reported_client(scope, item, 7)
+    with pytest.raises(ValueError, match="author"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, client
+        )
+    assert item.pr_number is None
+
+    client.pull["user"]["login"] = "deck[bot]"
+    await github_verification_service.report_pr_opened(db, item, scope, 7, client)
+    assert item.pr_number == 7
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_app_mode_requires_bot_login(db, monkeypatch):
+    monkeypatch.setattr(settings, "github_app_bot_login", "")
+    scope = await _scope(
+        db,
+        github_auth_mode="app",
+        github_app_installation_id=55,
+    )
+    item = await _item(db, scope)
+
+    with pytest.raises(ValueError, match="app_mode_bot_login_unset"):
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 7, _reported_client(scope, item, 7)
+        )
+    assert item.pr_number is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ambient", "unknown"])
+async def test_report_pr_opened_non_app_modes_skip_author(db, mode):
+    scope = await _scope(db, github_auth_mode=mode)
+    item = await _item(db, scope)
+
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 7, _reported_client(scope, item, 7)
+    )
+
+    assert item.pr_number == 7
+    assert item.dispatch_status == "verifying"
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_merged_design_skips_review_mail(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, issue_type="design")
+    client = _reported_client(scope, item, 8)
+    client.pull.update(
+        state="closed",
+        merged=True,
+        merged_at="2026-08-14T12:00:00Z",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 8, client)
+
+    assert item.pr_number == 8
+    assert item.dispatch_status == "merged"
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert not any(message.subject == "Design PR ready for review" for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_report_pr_opened_closed_unmerged_is_silent(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, issue_type="design")
+    client = _reported_client(scope, item, 9)
+    client.pull.update(
+        state="closed",
+        merged=False,
+        merged_at=None,
+        merge_commit_sha="not-proof-of-merge",
+    )
+
+    await github_verification_service.report_pr_opened(db, item, scope, 9, client)
+
+    assert item.pr_number is None
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "pr_closed_unmerged"
+    assert "#9" in item.status_note
+    assert (await db.execute(select(MailMessage))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_verifier_classifies_closed_before_checks(db):
+    scope = await _scope(db)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client(
+        pull={
+            "number": 5,
+            "state": "closed",
+            "merged_at": None,
+            "merge_commit_sha": "not-proof-of-merge",
+            "draft": True,
+            "head": {"sha": "sha"},
+        },
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "pr_closed_unmerged"
+    assert client.ready_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unclassifiable_pull_consumes_retry_budget(db):
+    scope = await _scope(db, max_verification_retries=2)
+    item = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    client = _Client()
+    del client.pull["merged_at"]
+
+    for _ in range(3):
+        item.dispatch_status = "verifying"
+        await db.commit()
+        await github_verification_service.process_scope(db, scope, client=client)
+
+    assert item.retry_count == 3
+    assert item.last_verified_sha is None
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_outer_http_failure_preserves_human_merge_reservation(db):
+    scope = await _scope(db, merge_policy="auto")
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        status_note="Auto-merge blocked: human owns this merge.",
+    )
+
+    class _FailOnce(_Client):
+        async def get_pull(self, owner, repo, pr_number):
+            if self.pull_calls == 0:
+                self.pull_calls += 1
+                raise _http_error(503)
+            return await super().get_pull(owner, repo, pr_number)
+
+    client = _FailOnce()
+    expected = item.status_note
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    assert item.status_note == expected
+    assert client.merge_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_polled_pr_retargeted_to_another_base_never_auto_merges(db):
+    scope = await _scope(db, merge_policy="auto")
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="ready_for_review",
+        pr_number=5,
+        last_verified_sha="sha",
+        status_note="Auto-merge blocked: human owns this merge.",
+    )
+    client = _Client(
+        pull={
+            "number": 5,
+            "node_id": "node",
+            "draft": False,
+            "state": "open",
+            "merged_at": None,
+            "mergeable_state": "clean",
+            "head": {
+                "sha": "sha",
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": "o/r"},
+            },
+            "base": {"ref": "release", "repo": {"full_name": "o/r"}},
+            "user": {"login": "human"},
+        },
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "ready_for_review"
+    assert item.retry_count == 1
+    assert item.status_note == "Auto-merge blocked: human owns this merge."
+    assert client.merge_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_ref", "expected", "default_branch", "expected_calls"),
+    [
+        ("origin/main", "main", "unused", 0),
+        ("release/v2", "release/v2", "unused", 0),
+        ("origin/HEAD", "trunk", "trunk", 1),
+    ],
+)
+async def test_base_ref_normalization(
+    db, base_ref, expected, default_branch, expected_calls
+):
+    scope = await _scope(db, base_ref=base_ref)
+
+    class _RepositoryClient:
+        calls = 0
+
+        async def get_repository(self, owner, repo, *, token):
+            self.calls += 1
+            assert token == "app-token"
+            return {"default_branch": default_branch}
+
+    client = _RepositoryClient()
+
+    assert await github_verification_service.normalize_base_ref(
+        scope, client, token="app-token"
+    ) == expected
+    assert client.calls == expected_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_ref", ["HEAD", "refs/heads/main", "origin/", "bad ref"])
+async def test_base_ref_normalization_refuses_unsupported_values(db, base_ref):
+    scope = await _scope(db, base_ref=base_ref)
+
+    class _NoNetwork:
+        async def get_repository(self, *_args, **_kwargs):
+            raise AssertionError("invalid static refs must refuse before network")
+
+    with pytest.raises(ValueError):
+        await github_verification_service.normalize_base_ref(
+            scope, _NoNetwork(), token="app-token"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("issue_type", "draft"), [("code", True), ("design", False)])
+async def test_pull_presentation_is_deterministic(db, issue_type, draft):
+    scope = await _scope(db)
+    owner, _ = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        owner_slot_id=owner.id,
+        issue_number=42,
+        issue_title="Make identity explicit",
+        issue_type=issue_type,
+        dispatch_nonce="0123456789abcdef",
+    )
+    head = "deck/slot-1/issue-42/0123456789abcdef"
+
+    assert github_verification_service.pull_title(item, owner) == (
+        "[Owner] Make identity explicit (#42)"
+    )
+    assert github_verification_service.pull_body(item, head_ref=head) == (
+        "Closes #42\n\n"
+        "Make identity explicit\n\n"
+        "---\n"
+        "Claude Deck provenance\n"
+        f"- Work item: {item.id}\n"
+        f"- Owner slot: {owner.id}\n"
+        "- Dispatch nonce: 0123456789abcdef\n"
+        f"- Head ref: {head}"
+    )
+    assert github_verification_service.pull_is_draft(item) is draft
 
 
 async def _ready_review_messages(db):
@@ -381,8 +1239,16 @@ async def test_report_pr_opened_routes_code_and_design(db):
     code_item = await _item(db, code_scope, issue_type="code")
     design_item = await _item(db, design_scope, issue_type="design")
 
-    await github_verification_service.report_pr_opened(db, code_item, code_scope, 10)
-    await github_verification_service.report_pr_opened(db, design_item, design_scope, 11)
+    await github_verification_service.report_pr_opened(
+        db, code_item, code_scope, 10, _reported_client(code_scope, code_item, 10)
+    )
+    await github_verification_service.report_pr_opened(
+        db,
+        design_item,
+        design_scope,
+        11,
+        _reported_client(design_scope, design_item, 11),
+    )
 
     await db.refresh(code_item)
     await db.refresh(design_item)
@@ -403,7 +1269,9 @@ async def test_pr_opened_accepted_from_recoverable_escalation(db):
         issue_type="code",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 865)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 865, _reported_client(scope, item, 865)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "verifying"
@@ -422,7 +1290,9 @@ async def test_pr_opened_accepted_from_brief_unread_escalation(db):
         issue_type="code",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 867)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 867, _reported_client(scope, item, 867)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "verifying"
@@ -442,7 +1312,9 @@ async def test_pr_opened_recovery_clears_deferred_retry_stamp(db):
         issue_type="code",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 866)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 866, _reported_client(scope, item, 866)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "verifying"
@@ -461,7 +1333,9 @@ async def test_pr_opened_accepted_from_recoverable_escalation_design_item(db):
         issue_type="design",
     )
 
-    await github_verification_service.report_pr_opened(db, item, scope, 865)
+    await github_verification_service.report_pr_opened(
+        db, item, scope, 865, _reported_client(scope, item, 865)
+    )
 
     await db.refresh(item)
     assert item.dispatch_status == "awaiting_human_review"
@@ -480,7 +1354,9 @@ async def test_pr_opened_rejected_after_label_removed(db):
     )
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -494,7 +1370,9 @@ async def test_pr_opened_rejected_after_retry_budget_exhausted(db):
     )
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -508,7 +1386,9 @@ async def test_pr_opened_rejected_from_unattributed_escalation(db):
     )
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -517,7 +1397,9 @@ async def test_pr_opened_still_rejected_from_merged(db):
     item = await _item(db, scope, dispatch_status="merged")
 
     with pytest.raises(ValueError):
-        await github_verification_service.report_pr_opened(db, item, scope, 865)
+        await github_verification_service.report_pr_opened(
+            db, item, scope, 865, _reported_client(scope, item, 865)
+        )
 
 
 @pytest.mark.asyncio
@@ -877,8 +1759,16 @@ async def test_unexpected_merge_status_is_transient_and_does_not_abort_batch(db)
             return {
                 "number": pr_number,
                 "merged": False,
+                "state": "open",
+                "merged_at": None,
                 "mergeable_state": "clean",
-                "head": {"sha": f"sha-{pr_number}"},
+                "head": {
+                    "sha": f"sha-{pr_number}",
+                    "ref": "deck/slot-1/issue-1/attempt",
+                    "repo": {"full_name": "o/r"},
+                },
+                "base": {"ref": "master", "repo": {"full_name": "o/r"}},
+                "user": {"login": "human"},
             }
 
         async def merge_pull(self, owner, repo, pr_number):
@@ -915,16 +1805,32 @@ async def test_draft_pr_is_refetched_before_auto_merge_decision(db):
                     "node_id": "node",
                     "draft": True,
                     "merged": False,
+                    "state": "open",
+                    "merged_at": None,
                     "mergeable_state": "unknown",
-                    "head": {"sha": "sha"},
+                    "head": {
+                        "sha": "sha",
+                        "ref": "deck/slot-1/issue-1/attempt",
+                        "repo": {"full_name": "o/r"},
+                    },
+                    "base": {"ref": "master", "repo": {"full_name": "o/r"}},
+                    "user": {"login": "human"},
                 }
             return {
                 "number": 5,
                 "node_id": "node",
                 "draft": False,
                 "merged": False,
+                "state": "open",
+                "merged_at": None,
                 "mergeable_state": "clean",
-                "head": {"sha": "sha"},
+                "head": {
+                    "sha": "sha",
+                    "ref": "deck/slot-1/issue-1/attempt",
+                    "repo": {"full_name": "o/r"},
+                },
+                "base": {"ref": "master", "repo": {"full_name": "o/r"}},
+                "user": {"login": "human"},
             }
 
     client = _DraftClient(

@@ -3,7 +3,7 @@
 import hmac
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,34 @@ from app.config import settings
 from app.database import get_db
 from app.models.database import MailAgentSession
 from app.services.agent_mail_service import agent_mail_service
+from app.utils import peer_process
+
+
+def resolve_request_pane_detailed(
+    http_request: Request,
+    *,
+    max_parent_walk: int = 32,
+) -> peer_process.PeerPaneResolution:
+    """Resolve a live request's process tree while its socket still exists."""
+    client = http_request.client
+    if client is None:
+        return peer_process.PeerPaneResolution(
+            None, (), "client_unavailable", max_parent_walk
+        )
+    local_port = http_request.scope.get("server", (None, None))[1]
+    return peer_process.resolve_peer_pane_detailed(
+        client.host,
+        client.port,
+        local_port=local_port,
+        max_parent_walk=max_parent_walk,
+    )
+
+
+def resolve_request_pane(
+    http_request: Request,
+) -> Optional[peer_process.PeerPane]:
+    """Compatibility projection used by Agent Mail registration."""
+    return resolve_request_pane_detailed(http_request).pane
 
 async def mail_session(
     x_deck_session_token: Optional[str] = Header(default=None),

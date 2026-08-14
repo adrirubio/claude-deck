@@ -227,6 +227,8 @@ class TeamGithubScope(Base):
     build_dir_template: Mapped[str | None] = mapped_column(String, default="build", nullable=True)
     build_command_hint: Mapped[str | None] = mapped_column(String, nullable=True)
     max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    github_auth_mode: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
+    github_app_installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -281,6 +283,7 @@ class GithubWorkItem(Base):
     ack_enforcement_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ack_approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     dispatch_head_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    dispatch_base_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -311,6 +314,9 @@ class GithubWorkspace(Base):
     leased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    push_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     leased_owner_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     leased_owner_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
     lease_last_owner_contact_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -2285,6 +2285,18 @@ class GithubWorkspaceListResponse(BaseModel):
     workspaces: List[GithubWorkspaceResponse] = Field(default_factory=list)
 
 
+class GithubCredentialRequest(BaseModel):
+    workspace_token: str
+    protocol: str
+    host: str
+    path: Optional[str] = None
+
+
+class GithubCredentialResponse(BaseModel):
+    username: str
+    password: str
+
+
 class GithubWorkItemResponse(BaseModel):
     id: int
     scope_id: int
@@ -2386,6 +2398,7 @@ class DispatchStatusReport(BaseModel):
     work_item_id: int
     status: str
     pr_number: Optional[int] = None
+    head_ref: Optional[str] = None
     reassign_to_slot_id: Optional[int] = None
     note: Optional[str] = None
     reporting_slot_id: Optional[int] = None
