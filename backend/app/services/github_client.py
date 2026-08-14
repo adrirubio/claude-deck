@@ -17,6 +17,10 @@ from app.config import settings
 _GITHUB_API = "https://api.github.com"
 
 
+class GithubClientResponseError(RuntimeError):
+    """GitHub returned a response Deck cannot safely interpret."""
+
+
 class GithubClient:
     """Thin async wrapper over the GitHub calls dispatch needs."""
 
@@ -35,6 +39,34 @@ class GithubClient:
         if authorization:
             headers["Authorization"] = f"Bearer {authorization}"
         return headers
+
+    @staticmethod
+    def _json_object(response: httpx.Response, label: str) -> dict:
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise GithubClientResponseError(
+                f"GitHub {label} response was not valid JSON"
+            ) from exc
+        if not isinstance(body, dict):
+            raise GithubClientResponseError(
+                f"GitHub {label} response was not an object"
+            )
+        return body
+
+    @staticmethod
+    def _json_list(response: httpx.Response, label: str) -> list:
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise GithubClientResponseError(
+                f"GitHub {label} response was not valid JSON"
+            ) from exc
+        if not isinstance(body, list):
+            raise GithubClientResponseError(
+                f"GitHub {label} response was not a list"
+            )
+        return body
 
     async def list_issues_with_label(self, owner: str, repo: str, label: str) -> list[dict]:
         client = self._client()
@@ -113,7 +145,7 @@ class GithubClient:
                 headers=self._headers(token),
             )
             resp.raise_for_status()
-            return resp.json()
+            return self._json_object(resp, "pull request")
         finally:
             if self._http is None:
                 await client.aclose()
@@ -136,7 +168,7 @@ class GithubClient:
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return response.json()
+            return self._json_object(response, "git ref")
         finally:
             if self._http is None:
                 await client.aclose()
@@ -146,7 +178,7 @@ class GithubClient:
         owner: str,
         repo: str,
         *,
-        token: str,
+        token: str | None = None,
     ) -> dict:
         client = self._client()
         try:
@@ -155,7 +187,7 @@ class GithubClient:
                 headers=self._headers(token),
             )
             response.raise_for_status()
-            return response.json()
+            return self._json_object(response, "repository")
         finally:
             if self._http is None:
                 await client.aclose()
@@ -200,11 +232,15 @@ class GithubClient:
                 response.raise_for_status()
                 current_url = str(response.request.url)
                 if current_url in seen_urls:
-                    raise ValueError("GitHub pull pagination cycle detected")
+                    raise GithubClientResponseError(
+                        "GitHub pull pagination cycle detected"
+                    )
                 seen_urls.add(current_url)
-                body = response.json()
-                if not isinstance(body, list):
-                    raise ValueError("GitHub pull list response was not a list")
+                body = self._json_list(response, "pull list")
+                if not all(isinstance(pull, dict) for pull in body):
+                    raise GithubClientResponseError(
+                        "GitHub pull list response contained a non-object"
+                    )
                 pulls.extend(body)
                 next_link = response.links.get("next", {}).get("url")
                 if not next_link:
@@ -223,10 +259,14 @@ class GithubClient:
                     or parsed.path != endpoint
                     or any(query.get(key) != value for key, value in expected_query.items())
                 ):
-                    raise ValueError("Unsafe GitHub pull pagination link")
+                    raise GithubClientResponseError(
+                        "Unsafe GitHub pull pagination link"
+                    )
                 candidate_text = str(candidate)
                 if candidate_text in seen_urls:
-                    raise ValueError("GitHub pull pagination cycle detected")
+                    raise GithubClientResponseError(
+                        "GitHub pull pagination cycle detected"
+                    )
                 next_url = candidate_text
             return pulls
         finally:
@@ -259,7 +299,7 @@ class GithubClient:
                 },
             )
             response.raise_for_status()
-            return response.json()
+            return self._json_object(response, "pull creation")
         finally:
             if self._http is None:
                 await client.aclose()
@@ -272,7 +312,15 @@ class GithubClient:
                 headers=self._headers(),
             )
             resp.raise_for_status()
-            return resp.json().get("check_runs", [])
+            body = self._json_object(resp, "check runs")
+            check_runs = body.get("check_runs", [])
+            if not isinstance(check_runs, list) or not all(
+                isinstance(check, dict) for check in check_runs
+            ):
+                raise GithubClientResponseError(
+                    "GitHub check runs response contained invalid entries"
+                )
+            return check_runs
         finally:
             if self._http is None:
                 await client.aclose()
@@ -285,7 +333,7 @@ class GithubClient:
                 headers=self._headers(),
             )
             resp.raise_for_status()
-            return resp.json()
+            return self._json_object(resp, "combined status")
         finally:
             if self._http is None:
                 await client.aclose()
@@ -306,7 +354,7 @@ class GithubClient:
                 },
             )
             resp.raise_for_status()
-            body = resp.json()
+            body = self._json_object(resp, "GraphQL")
             if body.get("errors"):
                 raise httpx.HTTPStatusError(
                     str(body["errors"]),
@@ -326,7 +374,7 @@ class GithubClient:
                 headers=self._headers(),
             )
             resp.raise_for_status()
-            return resp.json()
+            return self._json_object(resp, "merge")
         finally:
             if self._http is None:
                 await client.aclose()

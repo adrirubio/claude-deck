@@ -25,7 +25,16 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.services.agent_mail_service import agent_mail_service
-from app.services.github_workspace_service import github_workspace_service
+from app.services.github_app_auth_service import (
+    GithubAppMintError,
+    GithubAppNotInstalled,
+    GithubAppUnconfigured,
+)
+from app.services.github_client import GithubClientResponseError
+from app.services.github_workspace_service import (
+    GithubWorkspaceCredentialRevokeError,
+    github_workspace_service,
+)
 
 DEFAULT_TOKEN = "default-owner-token"
 
@@ -49,7 +58,7 @@ def stub_reported_pull(monkeypatch):
                 "ref": "deck/test-attempt",
                 "repo": {"full_name": full_name},
             },
-            "base": {"repo": {"full_name": full_name}},
+            "base": {"ref": "master", "repo": {"full_name": full_name}},
             "user": {"login": "human"},
         }
 
@@ -169,6 +178,7 @@ async def _seed_item(maker, **overrides):
             "dispatch_status": "dispatched",
             "owner_slot_id": owner.id,
             "dispatch_head_ref": "deck/test-attempt",
+            "dispatch_base_ref": "origin/master",
         }
         values.update(overrides)
         item = GithubWorkItem(**values)
@@ -275,6 +285,7 @@ async def _seed_leased_item(
             dispatch_status=dispatch_status,
             owner_slot_id=owner.id,
             dispatch_head_ref="deck/test-attempt",
+            dispatch_base_ref="origin/master",
         )
         db.add(item)
         await db.flush()
@@ -495,6 +506,36 @@ async def test_owner_releases_terminal_item_idempotently(client_and_db, monkeypa
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_workspace_release_reports_push_token_revocation_failure_as_503(
+    client_and_db, monkeypatch
+):
+    ac, maker = client_and_db
+    monkeypatch.setattr(github_workspace_service, "_runner", _FakeGitRunner())
+    item_id, owner_id, _, workspace_id, _ = await _seed_leased_item(maker)
+
+    async def fail_revoke(*args, **kwargs):
+        raise GithubWorkspaceCredentialRevokeError("revocation unavailable")
+
+    monkeypatch.setattr(github_workspace_service, "release_by_owner", fail_revoke)
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "workspace_released",
+            "reporting_slot_id": owner_id,
+            "lease_token": "lease-current",
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "workspace_credential_revoke_failed"
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id == item_id
 
 
 @pytest.mark.asyncio
@@ -1415,6 +1456,131 @@ async def test_pr_ready_cheap_path_returns_the_stored_number(client_and_db):
 
     assert response.status_code == 200
     assert response.json()["pr_number"] == 42
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (GithubAppNotInstalled("o", "r", 55), 409, "app_not_installed"),
+        (GithubAppUnconfigured(), 503, "app_auth_unconfigured"),
+        (GithubAppMintError("o", "r"), 502, "app_token_mint_failed"),
+        (
+            httpx.ReadTimeout(
+                "timed out",
+                request=httpx.Request("POST", "https://api.github.com"),
+            ),
+            503,
+            "github_upstream_timeout",
+        ),
+        (
+            httpx.ConnectError(
+                "offline",
+                request=httpx.Request("POST", "https://api.github.com"),
+            ),
+            502,
+            "github_upstream_error",
+        ),
+        (
+            GithubClientResponseError("unsafe pagination"),
+            502,
+            "github_upstream_error",
+        ),
+    ],
+)
+async def test_pr_ready_maps_upstream_failures_to_stable_http_contracts(
+    client_and_db, monkeypatch, error, status_code, detail
+):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key=f"mcp:pr-ready:{detail}")
+
+    async def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        agent_teams_routes.github_verification_service,
+        "report_pr_ready",
+        fail,
+    )
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_ready",
+            "head_ref": "deck/test-attempt",
+            "lease_token": "lease-current",
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"] == detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (
+            httpx.ReadTimeout(
+                "timed out",
+                request=httpx.Request("GET", "https://api.github.com"),
+            ),
+            503,
+            "github_upstream_timeout",
+        ),
+        (
+            httpx.ConnectError(
+                "offline",
+                request=httpx.Request("GET", "https://api.github.com"),
+            ),
+            502,
+            "github_upstream_error",
+        ),
+        (
+            GithubClientResponseError("invalid GitHub response"),
+            502,
+            "github_upstream_error",
+        ),
+    ],
+)
+async def test_pr_opened_maps_upstream_failures_to_stable_http_contracts(
+    client_and_db, monkeypatch, error, status_code, detail
+):
+    ac, maker = client_and_db
+    item_id, owner_id, _, _, _ = await _seed_leased_item(
+        maker,
+        dispatch_status="dispatched",
+    )
+    token = await _token_for_slot(maker, owner_id, key=f"mcp:pr-opened:{detail}")
+
+    async def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        agent_teams_routes.github_verification_service,
+        "report_pr_opened",
+        fail,
+    )
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "pr_opened",
+            "pr_number": 9,
+            "lease_token": "lease-current",
+        },
+        headers=_auth(token),
+    )
+
+    assert response.status_code == status_code
+    assert response.json()["detail"] == detail
 
 
 @pytest.mark.asyncio

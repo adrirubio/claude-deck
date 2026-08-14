@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.services.github_client import GithubClient
+from app.services.github_client import GithubClient, GithubClientResponseError
 
 
 def test_explicit_authorization_does_not_mutate_ambient_token():
@@ -146,7 +146,7 @@ async def test_pull_pagination_rejects_unsafe_next_links(next_url):
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://api.github.com"
     ) as http:
-        with pytest.raises(ValueError, match="Unsafe"):
+        with pytest.raises(GithubClientResponseError, match="Unsafe"):
             await GithubClient(http=http).list_pulls_for_head(
                 "owner",
                 "repo",
@@ -170,7 +170,36 @@ async def test_pull_pagination_rejects_cycles():
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://api.github.com"
     ) as http:
-        with pytest.raises(ValueError, match="cycle"):
+        with pytest.raises(GithubClientResponseError, match="cycle"):
             await GithubClient(http=http).list_pulls_for_head(
                 "owner", "repo", head="owner:x", token="app-token"
+            )
+
+
+@pytest.mark.asyncio
+async def test_pull_fetch_rejects_malformed_json_as_an_upstream_response_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, content=b"{")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        with pytest.raises(GithubClientResponseError, match="valid JSON"):
+            await GithubClient(http=http).get_pull("owner", "repo", 7)
+
+
+@pytest.mark.asyncio
+async def test_pull_list_rejects_non_object_members():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, json=[{"number": 1}, 2])
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        with pytest.raises(GithubClientResponseError, match="non-object"):
+            await GithubClient(http=http).list_pulls_for_head(
+                "owner",
+                "repo",
+                head="owner:x",
+                token="app-token",
             )

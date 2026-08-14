@@ -1,5 +1,5 @@
 """HTTP contract tests for GitHub workspace operations."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -22,11 +22,14 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.services.github_app_auth_service import (
+    GithubAppMintError,
+    GithubAppMintRejected,
     GithubAppNotInstalled,
     GithubAppUnconfigured,
     github_app_auth_service,
 )
 from app.services.github_workspace_service import (
+    GithubWorkspaceCredentialRevokeError,
     GithubWorkspaceError,
     GithubWorkspaceResetError,
     github_workspace_service,
@@ -198,7 +201,7 @@ def _credential_resolution(start="proc-start"):
 async def test_git_credential_mints_only_for_kernel_derived_owner(
     client, db, tmp_path, monkeypatch
 ):
-    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    _, scope, _, _, workspace = await _credential_context(db, tmp_path)
     monkeypatch.setattr(
         "app.api.v1.agent_teams.resolve_request_pane_detailed",
         lambda *_args, **_kwargs: _credential_resolution(),
@@ -210,11 +213,16 @@ async def test_git_credential_mints_only_for_kernel_derived_owner(
     )
     calls = []
 
-    async def mint(installation_id, owner, repo):
-        calls.append((installation_id, owner, repo))
+    async def mint(installation_id, owner, repo, **kwargs):
+        calls.append((installation_id, owner, repo, kwargs))
         return "installation-secret"
 
     monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint)
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "cached_repository_token_expiry",
+        lambda *_args, **_kwargs: datetime.now(timezone.utc) + timedelta(hours=1),
+    )
 
     response = await client.post(
         "/api/v1/agent-teams/git-credential",
@@ -231,7 +239,21 @@ async def test_git_credential_mints_only_for_kernel_derived_owner(
         "username": "x-access-token",
         "password": "installation-secret",
     }
-    assert calls == [(55, "owner", scope.repo_name)]
+    assert calls == [
+        (
+            55,
+            "owner",
+            scope.repo_name,
+            {
+                "purpose": "push",
+                "cache_subject": "workspace:1:lease:workspace-secret:slot:1",
+            },
+        )
+    ]
+    assert response.headers["cache-control"] == "no-store"
+    await db.refresh(workspace)
+    assert workspace.push_token_expires_at is not None
+    assert workspace.push_token_expires_at > datetime.utcnow()
 
 
 @pytest.mark.asyncio
@@ -423,7 +445,7 @@ async def test_git_credential_rechecks_owner_after_mint(
         lambda **_kwargs: None,
     )
 
-    async def mint(*_args):
+    async def mint(*_args, **_kwargs):
         item.owner_slot_id = replacement.id
         await db.commit()
         return "must-not-escape"
@@ -449,7 +471,7 @@ async def test_git_credential_rechecks_owner_after_mint(
 async def test_git_credential_distinguishes_stale_app_and_missing_config(
     client, db, tmp_path, monkeypatch
 ):
-    _, scope, _, _, _ = await _credential_context(db, tmp_path)
+    _, scope, _, item, workspace = await _credential_context(db, tmp_path)
     monkeypatch.setattr(
         "app.api.v1.agent_teams.resolve_request_pane_detailed",
         lambda *_args, **_kwargs: _credential_resolution(),
@@ -478,7 +500,7 @@ async def test_git_credential_distinguishes_stale_app_and_missing_config(
         lambda **_kwargs: None,
     )
 
-    async def gone(*_args):
+    async def gone(*_args, **_kwargs):
         raise GithubAppNotInstalled("owner", scope.repo_name, 55)
 
     monkeypatch.setattr(github_app_auth_service, "mint_repository_token", gone)
@@ -490,6 +512,169 @@ async def test_git_credential_distinguishes_stale_app_and_missing_config(
     await db.refresh(scope)
     assert scope.github_auth_mode == "app"
     assert scope.github_app_installation_id == 55
+    await db.refresh(workspace)
+    assert workspace.push_token_expires_at is None
+
+    async def config_runner(_args):
+        return 0, ""
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    assert await github_workspace_service.release(db, item.id) is True
+
+
+@pytest.mark.asyncio
+async def test_failed_credential_refresh_preserves_an_existing_token_quarantine(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, item, workspace = await _credential_context(db, tmp_path)
+    previous_expiry = datetime.utcnow() + timedelta(minutes=20)
+    workspace.push_token_expires_at = previous_expiry
+    await db.commit()
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "cached_repository_token_expiry",
+        lambda *_args, **_kwargs: previous_expiry.replace(tzinfo=timezone.utc),
+    )
+
+    async def gone(*_args, **_kwargs):
+        raise GithubAppNotInstalled("owner", scope.repo_name, 55)
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", gone)
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 409
+    await db.refresh(workspace)
+    assert workspace.push_token_expires_at >= previous_expiry
+
+    async def cache_miss(*_args, **_kwargs):
+        return False
+
+    async def config_runner(_args):
+        return 0, ""
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "revoke_cached_repository_token",
+        cache_miss,
+    )
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    with pytest.raises(GithubWorkspaceCredentialRevokeError):
+        await github_workspace_service.release(db, item.id)
+
+
+@pytest.mark.asyncio
+async def test_definitive_mint_rejection_does_not_quarantine_a_first_request(
+    client, db, tmp_path, monkeypatch
+):
+    _, scope, _, item, workspace = await _credential_context(db, tmp_path)
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def rejected(*_args, **_kwargs):
+        raise GithubAppMintRejected("owner", scope.repo_name)
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", rejected)
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "app_token_mint_failed"
+    await db.refresh(workspace)
+    assert workspace.push_token_expires_at is None
+
+    async def config_runner(_args):
+        return 0, ""
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    assert await github_workspace_service.release(db, item.id) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_previous_token", [False, True])
+async def test_ambiguous_mint_failure_keeps_the_workspace_quarantined(
+    client, db, tmp_path, monkeypatch, with_previous_token
+):
+    _, scope, _, item, workspace = await _credential_context(db, tmp_path)
+    if with_previous_token:
+        workspace.push_token_expires_at = datetime.utcnow() + timedelta(minutes=20)
+        await db.commit()
+    monkeypatch.setattr(
+        "app.api.v1.agent_teams.resolve_request_pane_detailed",
+        lambda *_args, **_kwargs: _credential_resolution(),
+    )
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def ambiguous(*_args, **_kwargs):
+        raise GithubAppMintError("owner", scope.repo_name)
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", ambiguous)
+
+    response = await client.post(
+        "/api/v1/agent-teams/git-credential",
+        json={
+            "workspace_token": "workspace-secret",
+            "protocol": "https",
+            "host": "github.com",
+            "path": f"owner/{scope.repo_name}.git",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "app_token_mint_failed"
+    await db.refresh(workspace)
+    assert workspace.push_token_expires_at > datetime.utcnow()
+
+    async def cache_miss(*_args, **_kwargs):
+        return False
+
+    async def config_runner(_args):
+        return 0, ""
+
+    monkeypatch.setattr(
+        github_app_auth_service,
+        "revoke_cached_repository_token",
+        cache_miss,
+    )
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    with pytest.raises(GithubWorkspaceCredentialRevokeError):
+        await github_workspace_service.release(db, item.id)
 
 
 @pytest.mark.asyncio
@@ -510,6 +695,7 @@ async def test_resume_prepared_attempt_requires_operator_and_preserves_identity(
         routing_method="label",
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref=f"deck/slot-{owner.id}/issue-70-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=2,
         last_verified_sha="abc123",
     )
@@ -569,6 +755,7 @@ async def test_resume_reassignment_refuses_unknown_previous_owner_liveness(
         routing_method="label",
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref=f"deck/slot-{owner.id}/issue-71-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=1,
     )
     db.add(item)

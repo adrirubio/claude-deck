@@ -470,10 +470,19 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approval_round INTEGER"))
     if work_item_columns and "dispatch_head_ref" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_head_ref VARCHAR"))
+    if work_item_columns and "dispatch_base_ref" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_base_ref VARCHAR"))
 
     workspace_columns = await _sqlite_columns(conn, "github_workspaces")
     if workspace_columns and "lease_token" not in workspace_columns:
         await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN lease_token VARCHAR"))
+    if workspace_columns and "push_token_expires_at" not in workspace_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_workspaces "
+                "ADD COLUMN push_token_expires_at DATETIME"
+            )
+        )
     if workspace_columns and "leased_owner_pid" not in workspace_columns:
         await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN leased_owner_pid INTEGER"))
     if workspace_columns and "leased_owner_proc_start" not in workspace_columns:

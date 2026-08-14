@@ -1,4 +1,5 @@
 """Workspace lease, provisioning, adoption, and reset tests."""
+import asyncio
 import os
 import subprocess
 from datetime import datetime, timedelta
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -20,10 +22,13 @@ from app.models.database import (
 )
 from app.services.github_workspace_service import (
     GIT_TIMEOUT_SECONDS,
+    GithubWorkspaceConfigError,
+    GithubWorkspaceCredentialRevokeError,
     GithubWorkspaceError,
     GithubWorkspaceRemoteError,
     GithubWorkspaceResetError,
     GithubWorkspaceService,
+    WorktreeConfigSnapshot,
 )
 
 
@@ -122,6 +127,7 @@ async def test_lease_columns_default_to_null(db, tmp_path):
     await db.commit()
 
     assert workspace.lease_token is None
+    assert workspace.push_token_expires_at is None
     assert workspace.leased_owner_pid is None
     assert workspace.leased_owner_proc_start is None
     assert workspace.lease_last_owner_contact_at is None
@@ -180,6 +186,7 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
         path=str(tmp_path / "ws"),
         leased_item_id=item.id,
         lease_token="current-token",
+        push_token_expires_at=datetime.utcnow() + timedelta(minutes=30),
         leased_owner_pid=123,
         leased_owner_proc_start="456",
         lease_last_owner_contact_at=datetime.utcnow(),
@@ -187,6 +194,9 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
     )
     db.add(workspace)
     await db.commit()
+    workspace_id = workspace.id
+    item_id = item.id
+    slot_id = slot.id
     service = GithubWorkspaceService(runner=FakeGitRunner())
     item_id = item.id
 
@@ -248,10 +258,274 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
     await db.refresh(workspace)
     assert workspace.leased_item_id is None
     assert workspace.lease_token is None
+    assert workspace.push_token_expires_at is None
     assert workspace.leased_owner_pid is None
     assert workspace.leased_owner_proc_start is None
     assert workspace.lease_last_owner_contact_at is None
     assert workspace.lease_release_reminded_at is None
+
+
+@pytest.mark.asyncio
+async def test_stale_release_does_not_revoke_any_acquisition_token(
+    db, tmp_path, monkeypatch
+):
+    scope, slot, item = await _context(db, tmp_path / "repo")
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 55
+    item.dispatch_status = "merged"
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="captured-token",
+    )
+    db.add(workspace)
+    await db.commit()
+    workspace_id = workspace.id
+    item_id = item.id
+    slot_id = slot.id
+    scope_id = scope.id
+    leased_at = workspace.leased_at
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    subjects = []
+
+    async def replace_acquisition(_workspace):
+        await db.execute(
+            update(GithubWorkspace)
+            .where(GithubWorkspace.id == workspace_id)
+            .values(lease_token="replacement-token")
+        )
+        await db.commit()
+        return WorktreeConfigSnapshot(values={})
+
+    async def revoke(_installation_id, _owner, _repo, **kwargs):
+        subjects.append(kwargs["cache_subject"])
+        return True
+
+    monkeypatch.setattr(service, "snapshot_worktree_config", replace_acquisition)
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_app_auth_service."
+        "revoke_cached_repository_token",
+        revoke,
+    )
+
+    assert await service.release_by_owner(
+        db,
+        item_id,
+        lease_token="captured-token",
+        workspace_id=workspace_id,
+        scope_id=scope_id,
+        owner_slot_id=slot_id,
+        expected_leased_at=leased_at,
+    ) is False
+
+    assert subjects == []
+    await db.refresh(workspace)
+    assert workspace.lease_token == "replacement-token"
+    assert workspace.leased_item_id == item_id
+
+
+@pytest.mark.asyncio
+async def test_successful_release_revokes_the_captured_push_token(
+    db, tmp_path, monkeypatch
+):
+    scope, slot, item = await _context(db, tmp_path / "repo")
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 55
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="captured-token",
+    )
+    db.add(workspace)
+    await db.commit()
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    subjects = []
+
+    async def revoke(_installation_id, _owner, _repo, **kwargs):
+        subjects.append(kwargs["cache_subject"])
+        return True
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_app_auth_service."
+        "revoke_cached_repository_token",
+        revoke,
+    )
+
+    assert await service.release(db, item.id) is True
+
+    assert subjects == [
+        f"workspace:{workspace.id}:lease:captured-token:slot:{slot.id}"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_release_quarantines_a_live_token_after_backend_cache_loss(
+    db, tmp_path, monkeypatch
+):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 55
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="captured-token",
+        push_token_expires_at=datetime.utcnow() + timedelta(minutes=30),
+    )
+    db.add(workspace)
+    await db.commit()
+    item_id = item.id
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    async def cache_miss(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_app_auth_service."
+        "revoke_cached_repository_token",
+        cache_miss,
+    )
+
+    with pytest.raises(
+        GithubWorkspaceCredentialRevokeError,
+        match="backend token cache was lost",
+    ):
+        await service.release(db, item_id)
+
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item_id
+    assert workspace.lease_token == "captured-token"
+
+    workspace.push_token_expires_at = datetime.utcnow() - timedelta(minutes=1)
+    await db.commit()
+
+    assert await service.release(db, item_id) is True
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+    assert workspace.push_token_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_release_refreshes_quarantine_after_waiting_for_the_config_lock(
+    db, tmp_path, monkeypatch
+):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 55
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="captured-token",
+    )
+    db.add(workspace)
+    await db.commit()
+    item_id = item.id
+    future_expiry = datetime.utcnow() + timedelta(minutes=30)
+    await db.execute(
+        update(GithubWorkspace)
+        .where(GithubWorkspace.id == workspace.id)
+        .values(push_token_expires_at=future_expiry)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    assert workspace.push_token_expires_at is None
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    async def cache_miss(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_app_auth_service."
+        "revoke_cached_repository_token",
+        cache_miss,
+    )
+
+    with pytest.raises(GithubWorkspaceCredentialRevokeError):
+        await service.release(db, item_id)
+
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item_id
+    assert workspace.push_token_expires_at == future_expiry
+
+
+@pytest.mark.asyncio
+async def test_release_preserves_unflushed_caller_item_state(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease",
+    )
+    db.add(workspace)
+    await db.commit()
+    item_id = item.id
+    item.dispatch_status = "failed"
+    item.pending_reason = "queued_auth_mode_unresolved"
+    item.status_note = "Preserve this release diagnostic."
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    assert await service.release(db, item_id) is True
+
+    await db.refresh(item)
+    assert item.dispatch_status == "failed"
+    assert item.pending_reason == "queued_auth_mode_unresolved"
+    assert item.status_note == "Preserve this release diagnostic."
+
+
+@pytest.mark.asyncio
+async def test_release_cancellation_rolls_back_lease_and_restores_config(
+    db, tmp_path, monkeypatch
+):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "ws"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease",
+    )
+    db.add(workspace)
+    await db.commit()
+    item_id = item.id
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    snapshot = WorktreeConfigSnapshot(values={})
+    restored = []
+
+    async def snapshot_config(_workspace):
+        return snapshot
+
+    async def cancel_cleanup(_workspace):
+        raise asyncio.CancelledError
+
+    async def restore(_workspace, restored_snapshot):
+        restored.append(restored_snapshot)
+
+    monkeypatch.setattr(service, "snapshot_worktree_config", snapshot_config)
+    monkeypatch.setattr(service, "remove_managed_worktree_config", cancel_cleanup)
+    monkeypatch.setattr(service, "restore_worktree_config", restore)
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.release(db, item_id)
+
+    await db.refresh(workspace)
+    assert workspace.leased_item_id == item_id
+    assert workspace.lease_token == "lease"
+    assert restored == [snapshot]
 
 
 @pytest.mark.asyncio
@@ -601,6 +875,45 @@ def test_credential_helper_uses_configured_loopback_port(monkeypatch):
     assert "127.0.0.1:8000" not in command
 
 
+@pytest.mark.asyncio
+async def test_configure_cancellation_restores_the_previous_worktree_config(
+    monkeypatch
+):
+    workspace = GithubWorkspace(
+        id=44,
+        scope_id=1,
+        path="/tmp/cancelled-config",
+        kind="worktree",
+        lease_token="lease",
+    )
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+    snapshot = WorktreeConfigSnapshot(values={})
+    restored = []
+
+    async def take_snapshot(_workspace):
+        return snapshot
+
+    async def cancel_identity(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    async def restore(_workspace, restored_snapshot):
+        restored.append(restored_snapshot)
+
+    monkeypatch.setattr(service, "snapshot_worktree_config", take_snapshot)
+    monkeypatch.setattr(service, "apply_slot_identity", cancel_identity)
+    monkeypatch.setattr(service, "restore_worktree_config", restore)
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.configure_dispatch_worktree(
+            workspace,
+            display_name="Owner",
+            slot_id=1,
+            app_mode=True,
+        )
+
+    assert restored == [snapshot]
+
+
 def _git(env, *args, cwd=None):
     return subprocess.run(
         ["git", *args],
@@ -831,6 +1144,56 @@ async def test_app_remote_validation_refuses_unsafe_urls(url):
 
 
 @pytest.mark.asyncio
+async def test_attempt_base_freezes_origin_head_to_the_worktree_branch():
+    async def base_runner(args):
+        assert args[-3:] == [
+            "symbolic-ref",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ]
+        return 0, "origin/main\n"
+
+    scope = TeamGithubScope(base_ref="origin/HEAD")
+    workspace = GithubWorkspace(path="/tmp/worktree")
+
+    resolved = await GithubWorkspaceService(
+        runner=base_runner
+    ).resolve_attempt_base_ref(scope, workspace)
+
+    assert resolved == "origin/main"
+
+
+@pytest.mark.asyncio
+async def test_attempt_base_refuses_an_unresolved_origin_head():
+    async def base_runner(_args):
+        return 1, "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref"
+
+    scope = TeamGithubScope(base_ref="origin/HEAD")
+    workspace = GithubWorkspace(path="/tmp/worktree")
+
+    with pytest.raises(GithubWorkspaceConfigError, match="immutable dispatch base"):
+        await GithubWorkspaceService(runner=base_runner).resolve_attempt_base_ref(
+            scope,
+            workspace,
+        )
+
+
+@pytest.mark.asyncio
+async def test_attempt_base_keeps_an_explicit_ref_without_git_lookup():
+    async def unexpected_runner(_args):
+        raise AssertionError("explicit bases do not need resolution")
+
+    scope = TeamGithubScope(base_ref="origin/release")
+    workspace = GithubWorkspace(path="/tmp/worktree")
+
+    resolved = await GithubWorkspaceService(
+        runner=unexpected_runner
+    ).resolve_attempt_base_ref(scope, workspace)
+
+    assert resolved == "origin/release"
+
+
+@pytest.mark.asyncio
 async def test_release_is_idempotent(db, tmp_path):
     scope, _, item = await _context(db, tmp_path / "repo")
     workspace = GithubWorkspace(
@@ -1011,6 +1374,49 @@ async def test_reclaim_releases_when_owner_contact_has_aged_out(db, tmp_path, de
     await db.commit()
 
     assert await GithubWorkspaceService(runner=FakeGitRunner()).reclaim_stale(db, scope) == 1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_rechecks_liveness_in_the_release_write(tmp_path, dead_owner):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'reclaim-race.db'}"
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with maker() as setup:
+        scope, _, item = await _context(setup, tmp_path / "repo")
+        item.dispatch_status = "merged"
+        workspace = _stale_lease(scope, tmp_path, item)
+        setup.add(workspace)
+        await setup.commit()
+        scope_id = scope.id
+        item_id = item.id
+        workspace_id = workspace.id
+
+    service = GithubWorkspaceService(runner=FakeGitRunner())
+
+    async def owner_contact_arrives(_scope, _workspace):
+        async with maker() as concurrent:
+            await concurrent.execute(
+                update(GithubWorkspace)
+                .where(GithubWorkspace.id == workspace_id)
+                .values(lease_last_owner_contact_at=datetime.utcnow())
+            )
+            await concurrent.commit()
+        return True
+
+    service._worktree_is_quiescent = owner_contact_arrives
+    async with maker() as reclaim_db:
+        scope = await reclaim_db.get(TeamGithubScope, scope_id)
+        assert await service.reclaim_stale(reclaim_db, scope) == 0
+
+    async with maker() as verify:
+        workspace = await verify.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id == item_id
+        assert workspace.lease_last_owner_contact_at is not None
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -1376,3 +1782,46 @@ async def test_git_runner_is_noninteractive_and_timed(monkeypatch):
     assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
     assert captured["env"]["GIT_ASKPASS"] == ""
     assert captured["env"]["SSH_ASKPASS"] == ""
+
+
+@pytest.mark.asyncio
+async def test_git_timeout_diagnostic_redacts_the_workspace_lease(monkeypatch):
+    class Process:
+        returncode = None
+
+        async def communicate(self):
+            return b"", b""
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def create_process(*args, **kwargs):
+        return Process()
+
+    async def timeout(awaitable, *, timeout):
+        awaitable.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.asyncio.create_subprocess_exec",
+        create_process,
+    )
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.asyncio.wait_for",
+        timeout,
+    )
+
+    return_code, diagnostic = await GithubWorkspaceService()._run_git(
+        [
+            "config",
+            "credential.https://github.com.helper",
+            "python helper.py --lease lease-secret-value",
+        ]
+    )
+
+    assert return_code == 124
+    assert "lease-secret-value" not in diagnostic
+    assert "--lease <redacted>" in diagnostic

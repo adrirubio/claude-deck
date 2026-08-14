@@ -17,10 +17,7 @@ from app.models.database import (
     GithubWorkspace,
     TeamGithubScope,
 )
-from app.services.github_app_auth_service import (
-    GithubAppAuthError,
-    github_app_auth_service,
-)
+from app.services.github_app_auth_service import github_app_auth_service
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
 
@@ -60,9 +57,10 @@ class GithubVerificationService:
         scope: TeamGithubScope,
         client: GithubClient,
         *,
-        token: str,
+        token: str | None,
+        base_ref: str | None = None,
     ) -> str:
-        base_ref = scope.base_ref
+        base_ref = scope.base_ref if base_ref is None else base_ref
         if base_ref == "origin/HEAD":
             repository = await client.get_repository(
                 scope.repo_owner, scope.repo_name, token=token
@@ -135,6 +133,7 @@ class GithubVerificationService:
         scope: TeamGithubScope,
         item: GithubWorkItem,
         *,
+        expected_base: str,
         verify_author: bool = True,
     ) -> None:
         expected_repo = f"{scope.repo_owner}/{scope.repo_name}"
@@ -147,6 +146,8 @@ class GithubVerificationService:
             )
         if item.dispatch_head_ref is None or head.get("ref") != item.dispatch_head_ref:
             raise ValueError("PR head does not match the prepared dispatch head")
+        if (pull.get("base") or {}).get("ref") != expected_base:
+            raise ValueError("PR base does not match the prepared dispatch base")
         if verify_author and scope.github_auth_mode == "app":
             if not settings.github_app_bot_login:
                 raise ValueError("app_mode_bot_login_unset")
@@ -171,8 +172,21 @@ class GithubVerificationService:
                 f"items with a recoverable reason; current status is "
                 f"{item.dispatch_status} ({item.escalation_reason})"
             )
+        if item.dispatch_base_ref is None:
+            raise ValueError("prepared dispatch base is missing")
+        expected_base = await self.normalize_base_ref(
+            scope,
+            client,
+            token=None,
+            base_ref=item.dispatch_base_ref,
+        )
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, pr_number)
-        self._verify_pull_identity(pull, scope, item)
+        self._verify_pull_identity(
+            pull,
+            scope,
+            item,
+            expected_base=expected_base,
+        )
         verdict = self._classify_pull(pull)
         if verdict is None:
             raise ValueError("GitHub returned a pull request state Deck cannot classify")
@@ -220,6 +234,8 @@ class GithubVerificationService:
                 raise ValueError("workspace_lease_changed")
             if item.dispatch_head_ref is None:
                 raise ValueError("prepared dispatch head is missing")
+            if item.dispatch_base_ref is None:
+                raise ValueError("prepared dispatch base is missing")
             if head_ref != item.dispatch_head_ref:
                 raise ValueError("reported head does not match the prepared dispatch head")
             if item.pr_number is not None:
@@ -236,15 +252,14 @@ class GithubVerificationService:
             if not settings.github_app_bot_login:
                 raise ValueError("app_mode_bot_login_unset")
 
-            try:
-                github_app_auth_service.require_configuration(require_bot_login=True)
-                token = await github_app_auth_service.mint_repository_token(
-                    scope.github_app_installation_id,
-                    scope.repo_owner,
-                    scope.repo_name,
-                )
-            except GithubAppAuthError as exc:
-                raise ValueError(exc.code) from exc
+            github_app_auth_service.require_configuration(require_bot_login=True)
+            token = await github_app_auth_service.mint_repository_token(
+                scope.github_app_installation_id,
+                scope.repo_owner,
+                scope.repo_name,
+                purpose="pull_request",
+                cache_subject="backend",
+            )
 
             remote_ref = await client.get_ref(
                 scope.repo_owner,
@@ -257,7 +272,12 @@ class GithubVerificationService:
             if remote_ref.get("ref") != f"refs/heads/{head_ref}":
                 raise ValueError("remote_head_mismatch")
 
-            base = await self.normalize_base_ref(scope, client, token=token)
+            base = await self.normalize_base_ref(
+                scope,
+                client,
+                token=token,
+                base_ref=item.dispatch_base_ref,
+            )
             pulls = await self._list_attempt_pulls(
                 scope,
                 client,
@@ -270,6 +290,7 @@ class GithubVerificationService:
                 scope,
                 item,
                 pulls,
+                expected_base=base,
                 verify_author=True,
             )
             if selected is not None:
@@ -309,6 +330,7 @@ class GithubVerificationService:
                     scope,
                     item,
                     pulls,
+                    expected_base=base,
                     verify_author=True,
                 )
                 if selected is None:
@@ -320,6 +342,7 @@ class GithubVerificationService:
                 scope,
                 item,
                 [created],
+                expected_base=base,
                 verify_author=False,
             )
             if selected is None:
@@ -358,14 +381,25 @@ class GithubVerificationService:
         item: GithubWorkItem,
         pulls: list[dict],
         *,
+        expected_base: str,
         verify_author: bool,
     ) -> int | None:
+        unique_pulls: dict[int, dict] = {}
+        for pull in pulls:
+            number = self._pull_number(pull)
+            previous = unique_pulls.get(number)
+            if previous is not None and previous != pull:
+                raise ValueError(
+                    f"GitHub returned conflicting representations for PR #{number}"
+                )
+            unique_pulls[number] = pull
+
         classified: list[tuple[dict, str]] = []
         invalid: list[str] = []
-        for index, pull in enumerate(pulls):
+        for pull in unique_pulls.values():
             verdict = self._classify_pull(pull)
             if verdict is None:
-                invalid.append(str(pull.get("number", f"index {index}")))
+                invalid.append(str(pull["number"]))
             else:
                 classified.append((pull, verdict))
         if invalid:
@@ -382,6 +416,7 @@ class GithubVerificationService:
                     pull,
                     scope,
                     item,
+                    expected_base=expected_base,
                     verify_author=verify_author,
                 )
                 self._pull_number(pull)
@@ -542,6 +577,15 @@ class GithubVerificationService:
         client: GithubClient,
     ) -> None:
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+        if not await self._validate_polled_pull_identity(
+            db,
+            scope,
+            item,
+            client,
+            pull,
+            retry_status="dispatched",
+        ):
+            return
         verdict = self._classify_pull(pull)
         if verdict is None:
             note = f"PR #{item.pr_number} returned a state Deck cannot classify."
@@ -635,6 +679,15 @@ class GithubVerificationService:
         pull: dict | None = None,
     ) -> None:
         pull = pull or await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+        if not await self._validate_polled_pull_identity(
+            db,
+            scope,
+            item,
+            client,
+            pull,
+            retry_status=item.dispatch_status,
+        ):
+            return
         verdict = self._classify_pull(pull)
         if verdict is None:
             note = f"PR #{item.pr_number} returned a state Deck cannot classify."
@@ -733,6 +786,51 @@ class GithubVerificationService:
         item.auto_merged_at = datetime.utcnow()
         await db.commit()
         await self._notify_blocker_merged(db, scope, item)
+
+    async def _validate_polled_pull_identity(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        pull: dict,
+        *,
+        retry_status: str,
+    ) -> bool:
+        try:
+            if item.dispatch_base_ref is None:
+                raise ValueError("prepared dispatch base is missing")
+            expected_base = await self.normalize_base_ref(
+                scope,
+                client,
+                token=None,
+                base_ref=item.dispatch_base_ref,
+            )
+            self._verify_pull_identity(
+                pull,
+                scope,
+                item,
+                expected_base=expected_base,
+            )
+        except ValueError as exc:
+            note = f"PR #{item.pr_number} identity verification failed: {exc}"
+            await self._record_failed_verification_attempt(
+                db,
+                scope,
+                item,
+                None,
+                note,
+                subject="GitHub pull request identity verification failed",
+                body_markdown=note,
+                payload={
+                    "kind": "github_dispatch_pr_identity_invalid",
+                    "work_item_id": item.id,
+                    "pr_number": item.pr_number,
+                },
+                retry_status=retry_status,
+            )
+            return False
+        return True
 
     async def _approval_gate_reason(
         self,

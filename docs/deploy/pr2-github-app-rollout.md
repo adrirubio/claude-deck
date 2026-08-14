@@ -11,6 +11,11 @@ Create or select a GitHub App and install it only on repositories that use App m
 - **Metadata: Read-only**, which GitHub grants automatically.
 - Add checks/status read permissions if the repository restricts those endpoints.
 
+Do not grant Administration, Workflows, or any branch-protection/ruleset bypass to
+the App. Deck mints separate installation tokens: panes receive only Contents
+write, while the backend receives Contents read plus Pull requests write. Keep
+protected-branch rules as the final guard against a direct push to the base branch.
+
 Branch protection, App installation, and repository provisioning remain manual operator actions.
 
 ## Backend configuration
@@ -24,6 +29,15 @@ GITHUB_APP_BOT_LOGIN=<app-slug>[bot]
 ```
 
 Set mode `0600` on both `.env` and the private key. Restart the backend after a setting or key change. App JWTs and installation tokens must never appear in prompts, status notes, logs, URLs, or tmux configuration.
+
+Run one backend worker for App-mode dispatch. The installation-token cache and
+revocation locks are process-local. Before a planned backend restart, disable
+autonomy and drain every App-mode workspace lease. After an unplanned restart
+with an active App lease, Deck retains the token's persisted expiry quarantine
+and refuses release or reassignment until that time passes, unless an operator
+revokes the GitHub App installation first. Keep autonomy disabled while such a
+lease is quarantined. A restarted process cannot revoke plaintext tokens that
+intentionally were never persisted.
 
 ## Scope reset gate
 

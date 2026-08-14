@@ -1,11 +1,12 @@
 """Dispatch routing + concurrency tests."""
+import asyncio
 import os
 from datetime import datetime, timedelta
 from io import StringIO
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -34,7 +35,10 @@ from app.services.github_dispatch_service import (
     attempt_state,
     github_dispatch_service,
 )
-from app.services.github_workspace_service import github_workspace_service
+from app.services.github_workspace_service import (
+    GithubWorkspaceCredentialRevokeError,
+    github_workspace_service,
+)
 from app.services.github_app_auth_service import github_app_auth_service
 
 
@@ -126,7 +130,13 @@ async def _team(db):
     )
     db.add_all([architect, backend])
     await db.flush()
-    scope = TeamGithubScope(preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/r")
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="o",
+        repo_name="r",
+        repo_path="/tmp/r",
+        base_ref="origin/master",
+    )
     db.add(scope)
     await db.flush()
     db.add_all(
@@ -659,6 +669,7 @@ def test_ack_lifecycle_settings_present():
             {
                 "dispatch_nonce": "0123456789abcdef",
                 "dispatch_head_ref": "deck/slot-9/issue-42-0123456789abcdef",
+                "dispatch_base_ref": "origin/master",
                 "approval_round_count": 1,
                 "owner_slot_id": 9,
                 "routing_method": "label",
@@ -766,6 +777,7 @@ async def test_prepare_attempt_commits_exact_identity_and_reuses_it(db, monkeypa
         item,
         owner_slot_id=slots[1].id,
         routing_method="label",
+        base_ref=scope.base_ref,
     )
 
     assert prepared.dispatch_head_ref == (
@@ -786,6 +798,7 @@ async def test_prepare_attempt_commits_exact_identity_and_reuses_it(db, monkeypa
         item,
         owner_slot_id=slots[0].id,
         routing_method="leader_fallback",
+        base_ref="origin/other",
     )
     assert reused == prepared
     assert calls == 1
@@ -810,6 +823,7 @@ async def test_reset_for_retry_clears_ack_received_at(db):
         ack_approval_round=2,
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref="deck/slot-1/issue-819-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=2,
         dispatched_at=datetime(2026, 7, 24, 17, 12, 0),
     )
@@ -840,6 +854,7 @@ async def test_reset_for_retry_defers_while_a_lease_is_held(db):
         escalation_reason="plan_blocked",
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref="deck/slot-1/issue-909-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=1,
     )
     db.add(item)
@@ -1134,6 +1149,7 @@ async def test_report_ack_received_records_approved_leader_evidence(
         last_nudge_at=datetime.utcnow(),
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref=f"deck/slot-{slots[1].id}/issue-911-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=1,
     )
     db.add(item)
@@ -1238,6 +1254,7 @@ async def test_ack_evidence_refusal_matrix(
         dispatched_at=datetime.utcnow(),
         dispatch_nonce=item_nonce,
         dispatch_head_ref=f"deck/slot-{owner_slot.id}/issue-912-head",
+        dispatch_base_ref="origin/master",
         approval_round_count=item_round,
     )
     db.add(item)
@@ -1806,8 +1823,11 @@ async def test_app_brief_uses_persisted_head_and_deck_owned_pr_contract(db):
         dispatch_status="dispatched",
         owner_slot_id=owner.id,
         dispatch_head_ref=f"deck/slot-{owner.id}/issue-95-persisted",
+        dispatch_base_ref="origin/master",
     )
     db.add(item)
+    await db.commit()
+    scope.base_ref = "origin/release"
     await db.commit()
 
     brief = github_dispatch_service._dispatch_brief(
@@ -1819,6 +1839,8 @@ async def test_app_brief_uses_persisted_head_and_deck_owned_pr_contract(db):
     )
 
     assert item.dispatch_head_ref in brief
+    assert "detached HEAD at origin/master" in brief
+    assert "detached HEAD at origin/release" not in brief
     assert f"Deck-Agent-Slot: {owner.id} ({owner.display_name})" in brief
     assert f"Deck-Work-Item: {item.id}" in brief
     assert f"git push -u origin {item.dispatch_head_ref}" in brief
@@ -3061,12 +3083,19 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
 @pytest.mark.asyncio
 async def test_two_phase_handoff(db, monkeypatch):
     config_calls = []
+    revoked = []
 
     async def config_runner(args):
         config_calls.append(args)
         return 0, ""
 
     monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+
+    async def revoke(scope, workspace, *, owner_slot_id):
+        revoked.append((workspace.lease_token, owner_slot_id))
+        return True
+
+    monkeypatch.setattr(github_workspace_service, "revoke_push_token", revoke)
     preset, slots, scope = await _team(db)
     architect, backend = slots[0], slots[1]
     item = GithubWorkItem(
@@ -3080,6 +3109,7 @@ async def test_two_phase_handoff(db, monkeypatch):
         routing_method="label",
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref=f"deck/slot-{architect.id}/issue-40-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=2,
         ack_received_at=datetime.utcnow(),
         ack_approver_member_id=55,
@@ -3146,6 +3176,7 @@ async def test_two_phase_handoff(db, monkeypatch):
     assert workspace.leased_owner_pid == 202
     assert workspace.leased_owner_proc_start == "2002"
     assert workspace.lease_last_owner_contact_at is not None
+    assert revoked == [("lease-kept", architect.id)]
     assert any(
         call[-2:] == ["user.name", "Backend SME (Deck agent)"]
         for call in config_calls
@@ -3183,6 +3214,7 @@ async def test_handoff_config_failure_keeps_old_owner_and_identity(db, monkeypat
         handoff_target_slot_id=target.id,
         dispatch_nonce="nonce",
         dispatch_head_ref="deck/preserved",
+        dispatch_base_ref="origin/master",
     )
     db.add(item)
     await db.flush()
@@ -3231,6 +3263,214 @@ async def test_handoff_config_failure_keeps_old_owner_and_identity(db, monkeypat
     assert fresh_item.dispatch_head_ref == "deck/preserved"
     assert fresh_workspace.lease_token == "lease-kept"
     assert restored is True
+
+
+@pytest.mark.asyncio
+async def test_handoff_cas_loss_does_not_revoke_the_current_lease(db, monkeypatch):
+    _, slots, scope = await _team(db)
+    old_owner, target = slots[:2]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=43,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=old_owner.id,
+        handoff_state="pending",
+        handoff_target_slot_id=target.id,
+        dispatch_nonce="nonce",
+        dispatch_head_ref="deck/preserved",
+        dispatch_base_ref="origin/master",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/handoff-race",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-kept",
+    )
+    db.add(workspace)
+    await db.commit()
+    revoked = []
+
+    async def config_runner(_args):
+        return 0, ""
+
+    async def revoke(*args, **kwargs):
+        revoked.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    monkeypatch.setattr(github_workspace_service, "revoke_push_token", revoke)
+    await db.execute(
+        update(GithubWorkItem)
+        .where(GithubWorkItem.id == item.id)
+        .values(owner_slot_id=target.id)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+
+    with pytest.raises(ValueError, match="handoff state changed"):
+        await github_dispatch_service.accept_handoff(
+            db,
+            item,
+            target.id,
+            accepting_pane_pid=202,
+            accepting_pane_proc_start="2002",
+        )
+
+    await db.refresh(workspace)
+    assert workspace.lease_token == "lease-kept"
+    assert revoked == []
+
+
+@pytest.mark.asyncio
+async def test_handoff_refreshes_quarantine_after_waiting_for_config_lock(
+    db, monkeypatch
+):
+    _, slots, scope = await _team(db)
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 55
+    old_owner, target = slots[:2]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=44,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=old_owner.id,
+        handoff_state="pending",
+        handoff_target_slot_id=target.id,
+        dispatch_nonce="nonce",
+        dispatch_head_ref="deck/preserved",
+        dispatch_base_ref="origin/master",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/handoff-quarantine-race",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-kept",
+    )
+    db.add(workspace)
+    await db.commit()
+    item_id = item.id
+    old_owner_id = old_owner.id
+    future_expiry = datetime.utcnow() + timedelta(minutes=30)
+    await db.execute(
+        update(GithubWorkspace)
+        .where(GithubWorkspace.id == workspace.id)
+        .values(push_token_expires_at=future_expiry)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+    assert workspace.push_token_expires_at is None
+
+    async def config_runner(_args):
+        return 0, ""
+
+    async def cache_miss(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_app_auth_service."
+        "revoke_cached_repository_token",
+        cache_miss,
+    )
+
+    with pytest.raises(GithubWorkspaceCredentialRevokeError):
+        await github_dispatch_service.accept_handoff(
+            db,
+            item,
+            target.id,
+            accepting_pane_pid=202,
+            accepting_pane_proc_start="2002",
+        )
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    assert item.id == item_id
+    assert item.owner_slot_id == old_owner_id
+    assert item.handoff_state == "pending"
+    assert workspace.lease_token == "lease-kept"
+    assert workspace.push_token_expires_at == future_expiry
+
+
+@pytest.mark.asyncio
+async def test_handoff_cancellation_restores_identity_and_keeps_the_old_owner(
+    db, monkeypatch
+):
+    _, slots, scope = await _team(db)
+    old_owner, target = slots[:2]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=42,
+        issue_title="x",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=old_owner.id,
+        handoff_state="pending",
+        handoff_target_slot_id=target.id,
+        dispatch_nonce="nonce",
+        dispatch_head_ref="deck/preserved",
+        dispatch_base_ref="origin/master",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/handoff-cancelled",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-kept",
+    )
+    db.add(workspace)
+    await db.commit()
+    old_owner_id = old_owner.id
+    restored = []
+    snapshot = object()
+
+    async def take_snapshot(_workspace):
+        return snapshot
+
+    async def cancel_identity(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    async def restore(_workspace, restored_snapshot):
+        restored.append(restored_snapshot)
+
+    monkeypatch.setattr(
+        github_workspace_service, "snapshot_worktree_config", take_snapshot
+    )
+    monkeypatch.setattr(
+        github_workspace_service, "apply_slot_identity", cancel_identity
+    )
+    monkeypatch.setattr(github_workspace_service, "restore_worktree_config", restore)
+
+    with pytest.raises(asyncio.CancelledError):
+        await github_dispatch_service.accept_handoff(
+            db,
+            item,
+            target.id,
+            accepting_pane_pid=202,
+            accepting_pane_proc_start="2002",
+        )
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    assert item.owner_slot_id == old_owner_id
+    assert item.handoff_state == "pending"
+    assert workspace.leased_owner_pid is None
+    assert workspace.lease_token == "lease-kept"
+    assert restored == [snapshot]
 
 
 @pytest.mark.asyncio
@@ -4189,6 +4429,7 @@ async def test_prepared_dispatch_reuses_persisted_owner_head_and_route(db, monke
         routing_method="label",
         dispatch_nonce=nonce,
         dispatch_head_ref=head,
+        dispatch_base_ref="origin/master",
         approval_round_count=1,
     )
     db.add(item)
@@ -4289,6 +4530,7 @@ async def test_disabled_prepared_owner_keeps_attempt_and_lease(db):
         routing_method="label",
         dispatch_nonce="0123456789abcdef",
         dispatch_head_ref=f"deck/slot-{owner.id}/issue-963-0123456789abcdef",
+        dispatch_base_ref="origin/master",
         approval_round_count=1,
     )
     db.add(item)

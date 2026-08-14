@@ -52,6 +52,7 @@ async def _scope(db, *, repo_owner="o", repo_name="r", autonomy=True, enabled=Tr
         repo_owner=repo_owner,
         repo_name=repo_name,
         repo_path=f"/tmp/{repo_name}",
+        base_ref="origin/master",
         enabled=enabled,
     )
     db.add_all([slot, scope])

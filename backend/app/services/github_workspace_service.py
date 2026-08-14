@@ -20,6 +20,10 @@ from app.config import settings
 from app.models.database import GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_mail_install_service import deck_base_url
+from app.services.github_app_auth_service import (
+    GithubAppAuthError,
+    github_app_auth_service,
+)
 
 GIT_TIMEOUT_SECONDS = 300
 
@@ -43,6 +47,19 @@ _MANAGED_WORKTREE_KEYS = (
     f"{_GITHUB_CREDENTIAL_PREFIX}.useHttpPath",
     f"{_GITHUB_CREDENTIAL_PREFIX}.helper",
 )
+_UNSET = object()
+
+
+def _push_token_subject(
+    workspace_id: int,
+    lease_token: str,
+    owner_slot_id: int,
+) -> str:
+    return f"workspace:{workspace_id}:lease:{lease_token}:slot:{owner_slot_id}"
+
+
+def _redact_git_diagnostic(value: str) -> str:
+    return re.sub(r"(--lease(?:=|\s+))[^\s'\"]+", r"\1<redacted>", value)
 
 
 @dataclass(frozen=True)
@@ -73,6 +90,11 @@ class GithubWorkspaceConfigError(GithubWorkspaceError):
         self.restoration_failed = restoration_failed
 
 
+class GithubWorkspaceCredentialRevokeError(GithubWorkspaceError):
+    def __init__(self, message: str):
+        super().__init__(message, "workspace_credential_revoke_failed")
+
+
 class GithubWorkspaceRemoteError(GithubWorkspaceError):
     def __init__(self, message: str):
         super().__init__(message, "workspace_remote_invalid")
@@ -101,7 +123,8 @@ class GithubWorkspaceService:
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            return 124, f"git {' '.join(args)} timed out after {GIT_TIMEOUT_SECONDS}s"
+            command = _redact_git_diagnostic(shlex.join(args))
+            return 124, f"git {command} timed out after {GIT_TIMEOUT_SECONDS}s"
         return process.returncode, stdout.decode("utf-8", "replace")
 
     def _parse_proc_start(self, raw: str) -> str | None:
@@ -181,6 +204,7 @@ class GithubWorkspaceService:
         workspace.leased_at = now
         workspace.released_at = None
         workspace.lease_token = secrets.token_hex(8)
+        workspace.push_token_expires_at = None
         workspace.leased_owner_pid = None
         workspace.leased_owner_proc_start = None
         workspace.lease_last_owner_contact_at = None
@@ -246,6 +270,55 @@ class GithubWorkspaceService:
             ]
         )
 
+    @staticmethod
+    def push_token_subject(
+        workspace_id: int,
+        lease_token: str,
+        owner_slot_id: int,
+    ) -> str:
+        return _push_token_subject(workspace_id, lease_token, owner_slot_id)
+
+    async def revoke_push_token(
+        self,
+        scope: TeamGithubScope,
+        workspace: GithubWorkspace,
+        *,
+        owner_slot_id: int | None,
+    ) -> bool:
+        if (
+            scope.github_auth_mode != "app"
+            or scope.github_app_installation_id is None
+            or workspace.lease_token is None
+            or owner_slot_id is None
+        ):
+            return False
+        try:
+            revoked = await github_app_auth_service.revoke_cached_repository_token(
+                scope.github_app_installation_id,
+                scope.repo_owner,
+                scope.repo_name,
+                purpose="push",
+                cache_subject=_push_token_subject(
+                    workspace.id,
+                    workspace.lease_token,
+                    owner_slot_id,
+                ),
+            )
+            if (
+                not revoked
+                and workspace.push_token_expires_at is not None
+                and workspace.push_token_expires_at > datetime.utcnow()
+            ):
+                raise GithubWorkspaceCredentialRevokeError(
+                    "Unable to prove the workspace push credential expired after "
+                    "the backend token cache was lost"
+                )
+            return revoked
+        except GithubAppAuthError as exc:
+            raise GithubWorkspaceCredentialRevokeError(
+                f"Unable to revoke the workspace push credential: {exc.code}"
+            ) from exc
+
     async def _config_values(
         self, workspace: GithubWorkspace, key: str
     ) -> tuple[str, ...]:
@@ -293,7 +366,8 @@ class GithubWorkspaceService:
                 )
                 if return_code != 0:
                     raise GithubWorkspaceConfigError(
-                        output.strip() or f"Unable to restore worktree config {key}",
+                        _redact_git_diagnostic(output.strip())
+                        or f"Unable to restore worktree config {key}",
                         restoration_failed=True,
                     )
 
@@ -337,7 +411,8 @@ class GithubWorkspaceService:
             return_code, output = await self._runner(command)
             if return_code != 0:
                 raise GithubWorkspaceConfigError(
-                    output.strip() or f"git {' '.join(command)} failed"
+                    _redact_git_diagnostic(output.strip())
+                    or f"git {_redact_git_diagnostic(shlex.join(command))} failed"
                 )
 
     async def validate_app_remote(
@@ -373,6 +448,35 @@ class GithubWorkspaceService:
             raise GithubWorkspaceRemoteError(
                 f"origin push URL does not match https://github.com/{expected_path}.git"
             )
+
+    async def resolve_attempt_base_ref(
+        self,
+        scope: TeamGithubScope,
+        workspace: GithubWorkspace,
+    ) -> str:
+        """Freeze a symbolic default branch to the branch this worktree uses."""
+        if scope.base_ref != "origin/HEAD":
+            return scope.base_ref
+        return_code, output = await self._runner(
+            [
+                "-C",
+                workspace.path,
+                "symbolic-ref",
+                "--short",
+                "refs/remotes/origin/HEAD",
+            ]
+        )
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if (
+            return_code != 0
+            or len(lines) != 1
+            or not lines[0].startswith("origin/")
+            or lines[0] == "origin/HEAD"
+        ):
+            raise GithubWorkspaceConfigError(
+                "Unable to resolve origin/HEAD to an immutable dispatch base"
+            )
+        return lines[0]
 
     async def configure_dispatch_worktree(
         self,
@@ -438,12 +542,15 @@ class GithubWorkspaceService:
                     return_code, output = await self._runner(command)
                     if return_code != 0:
                         raise GithubWorkspaceConfigError(
-                            output.strip() or f"git {' '.join(command)} failed"
+                            _redact_git_diagnostic(output.strip())
+                            or f"git {_redact_git_diagnostic(shlex.join(command))} failed"
                         )
-            except GithubWorkspaceConfigError as exc:
+            except BaseException as exc:
                 try:
                     await self.restore_worktree_config(workspace, snapshot)
                 except GithubWorkspaceConfigError as restore_exc:
+                    if not isinstance(exc, Exception):
+                        raise exc from restore_exc
                     raise GithubWorkspaceConfigError(
                         f"{exc}; worktree config restoration failed: {restore_exc}",
                         restoration_failed=True,
@@ -457,6 +564,7 @@ class GithubWorkspaceService:
             "leased_item_id": None,
             "released_at": now,
             "lease_token": None,
+            "push_token_expires_at": None,
             "leased_owner_pid": None,
             "leased_owner_proc_start": None,
             "lease_last_owner_contact_at": None,
@@ -499,16 +607,71 @@ class GithubWorkspaceService:
         expected_leased_at: datetime | None,
         lease_token: str | None,
         owner_slot_id: int | None = None,
+        expected_owner_pid: int | None | object = _UNSET,
+        expected_owner_proc_start: str | None | object = _UNSET,
+        expected_last_owner_contact_at: datetime | None | object = _UNSET,
     ) -> bool:
-        workspace = await db.get(GithubWorkspace, workspace_id)
-        if workspace is None:
-            return False
-        config_workspace = GithubWorkspace(
-            id=workspace.id,
-            path=workspace.path,
-            kind=workspace.kind,
-        )
         async with self.config_lock(workspace_id):
+            workspace_row = (
+                await db.execute(
+                    select(
+                        GithubWorkspace.id,
+                        GithubWorkspace.scope_id,
+                        GithubWorkspace.path,
+                        GithubWorkspace.kind,
+                        GithubWorkspace.leased_item_id,
+                        GithubWorkspace.leased_at,
+                        GithubWorkspace.lease_token,
+                        GithubWorkspace.push_token_expires_at,
+                    )
+                    .where(GithubWorkspace.id == workspace_id)
+                )
+            ).one_or_none()
+            item_row = (
+                await db.execute(
+                    select(GithubWorkItem.id, GithubWorkItem.owner_slot_id)
+                    .where(GithubWorkItem.id == item_id)
+                )
+            ).one_or_none()
+            scope_row = (
+                await db.execute(
+                    select(
+                        TeamGithubScope.id,
+                        TeamGithubScope.repo_owner,
+                        TeamGithubScope.repo_name,
+                        TeamGithubScope.github_auth_mode,
+                        TeamGithubScope.github_app_installation_id,
+                    )
+                    .where(TeamGithubScope.id == scope_id)
+                )
+            ).one_or_none()
+            if workspace_row is None or item_row is None or scope_row is None:
+                await db.rollback()
+                return False
+            scope = TeamGithubScope(
+                id=scope_row.id,
+                repo_owner=scope_row.repo_owner,
+                repo_name=scope_row.repo_name,
+                github_auth_mode=scope_row.github_auth_mode,
+                github_app_installation_id=scope_row.github_app_installation_id,
+            )
+            config_workspace = GithubWorkspace(
+                id=workspace_row.id,
+                path=workspace_row.path,
+                kind=workspace_row.kind,
+                lease_token=lease_token,
+                push_token_expires_at=workspace_row.push_token_expires_at,
+            )
+            current_owner_slot_id = item_row.owner_slot_id
+            if (
+                workspace_row.scope_id != scope_id
+                or workspace_row.leased_item_id != item_id
+                or workspace_row.leased_at != expected_leased_at
+                or workspace_row.lease_token != lease_token
+            ):
+                await db.rollback()
+                return False
+            await db.commit()
             snapshot = (
                 None
                 if config_workspace.kind == "primary"
@@ -521,6 +684,20 @@ class GithubWorkspaceService:
                 GithubWorkspace.leased_at == expected_leased_at,
                 GithubWorkspace.lease_token == lease_token,
             ]
+            if expected_owner_pid is not _UNSET:
+                predicates.append(
+                    GithubWorkspace.leased_owner_pid == expected_owner_pid
+                )
+            if expected_owner_proc_start is not _UNSET:
+                predicates.append(
+                    GithubWorkspace.leased_owner_proc_start
+                    == expected_owner_proc_start
+                )
+            if expected_last_owner_contact_at is not _UNSET:
+                predicates.append(
+                    GithubWorkspace.lease_last_owner_contact_at
+                    == expected_last_owner_contact_at
+                )
             if owner_slot_id is not None:
                 predicates.append(
                     exists().where(
@@ -539,11 +716,20 @@ class GithubWorkspaceService:
                 await db.rollback()
                 return False
             try:
+                await self.revoke_push_token(
+                    scope,
+                    config_workspace,
+                    owner_slot_id=(
+                        owner_slot_id
+                        if owner_slot_id is not None
+                        else current_owner_slot_id
+                    ),
+                )
                 if config_workspace.kind != "primary":
                     await self.remove_managed_worktree_config(config_workspace)
                 await db.commit()
                 return True
-            except Exception as exc:
+            except BaseException as exc:
                 await db.rollback()
                 if snapshot is not None:
                     try:
@@ -559,11 +745,13 @@ class GithubWorkspaceService:
                             item_id=item_id,
                             detail=detail,
                         )
+                        if not isinstance(exc, Exception):
+                            raise exc from restore_exc
                         raise GithubWorkspaceConfigError(
                             detail,
                             restoration_failed=True,
                         ) from restore_exc
-                raise exc
+                raise
 
     async def release(self, db: AsyncSession, item_id: int) -> bool:
         workspace = (
@@ -787,6 +975,10 @@ class GithubWorkspaceService:
                 item_id=item.id,
                 expected_leased_at=workspace.leased_at,
                 lease_token=workspace.lease_token,
+                owner_slot_id=item.owner_slot_id,
+                expected_owner_pid=workspace.leased_owner_pid,
+                expected_owner_proc_start=workspace.leased_owner_proc_start,
+                expected_last_owner_contact_at=workspace.lease_last_owner_contact_at,
             )
             if released_now:
                 released += 1

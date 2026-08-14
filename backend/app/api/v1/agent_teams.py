@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 import ipaddress
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from string import Formatter
 from typing import NamedTuple
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -63,14 +65,17 @@ from app.models.schemas import (
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
-from app.services.github_client import github_client
+from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
+    GithubAppMintRejected,
     GithubAppNotInstalled,
+    GithubAppUnconfigured,
     github_app_auth_service,
 )
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
+    GithubWorkspaceCredentialRevokeError,
     GithubWorkspaceError,
     GithubWorkspaceResetError,
     github_workspace_service,
@@ -278,6 +283,42 @@ async def _sync_github_jobs(db: AsyncSession) -> None:
     await github_dispatch_scheduler.sync_jobs(db)
 
 
+async def _scope_identity_in_use(db: AsyncSession, scope_id: int) -> bool:
+    leased_workspace = (
+        await db.execute(
+            select(GithubWorkspace.id)
+            .where(
+                GithubWorkspace.scope_id == scope_id,
+                GithubWorkspace.leased_item_id.is_not(None),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if leased_workspace is not None:
+        return True
+    active_attempt = (
+        await db.execute(
+            select(GithubWorkItem.id)
+            .where(
+                GithubWorkItem.scope_id == scope_id,
+                GithubWorkItem.dispatch_status.in_(
+                    (
+                        "pending",
+                        "dispatched",
+                        "verifying",
+                        "ready_for_review",
+                        "awaiting_human_review",
+                        "escalated",
+                        "failed",
+                    )
+                ),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return active_attempt is not None
+
+
 def _apply_scope_create(
     scope: TeamGithubScope,
     request: TeamGithubScopeCreate | TeamGithubScopeUpdate,
@@ -396,6 +437,7 @@ async def _authorize_dispatch_report(
 async def get_github_credential(
     credential: GithubCredentialRequest,
     http_request: Request,
+    http_response: Response,
     db: AsyncSession = Depends(get_db),
 ):
     """Mint a repository-scoped credential for the kernel-derived owner."""
@@ -483,14 +525,60 @@ async def get_github_credential(
         ).scalar_one_or_none()
         if binding is None or binding.slot_id != current_item.owner_slot_id:
             raise HTTPException(status_code=403, detail="not_item_owner")
+        cache_subject = github_workspace_service.push_token_subject(
+            current_workspace.id,
+            credential.workspace_token,
+            binding.slot_id,
+        )
+        previous_quarantine = current_workspace.push_token_expires_at
+
+        async def restore_preexisting_quarantine() -> None:
+            cached_expiry = github_app_auth_service.cached_repository_token_expiry(
+                int(current_scope.github_app_installation_id),
+                current_scope.repo_owner,
+                current_scope.repo_name,
+                purpose="push",
+                cache_subject=cache_subject,
+            )
+            cached_quarantine = (
+                cached_expiry.astimezone(timezone.utc).replace(tzinfo=None)
+                + timedelta(minutes=1)
+                if cached_expiry is not None
+                else None
+            )
+            current_workspace.push_token_expires_at = max(
+                (
+                    expiry
+                    for expiry in (previous_quarantine, cached_quarantine)
+                    if expiry is not None
+                ),
+                default=None,
+            )
+            current_workspace.updated_at = datetime.utcnow()
+            await db.commit()
+
+        current_workspace.push_token_expires_at = datetime.utcnow() + timedelta(
+            minutes=65
+        )
+        current_workspace.updated_at = datetime.utcnow()
+        await db.commit()
         try:
             password = await github_app_auth_service.mint_repository_token(
                 int(current_scope.github_app_installation_id),
                 current_scope.repo_owner,
                 current_scope.repo_name,
+                purpose="push",
+                cache_subject=cache_subject,
             )
         except GithubAppNotInstalled as exc:
+            await restore_preexisting_quarantine()
             raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubAppUnconfigured as exc:
+            await restore_preexisting_quarantine()
+            raise HTTPException(status_code=503, detail=exc.code) from exc
+        except GithubAppMintRejected as exc:
+            await restore_preexisting_quarantine()
+            raise HTTPException(status_code=502, detail=exc.code) from exc
         except GithubAppAuthError as exc:
             raise HTTPException(status_code=502, detail=exc.code) from exc
 
@@ -516,6 +604,22 @@ async def get_github_credential(
             raise HTTPException(status_code=409, detail="workspace_lease_changed")
         if after.owner_slot_id != binding.slot_id:
             raise HTTPException(status_code=403, detail="not_item_owner")
+        token_expiry = github_app_auth_service.cached_repository_token_expiry(
+            int(current_scope.github_app_installation_id),
+            current_scope.repo_owner,
+            current_scope.repo_name,
+            purpose="push",
+            cache_subject=cache_subject,
+        )
+        if token_expiry is None:
+            raise HTTPException(status_code=502, detail="app_token_expiry_missing")
+        current_workspace.push_token_expires_at = (
+            token_expiry.astimezone(timezone.utc).replace(tzinfo=None)
+            + timedelta(minutes=1)
+        )
+        current_workspace.updated_at = datetime.utcnow()
+        await db.commit()
+    http_response.headers["Cache-Control"] = "no-store"
     return GithubCredentialResponse(username="x-access-token", password=password)
 
 
@@ -570,6 +674,8 @@ async def report_dispatch_status(
                 accepting_pane_pid=session.bound_pane_pid,
                 accepting_pane_proc_start=session.bound_pane_proc_start,
             )
+        except GithubWorkspaceCredentialRevokeError as exc:
+            raise HTTPException(status_code=503, detail=exc.block_code) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "blocked":
@@ -588,6 +694,16 @@ async def report_dispatch_status(
             await github_verification_service.report_pr_opened(
                 db, item, scope, report.pr_number, github_client
             )
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="github_upstream_timeout",
+            ) from exc
+        except (httpx.HTTPError, GithubClientResponseError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="github_upstream_error",
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "pr_ready":
@@ -604,6 +720,22 @@ async def report_dispatch_status(
                 report.lease_token or "",
                 github_client,
             )
+        except GithubAppNotInstalled as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubAppUnconfigured as exc:
+            raise HTTPException(status_code=503, detail=exc.code) from exc
+        except GithubAppAuthError as exc:
+            raise HTTPException(status_code=502, detail=exc.code) from exc
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="github_upstream_timeout",
+            ) from exc
+        except (httpx.HTTPError, GithubClientResponseError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="github_upstream_error",
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     elif report.status == "in_progress":
@@ -652,15 +784,18 @@ async def report_dispatch_status(
                         "the lease held."
                     ),
                 )
-            released = await github_workspace_service.release_by_owner(
-                db,
-                item_id,
-                lease_token=report.lease_token,
-                workspace_id=workspace.id,
-                scope_id=scope.id,
-                owner_slot_id=int(report.reporting_slot_id),
-                expected_leased_at=workspace.leased_at,
-            )
+            try:
+                released = await github_workspace_service.release_by_owner(
+                    db,
+                    item_id,
+                    lease_token=report.lease_token,
+                    workspace_id=workspace.id,
+                    scope_id=scope.id,
+                    owner_slot_id=int(report.reporting_slot_id),
+                    expected_leased_at=workspace.leased_at,
+                )
+            except GithubWorkspaceCredentialRevokeError as exc:
+                raise HTTPException(status_code=503, detail=exc.block_code) from exc
             if not released:
                 current_owner = (
                     await db.execute(
@@ -914,6 +1049,18 @@ async def update_github_scope(
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
+    identity_change = any(
+        value is not None
+        for value in (
+            request.repo_owner,
+            request.repo_name,
+            request.repo_path,
+            request.base_ref,
+        )
+    )
+    if identity_change:
+        if await _scope_identity_in_use(db, scope_id):
+            raise HTTPException(status_code=409, detail="scope_identity_in_use")
     try:
         _apply_scope_create(scope, request)
         await db.commit()
@@ -932,6 +1079,8 @@ async def delete_github_scope(scope_id: int, db: AsyncSession = Depends(get_db))
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
+    if await _scope_identity_in_use(db, scope_id):
+        raise HTTPException(status_code=409, detail="scope_identity_in_use")
     await db.delete(scope)
     await db.commit()
     await _sync_github_jobs(db)
@@ -1091,14 +1240,17 @@ async def force_release_github_workspace(
         scope, workspace
     )
 
-    released = await github_workspace_service.force_release_acquisition(
-        db,
-        workspace_id=workspace_id,
-        scope_id=scope_id,
-        item_id=released_item_id,
-        expected_leased_at=request.expected_leased_at,
-        lease_token=inspected_lease_token,
-    )
+    try:
+        released = await github_workspace_service.force_release_acquisition(
+            db,
+            workspace_id=workspace_id,
+            scope_id=scope_id,
+            item_id=released_item_id,
+            expected_leased_at=request.expected_leased_at,
+            lease_token=inspected_lease_token,
+        )
+    except GithubWorkspaceCredentialRevokeError as exc:
+        raise HTTPException(status_code=503, detail=exc.block_code) from exc
     if not released:
         await db.refresh(workspace)
         if workspace.leased_item_id is None:

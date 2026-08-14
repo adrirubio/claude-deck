@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import tomllib
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,10 @@ from app.services.github_app_auth_service import (
     GithubAppAuthError,
     GithubAppAuthService,
     GithubAppLookupError,
+    GithubAppMintError,
+    GithubAppMintRejected,
     GithubAppNotInstalled,
+    GithubAppRevokeError,
     GithubAppUnconfigured,
 )
 
@@ -139,6 +143,55 @@ async def test_lookup_http_failures_are_explicit(tmp_path, status):
 
 
 @pytest.mark.asyncio
+async def test_mint_http_rejection_is_distinct_from_unknown_transport_outcome(
+    tmp_path,
+):
+    private_path, _ = _key_pair(tmp_path)
+
+    def handler(request: httpx.Request):
+        return httpx.Response(422, request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        service = GithubAppAuthService(http, config=_settings(private_path))
+        with pytest.raises(GithubAppMintRejected) as exc_info:
+            await service.mint_repository_token(
+                7,
+                "owner",
+                "repo",
+                purpose="push",
+                cache_subject="lease",
+            )
+
+    assert exc_info.value.code == "app_token_mint_failed"
+
+
+@pytest.mark.asyncio
+async def test_mint_server_failure_keeps_an_ambiguous_outcome(tmp_path):
+    private_path, _ = _key_pair(tmp_path)
+
+    def handler(request: httpx.Request):
+        return httpx.Response(503, request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        service = GithubAppAuthService(http, config=_settings(private_path))
+        with pytest.raises(GithubAppMintError) as exc_info:
+            await service.mint_repository_token(
+                7,
+                "owner",
+                "repo",
+                purpose="push",
+                cache_subject="lease",
+            )
+
+    assert not isinstance(exc_info.value, GithubAppMintRejected)
+    assert exc_info.value.code == "app_token_mint_failed"
+
+
+@pytest.mark.asyncio
 async def test_lookup_transport_failure_is_explicit(tmp_path):
     private_path, _ = _key_pair(tmp_path)
 
@@ -184,23 +237,188 @@ async def test_token_is_repository_narrowed_cached_and_refreshed(tmp_path):
     assert first == second == "token-1"
     assert other == "token-2"
     assert len(calls) == 2
-    assert calls[0].read() == b'{"repositories":["repo"]}'
+    assert calls[0].read() == (
+        b'{"repositories":["repo"],"permissions":'
+        b'{"contents":"read","pull_requests":"write"}}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_push_and_pr_tokens_have_distinct_permissions_and_cache_keys(tmp_path):
+    private_path, _ = _key_pair(tmp_path)
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    requests = []
+
+    def handler(request: httpx.Request):
+        requests.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(204, request=request)
+        return httpx.Response(
+            201,
+            request=request,
+            json={
+                "token": f"token-{len(requests)}",
+                "expires_at": (now + timedelta(minutes=30)).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        service = GithubAppAuthService(
+            http, config=_settings(private_path), now=lambda: now
+        )
+        push = await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+        pull_request = await service.mint_repository_token(
+            7,
+            "owner",
+            "repo",
+            purpose="pull_request",
+            cache_subject="backend",
+        )
+        assert push != pull_request
+        assert json.loads(requests[0].content)["permissions"] == {"contents": "write"}
+        assert json.loads(requests[1].content)["permissions"] == {
+            "contents": "read",
+            "pull_requests": "write",
+        }
+        assert await service.revoke_cached_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+        assert requests[2].method == "DELETE"
+        assert requests[2].headers["Authorization"] == f"Bearer {push}"
+        assert await service.mint_repository_token(
+            7,
+            "owner",
+            "repo",
+            purpose="pull_request",
+            cache_subject="backend",
+        ) == pull_request
+        replacement_push = await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+        assert replacement_push != push
+        assert json.loads(requests[3].content)["permissions"] == {
+            "contents": "write"
+        }
+
+
+@pytest.mark.asyncio
+async def test_token_revocation_has_a_distinct_failure_contract(tmp_path):
+    private_path, _ = _key_pair(tmp_path)
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+
+    def handler(request: httpx.Request):
+        if request.method == "DELETE":
+            return httpx.Response(503, request=request)
+        return httpx.Response(
+            201,
+            request=request,
+            json={
+                "token": "push-token",
+                "expires_at": (now + timedelta(minutes=30)).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        service = GithubAppAuthService(
+            http, config=_settings(private_path), now=lambda: now
+        )
+        await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+
+        with pytest.raises(GithubAppRevokeError) as exc_info:
+            await service.revoke_cached_repository_token(
+                7,
+                "owner",
+                "repo",
+                purpose="push",
+                cache_subject="lease-a",
+            )
+
+    assert exc_info.value.code == "app_token_revoke_failed"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_revocation_quarantines_the_unknown_token(tmp_path):
+    private_path, _ = _key_pair(tmp_path)
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    delete_started = asyncio.Event()
+    hold_delete = asyncio.Event()
+    minted = 0
+
+    async def handler(request: httpx.Request):
+        nonlocal minted
+        if request.method == "DELETE":
+            delete_started.set()
+            await hold_delete.wait()
+            return httpx.Response(204, request=request)
+        minted += 1
+        return httpx.Response(
+            201,
+            request=request,
+            json={
+                "token": f"push-{minted}",
+                "expires_at": (now + timedelta(minutes=30)).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        service = GithubAppAuthService(
+            http, config=_settings(private_path), now=lambda: now
+        )
+        assert await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        ) == "push-1"
+        revoke_task = asyncio.create_task(
+            service.revoke_cached_repository_token(
+                7,
+                "owner",
+                "repo",
+                purpose="push",
+                cache_subject="lease-a",
+            )
+        )
+        await delete_started.wait()
+        revoke_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await revoke_task
+
+        assert service.cached_repository_token_expiry(
+            7,
+            "owner",
+            "repo",
+            purpose="push",
+            cache_subject="lease-a",
+        ) is None
+        assert await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        ) == "push-2"
 
 
 @pytest.mark.asyncio
 async def test_token_refreshes_inside_margin(tmp_path):
     private_path, _ = _key_pair(tmp_path)
     now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
-    calls = 0
+    minted = 0
+    methods = []
 
     def handler(request: httpx.Request):
-        nonlocal calls
-        calls += 1
+        nonlocal minted
+        methods.append(request.method)
+        minted += 1
         return httpx.Response(
             201,
             request=request,
             json={
-                "token": f"token-{calls}",
+                "token": f"token-{minted}",
                 "expires_at": (now + timedelta(minutes=4)).isoformat(),
             },
         )
@@ -213,6 +431,50 @@ async def test_token_refreshes_inside_margin(tmp_path):
         )
         assert await service.mint_repository_token(7, "owner", "repo") == "token-1"
         assert await service.mint_repository_token(7, "owner", "repo") == "token-2"
+        assert methods == ["POST", "POST"]
+
+
+@pytest.mark.asyncio
+async def test_push_refresh_revokes_every_generation_when_the_lease_ends(tmp_path):
+    private_path, _ = _key_pair(tmp_path)
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    minted = 0
+    revoked = []
+
+    def handler(request: httpx.Request):
+        nonlocal minted
+        if request.method == "DELETE":
+            revoked.append(request.headers["Authorization"])
+            return httpx.Response(204, request=request)
+        minted += 1
+        return httpx.Response(
+            201,
+            request=request,
+            json={
+                "token": f"push-{minted}",
+                "expires_at": (now + timedelta(minutes=4)).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        service = GithubAppAuthService(
+            http, config=_settings(private_path), now=lambda: now
+        )
+        first = await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+        second = await service.mint_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+
+        assert first != second
+        assert await service.revoke_cached_repository_token(
+            7, "owner", "repo", purpose="push", cache_subject="lease-a"
+        )
+
+    assert revoked == ["Bearer push-1", "Bearer push-2"]
 
 
 @pytest.mark.asyncio
