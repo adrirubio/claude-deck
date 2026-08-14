@@ -126,6 +126,38 @@ def test_opencode_process_detection_matches_binary_and_wrappers():
         assert provider.is_process_match("bun", "123") is True
 
 
+def test_argv0_name_tolerates_blank_commands():
+    from app.services.providers.base import argv0_name
+
+    assert argv0_name(" ") == ""
+    assert argv0_name("\t") == ""
+    assert argv0_name("") == ""
+    assert argv0_name("  codex  ") == "codex"
+
+
+def test_discovery_survives_a_blank_pane_command():
+    from app.services.agent_bridge.discovery import discover_agent_sessions
+
+    tmux_output = "\n".join(
+        [
+            "blank:0.0|blank|main|%1|/repo/a|111| ",
+            "codexproj:0.0|codexproj|main|%2|/repo/b|222|codex",
+        ]
+    )
+
+    def fake_run(args, **_kwargs):
+        if args[:2] == ["tmux", "list-panes"]:
+            return SimpleNamespace(returncode=0, stdout=tmux_output, stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+    with patch(
+        "app.services.agent_bridge.discovery.subprocess.run", side_effect=fake_run
+    ):
+        sessions = discover_agent_sessions()
+
+    assert [session["pane_id"] for session in sessions] == ["%2"]
+
+
 def test_opencode_home_respects_xdg_config_home(monkeypatch, tmp_path):
     from app.services.providers.opencode_cli import get_opencode_home
 

@@ -4,17 +4,27 @@ import os
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.deps import require_mail_session, resolve_request_pane
+from app.config import settings
 from app.database import get_db
-from app.models.database import MailTeamMember
+from app.models.database import (
+    GithubWorkItem,
+    MailAgentSession,
+    MailMessage,
+    MailTeamMember,
+    TeamGithubScope,
+)
 from app.models.schemas import (
     AgentMailInstallStatus,
     AgentMailSnippets,
     MailAgentRegisterRequest,
     MailAgentRegisterResponse,
     MailInboxResponse,
+    MailDecisionRequest,
     MailMemberResponse,
     MailMemberUpdate,
     MailMessageCreate,
@@ -23,7 +33,8 @@ from app.models.schemas import (
     TeamListResponse,
 )
 from app.services import agent_mail_install_service
-from app.services.agent_mail_service import agent_mail_service
+from app.services.agent_mail_service import MailAuthorityError, agent_mail_service
+from app.services.github_dispatch_service import github_dispatch_service
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +74,92 @@ async def update_member(
 
 
 @router.post("/messages", response_model=MailMessageResponse)
-async def send_message(request: MailMessageCreate, db: AsyncSession = Depends(get_db)):
+async def send_message(
+    request: MailMessageCreate,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    if (
+        request.sender_member_id is not None
+        and request.sender_member_id != session.member_id
+    ):
+        raise HTTPException(status_code=403, detail="sender_not_token_holder")
+    request = request.model_copy(update={"sender_member_id": session.member_id})
     try:
-        return await agent_mail_service.send_message(db, request)
+        return await agent_mail_service.send_message(
+            db,
+            request,
+            authenticated_sender_member_id=session.member_id,
+        )
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/decisions", response_model=MailMessageResponse)
+async def decide_work_item(
+    request: MailDecisionRequest,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, request.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    if item.dispatch_nonce != request.dispatch_nonce:
+        raise HTTPException(status_code=409, detail="stale_nonce")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    owner, leader = await agent_mail_service._dispatch_participants(db, item)
+    if leader is None or leader.id != session.member_id:
+        raise HTTPException(status_code=403, detail="not_designated_leader")
+    if owner is None:
+        raise HTTPException(status_code=409, detail="owner_not_registered")
+    roots = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.kind == "context_request",
+                MailMessage.sender_member_id == owner.id,
+                MailMessage.recipient_member_id == leader.id,
+            )
+        )
+    ).scalars().all()
+    matches = [
+        root
+        for root in roots
+        if (root.payload or {}).get("work_item_id") == item.id
+        and (root.payload or {}).get("dispatch_nonce") == item.dispatch_nonce
+        and (root.payload or {}).get("approval_round") == item.approval_round_count
+    ]
+    if not matches:
+        raise HTTPException(status_code=404, detail="no_current_approval_request")
+    if len(matches) > 1:
+        ids = ", ".join(str(root.id) for root in matches)
+        raise HTTPException(
+            status_code=409,
+            detail=f"ambiguous_current_approval_request: {ids}",
+        )
+    decision_message = MailMessageCreate(
+        kind="answer",
+        sender_member_id=session.member_id,
+        thread_root_id=matches[0].id,
+        body_markdown=request.reason,
+        decision=request.decision,
+    )
+    try:
+        message = await github_dispatch_service.advance_approval_round(
+            db,
+            item,
+            scope,
+            decision_message=decision_message,
+            authenticated_sender_member_id=session.member_id,
+        )
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await agent_mail_service._message_response(db, message, for_member_id=None)
 
 
 @router.get("/messages", response_model=list[MailMessageResponse])
@@ -90,20 +182,28 @@ async def get_thread(
 @router.post("/messages/{message_id}/read")
 async def mark_read(
     message_id: int,
-    body: dict[str, Any] = Body(...),
+    body: dict[str, Any] = Body(default_factory=dict),
+    session: MailAgentSession = Depends(require_mail_session),
     db: AsyncSession = Depends(get_db),
 ):
-    await agent_mail_service.mark_read(db, message_id, int(body["member_id"]))
+    claimed = body.get("member_id")
+    if claimed is not None and claimed != session.member_id:
+        raise HTTPException(status_code=403, detail="member_not_token_holder")
+    await agent_mail_service.mark_read(db, message_id, session.member_id)
     return {"ok": True}
 
 
 @router.post("/messages/{message_id}/ack")
 async def ack_message(
     message_id: int,
-    body: dict[str, Any] = Body(...),
+    body: dict[str, Any] = Body(default_factory=dict),
+    session: MailAgentSession = Depends(require_mail_session),
     db: AsyncSession = Depends(get_db),
 ):
-    await agent_mail_service.ack_message(db, message_id, int(body["member_id"]))
+    claimed = body.get("member_id")
+    if claimed is not None and claimed != session.member_id:
+        raise HTTPException(status_code=403, detail="member_not_token_holder")
+    await agent_mail_service.ack_message(db, message_id, session.member_id)
     return {"ok": True}
 
 
@@ -118,29 +218,72 @@ async def queue_inbox_check(member_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/agent/register", response_model=MailAgentRegisterResponse)
 async def register_agent(
+    http_request: Request,
     request: MailAgentRegisterRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
+    hashless_rebind = existing is not None and existing.capability_token_hash is None
+    if hashless_rebind and settings.mail_capability_tokens_required:
+        raise HTTPException(status_code=409, detail="token_required_for_rebind")
+
+    claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
+    pane = resolve_request_pane(http_request)
+
+    binding = None
+    if pane is None:
+        if claims_team_context and settings.mail_capability_tokens_required:
+            raise HTTPException(status_code=409, detail="bind_unverifiable")
+    else:
+        binding = await agent_mail_service.resolve_pane_binding(db, pane)
+        if binding is None and claims_team_context:
+            raise HTTPException(status_code=409, detail="bind_pending")
+
+    derived_slot_id = binding.slot_id if binding is not None else None
+    if (
+        request.team_slot_id is not None
+        and derived_slot_id is not None
+        and request.team_slot_id != derived_slot_id
+    ):
+        raise HTTPException(status_code=403, detail="slot_claim_mismatch")
+
+    request = request.model_copy(
+        update={
+            "team_slot_id": derived_slot_id,
+            "team_preset_id": binding.preset_id if binding is not None else None,
+        }
+    )
     member, session = await agent_mail_service.register_session(db, request)
+    if pane is not None:
+        session.bound_pane_pid = pane.pane_pid
+        session.bound_pane_proc_start = pane.pane_proc_start
+        await db.commit()
+    capability_token = (
+        None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
+    )
     members = await agent_mail_service.list_team(db)
     member_resp = next(candidate for candidate in members if candidate.id == member.id)
     session_resp = next(
         candidate for candidate in member_resp.sessions if candidate.session_key == session.session_key
     )
-    return MailAgentRegisterResponse(member=member_resp, session=session_resp)
+    return MailAgentRegisterResponse(
+        member=member_resp,
+        session=session_resp,
+        capability_token=capability_token,
+    )
 
 
 @router.get("/agent/inbox", response_model=MailInboxResponse)
 async def agent_inbox(
-    member_id: int,
     unread_only: bool = False,
     mark_read: bool = False,
     limit: int = 50,
+    session: MailAgentSession = Depends(require_mail_session),
     db: AsyncSession = Depends(get_db),
 ):
     return await agent_mail_service.get_inbox(
         db,
-        member_id,
+        session.member_id,
         unread_only=unread_only,
         mark_read=mark_read,
         limit=limit,

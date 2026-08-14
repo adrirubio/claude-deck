@@ -23,6 +23,7 @@ _register_lock = threading.Lock()
 
 _state: dict[str, Any] = {
     "member_id": None,
+    "capability_token": None,
     "session_key": f"mcp:{uuid.uuid4().hex[:12]}",
     "offline_until": 0.0,
     "last_error": None,
@@ -82,6 +83,11 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
         return _unreachable_result(_state.get("last_error") or "Claude Deck is unavailable.")
     normalized_path = path if path.startswith("/") else f"/{path}"
     url = f"{DECK_API}/{api_prefix.strip('/')}{normalized_path}"
+    session_token = _state.get("capability_token")
+    if session_token:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-Deck-Session-Token"] = session_token
+        kwargs["headers"] = headers
     try:
         response = httpx.request(method, url, timeout=DECK_HTTP_TIMEOUT, **kwargs)
         response.raise_for_status()
@@ -108,6 +114,10 @@ def _team_request(method: str, path: str, **kwargs) -> dict:
 
 def _bridge_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-bridge", path, **kwargs)
+
+
+def _dispatch_request(method: str, path: str, **kwargs) -> dict:
+    return _deck_request(method, "agent-teams", path, **kwargs)
 
 
 def _bridge_request_with_token(method: str, path: str, **kwargs) -> dict:
@@ -154,6 +164,9 @@ def _ensure_registered() -> dict:
         )
         if result["ok"]:
             _state["member_id"] = result["data"]["member"]["id"]
+            minted = result["data"].get("capability_token")
+            if minted:
+                _state["capability_token"] = minted
         return result
 
 
@@ -184,7 +197,7 @@ def _counts() -> dict:
         return {}
     result = _request(
         "GET",
-        f"/agent/inbox?member_id={_state['member_id']}&unread_only=true&limit=1",
+        "/agent/inbox?unread_only=true&limit=1",
     )
     if not result["ok"]:
         return {}
@@ -257,8 +270,8 @@ def deck_check_inbox(unread_only: bool = True, limit: int = 20) -> dict:
         return err
     result = _request(
         "GET",
-        f"/agent/inbox?member_id={_state['member_id']}"
-        f"&unread_only={'true' if unread_only else 'false'}&mark_read=true&limit={limit}",
+        f"/agent/inbox?unread_only={'true' if unread_only else 'false'}"
+        f"&mark_read=true&limit={limit}",
     )
     if not result["ok"]:
         return result
@@ -325,6 +338,46 @@ def deck_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def deck_approve_work_item(
+    work_item_id: int,
+    dispatch_nonce: str,
+    decision: str,
+    reason: str,
+) -> dict:
+    """Approve or reject the current dispatch approval round as its designated
+    leader. A rejection opens the next round automatically when one remains."""
+    if decision not in {"approved", "rejected"}:
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_decision",
+                "message": "decision must be approved or rejected",
+            },
+        }
+    err = _guard()
+    if err:
+        return err
+    result = _request(
+        "POST",
+        "/decisions",
+        json={
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "decision": decision,
+            "reason": reason,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {
+        "ok": True,
+        "message_id": result["data"]["id"],
+        "decision": result["data"].get("decision"),
+        **_counts(),
+    }
+
+
+@mcp.tool()
 def deck_ack_message(message_id: int) -> dict:
     """Acknowledge a message. Acking an answer to your context request closes it; acking
     a handoff addressed to you accepts and closes the handoff."""
@@ -347,6 +400,8 @@ def deck_request_context(
     topic: str,
     why_needed: str = "",
     files_or_symbols: Optional[list[str]] = None,
+    work_item_id: Optional[int] = None,
+    dispatch_nonce: Optional[str] = None,
 ) -> dict:
     """Ask another Agent Mail participant a structured question about something they know.
     Creates a pending context request they will be nudged to answer."""
@@ -357,6 +412,11 @@ def deck_request_context(
     body = topic
     if why_needed:
         body += f"\n\n**Why needed:** {why_needed}"
+    payload = {"why_needed": why_needed, "files_or_symbols": files_or_symbols}
+    if work_item_id is not None:
+        payload["work_item_id"] = work_item_id
+    if dispatch_nonce is not None:
+        payload["dispatch_nonce"] = dispatch_nonce
     result = _request(
         "POST",
         "/messages",
@@ -366,7 +426,7 @@ def deck_request_context(
             "recipient_member_id": to_member_id,
             "subject": topic[:120],
             "body_markdown": body,
-            "payload": {"why_needed": why_needed, "files_or_symbols": files_or_symbols},
+            "payload": payload,
         },
     )
     if not result["ok"]:
@@ -592,6 +652,123 @@ def deck_launch_team(
     if not result["ok"]:
         return result
     return {"ok": True, "launch": result["data"]}
+
+
+@mcp.tool()
+def deck_report_dispatch_status(
+    work_item_id: int,
+    status: str,
+    pr_number: Optional[int] = None,
+    head_ref: Optional[str] = None,
+    reassign_to_slot_id: Optional[int] = None,
+    note: Optional[str] = None,
+    lease_token: Optional[str] = None,
+) -> dict:
+    """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
+
+    status is one of: triaging, ack_received, in_progress, pr_ready (with
+    head_ref), pr_opened (with pr_number), handoff_initiated (with
+    reassign_to_slot_id), handoff_accepted, blocked, workspace_released. Never
+    send both head_ref and pr_number. Report ack_received only after the designated
+    leader records an explicit approved decision with deck_approve_work_item;
+    prose replies are not approval. Called by the owner slot the brain dispatched
+    the issue to. Include work_item_id and lease_token from your bootstrap prompt.
+    """
+    identity = _ensure_registered()
+    if not identity.get("ok"):
+        return identity
+    payload = {
+        "work_item_id": work_item_id,
+        "status": status,
+        "pr_number": pr_number,
+        "head_ref": head_ref,
+        "reassign_to_slot_id": reassign_to_slot_id,
+        "note": note,
+        "lease_token": lease_token,
+    }
+    return _dispatch_request("POST", "/dispatch-status", json=payload)
+
+
+@mcp.tool()
+def deck_get_work_item_context(work_item_id: int) -> dict:
+    """Claim the current owner's continuation context, including the persisted
+    branch, approval round, workspace, and lease capability after a handoff or
+    session restart."""
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/claim-continuation",
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "context": result["data"]}
+
+
+@mcp.tool()
+def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
+    """Leader-only: list this team's GitHub dispatch work items with their
+    work_item_id and issue_number. Defaults to escalated items (pass status=""
+    for all). Use at team start to resolve which escalated dependents are now
+    unblocked (per your dependency map) so you can call deck_retry_work_item
+    with the correct work_item_id.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    preset_id = registered["data"]["member"].get("team_preset_id")
+    if preset_id is None:
+        return {
+            "ok": False,
+            "error": {
+                "code": "no_team_preset",
+                "message": "Caller is not a member of a team preset.",
+            },
+        }
+    result = _dispatch_request(
+        "GET",
+        f"/presets/{preset_id}/github-work-items",
+        params={"limit": limit},
+    )
+    if not result["ok"]:
+        return result
+    items = result["data"].get("items", [])
+    if status:
+        items = [
+            item for item in items if item.get("dispatch_status") == status
+        ]
+    return {
+        "ok": True,
+        "items": [
+            {
+                "work_item_id": item.get("id"),
+                "issue_number": item.get("issue_number"),
+                "dispatch_status": item.get("dispatch_status"),
+                "escalation_reason": item.get("escalation_reason"),
+                "status_note": item.get("status_note"),
+                "ack_approval_round": item.get("ack_approval_round"),
+                "ack_enforcement_epoch": item.get("ack_enforcement_epoch"),
+                "dispatch_head_ref": item.get("dispatch_head_ref"),
+            }
+            for item in items
+        ],
+    }
+
+
+@mcp.tool()
+def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
+    """Leader-only: request re-dispatch of an ESCALATED GitHub work item whose
+    blockers are now resolved. Pass the work_item_id (from the blocker-merged
+    notification's escalated_items) and a short reason, e.g.
+    'prerequisite #816 merged'. Rejected (409) if the item is not escalated.
+    """
+    _ensure_registered()
+    return _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/retry",
+        json={"reason": reason},
+    )
 
 
 if __name__ == "__main__":

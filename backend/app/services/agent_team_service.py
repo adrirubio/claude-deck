@@ -13,6 +13,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
+    AgentPaneBinding,
     AgentTeamLaunch,
     AgentTeamLaunchItem,
     AgentTeamPreset,
@@ -48,6 +49,7 @@ from app.services.providers.launch_contract import (
     supports_bedrock,
 )
 from app.services.providers.platform_env import PLATFORM_BEDROCK
+from app.utils.peer_process import read_proc_stat
 from app.utils.repo_utils import derive_repo_identity
 
 
@@ -80,6 +82,12 @@ class AgentTeamService:
         preset = await self._require_preset(db, preset_id)
         return await self._preset_response(db, preset)
 
+    async def require_preset_row(self, db: AsyncSession, preset_id: int) -> AgentTeamPreset:
+        return await self._require_preset(db, preset_id)
+
+    def normalize_repo_path(self, repo_path: str) -> tuple[str, dict[str, str]]:
+        return self._normalize_repo(repo_path)
+
     async def create_preset(
         self, db: AsyncSession, request: AgentTeamPresetCreate
     ) -> AgentTeamPresetResponse:
@@ -110,6 +118,7 @@ class AgentTeamService:
         preset_id: int,
         name: str | None = None,
         description: str | None = None,
+        autonomy_enabled: bool | None = None,
     ) -> AgentTeamPresetResponse:
         preset = await self._require_preset(db, preset_id)
         if name is not None:
@@ -118,6 +127,8 @@ class AgentTeamService:
             preset.name = cleaned_name
         if description is not None:
             preset.description = self._clean_optional(description)
+        if autonomy_enabled is not None:
+            preset.autonomy_enabled = autonomy_enabled
         preset.updated_at = datetime.utcnow()
         await db.commit()
         await db.refresh(preset)
@@ -175,9 +186,12 @@ class AgentTeamService:
                     repo_name=slot.repo_name,
                     role=slot.role,
                     charter=slot.charter,
+                    ui_color=slot.ui_color,
                     bootstrap_prompt=slot.bootstrap_prompt,
                     launch_mode=slot.launch_mode,
                     launch_options=slot.launch_options or {},
+                    area_labels=slot.area_labels,
+                    expertise=slot.expertise,
                     enabled=slot.enabled,
                 )
             )
@@ -332,6 +346,10 @@ class AgentTeamService:
             updates["ui_color"] = self._clean_ui_color(request.ui_color)
         if request.bootstrap_prompt is not None:
             updates["bootstrap_prompt"] = self._clean_optional(request.bootstrap_prompt)
+        if "area_labels" in request.model_fields_set:
+            updates["area_labels"] = self._clean_area_labels(request.area_labels)
+        if request.expertise is not None:
+            updates["expertise"] = self._clean_optional(request.expertise)
         if request.launch_mode is not None:
             updates["launch_mode"] = request.launch_mode.strip() or "plain"
         if request.launch_options is not None:
@@ -496,7 +514,16 @@ class AgentTeamService:
         results: list[AgentTeamLaunchResultItem] = []
         for item in plan.items:
             slot = slot_by_id[item.slot_id]
-            result_item = await self._execute_plan_item(db, launch.id, preset, slot, item)
+            prompt_override = (request.slot_prompt_overrides or {}).get(slot.id)
+            result_item = await self._execute_plan_item(
+                db,
+                launch.id,
+                preset,
+                slot,
+                item,
+                request.repo_path_override,
+                prompt_override,
+            )
             results.append(result_item)
 
         failed = sum(1 for item in results if item.status == "failed")
@@ -523,6 +550,8 @@ class AgentTeamService:
         preset: AgentTeamPreset,
         slot: AgentTeamSlot,
         plan_item: AgentTeamLaunchPlanItem,
+        repo_path_override: str | None = None,
+        prompt_override: str | None = None,
     ) -> AgentTeamLaunchResultItem:
         if plan_item.action == "reuse":
             agent_mail_member_id = await self._attach_team_context_to_existing_session(
@@ -539,9 +568,17 @@ class AgentTeamService:
                 repo_path=slot.repo_path,
                 session_name=plan_item.matching_session.get("session_name") if plan_item.matching_session else None,
                 tmux_target=plan_item.matching_session.get("tmux_target") if plan_item.matching_session else None,
+                pane_pid=plan_item.matching_session.get("pid") if plan_item.matching_session else None,
                 agent_mail_member_id=agent_mail_member_id,
                 message="A matching wakeable tmux session was reused",
                 warnings=plan_item.warnings,
+            )
+            await self._write_pane_binding(
+                db,
+                pane_pid=result.pane_pid,
+                slot=slot,
+                preset=preset,
+                tmux_target=result.tmux_target,
             )
             self._record_launch_item(db, launch_id, result)
             return result
@@ -577,7 +614,14 @@ class AgentTeamService:
             return result
 
         try:
-            options = self._spawn_options_for_slot(slot, self._bootstrap_prompt(preset, slot))
+            bootstrap_prompt = prompt_override or await self._bootstrap_prompt(
+                db, preset, slot
+            )
+            options = self._spawn_options_for_slot(
+                slot,
+                bootstrap_prompt,
+                repo_path_override,
+            )
             spawned = spawn_session(
                 slot.provider,
                 options,
@@ -596,11 +640,19 @@ class AgentTeamService:
                 action="spawn",
                 status="pending_registration",
                 provider=slot.provider,
-                repo_path=slot.repo_path,
+                repo_path=repo_path_override or slot.repo_path,
                 session_name=spawned.get("session_name"),
                 tmux_target=spawned.get("tmux_target"),
+                pane_pid=spawned.get("pane_pid"),
                 message="Session spawned; waiting for Agent Mail registration",
                 warnings=plan_item.warnings,
+            )
+            await self._write_pane_binding(
+                db,
+                pane_pid=result.pane_pid,
+                slot=slot,
+                preset=preset,
+                tmux_target=result.tmux_target,
             )
         except Exception as exc:
             result = AgentTeamLaunchResultItem(
@@ -609,12 +661,59 @@ class AgentTeamService:
                 action="spawn",
                 status="failed",
                 provider=slot.provider,
-                repo_path=slot.repo_path,
+                repo_path=repo_path_override or slot.repo_path,
                 error=str(exc),
                 warnings=plan_item.warnings,
             )
         self._record_launch_item(db, launch_id, result)
         return result
+
+    async def _write_pane_binding(
+        self,
+        db: AsyncSession,
+        *,
+        pane_pid: int | None,
+        slot: AgentTeamSlot,
+        preset: AgentTeamPreset,
+        tmux_target: str | None,
+    ) -> None:
+        """Record which slot owns a pane so registration can derive it.
+
+        The commit is deliberately mid-loop on the caller's session. It makes
+        the row visible to a shim registering on another connection without
+        deadlocking on the launch transaction's existing SQLite write lock.
+        """
+        if pane_pid is None:
+            return
+        stat = read_proc_stat(pane_pid)
+        if stat is None:
+            return
+        _parent_pid, proc_start = stat
+
+        existing = (
+            await db.execute(
+                select(AgentPaneBinding).where(
+                    AgentPaneBinding.pane_pid == pane_pid,
+                    AgentPaneBinding.pane_proc_start == proc_start,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is None:
+            db.add(
+                AgentPaneBinding(
+                    pane_pid=pane_pid,
+                    pane_proc_start=proc_start,
+                    slot_id=slot.id,
+                    preset_id=preset.id,
+                    tmux_target=tmux_target,
+                )
+            )
+        else:
+            existing.slot_id = slot.id
+            existing.preset_id = preset.id
+            existing.tmux_target = tmux_target
+        await db.commit()
 
     def _record_launch_item(
         self,
@@ -1034,7 +1133,9 @@ class AgentTeamService:
         except Exception as exc:
             return str(exc)
 
-    def _spawn_options_for_slot(self, slot: AgentTeamSlot, prompt: str | None) -> SpawnCommandOptions:
+    def _spawn_options_for_slot(
+        self, slot: AgentTeamSlot, prompt: str | None, repo_path_override: str | None = None
+    ) -> SpawnCommandOptions:
         raw_options = dict(slot.launch_options or {})
         raw_prompt = self._clean_optional(raw_options.pop("prompt", None))
         if prompt and raw_prompt:
@@ -1043,7 +1144,7 @@ class AgentTeamService:
             prompt = raw_prompt
 
         values: dict[str, Any] = {
-            "directory": slot.repo_path,
+            "directory": repo_path_override or slot.repo_path,
             "mode": slot.launch_mode or "plain",
             "prompt": prompt,
         }
@@ -1052,19 +1153,49 @@ class AgentTeamService:
                 values[key] = value
         return SpawnCommandOptions(**values)
 
-    def _bootstrap_prompt(self, preset: AgentTeamPreset, slot: AgentTeamSlot) -> str:
+    async def _bootstrap_prompt(
+        self,
+        db: AsyncSession,
+        preset: AgentTeamPreset,
+        slot: AgentTeamSlot,
+    ) -> str:
+        is_leader = await self._slot_is_leader(db, preset, slot)
         if slot.bootstrap_prompt:
-            return slot.bootstrap_prompt
-        parts = [
-            f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
-            f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
-            "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
-        ]
-        if slot.role:
-            parts.append(f"Role: {slot.role}")
-        if slot.charter:
-            parts.append(f"Charter: {slot.charter}")
-        return "\n".join(parts)
+            base = slot.bootstrap_prompt
+        else:
+            parts = [
+                f'You are being started by Claude Deck as part of Agent Team "{preset.name}".',
+                f'Your team slot is "{slot.display_name}" for repo "{slot.repo_name}".',
+                "Call `deck_whoami` when the session starts, then check your inbox with `deck_check_inbox(unread_only=False)`.",
+            ]
+            if slot.role:
+                parts.append(f"Role: {slot.role}")
+            if slot.charter:
+                parts.append(f"Charter: {slot.charter}")
+            base = "\n".join(parts)
+        if is_leader:
+            from app.services.github_dispatch_service import github_dispatch_service
+
+            base = f"{base}\n\n{github_dispatch_service._leader_unblock_instructions()}"
+        return base
+
+    async def _slot_is_leader(
+        self,
+        db: AsyncSession,
+        preset: AgentTeamPreset,
+        slot: AgentTeamSlot,
+    ) -> bool:
+        first = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(
+                    AgentTeamSlot.preset_id == preset.id,
+                    AgentTeamSlot.enabled.is_(True),
+                )
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().first()
+        return first is not None and first.id == slot.id
 
     def _discover_sessions(self) -> list[dict[str, Any]]:
         try:
@@ -1115,6 +1246,7 @@ class AgentTeamService:
             created_by=preset.created_by,
             created_at=preset.created_at,
             updated_at=preset.updated_at,
+            autonomy_enabled=preset.autonomy_enabled,
             slots=[self._slot_response(slot) for slot in slots],
         )
 
@@ -1134,6 +1266,8 @@ class AgentTeamService:
             bootstrap_prompt=slot.bootstrap_prompt,
             launch_mode=slot.launch_mode,
             launch_options=slot.launch_options or {},
+            area_labels=slot.area_labels,
+            expertise=slot.expertise,
             warnings=self._slot_launch_warnings(slot.provider, slot.launch_options or {}),
             enabled=slot.enabled,
             created_at=slot.created_at,
@@ -1219,6 +1353,8 @@ class AgentTeamService:
             "bootstrap_prompt": self._clean_optional(slot.bootstrap_prompt),
             "launch_mode": launch_mode,
             "launch_options": launch_options,
+            "area_labels": self._clean_area_labels(slot.area_labels),
+            "expertise": self._clean_optional(slot.expertise),
             "enabled": slot.enabled,
         }
 
@@ -1381,6 +1517,19 @@ class AgentTeamService:
             allowed = ", ".join(sorted(_TEAM_SLOT_UI_COLORS))
             raise ValueError(f"Unsupported ui_color: {color}. Expected one of: {allowed}")
         return color
+
+    def _clean_area_labels(self, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        labels: list[str] = []
+        seen: set[str] = set()
+        for raw_label in value:
+            label = self._clean_optional(raw_label)
+            if label is None or label in seen:
+                continue
+            labels.append(label)
+            seen.add(label)
+        return labels or None
 
 
 agent_team_service = AgentTeamService()

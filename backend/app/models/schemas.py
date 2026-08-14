@@ -1872,6 +1872,14 @@ class MailMessageCreate(BaseModel):
     subject: Optional[str] = None
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
+    decision: Optional[Literal["approved", "rejected"]] = None
+
+
+class MailDecisionRequest(BaseModel):
+    work_item_id: int
+    dispatch_nonce: str
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1)
 
 
 class MailMessageResponse(BaseModel):
@@ -1882,6 +1890,8 @@ class MailMessageResponse(BaseModel):
     sender_actor_id: Optional[int] = None
     sender_type: str = "director"
     sender_actor_kind: Optional[str] = None
+    approval_round: Optional[int] = None
+    decision: Optional[str] = None
     sender_name: str
     recipient_member_id: Optional[int] = None
     subject: Optional[str] = None
@@ -1994,6 +2004,7 @@ class MailAgentRegisterRequest(BaseModel):
 class MailAgentRegisterResponse(BaseModel):
     member: MailMemberResponse
     session: MailSessionResponse
+    capability_token: Optional[str] = None
 
 
 class AgentMailInstallStatus(BaseModel):
@@ -2062,6 +2073,8 @@ class AgentTeamSlotCreate(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str = "plain"
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    area_labels: Optional[List[str]] = None
+    expertise: Optional[str] = None
     enabled: bool = True
     position: Optional[int] = None
 
@@ -2076,6 +2089,8 @@ class AgentTeamSlotUpdate(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: Optional[str] = None
     launch_options: Optional[Dict[str, Any]] = None
+    area_labels: Optional[List[str]] = None
+    expertise: Optional[str] = None
     enabled: Optional[bool] = None
     position: Optional[int] = None
 
@@ -2095,6 +2110,8 @@ class AgentTeamSlotResponse(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    area_labels: Optional[List[str]] = None
+    expertise: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)
     enabled: bool
     created_at: datetime
@@ -2111,6 +2128,7 @@ class AgentTeamPresetCreate(BaseModel):
 class AgentTeamPresetUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    autonomy_enabled: Optional[bool] = None
 
 
 class AgentTeamPresetResponse(BaseModel):
@@ -2120,6 +2138,7 @@ class AgentTeamPresetResponse(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    autonomy_enabled: bool = False
     slots: List[AgentTeamSlotResponse] = Field(default_factory=list)
 
 
@@ -2141,6 +2160,199 @@ class AgentTeamCreateFromBridgeRequest(BaseModel):
 
 class AgentTeamSlotReorderRequest(BaseModel):
     slot_ids: List[int]
+
+
+class TeamGithubScopeCreate(BaseModel):
+    repo_owner: str
+    repo_name: str
+    repo_path: str
+    dispatch_label: str = "claude-deck-ready"
+    design_label: str = "claude-deck-design"
+    merge_policy: Literal["human", "auto"] = "human"
+    max_approval_rounds: int = Field(default=3, ge=1)
+    max_concurrent_dispatched: int = Field(default=3, ge=1)
+    max_verification_retries: int = Field(default=2, ge=0)
+    max_auto_merges_per_day: int = Field(default=5, ge=0)
+    base_ref: str = "origin/HEAD"
+    builds_out_of_tree: bool = False
+    build_dir_template: str = "build"
+    build_command_hint: Optional[str] = None
+    max_build_parallelism: int = Field(default=4, ge=1)
+    enabled: bool = True
+
+
+class TeamGithubScopeUpdate(BaseModel):
+    repo_owner: Optional[str] = None
+    repo_name: Optional[str] = None
+    repo_path: Optional[str] = None
+    dispatch_label: Optional[str] = None
+    design_label: Optional[str] = None
+    merge_policy: Optional[Literal["human", "auto"]] = None
+    max_approval_rounds: Optional[int] = Field(default=None, ge=1)
+    max_concurrent_dispatched: Optional[int] = Field(default=None, ge=1)
+    max_verification_retries: Optional[int] = Field(default=None, ge=0)
+    max_auto_merges_per_day: Optional[int] = Field(default=None, ge=0)
+    base_ref: Optional[str] = None
+    builds_out_of_tree: Optional[bool] = None
+    build_dir_template: Optional[str] = None
+    build_command_hint: Optional[str] = None
+    max_build_parallelism: Optional[int] = Field(default=None, ge=1)
+    enabled: Optional[bool] = None
+
+
+class TeamGithubScopeResponse(BaseModel):
+    id: int
+    preset_id: int
+    repo_owner: str
+    repo_name: str
+    repo_path: str
+    dispatch_label: str
+    design_label: str
+    merge_policy: str
+    max_approval_rounds: int
+    max_concurrent_dispatched: int
+    max_verification_retries: int
+    max_auto_merges_per_day: int
+    base_ref: str
+    builds_out_of_tree: bool
+    build_dir_template: Optional[str] = None
+    build_command_hint: Optional[str] = None
+    max_build_parallelism: int
+    enabled: bool
+    last_polled_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TeamGithubScopeListResponse(BaseModel):
+    scopes: List[TeamGithubScopeResponse] = Field(default_factory=list)
+
+
+class GithubWorkItemRetryRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class GithubWorkItemResumeAttemptRequest(BaseModel):
+    resume: Literal[True]
+    reassign_to_slot_id: Optional[int] = None
+
+
+class GithubWorkItemAbandonRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class GithubWorkspaceCreate(BaseModel):
+    path: str
+    kind: str = "worktree"
+    dispatchable: Optional[bool] = None
+    enabled: bool = True
+
+
+class GithubWorkspaceResponse(BaseModel):
+    id: int
+    scope_id: int
+    path: str
+    kind: str
+    lease_state: str
+    dispatchable: bool
+    leased_item_id: Optional[int] = None
+    leased_at: Optional[datetime] = None
+    released_at: Optional[datetime] = None
+    lease_last_owner_contact_at: Optional[datetime] = None
+    lease_release_reminded_at: Optional[datetime] = None
+    lease_age_seconds: Optional[int] = None
+    provision_error: Optional[str] = None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class GithubWorkspaceForceReleaseRequest(BaseModel):
+    force: Literal[True]
+    expected_leased_at: datetime
+    reason: str
+    requested_by: Optional[str] = None
+
+
+class GithubWorkspaceForceReleaseResponse(BaseModel):
+    workspace: GithubWorkspaceResponse
+    released_item_id: int
+    discarded_paths: Optional[str] = None
+    unpushed_commits: Optional[int] = None
+
+
+class GithubWorkspaceListResponse(BaseModel):
+    workspaces: List[GithubWorkspaceResponse] = Field(default_factory=list)
+
+
+class GithubCredentialRequest(BaseModel):
+    workspace_token: str
+    protocol: str
+    host: str
+    path: Optional[str] = None
+
+
+class GithubCredentialResponse(BaseModel):
+    username: str
+    password: str
+
+
+class GithubWorkItemResponse(BaseModel):
+    id: int
+    scope_id: int
+    repo_owner: str
+    repo_name: str
+    issue_number: int
+    issue_title: str
+    issue_url: str
+    github_updated_at: datetime
+    issue_type: str
+    dispatch_status: str
+    pending_reason: Optional[str] = None
+    launch_id: Optional[int] = None
+    owner_slot_id: Optional[int] = None
+    routing_method: Optional[str] = None
+    handoff_state: Optional[str] = None
+    handoff_target_slot_id: Optional[int] = None
+    approval_round_count: int
+    ack_approver_member_id: Optional[int] = None
+    ack_evidence_message_id: Optional[int] = None
+    dispatch_nonce: Optional[str] = None
+    ack_enforcement_epoch: Optional[int] = None
+    ack_approval_round: Optional[int] = None
+    dispatch_head_ref: Optional[str] = None
+    pr_number: Optional[int] = None
+    retry_count: int
+    last_verified_sha: Optional[str] = None
+    retry_requested_at: Optional[datetime] = None
+    escalation_reason: Optional[str] = None
+    status_note: Optional[str] = None
+    auto_merged_at: Optional[datetime] = None
+    workspace_path: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class GithubWorkItemListResponse(BaseModel):
+    items: List[GithubWorkItemResponse] = Field(default_factory=list)
+
+
+class GithubWorkItemContinuationResponse(BaseModel):
+    work_item_id: int
+    issue_number: int
+    issue_title: str
+    issue_url: str
+    issue_type: str
+    repo_owner: str
+    repo_name: str
+    dispatch_status: str
+    approval_round_count: int
+    dispatch_nonce: Optional[str] = None
+    dispatch_head_ref: Optional[str] = None
+    workspace_path: Optional[str] = None
+    lease_token: Optional[str] = None
+    leader_member_id: Optional[int] = None
+    status_note: Optional[str] = None
 
 
 class AgentTeamLaunchPlanItem(BaseModel):
@@ -2178,6 +2390,19 @@ class AgentTeamLaunchRequest(BaseModel):
     include_disabled: bool = False
     confirm_plan_hash: Optional[str] = None
     skip_plan_confirmation: bool = False
+    repo_path_override: Optional[str] = None
+    slot_prompt_overrides: Optional[Dict[int, str]] = None
+
+
+class DispatchStatusReport(BaseModel):
+    work_item_id: int
+    status: str
+    pr_number: Optional[int] = None
+    head_ref: Optional[str] = None
+    reassign_to_slot_id: Optional[int] = None
+    note: Optional[str] = None
+    reporting_slot_id: Optional[int] = None
+    lease_token: Optional[str] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):
@@ -2189,6 +2414,7 @@ class AgentTeamLaunchResultItem(BaseModel):
     repo_path: str
     session_name: Optional[str] = None
     tmux_target: Optional[str] = None
+    pane_pid: Optional[int] = None
     agent_mail_member_id: Optional[int] = None
     message: Optional[str] = None
     block_code: Optional[str] = None

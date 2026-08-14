@@ -357,6 +357,18 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if session_columns and "team_slot_id" not in session_columns:
         await conn.execute(text("ALTER TABLE mail_agent_sessions ADD COLUMN team_slot_id INTEGER"))
+    if session_columns and "capability_token_hash" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN capability_token_hash TEXT")
+        )
+    if session_columns and "bound_pane_pid" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN bound_pane_pid INTEGER")
+        )
+    if session_columns and "bound_pane_proc_start" not in session_columns:
+        await conn.execute(
+            text("ALTER TABLE mail_agent_sessions ADD COLUMN bound_pane_proc_start TEXT")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_slots)"))
     slot_columns = {row[1] for row in result.fetchall()}
@@ -369,6 +381,120 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if slot_columns and "ui_color" not in slot_columns:
         await conn.execute(text("ALTER TABLE agent_team_slots ADD COLUMN ui_color VARCHAR"))
+    if slot_columns and "area_labels" not in slot_columns:
+        await conn.execute(text("ALTER TABLE agent_team_slots ADD COLUMN area_labels JSON"))
+    if slot_columns and "expertise" not in slot_columns:
+        await conn.execute(text("ALTER TABLE agent_team_slots ADD COLUMN expertise VARCHAR"))
+
+    result = await conn.execute(text("PRAGMA table_info(agent_team_presets)"))
+    preset_columns = {row[1] for row in result.fetchall()}
+    if preset_columns and "autonomy_enabled" not in preset_columns:
+        await conn.execute(
+            text("ALTER TABLE agent_team_presets ADD COLUMN autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL")
+        )
+
+    result = await conn.execute(text("PRAGMA table_info(team_github_scopes)"))
+    scope_columns = {row[1] for row in result.fetchall()}
+    if scope_columns and "max_concurrent_dispatched" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_concurrent_dispatched INTEGER DEFAULT 3 NOT NULL")
+        )
+    if scope_columns and "max_verification_retries" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_verification_retries INTEGER DEFAULT 2 NOT NULL")
+        )
+    if scope_columns and "max_auto_merges_per_day" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_auto_merges_per_day INTEGER DEFAULT 5 NOT NULL")
+        )
+    if scope_columns and "base_ref" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN base_ref VARCHAR DEFAULT 'origin/HEAD' NOT NULL")
+        )
+    if scope_columns and "builds_out_of_tree" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN builds_out_of_tree BOOLEAN DEFAULT 0 NOT NULL")
+        )
+    if scope_columns and "build_dir_template" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN build_dir_template VARCHAR DEFAULT 'build'")
+        )
+    if scope_columns and "build_command_hint" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN build_command_hint VARCHAR")
+        )
+    if scope_columns and "max_build_parallelism" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN max_build_parallelism INTEGER DEFAULT 4 NOT NULL")
+        )
+    if scope_columns and "github_auth_mode" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN github_auth_mode VARCHAR DEFAULT 'unknown' NOT NULL")
+        )
+    if scope_columns and "github_app_installation_id" not in scope_columns:
+        await conn.execute(
+            text("ALTER TABLE team_github_scopes ADD COLUMN github_app_installation_id INTEGER")
+        )
+
+    result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
+    work_item_columns = {row[1] for row in result.fetchall()}
+    if work_item_columns and "status_note" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN status_note VARCHAR"))
+    if work_item_columns and "auto_merged_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN auto_merged_at DATETIME"))
+    if work_item_columns and "last_verified_sha" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN last_verified_sha VARCHAR"))
+    if work_item_columns and "dispatched_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatched_at DATETIME"))
+    if work_item_columns and "ack_received_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_received_at DATETIME"))
+    if work_item_columns and "last_nudge_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN last_nudge_at DATETIME"))
+    if work_item_columns and "retry_requested_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN retry_requested_at DATETIME"))
+    if work_item_columns and "brief_delivery_nudge_at" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_at DATETIME"))
+    if work_item_columns and "brief_delivery_nudge_count" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_delivery_nudge_count INTEGER"))
+    if work_item_columns and "brief_message_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN brief_message_id INTEGER"))
+    if work_item_columns and "ack_approver_member_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approver_member_id INTEGER"))
+    if work_item_columns and "ack_evidence_message_id" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_evidence_message_id INTEGER"))
+    if work_item_columns and "dispatch_nonce" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_nonce VARCHAR"))
+    if work_item_columns and "ack_enforcement_epoch" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_enforcement_epoch INTEGER"))
+    if work_item_columns and "ack_approval_round" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN ack_approval_round INTEGER"))
+    if work_item_columns and "dispatch_head_ref" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_head_ref VARCHAR"))
+    if work_item_columns and "dispatch_base_ref" not in work_item_columns:
+        await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_base_ref VARCHAR"))
+
+    workspace_columns = await _sqlite_columns(conn, "github_workspaces")
+    if workspace_columns and "lease_token" not in workspace_columns:
+        await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN lease_token VARCHAR"))
+    if workspace_columns and "push_token_expires_at" not in workspace_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_workspaces "
+                "ADD COLUMN push_token_expires_at DATETIME"
+            )
+        )
+    if workspace_columns and "leased_owner_pid" not in workspace_columns:
+        await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN leased_owner_pid INTEGER"))
+    if workspace_columns and "leased_owner_proc_start" not in workspace_columns:
+        await conn.execute(text("ALTER TABLE github_workspaces ADD COLUMN leased_owner_proc_start VARCHAR"))
+    if workspace_columns and "lease_last_owner_contact_at" not in workspace_columns:
+        await conn.execute(
+            text("ALTER TABLE github_workspaces ADD COLUMN lease_last_owner_contact_at DATETIME")
+        )
+    if workspace_columns and "lease_release_reminded_at" not in workspace_columns:
+        await conn.execute(
+            text("ALTER TABLE github_workspaces ADD COLUMN lease_release_reminded_at DATETIME")
+        )
 
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}
@@ -385,6 +511,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
     message_columns = {row[1] for row in result.fetchall()}
     if message_columns and "sender_actor_id" not in message_columns:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN sender_actor_id INTEGER"))
+    if message_columns and "approval_round" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN approval_round INTEGER"))
+    if message_columns and "decision" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN decision VARCHAR"))
     await conn.commit()
 
 

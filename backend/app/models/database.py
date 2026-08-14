@@ -131,6 +131,7 @@ class AgentTeamPreset(Base):
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class AgentTeamSlot(Base):
@@ -154,6 +155,8 @@ class AgentTeamSlot(Base):
     bootstrap_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
     launch_mode: Mapped[str] = mapped_column(String, default="plain", nullable=False)
     launch_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    area_labels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    expertise: Mapped[str | None] = mapped_column(String, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -198,6 +201,163 @@ class AgentTeamLaunchItem(Base):
     block_code: Mapped[str | None] = mapped_column(String, nullable=True)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TeamGithubScope(Base):
+    """A GitHub repo an Agent Team watches for labeled issues."""
+
+    __tablename__ = "team_github_scopes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    preset_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    repo_owner: Mapped[str] = mapped_column(String, nullable=False)
+    repo_name: Mapped[str] = mapped_column(String, nullable=False)
+    repo_path: Mapped[str] = mapped_column(String, nullable=False)
+    dispatch_label: Mapped[str] = mapped_column(String, default="claude-deck-ready", nullable=False)
+    design_label: Mapped[str] = mapped_column(String, default="claude-deck-design", nullable=False)
+    merge_policy: Mapped[str] = mapped_column(String, default="human", nullable=False)
+    max_approval_rounds: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_concurrent_dispatched: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    max_verification_retries: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    max_auto_merges_per_day: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    base_ref: Mapped[str] = mapped_column(String, default="origin/HEAD", nullable=False)
+    builds_out_of_tree: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    build_dir_template: Mapped[str | None] = mapped_column(String, default="build", nullable=True)
+    build_command_hint: Mapped[str | None] = mapped_column(String, nullable=True)
+    max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    github_auth_mode: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
+    github_app_installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("preset_id", "repo_owner", "repo_name", name="uix_preset_repo_scope"),
+    )
+
+
+class GithubWorkItem(Base):
+    """A labeled GitHub issue the dispatch pipeline is tracking."""
+
+    __tablename__ = "github_work_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    issue_title: Mapped[str] = mapped_column(String, nullable=False)
+    issue_url: Mapped[str] = mapped_column(String, nullable=False)
+    github_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    issue_type: Mapped[str] = mapped_column(String, default="code", nullable=False)
+    dispatch_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    pending_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    launch_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_launches.id", ondelete="SET NULL"), nullable=True
+    )
+    owner_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    routing_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    handoff_state: Mapped[str | None] = mapped_column(String, nullable=True)
+    handoff_target_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    approval_round_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_verified_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ack_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retry_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    brief_delivery_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    brief_delivery_nudge_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    brief_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ack_approver_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ack_evidence_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dispatch_nonce: Mapped[str | None] = mapped_column(String, nullable=True)
+    ack_enforcement_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ack_approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dispatch_head_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    dispatch_base_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    status_note: Mapped[str | None] = mapped_column(String, nullable=True)
+    auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("scope_id", "issue_number", name="uix_scope_issue"),
+    )
+
+
+class GithubWorkspace(Base):
+    """A checkout a dispatched work item may exclusively occupy."""
+
+    __tablename__ = "github_workspaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
+    path: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, default="worktree", nullable=False)
+    dispatchable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    leased_item_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_work_items.id", ondelete="SET NULL"), nullable=True
+    )
+    leased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    push_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    leased_owner_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leased_owner_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
+    lease_last_owner_contact_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_release_reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    provision_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("path", name="uix_workspace_path"),
+        UniqueConstraint("leased_item_id", name="uix_workspace_leased_item"),
+    )
+
+
+class AgentPaneBinding(Base):
+    """Which tmux pane a launched slot physically occupies.
+
+    Written by the launcher at launch time and committed on its own, ahead of
+    the slot loop's single commit, because the pane it describes can register
+    with Agent Mail before that loop finishes. A binding that is not visible
+    yet is indistinguishable from a pane that was never launched.
+    """
+
+    __tablename__ = "agent_pane_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pane_pid: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    pane_proc_start: Mapped[str] = mapped_column(String, nullable=False)
+    slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
+    )
+    preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True
+    )
+    tmux_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("pane_pid", "pane_proc_start", name="uix_pane_binding"),
+    )
 
 
 class BridgeSessionAttachment(Base):
@@ -268,6 +428,9 @@ class MailAgentSession(Base):
     team_slot_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True
     )
+    capability_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    bound_pane_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bound_pane_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
     mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
     activity: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(
@@ -307,6 +470,8 @@ class MailMessage(Base):
     sender_actor_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_external_actors.id", ondelete="SET NULL"), nullable=True
     )
+    approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision: Mapped[str | None] = mapped_column(String, nullable=True)
     recipient_member_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=True
     )

@@ -19,6 +19,7 @@ from app.services.agent_mail_service import (
     HEARTBEAT_TTL_SECONDS,
     INBOX_CHECK_PROMPT,
     MCP_HEARTBEAT_TTL_SECONDS,
+    OBSERVED_TTL_SECONDS,
     TMUX_ENTER_DELAY_SECONDS,
     AgentMailService,
 )
@@ -366,6 +367,276 @@ async def test_sync_observed_creates_observed_sessions(db, svc, tmp_path):
     assert members[0].status == "observed"
     assert members[0].sessions[0].session_key == "tmux:%7"
     assert members[0].can_nudge is True
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_keeps_row_whose_pid_is_alive(db, svc, tmp_path):
+    """A single failed discovery pass must not delete a live pane's row.
+
+    discover_agent_sessions() returns [] for tmux-missing, non-zero exit, and
+    timeout, so [] cannot be read as "no panes exist".
+    """
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    member = await svc.get_or_create_slot_member(db, slot)
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            team_preset_id=slot.preset_id,
+            team_slot_id=slot.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%1",
+            pane_id="%1",
+            tmux_target="obs:0.0",
+            cwd=str(cwd),
+            pid=os.getpid(),
+            mailbox_status="observed",
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    assert len(await svc.nudgeable_sessions_for_slot(db, slot.id)) == 1
+
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=[]):
+        await svc.sync_observed_sessions(db)
+
+    kept = await svc.nudgeable_sessions_for_slot(db, slot.id)
+    assert len(kept) == 1
+    assert kept[0].team_slot_id == slot.id
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_still_deletes_row_whose_pid_is_dead(db, svc, tmp_path):
+    """Retention becomes pid-aware, not pid-only. A dead pane still goes."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    member = await svc.get_or_create_slot_member(db, slot)
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            team_preset_id=slot.preset_id,
+            team_slot_id=slot.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%2",
+            pane_id="%2",
+            tmux_target="obs:0.1",
+            cwd=str(cwd),
+            pid=None,
+            mailbox_status="observed",
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=[]):
+        await svc.sync_observed_sessions(db)
+
+    assert await svc.nudgeable_sessions_for_slot(db, slot.id) == []
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_deletes_row_whose_pid_is_gone(db, svc, tmp_path):
+    """A non-null pid that is not running must still be deleted."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    member = await svc.get_or_create_slot_member(db, slot)
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            team_preset_id=slot.preset_id,
+            team_slot_id=slot.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%3",
+            pane_id="%3",
+            tmux_target="obs:0.2",
+            cwd=str(cwd),
+            pid=999999,
+            mailbox_status="observed",
+            last_seen_at=datetime.utcnow(),
+        )
+    )
+    await db.commit()
+
+    with patch(
+        "app.services.agent_mail_service.discover_agent_sessions", return_value=[]
+    ), patch.object(type(svc), "_pid_is_running", return_value=False):
+        await svc.sync_observed_sessions(db)
+
+    assert await svc.nudgeable_sessions_for_slot(db, slot.id) == []
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_binds_slot_from_tmux_environment(db, svc, tmp_path):
+    """A rebuilt row recovers its slot from the pane's own tmux env."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id == slot.id
+    assert session.team_preset_id == preset.id
+    member = await db.get(MailTeamMember, session.member_id)
+    assert member.participant_kind == "team_slot"
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_from_another_repo(db, svc, tmp_path):
+    """An advertised slot whose repo does not match the pane's cwd is rejected."""
+    slot_cwd = tmp_path / "slotrepo"
+    slot_cwd.mkdir()
+    pane_cwd = tmp_path / "elsewhere"
+    pane_cwd.mkdir()
+    preset, slot = await _slot(db, str(slot_cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(pane_cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+    member = await db.get(MailTeamMember, session.member_id)
+    assert member.participant_kind == "repo"
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_that_no_longer_exists(db, svc, tmp_path):
+    """A stale tmux env naming a deleted slot falls back, it does not crash."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": 999,
+            "team_slot_id": 999,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_with_a_different_provider(db, svc, tmp_path):
+    """A pane advertising a slot whose provider disagrees is rejected."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    assert slot.provider == "codex-cli"
+    fake = [
+        {
+            "provider": "claude-code",
+            "provider_display_name": "Claude Code",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
+
+
+@pytest.mark.asyncio
+async def test_sync_observed_ignores_env_slot_whose_preset_disagrees(db, svc, tmp_path):
+    """A reused slot id with a contradictory preset id must not bind."""
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    preset, slot = await _slot(db, str(cwd), "Owner")
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "obs:0.0",
+            "session_name": "obs",
+            "window_name": "main",
+            "pane_id": "%1",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+            "team_preset_id": preset.id + 500,
+            "team_slot_id": slot.id,
+        }
+    ]
+    with patch("app.services.agent_mail_service.discover_agent_sessions", return_value=fake):
+        await svc.sync_observed_sessions(db)
+
+    session = (
+        await db.execute(
+            select(MailAgentSession).where(MailAgentSession.session_key == "tmux:%1")
+        )
+    ).scalar_one()
+    assert session.team_slot_id is None
 
 
 @pytest.mark.asyncio
@@ -741,6 +1012,105 @@ async def test_send_message_auto_nudge_is_throttled(db, svc, tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_dispatch_brief_nudge_bypasses_the_cooldown(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
+
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    calls.clear()
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="blocker merged",
+        body_markdown="fyi",
+    )
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="Autonomous dispatch: issue #900",
+        body_markdown="brief",
+        bypass_nudge_cooldown=True,
+    )
+
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_ordinary_send_still_throttled_after_a_bypassed_brief(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "obs"
+    cwd.mkdir()
+    fake = [
+        {
+            "provider": "codex-cli",
+            "provider_display_name": "Codex",
+            "tmux_target": "w:0.1",
+            "session_name": "w",
+            "window_name": "main",
+            "pane_id": "%7",
+            "cwd": str(cwd),
+            "pid": "4242",
+            "status": "active",
+        }
+    ]
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout="", stderr="", returncode=0 if command[0] == "tmux" else 1)
+
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
+    await svc.sync_observed_sessions(db)
+    recipient = (await svc.list_team(db))[0]
+    calls.clear()
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="brief",
+        body_markdown="b",
+        bypass_nudge_cooldown=True,
+    )
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
+
+    await svc.send_direct_message(
+        db,
+        recipient_member_id=recipient.id,
+        subject="chatter",
+        body_markdown="c",
+    )
+    assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_sync_observed_removes_stale_observed_only_members(db, svc, tmp_path):
     cwd = tmp_path / "obs"
     cwd.mkdir()
@@ -815,6 +1185,100 @@ async def test_stale_connected_session_reports_offline(db, svc, tmp_path):
     await db.commit()
     members = await svc.list_team(db)
     assert members[0].status == "offline"
+
+
+def test_observed_session_past_ttl_with_live_pid_reads_observed(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "observed"
+
+
+def test_revived_observed_session_is_still_nudgeable(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        provider="claude-code",
+        tmux_target="tizonia:1.0",
+        mailbox_status="observed",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._session_can_nudge(session, now) is True
+
+
+def test_observed_session_past_ttl_with_dead_pid_reads_offline(svc, monkeypatch):
+    monkeypatch.setattr(svc, "_pid_is_running", lambda pid: False)
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=123456,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "offline"
+
+
+def test_observed_session_past_ttl_without_pid_reads_offline(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=None,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "offline"
+
+
+def test_explicitly_offline_observed_session_stays_offline_with_live_pid(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="offline",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "offline"
+
+
+def test_observed_session_within_ttl_keeps_mailbox_status(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="observed",
+        mailbox_status="observed",
+        pid=None,
+        last_seen_at=now - timedelta(seconds=OBSERVED_TTL_SECONDS - 60),
+    )
+
+    assert svc._effective_status(session, now) == "observed"
+
+
+def test_mcp_session_past_ttl_with_live_pid_stays_connected(svc):
+    now = datetime.utcnow()
+    session = MailAgentSession(
+        member_id=1,
+        source="mcp",
+        mailbox_status="connected",
+        pid=os.getpid(),
+        last_seen_at=now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS + 60),
+    )
+
+    assert svc._effective_status(session, now) == "connected"
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from app.api.v1.router import router as api_v1_router
 from app.config import settings
 from app.database import AsyncSessionLocal, init_db
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
+from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,16 @@ async def lifespan(app: FastAPI):
             await agent_bridge_attachment_service.cleanup_expired(db)
     except Exception:
         logger.exception("Failed to clean up expired Agent Bridge attachments")
+    try:
+        await github_dispatch_scheduler.start()
+    except Exception:
+        logger.exception("Failed to start autonomous GitHub dispatch scheduler")
     # Clean up any orphaned relay processes from previous runs
     from app.services.cc_bridge.pty_relay import close_all_relays, cleanup_orphaned_relays
     cleanup_orphaned_relays()
     yield
     # Shutdown: Cleanup
+    await github_dispatch_scheduler.shutdown()
     await close_all_relays()
 
 

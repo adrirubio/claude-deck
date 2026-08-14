@@ -1,4 +1,5 @@
 """HTTP contract tests for Agent Team presets."""
+from datetime import datetime
 from types import SimpleNamespace
 
 import httpx
@@ -7,6 +8,7 @@ import pytest_asyncio
 
 from app.database import get_db
 from app.main import app
+from app.models.database import AgentTeamPreset, GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 
@@ -111,3 +113,431 @@ async def test_create_preset_validation_error_includes_block_code(client, tmp_pa
     detail = response.json()["detail"]
     assert detail["message"] == "opencode-cli does not support reasoning_effort"
     assert detail["block_code"] == "reasoning_effort_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_preset_autonomy_and_slot_routing_fields_round_trip(client, monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sync_calls = 0
+
+    async def fake_sync(_db):
+        nonlocal sync_calls
+        sync_calls += 1
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+
+    response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={
+            "name": "Autonomy team",
+            "slots": [
+                {
+                    "display_name": "Backend SME",
+                    "provider": "codex-cli",
+                    "repo_path": str(repo),
+                    "area_labels": ["area:backend", "area:api", "area:backend"],
+                    "expertise": "Owns the API",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    preset = response.json()
+    assert preset["autonomy_enabled"] is False
+    slot = preset["slots"][0]
+    assert slot["area_labels"] == ["area:backend", "area:api"]
+    assert slot["expertise"] == "Owns the API"
+
+    response = await client.patch(
+        f"/api/v1/agent-teams/presets/{preset['id']}",
+        json={"autonomy_enabled": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["autonomy_enabled"] is True
+    assert sync_calls == 1
+
+    response = await client.patch(
+        f"/api/v1/agent-teams/slots/{slot['id']}",
+        json={"area_labels": ["area:frontend"], "expertise": "Owns UI"},
+    )
+    assert response.status_code == 200
+    updated_slot = response.json()["slots"][0]
+    assert updated_slot["area_labels"] == ["area:frontend"]
+    assert updated_slot["expertise"] == "Owns UI"
+
+
+@pytest.mark.asyncio
+async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    sync_calls = 0
+
+    async def fake_sync(_db):
+        nonlocal sync_calls
+        sync_calls += 1
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": "Scope team", "slots": []},
+    )
+    preset_id = preset_response.json()["id"]
+
+    create_response = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_id}/github-scopes",
+        json={
+            "repo_owner": "adrirubio",
+            "repo_name": "snazzyemail",
+            "repo_path": str(repo),
+            "dispatch_label": "deck-ready",
+            "design_label": "deck-design",
+            "merge_policy": "auto",
+            "max_approval_rounds": 4,
+            "max_concurrent_dispatched": 2,
+            "max_verification_retries": 3,
+            "max_auto_merges_per_day": 1,
+            "base_ref": "origin/main",
+            "builds_out_of_tree": True,
+            "build_dir_template": "build-{issue_number}",
+            "build_command_hint": "meson compile -C {build_dir} -j{parallelism}",
+            "max_build_parallelism": 3,
+            "enabled": True,
+        },
+    )
+    assert create_response.status_code == 200
+    scope = create_response.json()
+    assert scope["repo_owner"] == "adrirubio"
+    assert scope["merge_policy"] == "auto"
+    assert scope["max_verification_retries"] == 3
+    assert scope["base_ref"] == "origin/main"
+    assert scope["builds_out_of_tree"] is True
+    assert scope["build_dir_template"] == "build-{issue_number}"
+    assert scope["max_build_parallelism"] == 3
+
+    list_response = await client.get(
+        f"/api/v1/agent-teams/presets/{preset_id}/github-scopes"
+    )
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()["scopes"]] == [scope["id"]]
+
+    update_response = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={
+            "merge_policy": "human",
+            "build_dir_template": "build",
+            "max_build_parallelism": 4,
+            "enabled": False,
+        },
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["merge_policy"] == "human"
+    assert update_response.json()["build_dir_template"] == "build"
+    assert update_response.json()["max_build_parallelism"] == 4
+    assert update_response.json()["enabled"] is False
+
+    item = GithubWorkItem(
+        scope_id=scope["id"],
+        issue_number=1,
+        issue_title="leased",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/1",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope["id"],
+        path=str(tmp_path / "leased-worktree"),
+        leased_item_id=item.id,
+        lease_token="lease",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    blocked_update = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"repo_name": "renamed-while-leased"},
+    )
+    assert blocked_update.status_code == 409
+    assert blocked_update.json()["detail"] == "scope_identity_in_use"
+
+    blocked_delete = await client.delete(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}"
+    )
+    assert blocked_delete.status_code == 409
+    assert blocked_delete.json()["detail"] == "scope_identity_in_use"
+
+    workspace.leased_item_id = None
+    workspace.lease_token = None
+    await db.commit()
+
+    blocked_pending = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"repo_owner": "other-owner"},
+    )
+    assert blocked_pending.status_code == 409
+    assert blocked_pending.json()["detail"] == "scope_identity_in_use"
+
+    item.dispatch_status = "verifying"
+    item.dispatch_nonce = "nonce"
+    item.dispatch_head_ref = "deck/slot-1/issue-1-nonce"
+    item.dispatch_base_ref = "origin/master"
+    await db.commit()
+
+    blocked_without_lease = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"base_ref": "origin/release"},
+    )
+    assert blocked_without_lease.status_code == 409
+    assert blocked_without_lease.json()["detail"] == "scope_identity_in_use"
+
+    item.dispatch_status = "completed"
+    await db.commit()
+
+    delete_response = await client.delete(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}"
+    )
+    assert delete_response.status_code == 204
+    assert sync_calls == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("build_dir_template", "build-{issue_number"),
+        ("build_dir_template", "build-{unknown}"),
+        ("build_command_hint", "make -C {unknown}"),
+    ],
+)
+async def test_github_scope_rejects_invalid_build_templates(
+    client, monkeypatch, tmp_path, field, value
+):
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    repo = tmp_path / f"repo-{field}-{len(value)}"
+    repo.mkdir()
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": f"Template team {field} {len(value)}", "slots": []},
+    )
+
+    response = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_response.json()['id']}/github-scopes",
+        json={
+            "repo_owner": "owner",
+            "repo_name": repo.name,
+            "repo_path": str(repo),
+            field: value,
+        },
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_github_scope_rejects_invalid_repo_path(client, tmp_path):
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": "Invalid scope team", "slots": []},
+    )
+    preset_id = preset_response.json()["id"]
+
+    response = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_id}/github-scopes",
+        json={
+            "repo_owner": "adrirubio",
+            "repo_name": "snazzyemail",
+            "repo_path": "relative/path",
+        },
+    )
+    assert response.status_code == 400
+    assert "Repo path must be absolute" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_github_scope_create_missing_preset_returns_404(client, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    response = await client.post(
+        "/api/v1/agent-teams/presets/999999/github-scopes",
+        json={
+            "repo_owner": "adrirubio",
+            "repo_name": "snazzyemail",
+            "repo_path": str(repo),
+        },
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_github_work_item_feed_and_retry_guard(client, db, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Feed team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Backend SME",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="adrirubio",
+        repo_name="snazzyemail",
+        repo_path=str(repo),
+    )
+    db.add(scope)
+    await db.flush()
+    escalated = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=10,
+        issue_title="Fix CI",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/10",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted",
+        pending_reason="queued_repo_cap",
+        handoff_state="pending",
+        handoff_target_slot_id=1,
+        pr_number=None,
+        retry_count=2,
+        last_verified_sha="abc123",
+        approval_round_count=3,
+    )
+    active = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=11,
+        issue_title="Still running",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/11",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+    )
+    db.add_all([escalated, active])
+    await db.commit()
+
+    feed_response = await client.get(
+        f"/api/v1/agent-teams/presets/{preset.id}/github-work-items"
+    )
+    assert feed_response.status_code == 200
+    rows = feed_response.json()["items"]
+    assert {row["issue_number"] for row in rows} == {10, 11}
+    row = next(item for item in rows if item["issue_number"] == 10)
+    assert row["repo_owner"] == "adrirubio"
+    assert row["escalation_reason"] == "retry_count_exhausted"
+
+    guard_response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{active.id}/retry",
+        json={"reason": "should remain guarded"},
+    )
+    assert guard_response.status_code == 409
+
+    retry_response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{escalated.id}/retry",
+        json={"reason": "prerequisite #816 merged"},
+    )
+    assert retry_response.status_code == 200
+    body = retry_response.json()
+    assert body["dispatch_status"] == "pending"
+    assert body["escalation_reason"] is None
+    assert body["pending_reason"] == "retry requested: prerequisite #816 merged"
+    assert body["handoff_state"] is None
+    assert body["handoff_target_slot_id"] is None
+    assert body["pr_number"] is None
+    assert body["retry_count"] == 0
+    assert body["last_verified_sha"] is None
+    assert body["approval_round_count"] == 0
+
+
+async def _create_retry_work_item(db, *, pr_number: int | None) -> GithubWorkItem:
+    preset = AgentTeamPreset(name="Retry team")
+    db.add(preset)
+    await db.flush()
+    scope = TeamGithubScope(
+        preset_id=preset.id,
+        repo_owner="adrirubio",
+        repo_name="snazzyemail",
+        repo_path="/tmp/snazzyemail",
+    )
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=865,
+        issue_title="Preserve open PR",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/865",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="plan_blocked",
+        pr_number=pr_number,
+    )
+    db.add(item)
+    await db.commit()
+    return item
+
+
+@pytest.mark.asyncio
+async def test_retry_rejected_when_pr_open(client, db):
+    item = await _create_retry_work_item(db, pr_number=865)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        json={"reason": "try again"},
+    )
+
+    assert response.status_code == 409
+    assert "865" in response.json()["detail"]
+    await db.refresh(item)
+    assert item.pr_number == 865
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_retry_allowed_when_no_pr(client, db):
+    item = await _create_retry_work_item(db, pr_number=None)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        json={"reason": "try again"},
+    )
+
+    assert response.status_code == 200
+    await db.refresh(item)
+    assert item.dispatch_status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_retry_endpoint_defers_while_workspace_is_leased(client, db):
+    item = await _create_retry_work_item(db, pr_number=None)
+    workspace = GithubWorkspace(
+        scope_id=item.scope_id,
+        path="/tmp/snazzyemail-retry",
+        leased_item_id=item.id,
+        lease_token="api-token",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        json={"reason": "try again"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
+    assert body["retry_requested_at"] is not None
+    assert workspace.leased_item_id == item.id

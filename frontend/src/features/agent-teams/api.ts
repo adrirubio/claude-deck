@@ -11,6 +11,12 @@ import type {
   AgentTeamPresetUpdate,
   AgentTeamSlotInput,
   AgentTeamSlotUpdate,
+  GithubWorkItem,
+  GithubWorkItemListResponse,
+  TeamGithubScope,
+  TeamGithubScopeInput,
+  TeamGithubScopeListResponse,
+  TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 
 export function fetchAgentTeamPresets(): Promise<AgentTeamPresetListResponse> {
@@ -117,5 +123,47 @@ export function launchAgentTeam(
   return apiClient<AgentTeamLaunchResult>(`agent-teams/presets/${presetId}/launch`, {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+export function fetchTeamGithubScopes(presetId: number): Promise<TeamGithubScopeListResponse> {
+  return apiClient<TeamGithubScopeListResponse>(`agent-teams/presets/${presetId}/github-scopes`)
+}
+
+export function createTeamGithubScope(
+  presetId: number,
+  input: TeamGithubScopeInput
+): Promise<TeamGithubScope> {
+  return apiClient<TeamGithubScope>(`agent-teams/presets/${presetId}/github-scopes`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateTeamGithubScope(
+  scopeId: number,
+  input: TeamGithubScopeUpdate
+): Promise<TeamGithubScope> {
+  return apiClient<TeamGithubScope>(`agent-teams/github-scopes/${scopeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteTeamGithubScope(scopeId: number): Promise<Record<string, never>> {
+  return apiClient<Record<string, never>>(`agent-teams/github-scopes/${scopeId}`, {
+    method: 'DELETE',
+  })
+}
+
+export function fetchGithubWorkItems(presetId: number, limit = 50): Promise<GithubWorkItemListResponse> {
+  return apiClient<GithubWorkItemListResponse>(
+    `agent-teams/presets/${presetId}/github-work-items?limit=${limit}`
+  )
+}
+
+export function retryGithubWorkItem(workItemId: number): Promise<GithubWorkItem> {
+  return apiClient<GithubWorkItem>(`agent-teams/github-work-items/${workItemId}/retry`, {
+    method: 'POST',
   })
 }

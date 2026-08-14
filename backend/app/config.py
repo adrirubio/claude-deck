@@ -35,6 +35,27 @@ class Settings(BaseSettings):
     bridge_attachment_retention_days: int = 7
     bridge_attachment_max_per_session_per_day: int = 100
 
+    # GitHub integration (autonomous dispatch)
+    github_token: str = ""
+    github_app_id: str = ""
+    github_app_private_key_path: str = ""
+    github_app_bot_login: str = ""
+    github_app_token_refresh_margin_seconds: int = 300
+    github_dispatch_interval_seconds: int = 60
+    github_check_signal_grace_seconds: int = 120
+    github_owner_registration_grace_seconds: int = 120
+    github_leader_ack_timeout_seconds: int = 300
+    github_design_ack_multiplier: int = 3
+    github_owner_idle_timeout_seconds: int = 900
+    github_nudge_grace_seconds: int = 180
+    github_min_available_memory_mb: int = 3000
+    github_stale_lease_backstop_seconds: int = 21600
+    github_brief_delivery_max_nudges: int = 2
+
+    # Agent Mail identity settings
+    mail_capability_tokens_required: bool = False
+    operator_token: str = ""
+
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
