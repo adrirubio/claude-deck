@@ -1187,6 +1187,26 @@ async def test_create_workspace_rejects_invalid_kind(client, db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_workspace_rejects_path_outside_scope_checkout_parent(
+    client, db, tmp_path, monkeypatch
+):
+    repo_path = tmp_path / "pool" / "repo"
+    repo_path.parent.mkdir()
+    _, scope = await _scope(db, repo_path)
+    runner = ApiGitRunner(repo_path)
+    monkeypatch.setattr(github_workspace_service, "_runner", runner)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        json={"path": str(tmp_path / "outside"), "kind": "worktree"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "workspace_path_outside_root"
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
 async def test_create_workspace_failure_persists_no_row(
     client, db, tmp_path, monkeypatch
 ):

@@ -1477,6 +1477,27 @@ async def test_register_empty_directory_takes_provisioning_path(db, tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("relative_candidate", ["../outside", "nested/ws"])
+async def test_register_rejects_worktree_outside_direct_sibling_root(
+    db, tmp_path, relative_candidate
+):
+    workspace_root = tmp_path / "pool"
+    repo_path = workspace_root / "repo"
+    repo_path.mkdir(parents=True)
+    scope, _, _ = await _context(db, repo_path)
+    runner = FakeGitRunner()
+    candidate = os.path.realpath(workspace_root / relative_candidate)
+
+    with pytest.raises(GithubWorkspaceError) as exc_info:
+        await GithubWorkspaceService(runner=runner).register_workspace(
+            db, scope, candidate, kind="worktree"
+        )
+
+    assert exc_info.value.block_code == "workspace_path_outside_root"
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
 async def test_register_adopts_existing_linked_worktree(db, tmp_path):
     repo_path = tmp_path / "repo"
     workspace_path = tmp_path / "ws"

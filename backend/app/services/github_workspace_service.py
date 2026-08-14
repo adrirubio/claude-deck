@@ -1044,11 +1044,23 @@ class GithubWorkspaceService:
 
         path = os.path.realpath(path)
         repo_path = os.path.realpath(scope.repo_path)
-        path_exists = os.path.exists(path)
         empty_directory = False
-        if path_exists and os.path.isdir(path):
-            with os.scandir(path) as entries:
-                empty_directory = next(entries, None) is None
+        if kind == "worktree":
+            workspace_root = os.path.dirname(repo_path)
+            workspace_name = os.path.basename(path)
+            bounded_path = os.path.join(workspace_root, workspace_name)
+            if not workspace_name or path != bounded_path:
+                raise GithubWorkspaceError(
+                    "A worktree path must be a direct sibling of the scope checkout",
+                    "workspace_path_outside_root",
+                )
+            path = bounded_path
+            path_exists = os.path.exists(path)
+            if path_exists and os.path.isdir(path):
+                with os.scandir(path) as entries:
+                    empty_directory = next(entries, None) is None
+        else:
+            path_exists = True
 
         if kind == "worktree" and path == repo_path:
             raise GithubWorkspaceError(

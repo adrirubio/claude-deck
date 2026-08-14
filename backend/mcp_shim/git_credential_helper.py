@@ -66,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Claude Deck could not provide a GitHub credential", file=sys.stderr)
         return 1
     print(f"username={username}")
+    # Git's credential-helper protocol requires the password on stdout; this is not logging.
+    # lgtm[py/clear-text-logging-sensitive-data]
     print(f"password={password}")
     print()
     return 0
