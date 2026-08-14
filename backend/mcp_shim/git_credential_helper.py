@@ -65,11 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, RuntimeError, urllib.error.URLError):
         print("Claude Deck could not provide a GitHub credential", file=sys.stderr)
         return 1
-    print(f"username={username}")
-    # Git's credential-helper protocol requires the password on stdout; this is not logging.
-    # codeql[py/clear-text-logging-sensitive-data]
-    print(f"password={password}")
-    print()
+    payload = f"username={username}\npassword={password}\n\n".encode("utf-8")
+    sys.stdout.buffer.write(payload)
+    sys.stdout.buffer.flush()
     return 0
 
 
