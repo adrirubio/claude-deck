@@ -40,6 +40,27 @@ def resolve_request_pane(
     """Compatibility projection used by Agent Mail registration."""
     return resolve_request_pane_detailed(http_request).pane
 
+
+def require_current_mail_session(session: MailAgentSession) -> None:
+    """Reject ended sessions and role-bearing sessions whose pane is stale."""
+    if not settings.mail_capability_tokens_required:
+        return
+    if session.mailbox_status == "offline":
+        raise HTTPException(status_code=401, detail="session_token_stale")
+    if session.team_slot_id is None:
+        return
+    if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+        raise HTTPException(status_code=401, detail="session_token_stale")
+    if (
+        peer_process.pane_is_alive(
+            session.bound_pane_pid,
+            session.bound_pane_proc_start,
+        )
+        is not True
+    ):
+        raise HTTPException(status_code=401, detail="session_token_stale")
+
+
 async def mail_session(
     x_deck_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
@@ -56,6 +77,7 @@ async def mail_session(
     )
     for session in result.scalars().all():
         if hmac.compare_digest(session.capability_token_hash, hashed):
+            require_current_mail_session(session)
             return session
     raise HTTPException(status_code=401, detail="session_token_invalid")
 

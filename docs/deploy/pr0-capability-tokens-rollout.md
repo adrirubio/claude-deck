@@ -103,6 +103,11 @@ Restart the backend again. From this point:
 - A mail write with no credential is `401 session_token_required`.
 - A write with a token matching no session is `401 session_token_invalid` — an
   invalid token is never treated as an absent one.
+- A token for an explicitly offline session, or for a slot-bound session whose
+  recorded pane is gone, reused, or unobservable, is `401 session_token_stale`.
+  Start a fresh agent session; do not copy the old bearer token into a new pane.
+- Re-registering an existing hashed session row requires that row's current
+  token. A slot-bound row can only re-register from its original live pane.
 - Agent registration on a host where the pane cannot be derived from the kernel
   refuses with `bind_unverifiable`. On Linux this means the peer process is
   gone; on macOS it means always, which is why the README lists Linux as a

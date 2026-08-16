@@ -19,6 +19,7 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.services.agent_mail_service import agent_mail_service
+from app.utils import peer_process
 
 
 @pytest_asyncio.fixture
@@ -31,6 +32,11 @@ async def client(db):
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def live_slot_session_bindings(monkeypatch):
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)
 
 
 async def _member(db, repo_id, name):
@@ -112,6 +118,8 @@ async def _dispatch_approval_fixture(db):
             mailbox_status="connected",
             last_seen_at=datetime.utcnow(),
             capability_token_hash=agent_mail_service.hash_capability_token(token),
+            bound_pane_pid=1000 + position,
+            bound_pane_proc_start=f"start-{position}",
         )
         db.add(session)
         slots.append(slot)
@@ -272,6 +280,46 @@ async def test_decision_route_requires_a_session_token(client, db, monkeypatch):
     )
 
     assert response.status_code == 401
+    assert (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_stale_leader_token_cannot_record_a_decision(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    leader, owner = members
+    request = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "kind": "context_request",
+            "sender_member_id": owner.id,
+            "recipient_member_id": leader.id,
+            "body_markdown": "plan",
+            "payload": {
+                "work_item_id": item.id,
+                "dispatch_nonce": item.dispatch_nonce,
+            },
+        },
+    )
+    assert request.status_code == 200
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: False)
+
+    response = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "stale approval",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
     assert (
         await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
     ).scalars().all() == []
