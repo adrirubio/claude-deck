@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: not started. Nothing has been deployed since PR A (`c92b044`) on 2026-08-01.**
+**Status: G0 passed on 2026-08-16; G1 has not started.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
@@ -112,7 +112,11 @@ issues live. Issue numbers in this document are that repo's.
 branch (`feature/autonomous-github-dispatch`); each phase PRs **into the integration branch,
 not master**; phase issues stay open and close together when integration merges to master.
 Note the drift: PR #316 already merged integration → master on 2026-08-14 while #272/#275/
-#277/#280 stayed open, so from here a defect is a **fix-forward on `master`**.
+#277/#280 stayed open. The operator resolved this on 2026-08-16 by restoring
+`feature/autonomous-github-dispatch` as the soak delivery line. From G0 onward, defect
+PRs target that branch and are held there until the remaining gates pass. This does not
+undo the earlier #316 merge; it prevents further soak fixes from reaching `master`
+prematurely.
 
 **Roles** (established during phases A–D and unchanged):
 
@@ -445,11 +449,11 @@ Open, and not owned by any gate above:
 
 ## Open decisions for the operator
 
-1. **Which branch the live checkout tracks.** Everything is on `origin/master` (PR #316
-   merged the integration branch on Aug 14), so `master` is the natural target — but the
-   soak runbook lists that merge as the *reward* for a clean soak, and #272/#275/#277/#280
-   are still open. Consequence either way: a defect found from here is a fix-forward on
-   `master`, not a held integration branch.
+1. **Resolved 2026-08-16 — which branch the live checkout tracks.** G0 historically ran
+   from `origin/master` because PR #316 had already merged. For G1 onward, track
+   `origin/feature/autonomous-github-dispatch`. The branch was fast-forwarded through
+   #316 and given the durable runbook; Finding 20 PR #320 was retargeted there. Hold all
+   subsequent soak fixes on that integration branch until the remaining gates pass.
 2. **Restart granularity in G0/G1.** The PR0 doc separates the code restart from the
    token restart. Recommended: keep them separate — one variable per restart gives a free
    bisect on a 113-commit jump against an irreplaceable database, and a restart costs
