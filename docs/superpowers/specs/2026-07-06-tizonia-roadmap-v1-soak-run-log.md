@@ -634,3 +634,229 @@ Test baseline before any G2 change: **239 passed** in `tests/agent_teams/`.
 | 818–826 | code | Specialist | pending (queued_slot_busy) | — | queued behind Specialist |
 | 818 | code | Specialist (slot 6) | **PR #866 merged**, issue closed; Deck item 26 stuck `escalated(plan_blocked)`, `pr_number=None` → **`completed`** after G1b | no — work succeeded | review PASS; exposed Finding 14 (stranded escalation) + the unsatisfiable self-approval block |
 | 821 | code | Specialist (slot 6, session `fd9c`) | Leader-approved plan, then `escalated(plan_blocked)` — frozen awaiting an isolated worktree | yes — Deck provisions no worktree | exposed Finding 16; sole owner confirmed, freeze upheld, no retry |
+
+## 2026-08-16 — G0 cold-start on merged code: **BLOCKED by Finding 20**
+
+The durable execution schedule was committed before deployment as `abd9f68`
+(`docs(deploy): soak resume runbook — gates G0-G7`). The live checkout then followed the
+runbook's branch decision and fast-forwarded to `origin/master` exactly.
+
+### G0 step 1 — cold rig, WAL-aware backup, and pre-restart state
+
+```text
+$ ss -ltnp '( sport = :8000 or sport = :5173 )'
+State Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+
+$ tmux list-panes -a -F '#{session_name} #{pane_id} #{pane_pid} #{pane_current_command}'
+error connecting to /tmp/tmux-1000/default (No such file or directory)
+
+$ stat -c 'mode=%a size=%s path=%n' backend/.env
+mode=600 size=107 path=backend/.env
+$ sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' backend/.env
+github_token
+
+$ stat -c '%s %n' backend/claude_registry.db backend/claude_registry.db-wal backend/claude_registry.db-shm
+1126400 backend/claude_registry.db
+5055272 backend/claude_registry.db-wal
+32768 backend/claude_registry.db-shm
+```
+
+The host has no `sqlite3` CLI (`zsh: command not found: sqlite3`), so the required
+read-only measurements used Python's standard `sqlite3` driver with
+`file:<absolute-path>?mode=ro`; the live WAL and SHM remained beside the database.
+
+```text
+--- pre-restart work item counts ---
+dispatch_status|items
+completed|11
+escalated|11
+merged|6
+--- pre-restart preset autonomy ---
+id|name|autonomy_enabled
+1|SnazzyEmail|0
+2|tizonia-v1|0
+--- pre-restart workspaces ---
+id|scope_id|kind|dispatchable|enabled|leased_item_id|path
+1|1|primary|0|1|NULL|/home/juan/work/repos/tizonia/tizonia-openmax-il
+2|1|worktree|1|1|NULL|/home/juan/work/repos/tizonia/tizonia-openmax-il-issue-818
+--- pre-restart mail sessions ---
+total_mail_sessions
+251
+```
+
+All three files were copied while the rig was cold to
+`/home/juan/work/backups/claude-deck-soak-g0-20260816T111144+0200`.
+
+```text
+claude_registry.db original=1126400 backup=1126400 match=yes
+claude_registry.db-wal original=5055272 backup=5055272 match=yes
+claude_registry.db-shm original=32768 backup=32768 match=yes
+
+be70f47858e4d15319722a2900cc38e20f3fd066f89cbd3b7c9c46807cc671ba  claude_registry.db
+f1325c7ad0318d27667c4cc00e87a0e563a5dccbbcb7157d3e16a7b11f7296b3  claude_registry.db-wal
+a59a7c469a44699a4152329c4a1591806acf1bfd737d49fcd0b4881d7bb562b0  claude_registry.db-shm
+```
+
+The same three hashes were returned from the backup directory.
+
+### G0 steps 3–5 — fast-forward, startup, and migration evidence
+
+```text
+$ git switch master && git merge --ff-only origin/master
+Updating 53f631e..96954a6
+Fast-forward
+
+$ git status -sb && git log -1 --oneline --decorate && git rev-list --left-right --count HEAD...origin/master
+## master...origin/master
+96954a6 (HEAD -> master, origin/master) Merge pull request #316 from adrirubio/feature/autonomous-github-dispatch
+0       0
+```
+
+The backend was started from `backend/`, one worker, with no exported settings.
+
+```text
+$ curl -fsS http://127.0.0.1:8000/health
+{"name":"Claude Deck","version":"2.0.1","status":"running"}
+
+pid=493565 cwd=/home/juan/work/repos/juanrubio/claude-deck/backend cmd=/home/juan/work/repos/juanrubio/claude-deck/backend/venv/bin/python3 venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+LISTEN 0 2048 0.0.0.0:8000 0.0.0.0:* users:(("uvicorn",pid=493565,fd=16))
+```
+
+The noninteractive command harness reaped PID 493565 when its parent command session
+closed; the backend log contained no exception or shutdown line. It was relaunched in a
+persistent foreground PTY. The second startup re-ran the idempotent ladder and remained
+healthy:
+
+```text
+$ curl -fsS http://127.0.0.1:8000/health
+{"name":"Claude Deck","version":"2.0.1","status":"running"}
+
+LISTEN 0 2048 0.0.0.0:8000 0.0.0.0:* users:(("uvicorn",pid=495111,fd=16))
+pid=495111 cwd=/home/juan/work/repos/juanrubio/claude-deck/backend cmd=/home/juan/work/repos/juanrubio/claude-deck/backend/venv/bin/python3 venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Raw `PRAGMA table_info` reads from the live database after startup:
+
+```text
+--- migrated columns github_workspaces ---
+lease_last_owner_contact_at|type=DATETIME|notnull=0|default=None
+lease_release_reminded_at|type=DATETIME|notnull=0|default=None
+lease_token|type=VARCHAR|notnull=0|default=None
+leased_owner_pid|type=INTEGER|notnull=0|default=None
+leased_owner_proc_start|type=VARCHAR|notnull=0|default=None
+push_token_expires_at|type=DATETIME|notnull=0|default=None
+--- migrated columns github_work_items ---
+ack_approval_round|type=INTEGER|notnull=0|default=None
+ack_approver_member_id|type=INTEGER|notnull=0|default=None
+ack_enforcement_epoch|type=INTEGER|notnull=0|default=None
+ack_evidence_message_id|type=INTEGER|notnull=0|default=None
+brief_delivery_nudge_at|type=DATETIME|notnull=0|default=None
+brief_delivery_nudge_count|type=INTEGER|notnull=0|default=None
+dispatch_base_ref|type=VARCHAR|notnull=0|default=None
+dispatch_head_ref|type=VARCHAR|notnull=0|default=None
+dispatch_nonce|type=VARCHAR|notnull=0|default=None
+retry_requested_at|type=DATETIME|notnull=0|default=None
+--- migrated columns team_github_scopes ---
+github_app_installation_id|type=INTEGER|notnull=0|default=None
+github_auth_mode|type=VARCHAR|notnull=1|default='unknown'
+```
+
+State survived the ladder unchanged:
+
+```text
+--- post-restart work item counts ---
+completed|11
+escalated|11
+merged|6
+--- post-restart preset autonomy ---
+1|SnazzyEmail|0
+2|tizonia-v1|0
+--- post-restart workspaces ---
+1|1|primary|0|1|NULL|NULL|/home/juan/work/repos/tizonia/tizonia-openmax-il
+2|1|worktree|1|1|NULL|NULL|/home/juan/work/repos/tizonia/tizonia-openmax-il-issue-818
+--- post-restart mail capability coverage ---
+total=251|with_token=0
+```
+
+### G0 step 6 — required suite and Finding 20
+
+```text
+$ cd backend && venv/bin/pytest tests/agent_teams tests/agent_mail -q
+FAILED tests/agent_teams/test_github_app_auth_service.py::test_concurrent_same_key_mints_once
+1 failed, 776 passed, 9550 warnings in 73.82s (0:01:13)
+
+>       assert calls == 1
+E       assert 2 == 1
+```
+
+The failure reproduced in three isolated runs:
+
+```text
+$ for run in 1 2 3; do venv/bin/pytest tests/agent_teams/test_github_app_auth_service.py::test_concurrent_same_key_mints_once -q --tb=short; done
+RUN 1 ... E assert 2 == 1 ... 1 failed in 0.27s
+RUN 2 ... E assert 2 == 1 ... 1 failed in 0.48s
+RUN 3 ... E assert 2 == 1 ... 1 failed in 0.28s
+```
+
+#### Finding 20 (G0 BLOCKER) — the GitHub App mint-concurrency test expires against wall time
+
+The test fixes `now = 2026-08-14T12:00:00Z` and returns an installation token expiring
+one hour later, but constructs `GithubAppAuthService` without the available `now=`
+dependency. The service therefore uses the real UTC clock. Measured at reproduction:
+
+```text
+$ date -u '+%Y-%m-%dT%H:%M:%SZ'
+2026-08-16T09:15:38Z
+
+github_app_auth_service.py:84  now: Callable[[], datetime] | None = None
+github_app_auth_service.py:88  self._now = now or (lambda: datetime.now(timezone.utc))
+test_github_app_auth_service.py:483  now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+test_github_app_auth_service.py:495  "expires_at": (now + timedelta(hours=1)).isoformat()
+test_github_app_auth_service.py:502  service = GithubAppAuthService(http, config=_settings(private_path))
+```
+
+On August 14 the cached token had future lifetime; on August 16 it is already expired, so
+the second waiter correctly mints again and `calls == 2`. The concurrency lock is not what
+failed; the test's clock boundary is missing. The required correction is to construct the
+service with `now=lambda: now`, as neighboring cache-expiry tests already do, then rerun the
+whole G0 suite. No implementation code was changed.
+
+**G0 verdict: BLOCKED.** Migration, state preservation, autonomy-off, and backend health
+passed. The required suite did not. G1 has not started; no panes were spawned; autonomy
+remains off on both presets. Backend PID 495111 remains running on the migrated database.
+
+### 2026-08-16 — Finding 20 corrected; G0 re-validation PASS
+
+The correction is test-only: the concurrency test now supplies the service's existing
+clock dependency from the same fixed `now` used to construct the mocked token expiry.
+Production token caching code is unchanged.
+
+```text
+service = GithubAppAuthService(
+    http, config=_settings(private_path), now=lambda: now
+)
+```
+
+The formerly failing test passed three consecutive isolated runs:
+
+```text
+$ for run in 1 2 3; do venv/bin/pytest tests/agent_teams/test_github_app_auth_service.py::test_concurrent_same_key_mints_once -q --tb=short; done
+RUN 1
+1 passed in 0.23s
+RUN 2
+1 passed in 0.20s
+RUN 3
+1 passed in 0.13s
+```
+
+The complete G0 suite then passed:
+
+```text
+$ cd backend && venv/bin/pytest tests/agent_teams tests/agent_mail -q
+777 passed, 9550 warnings in 60.64s (0:01:00)
+```
+
+**G0 final verdict: PASS.** The migrated backend remains healthy with one worker; the live
+database retains 11 completed / 11 escalated / 6 merged work items; both presets remain
+autonomy-off; both workspaces remain unleased. G1 has not started.
