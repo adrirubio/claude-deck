@@ -1062,3 +1062,54 @@ Tizonia checkout remained unchanged.
 
 **G2 verdict: PASS.** Authenticated Agent Mail and `/dispatch-status` work on the held,
 non-autonomous preset. Proceed to G3.
+
+### 2026-08-16 — G3 BLOCKED before public dispatch: empty Specialist reuses Generalist
+
+G3 was armed only through its last local safety gate. Scope 1 moved from
+`dispatch_label=agent-ready` to `agent-ready-e2e`; GitHub had zero open issues carrying
+that label, preset 2 remained autonomy-off, and both workspaces were unleased. No issue was
+created or labelled.
+
+The spawn-path setup then verified that slot 6 had zero active work items and no lease. The
+idle Specialist acknowledged the planned shutdown, and the supported Agent Bridge delete
+route removed only its tmux session:
+
+```text
+DELETE /api/v1/agent-bridge/sessions/tizonia-openmax-il-82cf:0.0 -> 200 {"killed":true}
+tmux panes matching tizonia-openmax-il-82cf:0.0                  -> 0
+agent_pane_bindings after sync                                  -> slots 4 and 5 only
+```
+
+Before enabling autonomy, the exact single-slot launch shape the scheduler uses was planned
+read-only for slot 6 (`reuse_existing=true`, `slot_ids=[6]`). It did not return `spawn`:
+
+```json
+{
+  "slot_id": 6,
+  "slot_name": "Specialist",
+  "action": "reuse",
+  "matching_session": {
+    "session_name": "tizonia-openmax-il-7e28",
+    "tmux_target": "tizonia-openmax-il-7e28:0.0",
+    "pid": "499524"
+  }
+}
+```
+
+PID 499524 and target `7e28` are the live **Generalist** pane, durably bound to slot 5.
+Executing this plan would reassign the Generalist session to the Specialist slot instead of
+spawning the empty Specialist. That invalidates both G3 paths and risks stealing a live
+owner during autonomous dispatch.
+
+The code path makes the result deterministic. `github_dispatch_service` launches each
+dispatch with `slot_ids=[attempt.owner_slot_id]` and `reuse_existing=True`.
+`agent_team_service.plan_launch` computes `_reuse_group_counts(slots)` from that selected
+one-slot subset. The count is therefore 1, `requires_disambiguation` becomes false, and
+`_matching_session` falls through to the generic same-provider/same-repository match, which
+accepts the Generalist. Planning the whole preset would count all three same-repository
+slots and refuse that ambiguous fallback, but autonomous dispatch never uses that shape.
+
+**G3 verdict: BLOCKED.** Autonomy was never enabled; no `agent-ready-e2e` issue exists; no
+new work item, branch, PR, or other public write was created; no workspace is leased. The
+scope remains on the safe isolation label and the Specialist pane remains intentionally
+stopped. Fix single-slot reuse disambiguation before resuming G3.
