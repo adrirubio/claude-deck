@@ -873,3 +873,88 @@ The remote integration branch was fast-forwarded through the #316 merge and the 
 runbook commit. Finding 20 PR #320 was retargeted from `master` to
 `feature/autonomous-github-dispatch`. G1 and every later soak fix must use that branch;
 no further soak change is to merge into `master` before the remaining gates pass.
+
+## 2026-08-16 — G1 steps 1–3: checkpoint before enforcement
+
+PR #320 merged into `feature/autonomous-github-dispatch` as `8ad604e`. The live
+checkout tracks that integration branch. G1 then followed the PR0 rollout order and
+stopped before step 4 as required.
+
+### Steps 1–2 — operator credential and backend restart
+
+Before provisioning, the operator route failed closed exactly as designed:
+
+```text
+POST /api/v1/agent-teams/github-scopes/1/workspaces/1/force-release
+without X-Deck-Operator-Token -> 503 operator_token_unconfigured
+```
+
+`backend/.env` remained mode `0600`. A 32-byte random operator token was written as 64
+hex characters without exporting or printing it; the file contained only
+`github_token` and `operator_token`. Backend PID 495111 shut down cleanly. A new
+one-worker backend started from `backend/` as PID 499003.
+
+Post-restart authorization measurements:
+
+```text
+force-release without header -> 401 operator_token_required
+GET scope 1 workspaces with X-Deck-Operator-Token -> 200, response key: workspaces
+```
+
+### Step 3 — observed-session hygiene and full Tizonia respawn
+
+The supported `GET /api/v1/agent-mail/team?sync=true` path pruned dead observed rows
+from 5 to 0. Historical MCP rows were deliberately retained: the design specifies that
+their hashes remain, and no supported endpoint deletes them.
+
+The confirmed preset-2 launch plan contained exactly three spawn actions and no reuse,
+skip, warning, or block:
+
+```text
+plan_hash=447747561939278043a02994e202ceda2b3000842c289585c4b165c37cfe3c0f
+launch_id=64
+Leader     slot=4 target=tizonia-openmax-il-a2a0:0.0 pane_pid=499511
+Generalist slot=5 target=tizonia-openmax-il-7e28:0.0 pane_pid=499524
+Specialist slot=6 target=tizonia-openmax-il-82cf:0.0 pane_pid=499559
+```
+
+Each slot had exactly one live tmux pane and one durable pane binding. Each pane's Codex
+process registered two live MCP rows; all six rows carried capability-token hashes and
+resolved to the same single pane PID for their slot. Hook and observed rows carried no
+token, by design. Captured backend output contained no `capability_token_missing` warning
+for the respawned members. All three members successfully called authenticated Agent Mail
+tools. They then acknowledged a direct hold: remain idle, change no checkout/work-item
+state, and perform no GitHub write until this checkpoint is cleared.
+
+The Tizonia checkout remained on the pre-existing
+`codex/issue-819-remove-libspotify` branch with only the already-recorded untracked
+`claude_registry.db`. Work-item counts stayed 11 completed / 11 escalated / 6 merged;
+both presets stayed autonomy-off; both workspaces stayed unleased.
+
+### G1 required question — retained offline tokens authenticate
+
+Registration does not replace or delete an older row with a different `session_key`.
+`ensure_capability_token` states that a row keeps its hash for life. The request
+dependency scans every non-NULL hash and returns a match without checking
+`mailbox_status`, PID liveness, `bound_pane_pid`, or process start time.
+
+A controlled real-API probe confirmed the consequence without a public or work-item
+write:
+
+```text
+temporary MCP session id=331, member=2, token length=43, bound_pane_pid=NULL
+POST hooks/session-end -> row status=offline, hash_present=1
+GET /agent-mail/agent/inbox with that offline session token -> 200
+final row status=offline, hash_present=1; plaintext probe file deleted
+```
+
+The probe was unbound because enforcement is still off, but the authentication dependency
+does not read binding fields, so a token retained or stolen from a dead bound pane follows
+the identical path. The design's safety argument is narrower: normally the only plaintext
+copy dies with the shim. If the plaintext is copied before death, it has no expiry or
+liveness revocation.
+
+**G1 checkpoint verdict:** steps 1–3 complete. Step 4 has **not** run;
+`mail_capability_tokens_required` is absent from `.env`, so enforcement remains at its
+default `false`. Stop for operator disposition of the retained-token behavior before
+flipping enforcement.
