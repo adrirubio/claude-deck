@@ -420,16 +420,22 @@ class AgentTeamService:
     ) -> AgentTeamLaunchPlan:
         request = request or AgentTeamLaunchRequest()
         preset = await self._require_preset(db, preset_id)
-        slots = await self._selected_slots(
-            db,
-            preset_id,
+        preset_slots = await self._slots_for_preset(db, preset_id)
+        slots = self._select_slots(
+            preset_slots,
             request.slot_ids,
             include_disabled=request.include_disabled,
         )
         await agent_mail_service.sync_observed_sessions(db)
         discovered = self._discover_sessions()
         install_status = await agent_mail_install_service.get_install_status()
-        reuse_group_counts = self._reuse_group_counts(slots)
+        reuse_group_counts = self._reuse_group_counts(preset_slots)
+        attached_sessions = (
+            await db.execute(
+                select(MailAgentSession).where(MailAgentSession.team_slot_id.is_not(None))
+            )
+        ).scalars().all()
+        pane_bindings = (await db.execute(select(AgentPaneBinding))).scalars().all()
         unsafe_resume_last_slot_ids = self._unsafe_resume_last_slot_ids(slots)
 
         items: list[AgentTeamLaunchPlanItem] = []
@@ -442,6 +448,8 @@ class AgentTeamService:
                     discovered,
                     used_matching_sessions,
                     requires_disambiguation=reuse_group_counts.get((slot.provider, slot.repo_id), 0) > 1,
+                    attached_sessions=attached_sessions,
+                    pane_bindings=pane_bindings,
                 )
                 if request.reuse_existing and slot.enabled
                 else None
@@ -945,16 +953,28 @@ class AgentTeamService:
         used_matching_sessions: set[str],
         *,
         requires_disambiguation: bool,
+        attached_sessions: list[MailAgentSession],
+        pane_bindings: list[AgentPaneBinding],
     ) -> dict[str, Any] | None:
-        attached = await self._matching_attached_session(db, slot, discovered, used_matching_sessions)
+        eligible = [
+            session
+            for session in discovered
+            if not self._session_owned_by_other_slot(
+                session,
+                slot,
+                attached_sessions,
+                pane_bindings,
+            )
+        ]
+        attached = await self._matching_attached_session(db, slot, eligible, used_matching_sessions)
         if attached is not None:
             return attached
-        named = self._matching_named_session(slot, discovered, used_matching_sessions)
+        named = self._matching_named_session(slot, eligible, used_matching_sessions)
         if named is not None:
             return named
         if requires_disambiguation:
             return None
-        for session in discovered:
+        for session in eligible:
             match_key = self._matching_session_key(session)
             if match_key in used_matching_sessions:
                 continue
@@ -962,6 +982,33 @@ class AgentTeamService:
                 used_matching_sessions.add(match_key)
                 return self._matching_session_payload(session)
         return None
+
+    def _session_owned_by_other_slot(
+        self,
+        session: dict[str, Any],
+        slot: AgentTeamSlot,
+        attached_sessions: list[MailAgentSession],
+        pane_bindings: list[AgentPaneBinding],
+    ) -> bool:
+        for attached in attached_sessions:
+            if not self._discovered_session_matches_registered(session, attached):
+                continue
+            if attached.team_slot_id != slot.id or attached.team_preset_id != slot.preset_id:
+                return True
+
+        try:
+            pane_pid = int(str(session.get("pid")))
+        except (TypeError, ValueError):
+            return False
+        stat = read_proc_stat(pane_pid)
+        if stat is None:
+            return False
+        _parent_pid, proc_start = stat
+        for binding in pane_bindings:
+            if binding.pane_pid != pane_pid or binding.pane_proc_start != proc_start:
+                continue
+            return binding.slot_id != slot.id or binding.preset_id != slot.preset_id
+        return False
 
     async def _matching_attached_session(
         self,
@@ -1304,6 +1351,15 @@ class AgentTeamService:
         include_disabled: bool = False,
     ) -> list[AgentTeamSlot]:
         slots = await self._slots_for_preset(db, preset_id)
+        return self._select_slots(slots, slot_ids, include_disabled=include_disabled)
+
+    def _select_slots(
+        self,
+        slots: list[AgentTeamSlot],
+        slot_ids: list[int] | None,
+        *,
+        include_disabled: bool = False,
+    ) -> list[AgentTeamSlot]:
         if slot_ids is None:
             return slots if include_disabled else [slot for slot in slots if slot.enabled]
         requested = set(slot_ids)
