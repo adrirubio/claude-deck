@@ -990,4 +990,5 @@ tests/agent_mail + tests/agent_teams                              789 passed
 
 This entry records implementation evidence only. The live backend still runs the pre-fix
 code, enforcement is still off, and G1 step 4 remains blocked until the fix PR is merged,
-the backend is restarted, and a real stale-token probe returns `401 session_token_stale`.
+the flag is enabled, and the restarted backend returns `401 session_token_stale` for a
+real stale-token probe as its first post-restart gate.
