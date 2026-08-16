@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0 and G1 passed on 2026-08-16; proceed with G2.**
+**Status: G0, G1, and G2 passed on 2026-08-16; proceed with G3.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.

@@ -1035,3 +1035,30 @@ counts remain 11 completed / 11 escalated / 6 merged, and the Tizonia checkout r
 
 **G1 verdict: PASS.** Capability-token enforcement is active. Proceed to G2 with autonomy
 still off.
+
+### 2026-08-16 — G2 authenticated non-autonomous surface passed
+
+Preset 2 remained autonomy-off throughout. Agent Mail had already been exercised by all
+three live slots in G1. For the `/dispatch-status` half, the Generalist used its own MCP
+shim to report `triaging` for deliberately nonexistent work item `999999`, with no note.
+The backend log confirms the request reached the correct route:
+
+```text
+POST /api/v1/agent-teams/dispatch-status -> 404 Not Found
+```
+
+This is the non-mutating positive authentication control: FastAPI resolves
+`mail_session` before entering the handler, and the handler then returns its work-item
+lookup failure. The two negative controls for the same body refused in the dependency
+before that lookup:
+
+```text
+no token           -> 401 session_token_required
+non-matching token -> 401 session_token_invalid
+```
+
+No real work-item id was submitted. Autonomy, work-item counts, workspace leases, and the
+Tizonia checkout remained unchanged.
+
+**G2 verdict: PASS.** Authenticated Agent Mail and `/dispatch-status` work on the held,
+non-autonomous preset. Proceed to G3.
