@@ -860,3 +860,16 @@ $ cd backend && venv/bin/pytest tests/agent_teams tests/agent_mail -q
 **G0 final verdict: PASS.** The migrated backend remains healthy with one worker; the live
 database retains 11 completed / 11 escalated / 6 merged work items; both presets remain
 autonomy-off; both workspaces remain unleased. G1 has not started.
+
+### Branch-policy correction after G0
+
+PR #316 had already merged `feature/autonomous-github-dispatch` into `master` on
+2026-08-14. The takeover handoff therefore directed G0 to run from `master`, and the
+commands above record that historical execution accurately. The operator clarified on
+2026-08-16 that the integration branch must remain the delivery line until the soak
+schedule completes.
+
+The remote integration branch was fast-forwarded through the #316 merge and the durable
+runbook commit. Finding 20 PR #320 was retargeted from `master` to
+`feature/autonomous-github-dispatch`. G1 and every later soak fix must use that branch;
+no further soak change is to merge into `master` before the remaining gates pass.

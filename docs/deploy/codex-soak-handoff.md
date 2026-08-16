@@ -35,6 +35,12 @@ PR0, PR1, PR2. Last actual deployment was PR A (c92b044) on 2026-08-01.
 For G0: check out master and fast-forward to origin/master. The integration branch
 has served its purpose (#316 already merged), so master is the tracking branch now.
 
+**Correction (2026-08-16, operator decision):** G0 did run from the already-merged
+`master`, but the integration branch remains the soak delivery line. It was
+fast-forwarded to the `master` merge and now carries the durable runbook. All findings
+from G0 onward must target `feature/autonomous-github-dispatch`; do not merge them to
+`master` until the remaining soak gates pass.
+
 The rig is fully cold: no backend, no frontend, no tmux server. backend/.env holds
 only github_token.
 
