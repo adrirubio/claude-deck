@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed on 2026-08-16; the G3 cross-slot reuse blocker is fixed and its local spawn gate passes; public dispatch is pending.**
+**Status: G0, G1, and G2 passed on 2026-08-16; the G3 reuse blocker is fixed, but G3 is paused after GitHub's first post-label list returned zero. Autonomy is off; issue #867 is now visibly armed; no work item or lease exists.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.

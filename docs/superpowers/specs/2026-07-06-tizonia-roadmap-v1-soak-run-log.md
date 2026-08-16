@@ -1168,3 +1168,45 @@ durable pane bindings                             slot 4 PID 499511; slot 5 PID 
 
 No issue was created or labelled during the fix verification. The Specialist pane remains
 stopped. **G3 resumes from its first public dispatch with the local spawn gate satisfied.**
+
+### 2026-08-16 — G3 PAUSED at the public-label precondition
+
+Created the fresh, docs-only test issue
+[`tizonia/tizonia-openmax-il#867`](https://github.com/tizonia/tizonia-openmax-il/issues/867),
+labelled `roadmap:v1` and `area:tests`, then added `agent-ready-e2e`. GitHub accepted the
+edit, but the immediate label-filtered list contradicted the required exactly-one
+precondition:
+
+```text
+gh issue edit 867 --add-label agent-ready-e2e -> success
+gh issue list --state open --label agent-ready-e2e -> []
+```
+
+Autonomy was enabled only after that empty result and was immediately disabled when the
+contradiction was noticed. The interval was approximately two seconds, shorter than the
+60-second scheduler interval. The post-disable controls show no dispatch occurred:
+
+```text
+preset 2 autonomy_enabled      0
+work items for issue #867      []
+leased github_workspaces       []
+```
+
+The authoritative issue read and a subsequent search then both showed the intended label:
+
+```json
+{
+  "number": 867,
+  "state": "OPEN",
+  "labels": ["roadmap:v1", "area:tests", "agent-ready-e2e"]
+}
+```
+
+```text
+gh issue list --search 'label:agent-ready-e2e' -> issue #867 only
+```
+
+This is consistent with GitHub search/list indexing lag, but the runbook requires stopping
+on any precondition mismatch rather than substituting a different observation. **G3 remains
+paused with autonomy off.** Issue #867 is the sole armed issue; no branch, PR, work item, or
+workspace lease was created.
