@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0 passed on 2026-08-16; G1 has not started.**
+**Status: G0 and G1 passed on 2026-08-16; proceed with G2.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
@@ -28,7 +28,7 @@ acting on it.
 | `deploy/pr1-approval-gate-rollout.md` | the deploy ordering PR1's guarantees depend on |
 | `deploy/pr2-github-app-rollout.md` | App permissions, scope-reset gate, staged rollout, rollback |
 | `specs/2026-08-05-distinct-approver-identity-design.md` §5.9, §8 | scope reset detail, 34 acceptance criteria |
-| `specs/2026-07-06-tizonia-roadmap-v1-soak-run-log.md` | **the evidence artifact.** Last entry 2026-08-02 |
+| `specs/2026-07-06-tizonia-roadmap-v1-soak-run-log.md` | **the evidence artifact.** Last entry 2026-08-16 |
 
 ## What we are verifying against — the tizonia testbed
 

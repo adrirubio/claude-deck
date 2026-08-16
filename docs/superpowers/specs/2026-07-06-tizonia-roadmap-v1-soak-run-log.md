@@ -992,3 +992,46 @@ This entry records implementation evidence only. The live backend still runs the
 code, enforcement is still off, and G1 step 4 remains blocked until the fix PR is merged,
 the flag is enabled, and the restarted backend returns `401 session_token_stale` for a
 real stale-token probe as its first post-restart gate.
+
+### 2026-08-16 — G1 step 4 complete; capability enforcement passed
+
+PR #321 merged the focused fix into `feature/autonomous-github-dispatch` as `4704104`.
+The live checkout fast-forwarded to that commit. Before the restart, a controlled session
+was registered under grace mode, its plaintext token was held in a mode-`0600` temporary
+file, and `hooks/session-end` left the durable row `offline` with its hash retained.
+
+`mail_capability_tokens_required=true` was added to the existing mode-`0600`
+`backend/.env` without exposing either credential. Backend PID 499003 shut down cleanly;
+the one-worker replacement started as PID 515916. The first post-restart gates were:
+
+```text
+GET /health                                                   -> 200
+GET /agent/inbox with the retained offline token              -> 401 session_token_stale
+GET /agent/inbox without a token                              -> 401 session_token_required
+GET /agent/inbox with a non-matching token                    -> 401 session_token_invalid
+```
+
+The temporary plaintext token, header, request, and response files were deleted after the
+measurement. The offline database row remains, intentionally, so the result proves the
+dependency refuses a retained hash rather than relying on row deletion.
+
+All three held Tizonia agents then called `deck_check_inbox` through their own live shims:
+
+```text
+Leader      member 16 -> ok=true
+Generalist  member 14 -> ok=true
+Specialist  member 17 -> ok=true
+```
+
+The database still has two live, hashed, pane-bound MCP sessions per slot (six total), and
+all three recorded pane PID/start pairs resolve to their original live tmux panes. A
+pre-upgrade local shim outside the Tizonia team received the expected registration
+refusal; the rollout contract requires such a client to restart and mint a fresh session.
+
+No safety state moved: both presets remain autonomy-off, no workspace is leased, work-item
+counts remain 11 completed / 11 escalated / 6 merged, and the Tizonia checkout remains on
+`codex/issue-819-remove-libspotify` with only its pre-existing untracked
+`claude_registry.db`.
+
+**G1 verdict: PASS.** Capability-token enforcement is active. Proceed to G2 with autonomy
+still off.
