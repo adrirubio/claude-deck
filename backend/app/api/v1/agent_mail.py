@@ -1,4 +1,5 @@
 """Agent Mail endpoints: team roster, messages, agent registration, hooks, install."""
+import hmac
 import logging
 import os
 from datetime import datetime
@@ -220,15 +221,39 @@ async def queue_inbox_check(member_id: int, db: AsyncSession = Depends(get_db)):
 async def register_agent(
     http_request: Request,
     request: MailAgentRegisterRequest,
+    x_deck_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
     hashless_rebind = existing is not None and existing.capability_token_hash is None
     if hashless_rebind and settings.mail_capability_tokens_required:
         raise HTTPException(status_code=409, detail="token_required_for_rebind")
+    if (
+        existing is not None
+        and existing.capability_token_hash is not None
+        and settings.mail_capability_tokens_required
+    ):
+        if not x_deck_session_token:
+            raise HTTPException(status_code=409, detail="token_required_for_rebind")
+        presented_hash = agent_mail_service.hash_capability_token(x_deck_session_token)
+        if not hmac.compare_digest(existing.capability_token_hash, presented_hash):
+            raise HTTPException(status_code=401, detail="session_token_invalid")
 
     claims_team_context = request.team_preset_id is not None or request.team_slot_id is not None
     pane = resolve_request_pane(http_request)
+    if (
+        existing is not None
+        and existing.team_slot_id is not None
+        and settings.mail_capability_tokens_required
+        and (
+            pane is None
+            or existing.bound_pane_pid is None
+            or existing.bound_pane_proc_start is None
+            or pane.pane_pid != existing.bound_pane_pid
+            or pane.pane_proc_start != existing.bound_pane_proc_start
+        )
+    ):
+        raise HTTPException(status_code=401, detail="session_token_stale")
 
     binding = None
     if pane is None:

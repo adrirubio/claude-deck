@@ -35,6 +35,7 @@ from app.services.github_workspace_service import (
     GithubWorkspaceCredentialRevokeError,
     github_workspace_service,
 )
+from app.utils import peer_process
 
 DEFAULT_TOKEN = "default-owner-token"
 
@@ -42,6 +43,11 @@ DEFAULT_TOKEN = "default-owner-token"
 @pytest.fixture(autouse=True)
 def require_capabilities(monkeypatch):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+
+
+@pytest.fixture(autouse=True)
+def live_slot_session_bindings(monkeypatch):
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)
 
 
 @pytest.fixture(autouse=True)
@@ -410,6 +416,27 @@ async def test_triaging_does_not_increment_approval_rounds(client_and_db):
         assert item.dispatch_status == "dispatched"
         assert item.approval_round_count == 1
         assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_stale_owner_token_cannot_update_dispatch_status(
+    client_and_db, monkeypatch
+):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, status_note="original")
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: False)
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "triaging", "note": "stale write"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "dispatched"
+        assert item.status_note == "original"
 
 
 @pytest.mark.asyncio

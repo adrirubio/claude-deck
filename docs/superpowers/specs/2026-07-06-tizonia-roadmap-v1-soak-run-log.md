@@ -958,3 +958,36 @@ liveness revocation.
 `mail_capability_tokens_required` is absent from `.env`, so enforcement remains at its
 default `false`. Stop for operator disposition of the retained-token behavior before
 flipping enforcement.
+
+### 2026-08-16 — focused retained-token remediation implemented, not deployed
+
+The retained-token behavior is confirmed as a blocker for enforcement. The focused fix
+keeps the existing bearer-token design and adds validity checks at the shared
+`mail_session` dependency:
+
+- an explicitly `offline` session is `401 session_token_stale`;
+- a slot-bound session must still have a complete `(bound_pane_pid,
+  bound_pane_proc_start)` pair and that exact process must be alive;
+- a connected, unbound manual session remains valid, preserving the non-team workflow;
+- grace mode remains unchanged.
+
+Registration is also part of the boundary. Under enforcement, re-registering an existing
+hashed row now requires its current capability token. A slot-bound row can only re-register
+from the same live pane identity; a copied token cannot move the durable row to another
+pane. Fresh shim processes continue to use fresh random session keys and mint their own
+tokens.
+
+Regression coverage includes dead panes, PID reuse, unobservable and incomplete bindings,
+explicitly offline sessions, authenticated re-registration, stale-pane rebind attempts,
+and no-write assertions on both leader decisions and `/dispatch-status`. Validation on the
+fix branch:
+
+```text
+tests/agent_mail/test_capability_tokens.py                         43 passed
+tests/agent_mail/test_api.py + test_dispatch_status_tool.py       85 passed
+tests/agent_mail + tests/agent_teams                              789 passed
+```
+
+This entry records implementation evidence only. The live backend still runs the pre-fix
+code, enforcement is still off, and G1 step 4 remains blocked until the fix PR is merged,
+the backend is restarted, and a real stale-token probe returns `401 session_token_stale`.
