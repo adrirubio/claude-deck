@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed on 2026-08-16; G3 is blocked before public dispatch by cross-slot session reuse.**
+**Status: G0, G1, and G2 passed on 2026-08-16; the G3 cross-slot reuse blocker is fixed and its local spawn gate passes; public dispatch is pending.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.

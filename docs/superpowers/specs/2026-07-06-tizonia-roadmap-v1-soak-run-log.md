@@ -1113,3 +1113,58 @@ slots and refuse that ambiguous fallback, but autonomous dispatch never uses tha
 new work item, branch, PR, or other public write was created; no workspace is leased. The
 scope remains on the safe isolation label and the Specialist pane remains intentionally
 stopped. Fix single-slot reuse disambiguation before resuming G3.
+
+### 2026-08-16 — G3 blocker fixed; local spawn gate passes
+
+PR #322 merged commit `8ea047a` into `feature/autonomous-github-dispatch`. The launch
+planner now computes same-provider/repository ambiguity from every enabled slot in the
+preset, not only the requested subset, and refuses any discovered pane durably attached or
+bound to a different slot or preset. Exact same-slot attachment reuse and true single-slot
+generic reuse remain available.
+
+Regression and scoped validation on the merged code:
+
+```text
+venv/bin/pytest -q tests/agent_teams/test_agent_team_service.py
+47 passed
+
+mail_capability_tokens_required=false venv/bin/pytest -q tests/agent_teams tests/agent_mail
+792 passed
+```
+
+The explicit environment override is the test baseline. Without it, the running soak
+installation's `backend/.env` enforcement setting made five grace-mode tests fail; no live
+setting was changed.
+
+After restarting the one-worker backend from `backend/` (PID 528159), the exact scheduler
+plan shape for the empty Specialist returned:
+
+```json
+{
+  "can_launch": true,
+  "reuse_count": 0,
+  "spawn_count": 1,
+  "items": [{
+    "slot_id": 6,
+    "slot_name": "Specialist",
+    "action": "spawn",
+    "status": "ready",
+    "matching_session": null,
+    "reasons": ["No matching running session found"]
+  }]
+}
+```
+
+The pre-public-write controls remained unchanged:
+
+```text
+preset 2 autonomy_enabled                         0
+scope 1 dispatch_label                           agent-ready-e2e
+open issues carrying agent-ready-e2e              0
+leased github_workspaces                          0
+active slot-6 work items                          0
+durable pane bindings                             slot 4 PID 499511; slot 5 PID 499524
+```
+
+No issue was created or labelled during the fix verification. The Specialist pane remains
+stopped. **G3 resumes from its first public dispatch with the local spawn gate satisfied.**
