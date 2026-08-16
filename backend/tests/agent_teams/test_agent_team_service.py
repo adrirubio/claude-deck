@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.models.database import AgentTeamSlot, MailAgentSession, MailTeamMember
+from app.models.database import AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailTeamMember
 from app.models.schemas import (
     AgentTeamCreateFromMailRequest,
     AgentTeamCreateFromBridgeRequest,
@@ -814,6 +814,175 @@ async def test_plan_launch_does_not_reuse_ambiguous_same_repo_sessions(db, tmp_p
     plan = await agent_team_service.plan_launch(db, preset.id)
 
     assert [item.action for item in plan.items] == ["spawn", "spawn"]
+
+
+@pytest.mark.asyncio
+async def test_partial_plan_does_not_reuse_a_same_repo_sibling_session(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Dispatch team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Generalist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Specialist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "generalist",
+                "tmux_target": "generalist:0.0",
+                "pane_id": "%1",
+                "cwd": str(repo),
+            }
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(slot_ids=[preset.slots[1].id]),
+    )
+
+    assert [item.slot_name for item in plan.items] == ["Specialist"]
+    assert plan.items[0].action == "spawn"
+
+
+@pytest.mark.asyncio
+async def test_partial_plan_reuses_the_selected_slots_attached_session(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Dispatch team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Generalist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Specialist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    generalist_slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    generalist_member = await agent_mail_service.get_or_create_slot_member(db, generalist_slot)
+    db.add(
+        MailAgentSession(
+            member_id=generalist_member.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%1",
+            tmux_target="generalist:0.0",
+            pane_id="%1",
+            cwd=str(repo),
+            team_preset_id=preset.id,
+            team_slot_id=generalist_slot.id,
+            mailbox_status="observed",
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "generalist",
+                "tmux_target": "generalist:0.0",
+                "pane_id": "%1",
+                "cwd": str(repo),
+            }
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(slot_ids=[preset.slots[0].id]),
+    )
+
+    assert plan.items[0].action == "reuse"
+    assert plan.items[0].matching_session["tmux_target"] == "generalist:0.0"
+
+
+@pytest.mark.asyncio
+async def test_plan_does_not_reuse_a_pane_bound_to_another_preset(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Target team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Target",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    owner = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Owner team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Owner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    db.add(
+        AgentPaneBinding(
+            pane_pid=4242,
+            pane_proc_start="120913170",
+            slot_id=owner.slots[0].id,
+            preset_id=owner.id,
+            tmux_target="repo:0.0",
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "repo",
+                "tmux_target": "repo:0.0",
+                "pid": "4242",
+                "cwd": str(repo),
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat",
+        lambda pid: (1, "120913170"),
+    )
+
+    plan = await agent_team_service.plan_launch(db, target.id)
+
+    assert plan.items[0].action == "spawn"
 
 
 @pytest.mark.asyncio
