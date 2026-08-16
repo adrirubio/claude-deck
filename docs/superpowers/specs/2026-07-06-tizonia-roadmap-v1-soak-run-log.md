@@ -1210,3 +1210,62 @@ This is consistent with GitHub search/list indexing lag, but the runbook require
 on any precondition mismatch rather than substituting a different observation. **G3 remains
 paused with autonomy off.** Issue #867 is the sole armed issue; no branch, PR, work item, or
 workspace lease was created.
+
+### 2026-08-16 — G3 spawn delivery PASS; BLOCKED by stale Leader checkpoint
+
+After operator clearance to resume, both GitHub reads agreed that issue #867 was the sole
+open `agent-ready-e2e` issue. Scope 1 still used that label, preset 2 was autonomy-off, and
+there were no work items or leases. Autonomy was then enabled for the isolated window.
+
+The scheduler created work item 29 and exercised the intended spawn path:
+
+```text
+issue_number                 867
+dispatch_status              dispatched
+owner_slot_id                6 (Specialist)
+routing_method               label
+launch_id                    65
+launch action/status         spawn / pending_registration
+tmux target                  tizonia-openmax-il-i-c387:0.0
+pane PID                     551524
+workspace                    .../tizonia-openmax-il-issue-818
+dispatch head                deck/slot-6/issue-867-a18c462d94acede5
+```
+
+The brief-delivery half passed. Director message 355, `Autonomous dispatch: issue #867`, was
+delivered to member 17 and its receipt gained `read_at=2026-08-16 21:27:06.915344`. The
+owner reported `triaging`, inspected the correct leased worktree, and sent approval request
+356 plus plan message 357 to Leader member 16. The worktree remained detached at
+`origin/master` commit `280f5803` and clean.
+
+The next precondition failed for an environmental reason. The Leader read the pending
+request and the scheduler's message 358, but its terminal still carried an earlier
+orchestrator constraint:
+
+```text
+One pending approval remains for work item 29 / issue #867. I did not approve or reject
+it because either action modifies a work item, which remains prohibited by the active G1
+checkpoint.
+```
+
+That checkpoint is stale: G1 and G2 are complete and this is the explicitly authorized G3
+window. It nevertheless governs the live Leader process, so the required autonomous
+leader-approval exchange cannot occur. This is not an owner-liveness failure: Leader PID
+499511 is alive and read the request; Specialist PID 551524 is alive and correctly waiting
+without editing.
+
+Autonomy was disabled immediately after confirming the contradiction. State at stop:
+
+```text
+preset 2 autonomy_enabled    0
+work item 29                 dispatched; no ack; no PR; no escalation
+approval request 356         pending
+workspace 2                  leased to item 29; token retained; owner PID 551524
+owner worktree               clean; no branch or file change
+public writes                issue #867 and its labels only
+```
+
+Per the no-kill/no-impersonation rule, neither live pane was terminated and no status was
+reported on an agent's behalf. **G3 is BLOCKED until the Leader's stale G1 constraint is
+explicitly cleared; then the existing pending approval can continue without recreating the
+item or lease.**

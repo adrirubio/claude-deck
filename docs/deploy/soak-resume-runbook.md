@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed on 2026-08-16; the G3 reuse blocker is fixed, but G3 is paused after GitHub's first post-label list returned zero. Autonomy is off; issue #867 is now visibly armed; no work item or lease exists.**
+**Status: G0, G1, and G2 passed on 2026-08-16; G3 spawn and brief delivery reached work item 29, then stopped because the Leader still enforces a stale G1 idle checkpoint and refuses approval. Autonomy is off; the live Specialist and lease are untouched.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
