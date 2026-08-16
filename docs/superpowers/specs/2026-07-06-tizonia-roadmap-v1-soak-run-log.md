@@ -1269,3 +1269,70 @@ Per the no-kill/no-impersonation rule, neither live pane was terminated and no s
 reported on an agent's behalf. **G3 is BLOCKED until the Leader's stale G1 constraint is
 explicitly cleared; then the existing pending approval can continue without recreating the
 item or lease.**
+
+### 2026-08-16 — G3 spawn implementation and CI PASS; BLOCKED by GitHub token permission
+
+The operator cleared the stale Leader checkpoint. Leader member 16 independently reviewed
+the issue and the Specialist's scoped plan, then recorded an explicit approval for round 1.
+The Specialist consumed answer message 359 and reported `ack_received`. The durable evidence
+became:
+
+```text
+ack_received_at            2026-08-16 21:44:04.453250
+ack_approver_member_id     16
+ack_evidence_message_id    359
+```
+
+The Specialist then created the assigned branch, changed only `CONTRIBUTING-agents.md`, ran
+`git diff --check`, committed, pushed, and opened draft PR
+[`tizonia/tizonia-openmax-il#868`](https://github.com/tizonia/tizonia-openmax-il/pull/868).
+The PR links issue #867 and contains exactly one file with two additions and two deletions.
+
+```text
+branch    deck/slot-6/issue-867-a18c462d94acede5
+commit    65375152 docs: require detailed agent verification results
+PR        #868 OPEN, draft, mergeable
+files     CONTRIBUTING-agents.md (+2/-2)
+CI        Core Meson build — pass (35s)
+```
+
+The first release attempt was correctly refused while the item was non-terminal:
+
+```text
+workspace_released -> 409 workspace cannot be released while the item is verifying;
+                           release is legal only from merged, completed, escalated, failed
+```
+
+With the isolated label still present on issue #867 and no second armed issue, autonomy was
+re-enabled through the preset API so the scheduler could perform the verification transition.
+The scheduler read the green check but failed while marking the draft ready:
+
+```text
+dispatch_status    verifying
+status_note        GitHub verification failed; will retry:
+                   Resource not accessible by personal access token
+GraphQL path       markPullRequestReadyForReview
+SAML failure       false
+retry_count        0
+last_verified_sha  NULL
+```
+
+A hash-only comparison established that Deck's configured GitHub credential is not the
+active `gh` OAuth credential. `gh auth status` reports the active OAuth credential with
+`repo`, `workflow`, `read:org`, and `gist`; Deck is configured with a different fine-grained
+credential. No credential value was printed or persisted in this artifact.
+
+Autonomy was disabled immediately after the failed scheduler transition. State at stop:
+
+```text
+preset 2 autonomy_enabled    0
+work item 29                 verifying; PR 868; no escalation
+workspace 2                  leased to item 29; token retained; owner PID 551524
+PR 868                       draft; CI green; not merged
+public writes                issue #867, assigned branch, and draft PR #868 only
+```
+
+No pane was terminated, no status was reported on the owner's behalf, and no manual
+ready-for-review transition or merge was substituted for the scheduler. **G3 is BLOCKED
+until the backend receives a GitHub credential that can execute
+`markPullRequestReadyForReview`; then the existing item, PR, and lease can resume.**

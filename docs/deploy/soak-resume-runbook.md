@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed on 2026-08-16; G3 spawn and brief delivery reached work item 29, then stopped because the Leader still enforces a stale G1 idle checkpoint and refuses approval. Autonomy is off; the live Specialist and lease are untouched.**
+**Status: G0, G1, and G2 passed on 2026-08-16; G3 spawn delivery, distinct approval, the scoped docs change, draft PR creation, and CI passed for work item 29. G3 is stopped because the configured fine-grained GitHub token cannot mark draft PR #868 ready. Autonomy is off; the live Specialist and lease are untouched.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
