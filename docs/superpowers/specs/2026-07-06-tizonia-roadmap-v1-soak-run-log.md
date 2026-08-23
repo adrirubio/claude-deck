@@ -1336,3 +1336,82 @@ No pane was terminated, no status was reported on the owner's behalf, and no man
 ready-for-review transition or merge was substituted for the scheduler. **G3 is BLOCKED
 until the backend receives a GitHub credential that can execute
 `markPullRequestReadyForReview`; then the existing item, PR, and lease can resume.**
+
+### 2026-08-23 — G3 credential and continuation recovery PASS; merge awaits required review
+
+The backend was down and the tmux server absent when G3 resumed. The persisted state was
+intact: item 29 remained `verifying`, workspace 2 remained leased to it, preset 2 remained
+autonomy-off, issue #867 was still the only open `agent-ready-e2e` issue, and PR #868 was
+open, draft, and CI-green.
+
+The operator ran `scripts/use-gh-token-for-deck.sh`. It replaced the fine-grained token with
+the active GitHub CLI OAuth credential atomically, without printing or exporting either
+credential, and reported:
+
+```text
+same_token = True
+env_mode = 0o600
+```
+
+Deck restarted from `backend/` as one uvicorn worker. The supported observed-session sync
+confirmed every historical member offline. A full preset-2 launch plan returned exactly
+three spawn actions and no reuse, skip, warning, or block:
+
+```text
+plan_hash   dd6fe7230610c7e5788ff5e1e67915bf7cb517ec8862834d4e6795e0c25797cc
+launch_id   66
+Leader      slot 4 -> tizonia-openmax-il-3098:0.0, PID 12055
+Generalist  slot 5 -> tizonia-openmax-il-83be:0.0, PID 12086
+Specialist  slot 6 -> tizonia-openmax-il-57eb:0.0, PID 12099
+```
+
+The recovered Specialist called `deck_get_work_item_context(work_item_id=29)`. The call
+returned the persisted item, branch, workspace and live lease capability through the
+authenticated continuation route. It also transferred the lease's process evidence from
+the dead PID to the new owner pane:
+
+```text
+before  leased_owner_pid=551524  proc_start=48611489
+after   leased_owner_pid=12099   proc_start=2480374
+item    verifying; owner_slot_id=6; PR #868
+```
+
+No file or PR write occurred during recovery. With the scope still isolated to issue #867,
+autonomy was enabled through the preset API. A scheduler pass using the replacement
+credential marked the draft ready and promoted the item:
+
+```text
+PR #868          OPEN; isDraft=false; CI pass; mergeable
+work item 29     ready_for_review
+status_note      PR #868 is ready for review.
+last_verified    6537515279330f22e491acdbc6ee2ddca207490c
+retry_count      0
+```
+
+Autonomy was disabled immediately after the transition. Independent review confirmed the
+PR changes only `CONTRIBUTING-agents.md` (+2/-2), exactly matches issue #867, and carries no
+scope drift. Both supported human merge attempts were then refused by the unchanged branch
+protection rule:
+
+```text
+gh pr merge 868 --merge --delete-branch
+X the base branch policy prohibits the merge
+
+gh pr merge 868 --merge --delete-branch --admin
+GraphQL: At least 1 approving review is required by reviewers with write access.
+```
+
+No collaborator permission or branch-protection setting was changed. State at stop:
+
+```text
+preset 2 autonomy_enabled    0
+work item 29                 ready_for_review; PR 868; no escalation
+workspace 2                  leased to item 29; owner PID 12099
+PR 868                       open, non-draft, CI green, review required
+issue 867                    open with agent-ready-e2e
+```
+
+**G3 is BLOCKED until an existing write-access reviewer approves PR #868.** After that human
+gate, merge the PR, re-enable the same isolated scheduler window long enough to mark item 29
+`merged`, and continue the correct-token/replay/stale-token release checks. Do not change
+branch protection or repository permissions to manufacture the approval.
