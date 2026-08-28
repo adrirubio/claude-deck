@@ -1049,15 +1049,26 @@ async def test_dispatch_brief_nudge_bypasses_the_cooldown(db, svc, tmp_path, mon
     )
     assert len([command for command, _ in calls if command[0] == "tmux"]) == 2
 
+    dispatch_nudge_prompt = "Read issue #900 and execute that assignment now."
     await svc.send_direct_message(
         db,
         recipient_member_id=recipient.id,
         subject="Autonomous dispatch: issue #900",
         body_markdown="brief",
         bypass_nudge_cooldown=True,
+        nudge_prompt=dispatch_nudge_prompt,
     )
 
-    assert len([command for command, _ in calls if command[0] == "tmux"]) == 4
+    tmux_calls = [command for command, _ in calls if command[0] == "tmux"]
+    assert len(tmux_calls) == 4
+    assert tmux_calls[2] == [
+        "tmux",
+        "send-keys",
+        "-t",
+        "w:0.1",
+        "-l",
+        dispatch_nudge_prompt,
+    ]
 
 
 @pytest.mark.asyncio
