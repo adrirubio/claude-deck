@@ -1613,3 +1613,115 @@ team panes                   exactly Leader, Generalist, Specialist
 
 **G3 reuse delivery is complete. G3 remains open only for a discriminating stale-token
 assertion, carried into the next controlled acquisition.**
+
+### 2026-08-28 — G4 PASS; carried G3 stale-token proof also closed
+
+G4 used one isolated public issue and a temporary, deliberately invalid slot to exercise
+release on launch failure without disturbing the three live team panes. Before dispatch,
+autonomy was off, item 23 was still `escalated / dispatch_label_removed`, both workspaces
+were free, and exactly the Leader, Generalist, and Specialist panes existed. Workspace 2's
+cache baseline was measured in bytes, and an untracked reset sentinel was added:
+
+```text
+build             34,132,634 bytes
+build-compat   1,116,441,196 bytes
+sentinel          .g4-reset-sentinel
+```
+
+Temporary slot 7 (`G4 Launch Failure Probe`) routed only on `agent-g4-probe`. Its Codex
+launch mode was `resume` with neither `session_id` nor `use_last`, so the supported launch
+planner returned `can_launch=false`, `block_code=invalid_launch_options`. Issue #871 was the
+only issue armed with `agent-ready-e2e` and the temporary route label. One natural scheduler
+poll created work item 31, routed it by label to slot 7, acquired and reset workspace 2,
+sent assignment message 380 to the offline slot member, and then refused the launch:
+
+```text
+item 31 first attempt       escalated / plan_blocked
+workspace 2 after failure  unleased, enabled, provision_error NULL
+new pane                    none
+sentinel                    removed
+HEAD                        ac5d97e7f2d9d92f69233cd3be2fce0db6bc7828
+HEAD == origin/master       yes
+worktree                    clean
+cache byte counts           unchanged exactly
+```
+
+The temporary slot and label were then deleted. Issue #871 received only `area:tests`, a
+second sentinel (`.g4-success-reset-sentinel`) was added, and item 31 was retried through the
+supported route. One isolated scheduler window routed the item to Specialist slot 6 and
+acquired workspace 2. Launch 69 / item 90 returned `action=reuse`, `status=reused`, targeting
+the existing `tizonia-openmax-il-e7e4:0.0` pane. The second sentinel disappeared, both cache
+counts again remained byte-identical, and assignment message 382 was read by member 17. Its
+brief named `/home/juan/work/repos/tizonia/tizonia-openmax-il-issue-818`; no additional pane
+appeared.
+
+The standing Specialist exercised the real approval gate. The Leader independently reviewed
+the issue and recorded an approved decision in message 385:
+
+```text
+owner                         Specialist slot 6 / member 17
+approver                      Leader member 16
+ack_approver_member_id        16
+ack_evidence_message_id       385
+ack_received_at               2026-08-28 11:39:08.590005
+changed file                  CONTRIBUTING-agents.md only
+local checks                  git diff --check; exact name-only assertion
+agent commit                  cde20caccdf540f74c41f86a0a7c82f2653d1a40
+```
+
+Deck accepted draft PR #872, observed the Core Meson build succeed, converted the PR to
+ready, and moved item 31 to `ready_for_review`. `adrirubio` supplied the required independent
+approval. The PR merged through the normal protected path, without `--admin`:
+
+```text
+PR #872       MERGED at 2026-08-28T11:45:01Z
+merge commit  10a06d881cf478c962155da9fd53e5869123c096
+issue #871    CLOSED at 2026-08-28T11:45:02Z
+item 31       merged after one isolated scheduler window
+```
+
+The carried G3 stale-token assertion ran before release. The Specialist first ran only
+`git fetch origin master`; the worktree then had zero changed paths and
+`origin/master..HEAD == 0`, so the clean-worktree guard could not mask the capability check.
+The retained item-30 token was submitted against item 31 and returned:
+
+```text
+HTTP status  409
+block_code   lease_changed
+message      The workspace lease or owner changed before release
+```
+
+The API intentionally collapses the conditional release predicates into `lease_changed`
+rather than exposing a token oracle. Immediately after that refusal, the persisted and git
+state proved every non-token predicate still held: item 31 was `merged`, owner slot was 6,
+workspace 2 was still scope 1 and leased to item 31 at the same acquisition timestamp, its
+current token remained present, the tree was clean, and there were zero unpushed commits.
+The stale token was therefore the discriminating mismatch, and the live lease was retained.
+The first instruction had asked the agent for an explicit `lease_token_mismatch` reason; it
+correctly stopped on the generic contract. After the coordinator verified the predicates
+above and clarified the contract, the remaining calls completed:
+
+```text
+retained item-30 token  409 lease_changed; item-31 lease retained
+current item-31 token   200; workspace released
+same-token replay       200; idempotent
+```
+
+Final state was verified after removing the isolation label:
+
+```text
+preset 2 autonomy_enabled    0
+open agent-ready-e2e issues  0
+item 23                      escalated / dispatch_label_removed
+item 31                      merged / PR 872 / no escalation
+workspace 1                  free; token absent; primary/non-dispatchable
+workspace 2                  free; token absent; enabled/dispatchable
+team panes                   exactly Leader, Generalist, Specialist
+build bytes                  34,132,634
+build-compat bytes           1,116,441,196
+```
+
+No DB row was edited, no session was killed or impersonated, no protection or permission
+setting changed, no auto-merge ran, and no public write occurred outside issue #871, its
+single-file branch, and PR #872. No new product finding was identified. **G4 passes, and the
+discriminating stale-token evidence closes G3.**

@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed. G3's spawn and reuse delivery paths, approval gate, PR/CI lifecycle, human merge, correct-token release, and same-token replay passed. The stale-token assertion remains open: its first `409` was emitted by the clean-worktree guard before token discrimination, and the sequencing correction arrived after the correct token released the lease. Carry that assertion into the next controlled acquisition before declaring G3 complete. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #869 is disarmed, and exactly three team panes remain alive.**
+**Status: G0 through G4 passed. G4 supplied the discriminating stale-token assertion carried from G3: after a fetch-only clean-worktree precondition, the retained item-30 token returned `409 lease_changed` while the item-31 lease remained intact; the current token then released it with `200`, and its replay returned idempotent `200`. G4 also proved real acquire/reset, cache preservation, brief worktree targeting, release on launch failure, standing-session reuse, approval/CI/human merge, and final release. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #871 is disarmed, and exactly three team panes remain alive.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
@@ -28,7 +28,7 @@ acting on it.
 | `deploy/pr1-approval-gate-rollout.md` | the deploy ordering PR1's guarantees depend on |
 | `deploy/pr2-github-app-rollout.md` | App permissions, scope-reset gate, staged rollout, rollback |
 | `specs/2026-08-05-distinct-approver-identity-design.md` §5.9, §8 | scope reset detail, 34 acceptance criteria |
-| `specs/2026-07-06-tizonia-roadmap-v1-soak-run-log.md` | **the evidence artifact.** Last entry 2026-08-16 |
+| `specs/2026-07-06-tizonia-roadmap-v1-soak-run-log.md` | **the evidence artifact.** Last entry 2026-08-28 |
 
 ## What we are verifying against — the tizonia testbed
 
@@ -318,7 +318,7 @@ Expect `409 tokens_not_enforced` on **every** `/dispatch-status` branch until G1
 done — that refusal is PR1 protecting its own guarantees, not a defect. Route is
 `POST /api/v1/agent-teams/dispatch-status` (`agent_teams.py:627`).
 
-### G3 — G2 re-arm steps 2–6 (never run)
+### G3 — G2 re-arm steps 2–6 (complete)
 
 **Goal:** one real dispatch through each delivery path. **Source:** G2 §7 steps 2–5 plus
 the owed sixth step in §9.
@@ -346,9 +346,9 @@ subject under test is the delivery and release mechanics, not the C++.
   wrong subject).
 
 **Execution status, 2026-08-28:** the reuse path passed on work item 30 / issue #869 and
-PR #870. PRs #323 and #324 removed the two blockers found during the run. The stale-token
-assertion did not produce discriminating evidence and remains owed on the next controlled
-lease; see the dated run-log entry.
+PR #870. PRs #323 and #324 removed the two blockers found during the run. G4's work-item-31
+acquisition supplied the owed discriminating stale-token proof after the worktree guard was
+made non-blocking with a fetch-only update. G3 is complete; see the dated run-log entries.
 
 ### G4 — PR A §7 step 5, the deferred dispatch half
 
@@ -356,7 +356,7 @@ lease; see the dated run-log entry.
 ⛔ status block. Both original blockers are removed by G2/G3 (a trigger now exists; the
 liveness predicate is trustworthy) — confirm that yourself rather than assuming it.
 
-Specifically unverified since PR A merged, all of it on real git:
+Verification targets (unverified before this gate), all of them on real git:
 
 - `acquire` under a real dispatch.
 - `reset_workspace`'s four commands on a real worktree.
@@ -373,6 +373,19 @@ Recovery actions, neither needing DB surgery:
 `POST /github-scopes/{scope_id}/workspaces/{workspace_id}/reprobe` (`:1173`) if a reset
 failure disabled the worktree, and `POST /github-work-items/{item_id}/abandon` (`:1395`)
 if an item wedges in a review status. Using either is itself a first — record it.
+
+**Execution status, 2026-08-28: PASS.** Work item 31 / issue #871 exercised both halves.
+A deliberately invalid temporary slot caused `plan_blocked` after a real acquisition and
+reset; Deck released workspace 2 without spawning a pane. After supported retry and routing
+to the standing Specialist, launch 69 reused the existing pane, the issue-specific brief
+named the leased worktree, and the agent completed the distinct-approver, CI, protected human
+merge, and release path through PR #872. Exact cache sizes survived both resets:
+`build=34,132,634` bytes and `build-compat=1,116,441,196` bytes. The carried stale item-30
+token returned `409 lease_changed` with the item-31 lease retained; this endpoint deliberately
+does not expose which acquisition predicate failed. The current item-31 token and one replay
+both returned `200`. Autonomy is off, both workspace leases are `NULL`, the isolation label
+has zero open issues, item 23 remains `escalated / dispatch_label_removed`, and the original
+three panes remain alive. Neither recovery endpoint was needed.
 
 ### G5 — PR2 GitHub App staged rollout
 
