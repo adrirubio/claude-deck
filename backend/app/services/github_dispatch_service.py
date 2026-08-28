@@ -503,15 +503,23 @@ class GithubDispatchService:
                 item.issue_number not in issue_details_by_number
                 or scope.dispatch_label not in issue_labels
             ):
+                note = (
+                    f"Required dispatch label `{scope.dispatch_label}` is absent "
+                    "or could not be verified while the item was pending. This poll "
+                    "did not acquire a workspace or launch an agent."
+                )
+                if any(getattr(item, marker) is not None for marker in _ATTEMPT_MARKERS):
+                    note += (
+                        " This item has prepared dispatch-attempt state, so its "
+                        "workspace may still be leased and its agent pane may still "
+                        "be live. Do NOT retry or release the workspace until the "
+                        "owner is confirmed stopped."
+                    )
                 await self.escalate(
                     db,
                     item,
                     "dispatch_label_removed",
-                    (
-                        f"Required dispatch label `{scope.dispatch_label}` is absent "
-                        "or could not be verified while the item was pending; no "
-                        "workspace was acquired and no agent was launched."
-                    ),
+                    note,
                 )
                 await db.commit()
                 continue

@@ -1177,6 +1177,50 @@ async def test_dispatch_pending_escalates_when_dispatch_label_is_not_verified(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_label_removal_preserves_and_warns_about_prepared_attempt(db):
+    _, slots, scope = await _team(db)
+    owner = slots[1]
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=912,
+        issue_title="prepared stale item",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = await github_workspace_service.acquire(db, scope, item)
+    await github_dispatch_service.prepare_attempt(
+        db,
+        item,
+        owner_slot_id=owner.id,
+        routing_method="label",
+        base_ref="origin/master",
+    )
+
+    async def unexpected_launcher(*_args, **_kwargs):
+        raise AssertionError("a prepared item without the dispatch label must not launch")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=unexpected_launcher,
+        issue_labels_by_number={912: ["area:backend"]},
+        issue_details_by_number={912: {"body": "label removed after preparation"}},
+    )
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "dispatch_label_removed"
+    assert "pane may still be live" in item.status_note
+    assert "Do NOT retry or release" in item.status_note
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
 async def test_ack_prompt_has_no_owner_side_timeout(db):
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")
