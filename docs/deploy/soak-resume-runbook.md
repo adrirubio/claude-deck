@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0 through G5 passed. G5 resolved the Tizonia scope to GitHub App mode, pushed with a repository-scoped installation credential, created PR #874 as `claude-deck-tizonia-soak[bot]`, retained the per-slot commit identity, passed CI and protected human review, and removed every managed identity/credential key on release. The original team panes and backend exited while approval was pending; the persisted item and lease survived, a same-slot Generalist respawn claimed the continuation, and release completed normally. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #873 is disarmed, and one recovered Generalist team pane remains alongside the Deck pane.**
+**Status: G0 through G6 passed. G5 resolved the Tizonia scope to GitHub App mode, pushed with a repository-scoped installation credential, created PR #874 as `claude-deck-tizonia-soak[bot]`, retained the per-slot commit identity, passed CI and protected human review, and removed every managed identity/credential key on release. G6 read back `required_approving_review_count=1` and `enforce_admins=true`; no protection mutation was needed. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #873 is disarmed, and one recovered Generalist team pane remains alongside the Deck pane.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
@@ -437,6 +437,12 @@ canaries. No additional repository or installation has been enabled.
 `required_reviews=1, enforce_admins=true` on the testbed's `master`. It was relaxed as a
 soak accommodation because agents could not approve their own PRs; PR2's bot authorship is
 what makes restoration possible (criterion 7). Operator action.
+
+**Execution status, 2026-08-28: PASS without mutation.** Read-only protection inspection
+returned `required_approving_review_count=1` and `enforce_admins.enabled=true`. PR #874 had
+also just demonstrated the rule behavior: it remained blocked until an independent write-
+access reviewer approved it, then merged normally without `--admin`. The required state was
+already restored, so G6 changed no repository setting.
 
 ### G7 — resume the soak runbook
 

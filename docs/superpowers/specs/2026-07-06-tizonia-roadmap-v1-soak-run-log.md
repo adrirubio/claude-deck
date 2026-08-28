@@ -1841,3 +1841,21 @@ during the canary. No public write occurred outside issue #873, its one-file bra
 not a numbered product finding: the durability and same-slot recovery path handled them
 without state loss or manual lease surgery. **G5 passes for the single Tizonia repository;
 expansion remains gated.**
+
+### 2026-08-28 — G6 PASS; protection already at the required state
+
+Immediately after the App-authored G5 canary, read-only inspection of
+`tizonia/tizonia-openmax-il` branch protection returned:
+
+```text
+master required approving reviews  1
+master enforce_admins               true
+required status-check contexts      none configured by the protection object
+push restrictions                   none
+```
+
+PR #874 supplied a behavioral check in addition to the settings read: it remained blocked
+after CI passed and became mergeable only after `adrirubio`, an independent write-access
+reviewer, approved it. The normal merge then succeeded without `--admin`. No branch-
+protection, ruleset, permission, or App setting was changed for this gate. **G6 passes
+without mutation; G7 may use the restored protected branch.**
