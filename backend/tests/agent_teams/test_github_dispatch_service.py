@@ -1108,12 +1108,72 @@ async def test_dispatch_pending_stamps_dispatched_at(db):
         scope,
         slots,
         launcher=fake_launcher,
-        issue_labels_by_number={910: ["area:backend"]},
+        issue_labels_by_number={910: [scope.dispatch_label, "area:backend"]},
         issue_details_by_number={910: {"body": "do the thing"}},
     )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.dispatched_at is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("issue_labels", "issue_details", "queue_blocker"),
+    [
+        (["area:backend"], {911: {"body": "label removed"}}, "repo_cap"),
+        (["area:backend"], {911: {"body": "label removed"}}, "low_memory"),
+        ([], {}, "repo_cap"),
+        ([], {}, "low_memory"),
+    ],
+)
+async def test_dispatch_pending_escalates_when_dispatch_label_is_not_verified(
+    db,
+    monkeypatch,
+    issue_labels,
+    issue_details,
+    queue_blocker,
+):
+    _, slots, scope = await _team(db)
+    if queue_blocker == "repo_cap":
+        scope.max_concurrent_dispatched = 0
+    else:
+        monkeypatch.setattr(
+            github_dispatch_service,
+            "_available_memory_mb",
+            lambda: 0,
+        )
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=911,
+        issue_title="stale pending item",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+
+    async def unexpected_launcher(*_args, **_kwargs):
+        raise AssertionError("an unverified pending item must not launch")
+
+    await github_dispatch_service.dispatch_pending(
+        db,
+        scope,
+        slots,
+        launcher=unexpected_launcher,
+        issue_labels_by_number={911: issue_labels},
+        issue_details_by_number=issue_details,
+    )
+
+    await db.refresh(item)
+    leased_workspace = (
+        await db.execute(
+            select(GithubWorkspace).where(GithubWorkspace.leased_item_id == item.id)
+        )
+    ).scalar_one_or_none()
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "dispatch_label_removed"
+    assert leased_workspace is None
 
 
 @pytest.mark.asyncio
@@ -1720,11 +1780,14 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
         scope,
         slots,
         launcher=fake_launcher,
-        issue_labels_by_number={833: ["area:backend"]},
+        issue_labels_by_number={833: [scope.dispatch_label, "area:backend"]},
         issue_details_by_number={
             833: {
                 "body": "Acceptance criteria and verification steps.",
-                "labels": [{"name": "area:backend"}, {"name": "agent-ready"}],
+                "labels": [
+                    {"name": "area:backend"},
+                    {"name": scope.dispatch_label},
+                ],
             }
         },
     )
@@ -1882,7 +1945,7 @@ async def test_design_dispatch_brief_uses_design_pipeline_language(db):
         scope,
         slots,
         launcher=fake_launcher,
-        issue_labels_by_number={835: ["area:backend"]},
+        issue_labels_by_number={835: [scope.dispatch_label, "area:backend"]},
         issue_details_by_number={835: {"body": "Capture design rationale."}},
     )
 
@@ -1926,7 +1989,7 @@ async def test_dispatch_brief_uses_discovery_when_leader_member_missing(db):
         scope,
         slots,
         launcher=fake_launcher,
-        issue_labels_by_number={837: ["area:backend"]},
+        issue_labels_by_number={837: [scope.dispatch_label, "area:backend"]},
         issue_details_by_number={837: {"body": "Tiny docs follow-up."}},
     )
 

@@ -105,7 +105,15 @@ class _RoutingDispatch:
 
 class _FakeClient:
     async def get_issues_by_number(self, owner, repo, numbers):
-        return {number: {"labels": [{"name": "area:backend"}]} for number in numbers}
+        return {
+            number: {
+                "labels": [
+                    {"name": "claude-deck-ready"},
+                    {"name": "area:backend"},
+                ]
+            }
+            for number in numbers
+        }
 
 
 class _RetryFlowClient:
@@ -183,6 +191,40 @@ async def test_run_repo_once_only_processes_enabled_autonomy_scopes(db):
     assert dispatch.monitor_calls == [active.id]
     assert dispatch.remind_calls == [active.id]
     assert verification.calls == [active.id]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_escalates_pending_item_after_dispatch_label_is_removed(db):
+    scope = await _scope(db, autonomy=True, enabled=True)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=2,
+        issue_title="stale pending item",
+        issue_url="https://github.com/o/r/issues/2",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="pending",
+    )
+    db.add(item)
+    await db.commit()
+    client = _RetryFlowClient(
+        {
+            "number": 2,
+            "state": "open",
+            "labels": [{"name": "area:backend"}],
+        }
+    )
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=_FakeWatcher(),
+        dispatch=_RoutingDispatch(),
+        verification=_FakeVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=client)
+
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "dispatch_label_removed"
 
 
 @pytest.mark.asyncio

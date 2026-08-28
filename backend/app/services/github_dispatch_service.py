@@ -480,6 +480,7 @@ class GithubDispatchService:
     ) -> None:
         launcher = launcher or agent_team_service.launch
         issue_labels_by_number = issue_labels_by_number or {}
+        issue_details_are_authoritative = issue_details_by_number is not None
         issue_details_by_number = issue_details_by_number or {}
         slots_by_id = {slot.id: slot for slot in preset_slots}
         slots_dispatched_this_batch: set[int] = set()
@@ -497,6 +498,23 @@ class GithubDispatchService:
         ).scalars().all()
 
         for item in pending:
+            issue_labels = issue_labels_by_number.get(item.issue_number, [])
+            if issue_details_are_authoritative and (
+                item.issue_number not in issue_details_by_number
+                or scope.dispatch_label not in issue_labels
+            ):
+                await self.escalate(
+                    db,
+                    item,
+                    "dispatch_label_removed",
+                    (
+                        f"Required dispatch label `{scope.dispatch_label}` is absent "
+                        "or could not be verified while the item was pending; no "
+                        "workspace was acquired and no agent was launched."
+                    ),
+                )
+                await db.commit()
+                continue
             if scope_active + scope_dispatched_this_batch >= scope.max_concurrent_dispatched:
                 item.pending_reason = "queued_repo_cap"
                 item.updated_at = datetime.utcnow()
@@ -511,7 +529,6 @@ class GithubDispatchService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
                 continue
-            issue_labels = issue_labels_by_number.get(item.issue_number, [])
             try:
                 state = attempt_state(item)
             except PartiallyPreparedAttempt as exc:
