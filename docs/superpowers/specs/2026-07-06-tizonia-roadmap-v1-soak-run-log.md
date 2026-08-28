@@ -1415,3 +1415,98 @@ issue 867                    open with agent-ready-e2e
 gate, merge the PR, re-enable the same isolated scheduler window long enough to mark item 29
 `merged`, and continue the correct-token/replay/stale-token release checks. Do not change
 branch protection or repository permissions to manufacture the approval.
+
+### 2026-08-28 — G3 spawn release PASS; reuse setup BLOCKED by forbidden item 23 retry
+
+An existing write-access reviewer approved PR #868 without any collaborator or protection
+change. Deck and the three-slot team were cold, so the backend restarted from `backend/` and
+the supported preset launch again returned exactly three spawn actions and no reuse:
+
+```text
+launch_id   67
+Leader      tizonia-openmax-il-4b75:0.0  PID 17615
+Generalist  tizonia-openmax-il-3459:0.0  PID 17627
+Specialist  tizonia-openmax-il-e7e4:0.0  PID 17659
+```
+
+The Specialist claimed work item 29 through `deck_get_work_item_context`; workspace 2's
+owner evidence moved from the dead PID 12099 to live PID 17659. PR #868 then merged through
+the normal protected-branch path, without `--admin`:
+
+```text
+PR #868       MERGED at 2026-08-28T08:30:13Z
+merge commit  e42be040c923278d0ca8a4d858a98328d2560166
+issue #867    CLOSED
+```
+
+With zero open `agent-ready-e2e` issues, autonomy was enabled only long enough for the
+scheduler to reconcile item 29 to `merged`, then disabled. The first legitimate release
+attempt reached the clean-worktree guard and was refused because the leased worktree's local
+`origin/master` predated the just-completed merge:
+
+```text
+workspace_released -> 409
+workspace will not be released: 1 commit(s) not pushed to origin/master
+```
+
+The owner ran only `git fetch origin master`, proved the clean branch HEAD was an ancestor of
+the refreshed `origin/master`, and retried. No reset or file edit occurred:
+
+```text
+origin/master       280f5803..e42be040
+correct lease token 200; workspace released
+same-token replay   200; workspace remained unleased
+```
+
+The stale-token assertion needs a newer live acquisition. The planned second dispatch would
+therefore route a small issue to the already-running Specialist: Agent Mail delivery plus no
+new pane would prove reuse, while the Specialist's retained item-29 token against the new
+lease would prove `409` with the lease retained before the correct new token releases it.
+
+The mandatory precheck stopped that setup. Work item 23, which the G3 runbook explicitly says
+must stay escalated and must not be retried, was `pending`:
+
+```text
+work item       23 / issue #821
+status          pending
+pending_reason  queued_no_workspace
+owner slot      6 / Specialist
+updated_at      2026-08-28 08:31:30.608703
+issue labels    roadmap:v1, area:tests, agent-ready, ubuntu-24.04, amd64
+                (no agent-ready-e2e)
+```
+
+The live Leader transcript explains the transition. On startup it independently re-derived
+the roadmap dependencies, concluded #821's blockers #817–#820 were all closed, and called:
+
+```text
+deck_retry_work_item(work_item_id=23, reason="prerequisite #817 already merged")
+```
+
+The tool returned a stale `409 Only escalated work items can be retried`, then
+`deck_list_work_items` showed item 23 already `pending`. Whether the request was duplicated at
+the shim/transport boundary is not established; the important execution fact is that the
+Leader attempted the retry forbidden by this gate and the persisted row changed at that
+time.
+
+This is unsafe to adapt around. `dispatch_pending` iterates every pending scope item and does
+not re-check `scope.dispatch_label`; it obtains labels by issue number and would route #821
+to slot 6 even though #821 lacks `agent-ready-e2e`. Enabling autonomy to run a newly-created
+reuse issue would therefore dispatch the older forbidden item first.
+
+State at stop:
+
+```text
+preset 2 autonomy_enabled    0
+open agent-ready-e2e issues  0
+github workspace leases      both NULL
+item 29                      merged; workspace released
+item 23                      pending / queued_no_workspace
+public reuse writes          none; no issue or label created
+team panes                    exactly Leader, Generalist, Specialist
+```
+
+**G3 is BLOCKED before the reuse dispatch.** Do not enable autonomy or manufacture the
+precondition with a DB edit. The operator must decide whether to reconcile item 23 through a
+supported route and explicitly constrain the live Leader from retrying it again, or amend the
+gate now that #821's real prerequisites are closed.

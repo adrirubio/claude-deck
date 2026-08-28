@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed on 2026-08-16; G3 spawn delivery, distinct approval, the scoped docs change, CI, credential replacement, session recovery, and the ready-for-review transition passed for work item 29. G3 is stopped because branch protection requires one approving review from a write-access reviewer before PR #868 can be merged. Autonomy is off; the recovered Specialist and lease are untouched.**
+**Status: G0, G1, and G2 passed; G3's spawn delivery, approval, PR/CI lifecycle, human merge, correct-token release, and same-token replay passed for work item 29. G3 is stopped before the reuse dispatch because the recovered Leader retried forbidden item 23, leaving it `pending`; autonomy would dispatch #821 outside the isolation label. Autonomy is off, both workspaces are free, and no reuse issue was created.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
