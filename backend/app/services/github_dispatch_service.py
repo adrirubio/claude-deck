@@ -1159,6 +1159,13 @@ class GithubDispatchService:
                     "scope_id": item.scope_id,
                 },
                 bypass_nudge_cooldown=True,
+                nudge_prompt=(
+                    "Claude Deck autonomous dispatch: call "
+                    "`deck_check_inbox(unread_only=False)` now, find the "
+                    f"`Autonomous dispatch: issue #{item.issue_number}` message for "
+                    f"work item {item.id}, and execute that assignment now. Follow "
+                    "its leader-ack and status-reporting instructions."
+                ),
             )
             item.brief_message_id = message.id
             item.brief_delivery_nudge_at = None

@@ -920,6 +920,7 @@ class AgentMailService:
         *,
         auto_nudge: bool = True,
         bypass_nudge_cooldown: bool = False,
+        nudge_prompt: str = INBOX_CHECK_PROMPT,
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
         commit: bool = True,
@@ -940,6 +941,7 @@ class AgentMailService:
                     db,
                     recipients,
                     bypass_cooldown=bypass_nudge_cooldown,
+                    nudge_prompt=nudge_prompt,
                 )
         return await self._message_response(db, message, for_member_id=None)
 
@@ -1157,6 +1159,7 @@ class AgentMailService:
         payload: dict | None = None,
         auto_nudge: bool = True,
         bypass_nudge_cooldown: bool = False,
+        nudge_prompt: str = INBOX_CHECK_PROMPT,
         sender_actor_id: int | None = None,
     ) -> MailMessageResponse:
         return await self.send_message(
@@ -1170,6 +1173,7 @@ class AgentMailService:
             ),
             auto_nudge=auto_nudge,
             bypass_nudge_cooldown=bypass_nudge_cooldown,
+            nudge_prompt=nudge_prompt,
             sender_actor_id=sender_actor_id,
         )
 
@@ -1369,12 +1373,16 @@ class AgentMailService:
         ).scalars().all()
         return [session for session in sessions if self._session_can_nudge(session, now)]
 
-    def _send_tmux_inbox_check(self, session: MailAgentSession) -> dict[str, str]:
+    def _send_tmux_inbox_check(
+        self,
+        session: MailAgentSession,
+        nudge_prompt: str = INBOX_CHECK_PROMPT,
+    ) -> dict[str, str]:
         if not session.tmux_target:
             raise ValueError("No live tmux session is available for this member")
         try:
             subprocess.run(
-                ["tmux", "send-keys", "-t", session.tmux_target, "-l", INBOX_CHECK_PROMPT],
+                ["tmux", "send-keys", "-t", session.tmux_target, "-l", nudge_prompt],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -1394,17 +1402,18 @@ class AgentMailService:
             raise ValueError(f"tmux send-keys failed: {(exc.stderr or '')[:200]}") from exc
         except subprocess.TimeoutExpired as exc:
             raise ValueError("tmux send-keys timed out") from exc
-        return {"target": session.tmux_target, "prompt": INBOX_CHECK_PROMPT}
+        return {"target": session.tmux_target, "prompt": nudge_prompt}
 
     async def _wake_member(
         self,
         db: AsyncSession,
         member_id: int,
         now: datetime,
+        nudge_prompt: str = INBOX_CHECK_PROMPT,
     ) -> dict[str, str] | None:
         session = await self._nudge_session_for_member(db, member_id, now)
         if session is not None:
-            result = self._send_tmux_inbox_check(session)
+            result = self._send_tmux_inbox_check(session, nudge_prompt)
             return {"method": "tmux", **result}
         return None
 
@@ -1414,6 +1423,7 @@ class AgentMailService:
         member_ids: set[int],
         *,
         bypass_cooldown: bool = False,
+        nudge_prompt: str = INBOX_CHECK_PROMPT,
     ) -> list[dict[str, str | int]]:
         """Best-effort delivery wakeup for visible tmux-observed recipients."""
         if not member_ids:
@@ -1431,7 +1441,12 @@ class AgentMailService:
             ):
                 continue
             try:
-                result = await self._wake_member(db, member_id, now)
+                result = await self._wake_member(
+                    db,
+                    member_id,
+                    now,
+                    nudge_prompt,
+                )
             except ValueError as exc:
                 logger.debug("agent mail auto-nudge failed for member %s: %s", member_id, exc)
                 continue

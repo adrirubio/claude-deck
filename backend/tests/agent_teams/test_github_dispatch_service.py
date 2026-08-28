@@ -177,7 +177,10 @@ def _isolate_agent_mail_nudges(monkeypatch):
     monkeypatch.setattr(
         agent_mail_service,
         "_send_tmux_inbox_check",
-        lambda session: {"target": session.tmux_target, "prompt": "check inbox"},
+        lambda session, nudge_prompt="check inbox": {
+            "target": session.tmux_target,
+            "prompt": nudge_prompt,
+        },
     )
 
 
@@ -1793,6 +1796,13 @@ async def test_dispatch_keeps_pid_pair_null_when_proc_start_is_unreadable(db, mo
 @pytest.mark.asyncio
 async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatch):
     _isolate_agent_mail_nudges(monkeypatch)
+    nudge_prompts = []
+
+    async def capture_nudge_prompt(_db, _member_ids, **kwargs):
+        nudge_prompts.append(kwargs.get("nudge_prompt"))
+        return []
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", capture_nudge_prompt)
     preset, slots, scope = await _team(db)
     architect = next(slot for slot in slots if slot.display_name == "Architect")
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
@@ -1874,6 +1884,10 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert item.brief_message_id == message.id
     assert item.brief_delivery_nudge_at is None
     assert item.brief_delivery_nudge_count is None
+    assert len(nudge_prompts) == 1
+    assert f"work item {item.id}" in nudge_prompts[0]
+    assert "issue #833" in nudge_prompts[0]
+    assert "execute that assignment now" in nudge_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -2402,7 +2416,10 @@ async def test_dispatch_proceeds_with_only_standing_session(db, monkeypatch):
     monkeypatch.setattr(
         agent_mail_service,
         "_send_tmux_inbox_check",
-        lambda session: {"target": session.tmux_target, "prompt": "check inbox"},
+        lambda session, nudge_prompt="check inbox": {
+            "target": session.tmux_target,
+            "prompt": nudge_prompt,
+        },
     )
     preset, slots, scope = await _team(db)
     backend = next(slot for slot in slots if slot.display_name == "Backend SME")
@@ -2724,7 +2741,10 @@ async def test_ambiguous_check_allows_one_nudgeable_pane(db, monkeypatch):
     monkeypatch.setattr(
         agent_mail_service,
         "_send_tmux_inbox_check",
-        lambda session: {"target": session.tmux_target, "prompt": "check inbox"},
+        lambda session, nudge_prompt="check inbox": {
+            "target": session.tmux_target,
+            "prompt": nudge_prompt,
+        },
     )
     item = GithubWorkItem(
         scope_id=scope.id,
