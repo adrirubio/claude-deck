@@ -1510,3 +1510,106 @@ team panes                    exactly Leader, Generalist, Specialist
 precondition with a DB edit. The operator must decide whether to reconcile item 23 through a
 supported route and explicitly constrain the live Leader from retrying it again, or amend the
 gate now that #821's real prerequisites are closed.
+
+### 2026-08-28 — G3 reuse delivery PASS; stale-token proof remains open
+
+Two focused defects blocked the reuse dispatch before the scenario itself could run.
+
+#### Finding 21 — pending dispatch did not re-check the configured dispatch label
+
+Item 23 was `pending` without `agent-ready-e2e`. The pending scheduler trusted the persisted
+row and could launch it even though it no longer matched the scope. PR #323 added a fail-closed
+authoritative label check before routing, leasing, or launch. With zero open
+`agent-ready-e2e` issues, one natural scheduler poll produced:
+
+```text
+item 23 status              escalated
+item 23 escalation_reason  dispatch_label_removed
+workspace leases           0
+new panes                   0
+```
+
+PR #323 merged into `feature/autonomous-github-dispatch` as
+`b9f008d5ef934f564e819d37c4ef82c4f26d6b21` after 155 dispatch/scheduler tests, 796 agent
+tests, and the full backend suite except the pre-existing #312 smoke failure.
+
+#### Finding 22 — a reused owner read the assignment but did not execute it
+
+Issue #869 was the only open issue carrying `agent-ready-e2e`. The scheduler created work
+item 30, routed it by `area:tests` to Specialist slot 6, and launch 68 recorded one reuse:
+
+```text
+launch item id  89
+action          reuse
+status          reused
+tmux target     tizonia-openmax-il-e7e4:0.0
+pane count      3 before; 3 after
+message 369     Autonomous dispatch: issue #869; read by member 17
+```
+
+The standing Specialist called `deck_check_inbox`, marked message 369 read, then returned to
+idle because the generic wake prompt mentioned only context requests and handoffs. PR #324
+added an internal per-message nudge prompt and made autonomous dispatch use an issue-specific
+instruction to find and execute the assignment. Ordinary Agent Mail keeps the existing
+generic prompt. PR #324 merged as `acbd74dafaa416604d3a34ac6fc9a583821173df` after 203
+registry/dispatch/scheduler tests and 798 agent tests.
+
+The backend restarted without touching the three panes. One audited recovery message used the
+new targeted prompt. The standing Specialist then completed the real approval path:
+
+```text
+work item                 30
+owner                     Specialist slot 6 / member 17
+approval request          message 371, approval_round 1
+approval decision         message 372, Leader member 16, approved
+ack_approver_member_id    16
+ack_evidence_message_id   372
+changed file              CONTRIBUTING-agents.md only
+local check               git diff --check passed
+```
+
+The agent opened draft PR #870 from
+`deck/slot-6/issue-869-8a9cdbcba816b3df`. Deck accepted `pr_opened`, moved the item through
+`verifying`, observed the Core Meson build succeed, converted the PR to ready, and set the
+item to `ready_for_review`. `adrirubio` supplied the required independent approval. The PR
+merged normally, without `--admin` or a protection change:
+
+```text
+PR #870       MERGED at 2026-08-28T11:20:36Z
+merge commit  ac5d97e7f2d9d92f69233cd3be2fce0db6bc7828
+issue #869    CLOSED
+item 30       merged after one isolated scheduler window
+```
+
+The reuse and release results were:
+
+```text
+Agent Mail assignment delivery  PASS
+no additional pane              PASS
+work executed in leased tree    PASS
+correct-token release           200 after git fetch origin master
+same-token replay               200; workspace remained unleased
+stale-token rejection           INCONCLUSIVE
+```
+
+The stale item-29 token was submitted first, but the endpoint returned the clean-worktree
+`409` because local `origin/master` predated the merge. A current item-30 token produced the
+same `409`; therefore the first response did not discriminate the stale token. The owner then
+ran the permitted `git fetch origin master`, released with the current token, and replayed it
+before the sequencing correction arrived. Do not count the stale-token row as passed merely
+because its HTTP status was `409`. Prove it against the next controlled live acquisition,
+after its clean-worktree precondition is satisfied and before the correct token releases it.
+
+Final state:
+
+```text
+preset 2 autonomy_enabled    0
+open agent-ready-e2e issues  0
+item 23                      escalated / dispatch_label_removed
+item 30                      merged / PR 870
+github workspace leases     both NULL
+team panes                   exactly Leader, Generalist, Specialist
+```
+
+**G3 reuse delivery is complete. G3 remains open only for a discriminating stale-token
+assertion, carried into the next controlled acquisition.**

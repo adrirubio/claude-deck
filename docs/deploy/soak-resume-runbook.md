@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0, G1, and G2 passed; G3's spawn delivery, approval, PR/CI lifecycle, human merge, correct-token release, and same-token replay passed for work item 29. G3 is stopped before the reuse dispatch because the recovered Leader retried forbidden item 23, leaving it `pending`; autonomy would dispatch #821 outside the isolation label. Autonomy is off, both workspaces are free, and no reuse issue was created.**
+**Status: G0, G1, and G2 passed. G3's spawn and reuse delivery paths, approval gate, PR/CI lifecycle, human merge, correct-token release, and same-token replay passed. The stale-token assertion remains open: its first `409` was emitted by the clean-worktree guard before token discrimination, and the sequencing correction arrived after the correct token released the lease. Carry that assertion into the next controlled acquisition before declaring G3 complete. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #869 is disarmed, and exactly three team panes remain alive.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
@@ -345,6 +345,11 @@ subject under test is the delivery and release mechanics, not the C++.
 - Do **not** retry item 23. It stays escalated (PR A §7's ⛔ block explains why it is the
   wrong subject).
 
+**Execution status, 2026-08-28:** the reuse path passed on work item 30 / issue #869 and
+PR #870. PRs #323 and #324 removed the two blockers found during the run. The stale-token
+assertion did not produce discriminating evidence and remains owed on the next controlled
+lease; see the dated run-log entry.
+
 ### G4 — PR A §7 step 5, the deferred dispatch half
 
 **Goal:** close the risk PR A deferred on 2026-08-01. **Source:** PR A §7 step 5 and its
@@ -464,5 +469,5 @@ Open, and not owned by any gate above:
 The run log (`specs/2026-07-06-tizonia-roadmap-v1-soak-run-log.md`) is the artifact, not
 this document. Append a dated section per gate containing: the commands run, the observed
 values (rule 9), anything that deviated from the plan, and any new finding numbered in
-sequence — the last one used is **Finding 19**. A gate with no run-log entry has not been
+sequence — the last one used is **Finding 22**. A gate with no run-log entry has not been
 completed, however green it looked at the terminal.
