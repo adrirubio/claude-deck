@@ -1725,3 +1725,119 @@ No DB row was edited, no session was killed or impersonated, no protection or pe
 setting changed, no auto-merge ran, and no public write occurred outside issue #871, its
 single-file branch, and PR #872. No new product finding was identified. **G4 passes, and the
 discriminating stale-token evidence closes G3.**
+
+### 2026-08-28 — G5 PASS; GitHub App authorship and cleanup verified
+
+The operator created `claude-deck-tizonia-soak` under `juanrubio` and installed it on the
+`tizonia` organization with selected-repository access. Live API inspection confirmed the
+registration and installation requested exactly:
+
+```text
+Contents       write
+Pull requests  write
+Metadata       read
+Webhooks       none
+Installation  active; repository_selection=selected
+```
+
+The downloaded metadata file also contained a client secret that Deck does not use. Its
+initial inspection exposed that value in the coordinator transcript, so the operator deleted
+the client secret in GitHub before rollout continued. The local metadata copy was removed.
+The private key moved outside the repository to
+`~/.config/claude-deck/github-apps/claude-deck-tizonia-soak.pem`; it and `backend/.env` were
+both `0600`. The PEM structure and key check passed. After adding only `GITHUB_APP_ID`,
+`GITHUB_APP_PRIVATE_KEY_PATH`, and `GITHUB_APP_BOT_LOGIN`, the single backend worker restarted
+from `backend/`. Repository installation lookup resolved successfully. None of those setting
+names appeared in the backend process environment or tmux global environment.
+
+The scope-reset gate ran before any public dispatch. Autonomy was off, item 23 remained
+`escalated / dispatch_label_removed`, and both workspace leases were `NULL`. One transaction
+changed scope 1 from `(github_auth_mode=ambient, github_app_installation_id=NULL)` to
+`(unknown, NULL)`; a new session read both columns back before proceeding.
+
+Issue #873 (`[e2e] Document Deck-managed pull request creation`) was the only open issue with
+`agent-ready-e2e`. It requested one exact bullet in `CONTRIBUTING-agents.md` and carried
+`area:docs`. One guarded scheduler window created work item 32, routed it by label to
+Generalist slot 5, acquired workspace 2, and resolved the previously unknown scope:
+
+```text
+scope mode                 app
+installation id           persisted; matched the selected Tizonia installation
+launch                     70 / item 91
+launch action/status       reuse / reused
+tmux target                tizonia-openmax-il-3459:0.0
+assignment message         393; read by Generalist member 14
+workspace lease token      present; never persisted outside the lease row/config contract
+push-token expiry          present
+```
+
+The leased worktree's managed config contained the per-slot author identity, URL-scoped Deck
+credential helper, and `useHttpPath=true`. No value was exported to the pane:
+
+```text
+user.name   Generalist (Deck agent)
+user.email  generalist+slot5@claude-deck.local
+```
+
+The Generalist requested approval in message 394. Leader member 16 independently reviewed
+the exact one-line plan and recorded `approved` in answer 395. The owner then reported
+`ack_received`, changed only `CONTRIBUTING-agents.md`, passed `git diff --check` and the exact
+name-only assertion, committed, and pushed the assigned branch through the managed helper:
+
+```text
+branch  deck/slot-5/issue-873-716db9f60509189c
+commit  794391d1e121434a6aaeb9164cbd8e2e954b7f6a
+author  Generalist (Deck agent) <generalist+slot5@claude-deck.local>
+```
+
+Instead of asking the agent to open a PR, the owner reported `pr_ready`. Deck created draft
+PR #874 with provenance fields and `Closes #873`; GitHub reported the PR author as
+`app/claude-deck-tizonia-soak`, while the commit retained the slot-specific local identity.
+The Core Meson build passed, Deck converted the PR to ready, and item 32 moved to
+`ready_for_review`. `adrirubio` approved at `2026-08-28T17:46:55Z`. The protected normal
+merge path then completed:
+
+```text
+PR #874       MERGED at 2026-08-28T17:50:00Z
+merge commit  d073ee9c43456a9a092d2b597d6c03b1b28ff3e7
+issue #873    CLOSED at 2026-08-28T17:50:01Z
+item 32       merged after one isolated scheduler window
+```
+
+The backend and all three original team panes had exited while the human approval was
+pending; no coordinator action caused those exits, and no root cause was established. The
+persisted state remained safe: autonomy was off, item 32 stayed `ready_for_review`, and
+workspace 2 retained the lease. The backend restarted as one worker, reconciled the merge in
+a guarded scheduler window, and returned autonomy off. Because the original owner process was
+offline, Deck planned and launched only Generalist slot 5 (launch 71, new target
+`tizonia-openmax-il-9ce0:0.0`). The same member identity re-registered, called
+`deck_get_work_item_context(32)`, and successfully claimed the persisted continuation. It ran
+only `git fetch origin master`, confirmed a clean tree and zero commits ahead, and reported
+`workspace_released` with the claimed current capability. Message 400 recorded the successful
+outcome.
+
+Post-release read-back proved the cleanup rather than inferring it from HTTP 200:
+
+```text
+preset 2 autonomy_enabled             0
+scope 1 auth mode                     app; installation id retained
+item 23                               escalated / dispatch_label_removed
+item 32                               merged / PR 874 / no escalation
+workspace 1 and 2 leased_item_id      NULL
+workspace lease_token                 absent on both
+workspace push_token_expires_at       absent on both
+workspace owner/contact evidence      cleared
+worktree-scoped user.name/user.email  absent
+Deck credential helper                absent
+credential useHttpPath                absent
+worktree                              clean; origin/master..HEAD = 0
+open agent-ready-e2e issues           0
+live panes                            Deck plus recovered Generalist
+```
+
+No App permission, repository selection, branch-protection rule, or merge policy changed
+during the canary. No public write occurred outside issue #873, its one-file branch, and PR
+#874. The unexplained process/session exits are recorded as an environmental observation,
+not a numbered product finding: the durability and same-slot recovery path handled them
+without state loss or manual lease surgery. **G5 passes for the single Tizonia repository;
+expansion remains gated.**

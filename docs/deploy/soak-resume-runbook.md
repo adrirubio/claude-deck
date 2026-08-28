@@ -1,6 +1,6 @@
 # Soak resume runbook — deployment and verification schedule
 
-**Status: G0 through G4 passed. G4 supplied the discriminating stale-token assertion carried from G3: after a fetch-only clean-worktree precondition, the retained item-30 token returned `409 lease_changed` while the item-31 lease remained intact; the current token then released it with `200`, and its replay returned idempotent `200`. G4 also proved real acquire/reset, cache preservation, brief worktree targeting, release on launch failure, standing-session reuse, approval/CI/human merge, and final release. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #871 is disarmed, and exactly three team panes remain alive.**
+**Status: G0 through G5 passed. G5 resolved the Tizonia scope to GitHub App mode, pushed with a repository-scoped installation credential, created PR #874 as `claude-deck-tizonia-soak[bot]`, retained the per-slot commit identity, passed CI and protected human review, and removed every managed identity/credential key on release. The original team panes and backend exited while approval was pending; the persisted item and lease survived, a same-slot Generalist respawn claimed the continuation, and release completed normally. Autonomy is off, both workspaces are free, item 23 is safely escalated, issue #873 is disarmed, and one recovered Generalist team pane remains alongside the Deck pane.**
 
 **Audience:** the implementing agent taking over the deployment schedule.
 **Written:** 2026-08-15, against `origin/master` at `96954a6`.
@@ -416,6 +416,21 @@ after that full lifecycle completes. Diagnostics to expect are listed in the rol
 (`app_not_installed`, `app_auth_unconfigured`, `app_mode_bot_login_unset`,
 `queued_auth_mode_unresolved`, `pane_unresolved`, and `501` meaning a stale mixed-version
 deployment).
+
+**Execution status, 2026-08-28: PASS on the Tizonia canary only.** The App
+`claude-deck-tizonia-soak` is installed with selected-repository access to
+`tizonia/tizonia-openmax-il`; its permissions are Contents write, Pull requests write, and
+Metadata read. The key and `backend/.env` are `0600`, and the three App settings appear in
+neither the backend process environment nor tmux's global environment. With autonomy off and
+both leases free, scope 1 reset atomically from `(ambient, NULL)` to `(unknown, NULL)`.
+Work item 32 / issue #873 then resolved the scope to `app`, persisted the installation id,
+configured only the leased worktree, and reused Generalist slot 5. The pushed commit retained
+`Generalist (Deck agent)` identity while Deck created PR #874 as the App. CI passed, Adri
+approved, and the PR merged normally. After an intervening process/session loss, a same-slot
+respawn claimed the persisted continuation and released the workspace. Read-back found both
+leases and tokens cleared, `push_token_expires_at` cleared, and no worktree-scoped `user.*`,
+credential helper, or `useHttpPath` key. The scope remains in resolved `app` mode for future
+canaries. No additional repository or installation has been enabled.
 
 ### G6 — restore branch protection (operator)
 
