@@ -700,6 +700,11 @@ _DISPATCH_STATUS_RULES: dict[str, _StatusRule] = {
         "not_item_owner",
         lease_token_required=True,
     ),
+    "diagnostic_completed": _StatusRule(
+        "owner",
+        "not_item_owner",
+        lease_token_required=True,
+    ),
     "workspace_released": _StatusRule(
         "owner",
         "not_item_owner",
@@ -1072,6 +1077,41 @@ async def report_dispatch_status(
                 current_head_sha=report.current_head_sha,
                 result_summary=report.summary.strip(),
                 evidence=report.evidence or {},
+                lease_token=report.lease_token,
+            )
+        except ContinuationCompletionError as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubAppAuthError as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubClientResponseError as exc:
+            raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    elif report.status == "diagnostic_completed":
+        if report.revision is None:
+            raise HTTPException(status_code=400, detail="revision_required")
+        if not report.dispatch_nonce:
+            raise HTTPException(status_code=400, detail="dispatch_nonce_required")
+        if not report.current_head_sha:
+            raise HTTPException(status_code=400, detail="current_head_sha_required")
+        if not report.summary or not report.summary.strip():
+            raise HTTPException(status_code=400, detail="summary_required")
+        if not report.evidence:
+            raise HTTPException(status_code=400, detail="evidence_required")
+        if report.lease_token is None:
+            raise HTTPException(status_code=400, detail="lease_token_required")
+        try:
+            await github_verification_service.submit_diagnostic_completion(
+                db,
+                item,
+                scope,
+                authenticated_owner_member_id=session.member_id,
+                authenticated_owner_slot_id=int(report.reporting_slot_id),
+                revision_number=report.revision,
+                dispatch_nonce=report.dispatch_nonce,
+                current_head_sha=report.current_head_sha,
+                result_summary=report.summary.strip(),
+                evidence=report.evidence,
                 lease_token=report.lease_token,
             )
         except ContinuationCompletionError as exc:

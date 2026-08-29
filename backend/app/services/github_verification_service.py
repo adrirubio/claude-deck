@@ -257,6 +257,188 @@ class GithubVerificationService:
         await db.refresh(item)
         return True
 
+    async def submit_diagnostic_completion(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        authenticated_owner_member_id: int,
+        authenticated_owner_slot_id: int,
+        revision_number: int,
+        dispatch_nonce: str,
+        current_head_sha: str,
+        result_summary: str,
+        evidence: dict,
+        lease_token: str,
+        client: GithubClient | None = None,
+    ) -> bool:
+        client = client or github_client
+        await db.refresh(item)
+        if item.scope_id != scope.id:
+            raise ContinuationCompletionError("scope_mismatch")
+        if item.dispatch_nonce != dispatch_nonce:
+            raise ContinuationCompletionError("stale_nonce")
+        if item.owner_slot_id != authenticated_owner_slot_id:
+            raise ContinuationCompletionError("not_item_owner")
+        owner, _leader = await agent_mail_service._dispatch_participants(db, item)
+        if owner is None or owner.id != authenticated_owner_member_id:
+            raise ContinuationCompletionError("not_item_owner")
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == revision_number,
+                )
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise ContinuationCompletionError("scope_revision_not_found")
+        await db.refresh(revision)
+        if (
+            revision.owner_slot_id != authenticated_owner_slot_id
+            or revision.owner_member_id != authenticated_owner_member_id
+            or revision.phase != "diagnostic"
+        ):
+            raise ContinuationCompletionError("stale_scope_revision")
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if (
+            workspace is None
+            or workspace.id != revision.expected_workspace_id
+            or workspace.lease_token is None
+        ):
+            raise ContinuationCompletionError("workspace_lease_changed")
+        if not hmac.compare_digest(workspace.lease_token, lease_token):
+            raise ContinuationCompletionError("lease_token_mismatch")
+        if not github_approval_service.lease_token_matches(
+            lease_token,
+            revision.expected_lease_token_hash,
+        ):
+            raise ContinuationCompletionError("workspace_lease_changed")
+        if item.pr_number is None:
+            raise ContinuationCompletionError("continuation_pr_required")
+        token = await github_approval_service.github_read_token(scope)
+        pull = await client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        head = pull.get("head")
+        github_head_sha = head.get("sha") if isinstance(head, dict) else None
+        if pull.get("state") != "open":
+            raise ContinuationCompletionError("continuation_pr_not_open")
+        if github_head_sha != current_head_sha:
+            raise ContinuationCompletionError("continuation_head_changed")
+        snapshot = await client.get_commit_snapshot(
+            scope.repo_owner,
+            scope.repo_name,
+            current_head_sha,
+            token=token,
+        )
+        if snapshot.tree_sha != revision.baseline_tree_sha:
+            raise ContinuationCompletionError("diagnostic_tree_not_restored")
+
+        envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
+        envelope["version"] = 1
+        envelope["diagnostic_completion"] = dict(evidence)
+        if (
+            revision.status == "completed"
+            and item.dispatch_status == "escalated"
+            and item.attempt_phase == "implementation"
+            and item.active_scope_revision == 0
+            and revision.result_summary == result_summary
+            and revision.evidence == envelope
+        ):
+            return False
+        if (
+            revision.status != "active"
+            or item.dispatch_status != "dispatched"
+            or item.attempt_phase != "diagnostic"
+            or item.active_scope_revision != revision.revision
+        ):
+            raise ContinuationCompletionError("stale_continuation_context")
+
+        now = datetime.utcnow()
+        item_result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                GithubWorkItem.active_scope_revision == revision.revision,
+                GithubWorkItem.attempt_phase == "diagnostic",
+                GithubWorkItem.pr_number.is_not(None),
+                exists(
+                    select(GithubWorkspace.id).where(
+                        GithubWorkspace.id == workspace.id,
+                        GithubWorkspace.leased_item_id == item.id,
+                        GithubWorkspace.lease_token == lease_token,
+                    )
+                ),
+            )
+            .values(
+                dispatch_status="escalated",
+                escalation_reason=revision.originating_escalation_reason,
+                status_note=(
+                    "Diagnostic restoration verified. Propose the smallest bounded "
+                    "implementation continuation supported by the evidence."
+                ),
+                active_scope_revision=0,
+                attempt_phase="implementation",
+                continuation_nudged_at=None,
+                continuation_activated_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        revision_result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "active",
+                GithubAttemptScopeRevision.phase == "diagnostic",
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.owner_slot_id
+                == authenticated_owner_slot_id,
+                GithubAttemptScopeRevision.owner_member_id
+                == authenticated_owner_member_id,
+                GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+            )
+            .values(
+                status="completed",
+                result_summary=result_summary,
+                evidence=envelope,
+                completed_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if item_result.rowcount != 1 or revision_result.rowcount != 1:
+            await db.rollback()
+            raise ContinuationCompletionError("stale_continuation_context")
+        await db.commit()
+        await db.refresh(item)
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject="Diagnostic restoration verified",
+            body_markdown=(
+                f"Diagnostic revision {revision.revision} restored the baseline tree. "
+                "Propose the smallest bounded implementation continuation supported "
+                "by the recorded evidence."
+            ),
+            payload={
+                "kind": "github_dispatch_diagnostic_completed",
+                "work_item_id": item.id,
+                "pr_number": item.pr_number,
+                "scope_revision": revision.revision,
+            },
+            delivery_key=f"github-diagnostic:{revision.id}:completed",
+        )
+        return True
+
     async def normalize_base_ref(
         self,
         scope: TeamGithubScope,

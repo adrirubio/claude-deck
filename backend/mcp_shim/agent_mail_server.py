@@ -847,9 +847,11 @@ def deck_report_dispatch_status(
     status is one of: triaging, ack_received, in_progress, pr_ready (with
     head_ref), pr_opened (with pr_number), handoff_initiated (with
     reassign_to_slot_id), handoff_accepted, blocked, continuation_completed,
-    workspace_released. continuation_completed requires revision, dispatch_nonce,
-    current_head_sha, summary, evidence, and lease_token. Never send both head_ref
-    and pr_number. Report ack_received only after the designated
+    diagnostic_completed, workspace_released. Both completion statuses require
+    revision, dispatch_nonce, current_head_sha, summary, evidence, and lease_token.
+    diagnostic_completed is accepted only after the PR tree is restored exactly to
+    the approved diagnostic baseline. Never send both head_ref and pr_number. Report
+    ack_received only after the designated
     leader records an explicit approved decision with deck_approve_work_item;
     prose replies are not approval. Called by the owner slot the brain dispatched
     the issue to. Include work_item_id and lease_token from your bootstrap prompt.

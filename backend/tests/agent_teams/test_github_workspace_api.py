@@ -1919,6 +1919,139 @@ async def test_continuation_completion_fails_closed_before_mutation(
     assert revision.status == "active"
 
 
+def _diagnostic_completion_report(item):
+    return {
+        "work_item_id": item.id,
+        "status": "diagnostic_completed",
+        "lease_token": "lease-secret",
+        "revision": 1,
+        "dispatch_nonce": item.dispatch_nonce,
+        "current_head_sha": "d" * 40,
+        "summary": "Captured the hosted crash evidence and restored the tree",
+        "evidence": {"run_url": "https://example.test/runs/42"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_requires_exact_restored_tree_and_preserves_history(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    item.retry_count = 5
+    item.last_verified_sha = "product-head"
+    item.diagnostic_retry_count = 1
+    item.diagnostic_last_verified_sha = "diagnostic-head"
+    revision.phase = "diagnostic"
+    revision.originating_escalation_reason = "retry_count_exhausted"
+    revision.evidence = {
+        "version": 1,
+        "diagnostic_observations": {
+            "diagnostic-head": {"state": "red", "head_sha": "diagnostic-head"}
+        },
+    }
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    completed = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+    replay = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert completed.status_code == 200, completed.text
+    assert replay.status_code == 200, replay.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.active_scope_revision == 0
+    assert item.retry_count == 5
+    assert item.last_verified_sha == "product-head"
+    assert item.diagnostic_retry_count == 1
+    assert item.diagnostic_last_verified_sha == "diagnostic-head"
+    assert revision.status == "completed"
+    assert revision.result_summary == (
+        "Captured the hosted crash evidence and restored the tree"
+    )
+    assert revision.evidence["diagnostic_observations"]["diagnostic-head"]["state"] == "red"
+    assert revision.evidence["diagnostic_completion"] == {
+        "run_url": "https://example.test/runs/42"
+    }
+    assert revision.completed_at is not None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_rejects_tree_mismatch_and_missing_evidence(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, _workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="f" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    missing_evidence = _diagnostic_completion_report(item)
+    missing_evidence["evidence"] = {}
+    refused_missing = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=missing_evidence,
+    )
+    refused_tree = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused_missing.status_code == 400
+    assert refused_missing.json()["detail"] == "evidence_required"
+    assert refused_tree.status_code == 409
+    assert refused_tree.json()["detail"] == "diagnostic_tree_not_restored"
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.attempt_phase == "diagnostic"
+    assert item.active_scope_revision == 1
+    assert revision.status == "active"
+    assert revision.completed_at is None
+
+
 @pytest.mark.asyncio
 async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     _, scope = await _scope(db, tmp_path / "repo")
