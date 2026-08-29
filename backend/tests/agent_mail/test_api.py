@@ -409,8 +409,9 @@ async def test_explicit_initial_approval_route_commits_authority_then_links_mail
 
 
 @pytest.mark.asyncio
-async def test_explicit_initial_approval_route_repairs_unlinked_durable_mail(
-    client, db, monkeypatch
+@pytest.mark.parametrize("stage", ["authority", "mail", "link"])
+async def test_explicit_initial_approval_route_repairs_durable_boundaries(
+    client, db, monkeypatch, stage
 ):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     item, members, tokens = await _dispatch_approval_fixture(db)
@@ -420,29 +421,33 @@ async def test_explicit_initial_approval_route_repairs_unlinked_durable_mail(
         authenticated_owner_member_id=members[1].id,
         summary="bounded",
     )
-    mail = await agent_mail_service.send_message(
-        db,
-        MailMessageCreate(
-            kind="context_request",
-            sender_member_id=members[1].id,
-            recipient_member_id=members[0].id,
-            subject=f"Approval request for work item {item.id}",
-            body_markdown="bounded",
-            payload={
-                "approval_request_id": approval.id,
-                "approval_round": approval.approval_round,
-                "dispatch_nonce": approval.dispatch_nonce,
-                "plan_metadata": {},
-                "request_kind": approval.request_kind,
-                "summary": "bounded",
-                "work_item_id": approval.work_item_id,
-            },
-        ),
-        authenticated_sender_member_id=members[1].id,
-        delivery_key=f"github-approval:{approval.id}:request",
-        auto_nudge=False,
-    )
-    assert approval.request_message_id is None
+    mail = None
+    if stage in {"mail", "link"}:
+        mail = await agent_mail_service.send_message(
+            db,
+            MailMessageCreate(
+                kind="context_request",
+                sender_member_id=members[1].id,
+                recipient_member_id=members[0].id,
+                subject=f"Approval request for work item {item.id}",
+                body_markdown="bounded",
+                payload={
+                    "approval_request_id": approval.id,
+                    "approval_round": approval.approval_round,
+                    "dispatch_nonce": approval.dispatch_nonce,
+                    "plan_metadata": {},
+                    "request_kind": approval.request_kind,
+                    "summary": "bounded",
+                    "work_item_id": approval.work_item_id,
+                },
+            ),
+            authenticated_sender_member_id=members[1].id,
+            delivery_key=f"github-approval:{approval.id}:request",
+            auto_nudge=False,
+        )
+    if stage == "link":
+        approval.request_message_id = mail.id
+        await db.commit()
 
     response = await client.post(
         "/api/v1/agent-mail/approval-requests",
@@ -455,7 +460,10 @@ async def test_explicit_initial_approval_route_repairs_unlinked_durable_mail(
     )
 
     assert response.status_code == 200
-    assert response.json()["request_message_id"] == mail.id
+    if mail is not None:
+        assert response.json()["request_message_id"] == mail.id
+    else:
+        assert response.json()["request_message_id"] is not None
     assert len((await db.execute(select(MailMessage))).scalars().all()) == 1
 
 
@@ -600,9 +608,9 @@ async def test_identical_rejection_replay_does_not_advance_twice(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("durable_mail", [False, True])
+@pytest.mark.parametrize("stage", ["authority", "mail", "link"])
 async def test_decision_route_recovers_committed_authority(
-    client, db, monkeypatch, durable_mail
+    client, db, monkeypatch, stage
 ):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     item, members, tokens = await _dispatch_approval_fixture(db)
@@ -626,7 +634,7 @@ async def test_decision_route_recovers_committed_authority(
     )
     assert decided is True
     durable_message = None
-    if durable_mail:
+    if stage in {"mail", "link"}:
         durable_message = await agent_mail_service.send_authoritative_decision(
             db,
             MailMessageCreate(
@@ -645,7 +653,9 @@ async def test_decision_route_recovers_committed_authority(
             approval_round=approval.approval_round,
             delivery_key=f"github-approval:{approval.id}:decision",
         )
-        assert approval.decision_message_id is None
+    if stage == "link":
+        approval.decision_message_id = durable_message.id
+        await db.commit()
 
     recovered = await client.post(
         "/api/v1/agent-mail/decisions",

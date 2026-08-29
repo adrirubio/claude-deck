@@ -145,6 +145,14 @@ async def request_work_item_approval(
             summary=request.summary,
             plan_metadata=request.plan_metadata,
         )
+        request_delivery_key = f"github-approval:{approval.id}:request"
+        if approval.request_message_id is not None:
+            linked_message = await db.get(MailMessage, approval.request_message_id)
+            if (
+                linked_message is None
+                or linked_message.delivery_key != request_delivery_key
+            ):
+                raise GithubApprovalError("approval_request_link_mismatch")
         if approval.request_message_id is None:
             message = await agent_mail_service.send_message(
                 db,
@@ -165,7 +173,7 @@ async def request_work_item_approval(
                     },
                 ),
                 authenticated_sender_member_id=session.member_id,
-                delivery_key=f"github-approval:{approval.id}:request",
+                delivery_key=request_delivery_key,
                 auto_nudge=False,
             )
             approval.request_message_id = message.id

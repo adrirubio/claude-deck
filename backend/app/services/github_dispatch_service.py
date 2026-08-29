@@ -1230,33 +1230,38 @@ class GithubDispatchService:
             return True
 
         now = datetime.utcnow()
-        values = {
-            "ack_received_at": None,
-            "ack_approver_member_id": None,
-            "ack_evidence_message_id": None,
-            "ack_enforcement_epoch": None,
-            "ack_approval_round": None,
-            "last_nudge_at": None,
-            "updated_at": now,
-        }
         exhausted = approval_round >= scope.max_approval_rounds
+        statement = update(GithubWorkItem).where(
+            GithubWorkItem.id == item.id,
+            GithubWorkItem.dispatch_status != "escalated",
+            GithubWorkItem.approval_round_count == approval_round,
+        )
         if exhausted:
-            values.update(
+            statement = statement.values(
+                ack_received_at=None,
+                ack_approver_member_id=None,
+                ack_evidence_message_id=None,
+                ack_enforcement_epoch=None,
+                ack_approval_round=None,
+                last_nudge_at=None,
                 dispatch_status="escalated",
                 escalation_reason="approval_rounds_exhausted",
                 pending_reason=None,
+                updated_at=now,
             )
         else:
-            values["approval_round_count"] = approval_round + 1
-        result = await db.execute(
-            update(GithubWorkItem)
-            .where(
-                GithubWorkItem.id == item.id,
-                GithubWorkItem.dispatch_status != "escalated",
-                GithubWorkItem.approval_round_count == approval_round,
+            statement = statement.values(
+                ack_received_at=None,
+                ack_approver_member_id=None,
+                ack_evidence_message_id=None,
+                ack_enforcement_epoch=None,
+                ack_approval_round=None,
+                last_nudge_at=None,
+                approval_round_count=approval_round + 1,
+                updated_at=now,
             )
-            .values(**values)
-            .execution_options(synchronize_session=False)
+        result = await db.execute(
+            statement.execution_options(synchronize_session=False)
         )
         await db.commit()
         await db.refresh(item)

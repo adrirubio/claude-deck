@@ -152,7 +152,8 @@ class GithubApprovalService:
                     root.request_status = "superseded"
             await db.flush()
 
-        request = GithubApprovalRequest(work_item_id=item.id, **identity)
+        work_item_id = item.id
+        request = GithubApprovalRequest(work_item_id=work_item_id, **identity)
         db.add(request)
         try:
             await db.commit()
@@ -160,7 +161,7 @@ class GithubApprovalService:
             return request, True
         except IntegrityError:
             await db.rollback()
-            winner = await self.current_pending(db, item.id)
+            winner = await self.current_pending(db, work_item_id)
             if winner is not None and self._same_request(winner, **identity):
                 return winner, False
             raise GithubApprovalError("approval_request_already_pending")
