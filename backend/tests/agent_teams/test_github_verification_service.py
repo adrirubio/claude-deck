@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -217,6 +217,37 @@ async def _implementation_revision(
         submitted_at=datetime.utcnow() if status == "submitted" else None,
     )
     db.add(revision)
+    await db.commit()
+    return revision, workspace
+
+
+async def _diagnostic_revision(
+    db,
+    scope,
+    item,
+    slot,
+    member,
+    *,
+    max_failed_heads=2,
+):
+    revision, workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        status="active",
+        max_failed_heads=max_failed_heads,
+    )
+    revision.phase = "diagnostic"
+    revision.execution_target = "hosted_ci"
+    revision.summary = "Collect hosted diagnostic evidence"
+    revision.allowed_paths = [".github/workflows/diagnostic.yml"]
+    revision.allowed_actions = [
+        "collect_hosted_logs",
+        "revert_diagnostic_changes",
+    ]
+    revision.allowed_commands = []
     await db.commit()
     return revision, workspace
 
@@ -1507,6 +1538,342 @@ async def test_dispatched_implementation_continuation_waits_for_completion_repor
     assert client.pull_calls == 0
     assert item.dispatch_status == "dispatched"
     assert revision.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_green_diagnostic_checks_are_evidence_only(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+        retry_count=7,
+        last_verified_sha="product-head",
+    )
+    revision, _workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+    client = _Client(
+        check_runs=[
+            {
+                "id": 12,
+                "name": "diagnostic",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://example.test/runs/12",
+                "output": {"text": "must not be persisted"},
+            }
+        ]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.attempt_phase == "diagnostic"
+    assert item.retry_count == 7
+    assert item.last_verified_sha == "product-head"
+    assert item.diagnostic_retry_count == 0
+    assert revision.status == "active"
+    assert revision.failed_head_count == 0
+    assert revision.completed_at is None
+    assert client.ready_calls == 0
+    observation = revision.evidence["diagnostic_observations"]["sha"]
+    assert observation["state"] == "green"
+    assert observation["checks"] == [
+        {
+            "id": 12,
+            "name": "diagnostic",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://example.test/runs/12",
+        }
+    ]
+    assert "must not be persisted" not in str(revision.evidence)
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_failure_counts_each_head_once_and_uses_only_diagnostic_budget(db):
+    scope = await _scope(db, max_continuation_failed_heads=2)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+        retry_count=4,
+        last_verified_sha="product-head",
+    )
+    revision, workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=3,
+    )
+    client = _Client(
+        check_runs=[
+            {
+                "name": "diagnostic",
+                "status": "completed",
+                "conclusion": "failure",
+            }
+        ]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 4
+    assert item.last_verified_sha == "product-head"
+    assert item.diagnostic_retry_count == 1
+    assert item.diagnostic_last_verified_sha == "sha"
+    assert revision.failed_head_count == 1
+    assert revision.last_failed_head_sha == "sha"
+    assert revision.evidence["diagnostic_observations"]["sha"]["state"] == "red"
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.subject == "Diagnostic checks produced evidence"
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+
+    client.pull["head"]["sha"] = "sha-2"
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert item.retry_count == 4
+    assert item.last_verified_sha == "product-head"
+    assert item.diagnostic_retry_count == 2
+    assert item.diagnostic_last_verified_sha == "sha-2"
+    assert revision.status == "exhausted"
+    assert revision.failed_head_count == 2
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_failure_replay_repairs_mail_without_recounting(
+    db,
+    monkeypatch,
+):
+    scope = await _scope(db, max_continuation_failed_heads=3)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+    )
+    revision, _workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=2,
+    )
+    client = _Client(
+        check_runs=[
+            {"name": "diagnostic", "status": "completed", "conclusion": "failure"}
+        ]
+    )
+    original_notify = github_dispatch_service.notify_owner
+
+    async def crash_before_mail(*_args, **_kwargs):
+        raise RuntimeError("crash before diagnostic failure mail")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        crash_before_mail,
+    )
+    with pytest.raises(RuntimeError, match="crash before diagnostic failure mail"):
+        await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.diagnostic_retry_count == 1
+    assert revision.failed_head_count == 1
+    assert (await db.execute(select(MailMessage))).scalars().all() == []
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        original_notify,
+    )
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key
+                == f"github-diagnostic:{revision.id}:check-failure:sha"
+            )
+        )
+    ).scalars().all()
+    assert item.diagnostic_retry_count == 1
+    assert revision.failed_head_count == 1
+    assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_diagnostic_observation_can_turn_green_without_retry(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+    )
+    revision, _workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+    client = _Client(
+        check_runs=[
+            {"name": "diagnostic", "status": "in_progress", "conclusion": None}
+        ]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(revision)
+    assert revision.evidence["diagnostic_observations"]["sha"]["state"] == "pending"
+
+    client.check_runs = [
+        {"name": "diagnostic", "status": "completed", "conclusion": "success"}
+    ]
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert revision.evidence["diagnostic_observations"]["sha"]["state"] == "green"
+    assert item.diagnostic_retry_count == 0
+    assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_observer_does_not_write_after_owner_handoff(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    target = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=1,
+        display_name="Replacement Owner",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(target)
+    await db.flush()
+    target_id = target.id
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+        retry_count=4,
+        last_verified_sha="product-head",
+    )
+    revision, workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+
+    class HandoffClient(_Client):
+        async def list_check_runs_for_ref(self, owner, repo, ref):
+            await db.execute(
+                update(GithubWorkItem)
+                .where(GithubWorkItem.id == item.id)
+                .values(
+                    owner_slot_id=target_id,
+                    dispatch_status="escalated",
+                    escalation_reason="retry_count_exhausted",
+                    attempt_phase="implementation",
+                    status_note="Owner handoff requires a fresh revision.",
+                )
+                .execution_options(synchronize_session=False)
+            )
+            await db.execute(
+                update(GithubAttemptScopeRevision)
+                .where(GithubAttemptScopeRevision.id == revision.id)
+                .values(status="superseded")
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            return [
+                {
+                    "name": "diagnostic",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ]
+
+    await github_verification_service.process_scope(
+        db,
+        scope,
+        client=HandoffClient(),
+    )
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.owner_slot_id == target_id
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.status_note == "Owner handoff requires a fresh revision."
+    assert item.retry_count == 4
+    assert item.diagnostic_retry_count == 0
+    assert revision.status == "superseded"
+    assert revision.failed_head_count == 0
+    assert revision.evidence in (None, {})
+    assert workspace.leased_item_id == item.id
 
 
 @pytest.mark.asyncio

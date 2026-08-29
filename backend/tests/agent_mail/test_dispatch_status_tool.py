@@ -369,6 +369,7 @@ def _statuses_the_route_accepts() -> set[str]:
         ("ack_received", {}),
         ("pr_opened", {"pr_number": 7, "lease_token": "lease"}),
         ("pr_ready", {"head_ref": "deck/test-attempt", "lease_token": "lease"}),
+        ("diagnostic_completed", {}),
         ("in_progress", {}),
         ("workspace_released", {"lease_token": "lease"}),
     ],
@@ -1462,7 +1463,7 @@ async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_d
 
 def test_every_accepted_status_has_an_authorization_rule():
     accepted = _statuses_the_route_accepts()
-    assert len(accepted) == 11, f"branch count changed: {sorted(accepted)}"
+    assert len(accepted) == 12, f"branch count changed: {sorted(accepted)}"
     missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
     assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
 

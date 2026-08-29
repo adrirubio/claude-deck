@@ -73,6 +73,7 @@ class _FakeDispatch:
         self.dispatch_calls = []
         self.monitor_calls = []
         self.continuation_calls = []
+        self.recovery_calls = []
         self.remind_calls = []
 
     async def dispatch_pending(self, db, scope, slots, **kwargs):
@@ -83,6 +84,9 @@ class _FakeDispatch:
 
     async def monitor_continuation(self, db, scope, slots):
         self.continuation_calls.append(scope.id)
+
+    async def monitor_recovery(self, db, scope, slots):
+        self.recovery_calls.append(scope.id)
 
     async def remind_held_leases(self, db, scope):
         self.remind_calls.append(scope.id)
@@ -104,6 +108,9 @@ class _RoutingDispatch:
         return None
 
     async def monitor_continuation(self, db, scope, slots):
+        return None
+
+    async def monitor_recovery(self, db, scope, slots):
         return None
 
     async def remind_held_leases(self, db, scope):
@@ -197,6 +204,7 @@ async def test_run_repo_once_only_processes_enabled_autonomy_scopes(db):
     assert [call[0] for call in dispatch.dispatch_calls] == [active.id]
     assert dispatch.monitor_calls == [active.id]
     assert dispatch.continuation_calls == [active.id]
+    assert dispatch.recovery_calls == [active.id]
     assert dispatch.remind_calls == [active.id]
     assert verification.calls == [active.id]
 
@@ -219,6 +227,9 @@ async def test_scheduler_orders_disjoint_monitors_around_verification(db):
 
         async def monitor_continuation(self, db, scope, slots):
             order.append("continuation_monitor")
+
+        async def monitor_recovery(self, db, scope, slots):
+            order.append("recovery_monitor")
 
         async def remind_held_leases(self, db, scope):
             order.append("lease_reminder")
@@ -243,8 +254,239 @@ async def test_scheduler_orders_disjoint_monitors_around_verification(db):
         "initial_monitor",
         "continuation_monitor",
         "verification",
+        "recovery_monitor",
         "lease_reminder",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stop_after",
+    [
+        "watcher",
+        "dispatch",
+        "initial_monitor",
+        "continuation_monitor",
+        "verification",
+        "recovery_monitor",
+    ],
+)
+async def test_scheduler_stops_after_autonomy_is_disabled_between_stages(
+    db,
+    stop_after,
+):
+    scope = await _scope(db, autonomy=True, enabled=True)
+    order = []
+
+    async def record(db, current_scope, stage):
+        order.append(stage)
+        if stage == stop_after:
+            preset = await db.get(AgentTeamPreset, current_scope.preset_id)
+            preset.autonomy_enabled = False
+
+    class ToggleWatcher(_FakeWatcher):
+        async def poll_scope(self, db, scope, client):
+            await record(db, scope, "watcher")
+
+    class ToggleDispatch(_FakeDispatch):
+        async def dispatch_pending(self, db, scope, slots, **kwargs):
+            await record(db, scope, "dispatch")
+
+        async def monitor_dispatched(self, db, scope, slots):
+            await record(db, scope, "initial_monitor")
+
+        async def monitor_continuation(self, db, scope, slots):
+            await record(db, scope, "continuation_monitor")
+
+        async def monitor_recovery(self, db, scope, slots):
+            await record(db, scope, "recovery_monitor")
+
+        async def remind_held_leases(self, db, scope):
+            order.append("lease_reminder")
+
+    class ToggleVerification(_FakeVerification):
+        async def process_scope(self, db, scope, client=None):
+            await record(db, scope, "verification")
+
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=ToggleWatcher(),
+        dispatch=ToggleDispatch(),
+        verification=ToggleVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+
+    stages = [
+        "watcher",
+        "dispatch",
+        "initial_monitor",
+        "continuation_monitor",
+        "verification",
+        "recovery_monitor",
+        "lease_reminder",
+    ]
+    assert order == stages[: stages.index(stop_after) + 1]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_reloads_then_recovers_new_verification_escalation(db):
+    scope = await _scope(db, autonomy=True, enabled=True)
+    now = datetime.utcnow()
+    items = [
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=101,
+            issue_title="Initial dispatch",
+            issue_url="u",
+            github_updated_at=now,
+            dispatch_status="pending",
+        ),
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=102,
+            issue_title="Active implementation continuation",
+            issue_url="u",
+            github_updated_at=now,
+            dispatch_status="dispatched",
+            pr_number=102,
+            active_scope_revision=1,
+            attempt_phase="implementation",
+        ),
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=103,
+            issue_title="Diagnostic verification",
+            issue_url="u",
+            github_updated_at=now,
+            dispatch_status="verifying",
+            pr_number=103,
+            active_scope_revision=2,
+            attempt_phase="diagnostic",
+        ),
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=104,
+            issue_title="Verification becomes recoverable",
+            issue_url="u",
+            github_updated_at=now,
+            dispatch_status="verifying",
+            pr_number=104,
+            attempt_phase="implementation",
+        ),
+        GithubWorkItem(
+            scope_id=scope.id,
+            issue_number=105,
+            issue_title="Already recoverable",
+            issue_url="u",
+            github_updated_at=now,
+            dispatch_status="escalated",
+            escalation_reason="retry_count_exhausted",
+            pr_number=105,
+        ),
+    ]
+    db.add_all(items)
+    await db.commit()
+    touches = []
+
+    class StageDispatch(_FakeDispatch):
+        async def dispatch_pending(self, db, scope, slots, **kwargs):
+            pending = (
+                await db.execute(
+                    select(GithubWorkItem).where(
+                        GithubWorkItem.scope_id == scope.id,
+                        GithubWorkItem.dispatch_status == "pending",
+                    )
+                )
+            ).scalars().all()
+            touches.append(("dispatch", [item.issue_number for item in pending]))
+            for item in pending:
+                item.dispatch_status = "dispatched"
+
+        async def monitor_dispatched(self, db, scope, slots):
+            initial = (
+                await db.execute(
+                    select(GithubWorkItem).where(
+                        GithubWorkItem.scope_id == scope.id,
+                        GithubWorkItem.dispatch_status == "dispatched",
+                        GithubWorkItem.pr_number.is_(None),
+                        GithubWorkItem.active_scope_revision == 0,
+                    )
+                )
+            ).scalars().all()
+            touches.append(("initial_monitor", [item.issue_number for item in initial]))
+
+        async def monitor_continuation(self, db, scope, slots):
+            active = (
+                await db.execute(
+                    select(GithubWorkItem).where(
+                        GithubWorkItem.scope_id == scope.id,
+                        GithubWorkItem.dispatch_status == "dispatched",
+                        GithubWorkItem.pr_number.is_not(None),
+                        GithubWorkItem.active_scope_revision > 0,
+                    )
+                )
+            ).scalars().all()
+            touches.append(
+                ("continuation_monitor", [item.issue_number for item in active])
+            )
+
+        async def monitor_recovery(self, db, scope, slots):
+            recoverable = (
+                await db.execute(
+                    select(GithubWorkItem).where(
+                        GithubWorkItem.scope_id == scope.id,
+                        GithubWorkItem.dispatch_status == "escalated",
+                    )
+                )
+            ).scalars().all()
+            touches.append(
+                ("recovery_monitor", [item.issue_number for item in recoverable])
+            )
+            for item in recoverable:
+                item.continuation_nudged_at = datetime.utcnow()
+
+        async def remind_held_leases(self, db, scope):
+            touches.append(("lease_reminder", []))
+
+    class StageVerification(_FakeVerification):
+        async def process_scope(self, db, scope, client=None):
+            verifying = (
+                await db.execute(
+                    select(GithubWorkItem).where(
+                        GithubWorkItem.scope_id == scope.id,
+                        GithubWorkItem.dispatch_status == "verifying",
+                    )
+                )
+            ).scalars().all()
+            touches.append(("verification", [item.issue_number for item in verifying]))
+            for item in verifying:
+                if item.issue_number == 104:
+                    item.dispatch_status = "escalated"
+                    item.escalation_reason = "retry_count_exhausted"
+
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=_FakeWatcher(),
+        dispatch=StageDispatch(),
+        verification=StageVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+
+    await db.refresh(items[3])
+    await db.refresh(items[4])
+
+    assert touches == [
+        ("dispatch", [101]),
+        ("initial_monitor", [101]),
+        ("continuation_monitor", [102]),
+        ("verification", [103, 104]),
+        ("recovery_monitor", [104, 105]),
+        ("lease_reminder", []),
+    ]
+    assert items[3].continuation_nudged_at is not None
+    assert items[4].continuation_nudged_at is not None
 
 
 @pytest.mark.asyncio
@@ -303,6 +545,7 @@ async def test_scheduler_checks_held_leases_with_no_enabled_slots(db):
 
     assert dispatch.monitor_calls == [scope.id]
     assert dispatch.continuation_calls == [scope.id]
+    assert dispatch.recovery_calls == [scope.id]
     assert dispatch.remind_calls == [scope.id]
 
 
@@ -349,6 +592,7 @@ async def test_torn_attempt_does_not_skip_scope_monitoring(db, monkeypatch):
     assert item.escalation_reason == "plan_blocked"
     assert dispatch.monitor_calls == [scope.id]
     assert dispatch.continuation_calls == [scope.id]
+    assert dispatch.recovery_calls == [scope.id]
     assert dispatch.remind_calls == [scope.id]
     assert verification.calls == [scope.id]
 

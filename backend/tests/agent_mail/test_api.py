@@ -421,6 +421,55 @@ async def test_continuation_decision_refuses_initial_plan_authority(
 
 
 @pytest.mark.asyncio
+async def test_continuation_decision_cannot_approve_expired_revision(
+    client,
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, _members, tokens, _workspace = (
+        await _continuation_approval_fixture(db)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    approval = await db.get(
+        GithubApprovalRequest,
+        proposed.json()["approval"]["id"],
+    )
+    revision = await db.get(
+        GithubAttemptScopeRevision,
+        proposed.json()["revision"]["id"],
+    )
+    revision.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+
+    refused = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "approval_request_id": approval.id,
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "Too late",
+        },
+    )
+
+    await db.refresh(approval)
+    await db.refresh(revision)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "continuation_request_expired"
+    assert approval.status == "pending"
+    assert approval.decision_message_id is None
+    assert revision.status == "proposed"
+    assert revision.delivery_message_id is None
+
+
+@pytest.mark.asyncio
 async def test_continuation_requester_cancels_without_operator_impersonation(
     client, db, monkeypatch
 ):
@@ -649,6 +698,73 @@ async def test_continuation_ack_rejects_wrong_acquisition_and_changed_head(
     assert wrong_token.json()["detail"] == "lease_token_mismatch"
     assert changed_head.status_code == 409
     assert changed_head.json()["detail"] == "continuation_head_changed"
+    await db.refresh(item)
+    await db.refresh(workspace)
+    revision = (
+        await db.execute(
+            select(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.revision == revision_number,
+            )
+        )
+    ).scalar_one()
+    assert item.dispatch_status == "escalated"
+    assert revision.status == "approved"
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
+async def test_continuation_ack_rechecks_pr_head_after_snapshot(
+    client,
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, _members, tokens, workspace = (
+        await _continuation_approval_fixture(db)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    approval_id = proposed.json()["approval"]["id"]
+    revision_number = proposed.json()["revision"]["revision"]
+    decided = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "approval_request_id": approval_id,
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "approved",
+        },
+    )
+    assert decided.status_code == 200
+    pull_calls = 0
+
+    async def moving_pull(*_args, **_kwargs):
+        nonlocal pull_calls
+        pull_calls += 1
+        sha = "a" * 40 if pull_calls == 1 else "c" * 40
+        return {"state": "open", "head": {"sha": sha}}
+
+    monkeypatch.setattr(github_client, "get_pull", moving_pull)
+    refused = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision_number}/ack",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "dispatch_nonce": item.dispatch_nonce,
+            "lease_token": "lease-secret",
+        },
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "continuation_head_changed"
+    assert pull_calls == 2
     await db.refresh(item)
     await db.refresh(workspace)
     revision = (

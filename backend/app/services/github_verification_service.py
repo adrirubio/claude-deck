@@ -257,6 +257,203 @@ class GithubVerificationService:
         await db.refresh(item)
         return True
 
+    async def submit_diagnostic_completion(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        authenticated_owner_member_id: int,
+        authenticated_owner_slot_id: int,
+        revision_number: int,
+        dispatch_nonce: str,
+        current_head_sha: str,
+        result_summary: str,
+        evidence: dict,
+        lease_token: str,
+        client: GithubClient | None = None,
+    ) -> bool:
+        client = client or github_client
+        await db.refresh(item)
+        if item.scope_id != scope.id:
+            raise ContinuationCompletionError("scope_mismatch")
+        if item.dispatch_nonce != dispatch_nonce:
+            raise ContinuationCompletionError("stale_nonce")
+        if item.owner_slot_id != authenticated_owner_slot_id:
+            raise ContinuationCompletionError("not_item_owner")
+        owner, _leader = await agent_mail_service._dispatch_participants(db, item)
+        if owner is None or owner.id != authenticated_owner_member_id:
+            raise ContinuationCompletionError("not_item_owner")
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == revision_number,
+                )
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise ContinuationCompletionError("scope_revision_not_found")
+        await db.refresh(revision)
+        if (
+            revision.owner_slot_id != authenticated_owner_slot_id
+            or revision.owner_member_id != authenticated_owner_member_id
+            or revision.phase != "diagnostic"
+        ):
+            raise ContinuationCompletionError("stale_scope_revision")
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if (
+            workspace is None
+            or workspace.id != revision.expected_workspace_id
+            or workspace.lease_token is None
+        ):
+            raise ContinuationCompletionError("workspace_lease_changed")
+        if not hmac.compare_digest(workspace.lease_token, lease_token):
+            raise ContinuationCompletionError("lease_token_mismatch")
+        if not github_approval_service.lease_token_matches(
+            lease_token,
+            revision.expected_lease_token_hash,
+        ):
+            raise ContinuationCompletionError("workspace_lease_changed")
+        if item.pr_number is None:
+            raise ContinuationCompletionError("continuation_pr_required")
+        token = await github_approval_service.github_read_token(scope)
+        pull = await client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        head = pull.get("head")
+        github_head_sha = head.get("sha") if isinstance(head, dict) else None
+        if pull.get("state") != "open":
+            raise ContinuationCompletionError("continuation_pr_not_open")
+        if github_head_sha != current_head_sha:
+            raise ContinuationCompletionError("continuation_head_changed")
+        snapshot = await client.get_commit_snapshot(
+            scope.repo_owner,
+            scope.repo_name,
+            current_head_sha,
+            token=token,
+        )
+        if snapshot.tree_sha != revision.baseline_tree_sha:
+            raise ContinuationCompletionError("diagnostic_tree_not_restored")
+        confirmed_pull = await client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        confirmed_head = confirmed_pull.get("head")
+        confirmed_head_sha = (
+            confirmed_head.get("sha") if isinstance(confirmed_head, dict) else None
+        )
+        if (
+            confirmed_pull.get("state") != "open"
+            or confirmed_head_sha != current_head_sha
+        ):
+            raise ContinuationCompletionError("continuation_head_changed")
+
+        envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
+        envelope["version"] = 1
+        envelope["diagnostic_completion"] = dict(evidence)
+        if (
+            revision.status == "completed"
+            and item.dispatch_status == "escalated"
+            and item.attempt_phase == "implementation"
+            and item.active_scope_revision == 0
+            and revision.result_summary == result_summary
+            and revision.evidence == envelope
+        ):
+            return False
+        if (
+            revision.status != "active"
+            or item.dispatch_status != "dispatched"
+            or item.attempt_phase != "diagnostic"
+            or item.active_scope_revision != revision.revision
+        ):
+            raise ContinuationCompletionError("stale_continuation_context")
+
+        now = datetime.utcnow()
+        item_result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                GithubWorkItem.active_scope_revision == revision.revision,
+                GithubWorkItem.attempt_phase == "diagnostic",
+                GithubWorkItem.pr_number.is_not(None),
+                exists(
+                    select(GithubWorkspace.id).where(
+                        GithubWorkspace.id == workspace.id,
+                        GithubWorkspace.leased_item_id == item.id,
+                        GithubWorkspace.lease_token == lease_token,
+                    )
+                ),
+            )
+            .values(
+                dispatch_status="escalated",
+                escalation_reason=revision.originating_escalation_reason,
+                status_note=(
+                    "Diagnostic restoration verified. Propose the smallest bounded "
+                    "implementation continuation supported by the evidence."
+                ),
+                active_scope_revision=0,
+                attempt_phase="implementation",
+                continuation_nudged_at=None,
+                continuation_activated_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        revision_result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "active",
+                GithubAttemptScopeRevision.phase == "diagnostic",
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.owner_slot_id
+                == authenticated_owner_slot_id,
+                GithubAttemptScopeRevision.owner_member_id
+                == authenticated_owner_member_id,
+                GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+            )
+            .values(
+                status="completed",
+                result_summary=result_summary,
+                evidence=envelope,
+                completed_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if item_result.rowcount != 1 or revision_result.rowcount != 1:
+            await db.rollback()
+            raise ContinuationCompletionError("stale_continuation_context")
+        await db.commit()
+        await db.refresh(item)
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject="Diagnostic restoration verified",
+            body_markdown=(
+                f"Diagnostic revision {revision.revision} restored the baseline tree. "
+                "Propose the smallest bounded implementation continuation supported "
+                "by the recorded evidence."
+            ),
+            payload={
+                "kind": "github_dispatch_diagnostic_completed",
+                "work_item_id": item.id,
+                "pr_number": item.pr_number,
+                "scope_revision": revision.revision,
+            },
+            delivery_key=f"github-diagnostic:{revision.id}:completed",
+        )
+        return True
+
     async def normalize_base_ref(
         self,
         scope: TeamGithubScope,
@@ -731,13 +928,32 @@ class GithubVerificationService:
         for item in items:
             try:
                 if item.dispatch_status in ("dispatched", "verifying"):
-                    revision = await self._active_implementation_revision(db, item)
+                    revision = await self._active_scope_revision(db, item)
                     if item.active_scope_revision > 0:
                         if revision is None:
                             logger.warning(
-                                "Skipping product verification for work item %s: "
+                                "Skipping continuation verification for work item %s: "
                                 "active continuation revision is inconsistent",
                                 item.id,
+                            )
+                            continue
+                        if revision.phase == "diagnostic":
+                            if item.dispatch_status != "dispatched":
+                                revision.status = "exhausted"
+                                await github_dispatch_service.escalate(
+                                    db,
+                                    item,
+                                    "continuation_invalid_state",
+                                    "An active diagnostic continuation entered a review state.",
+                                )
+                                await db.commit()
+                                continue
+                            await self._observe_diagnostic_checks(
+                                db,
+                                scope,
+                                item,
+                                revision,
+                                client,
                             )
                             continue
                         if item.dispatch_status == "dispatched":
@@ -761,7 +977,7 @@ class GithubVerificationService:
                 item.updated_at = datetime.utcnow()
                 await db.commit()
 
-    async def _active_implementation_revision(
+    async def _active_scope_revision(
         self,
         db: AsyncSession,
         item: GithubWorkItem,
@@ -776,18 +992,299 @@ class GithubVerificationService:
                     GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
                     GithubAttemptScopeRevision.revision
                     == item.active_scope_revision,
-                    GithubAttemptScopeRevision.phase == "implementation",
                 )
                 .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         if (
             revision is None
-            or item.attempt_phase != "implementation"
+            or item.attempt_phase != revision.phase
+            or revision.phase not in {"implementation", "diagnostic"}
             or revision.status not in {"active", "submitted"}
         ):
             return None
         return revision
+
+    @staticmethod
+    def _diagnostic_check_evidence(checks: list[dict]) -> list[dict]:
+        fields = ("id", "name", "status", "conclusion", "html_url", "details_url")
+        return [
+            {field: check.get(field) for field in fields if check.get(field) is not None}
+            for check in checks
+        ]
+
+    @staticmethod
+    def _diagnostic_status_evidence(status: dict) -> list[dict]:
+        fields = ("context", "state", "target_url", "description")
+        return [
+            {field: context.get(field) for field in fields if context.get(field) is not None}
+            for context in status.get("statuses") or []
+            if isinstance(context, dict)
+        ]
+
+    async def _claim_current_diagnostic_context(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+    ) -> bool:
+        current_revision = exists(
+            select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == revision.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == revision.revision,
+                GithubAttemptScopeRevision.owner_slot_id == revision.owner_slot_id,
+                GithubAttemptScopeRevision.phase == "diagnostic",
+                GithubAttemptScopeRevision.status == "active",
+            )
+        )
+        claim = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_nonce == revision.dispatch_nonce,
+                GithubWorkItem.owner_slot_id == revision.owner_slot_id,
+                GithubWorkItem.active_scope_revision == revision.revision,
+                GithubWorkItem.attempt_phase == "diagnostic",
+                current_revision,
+            )
+            .values(updated_at=GithubWorkItem.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        if claim.rowcount == 1:
+            return True
+        await db.rollback()
+        return False
+
+    async def _observe_diagnostic_checks(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        client: GithubClient,
+    ) -> None:
+        pull = await client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            int(item.pr_number),
+        )
+        try:
+            if item.dispatch_base_ref is None:
+                raise ValueError("prepared dispatch base is missing")
+            expected_base = await self.normalize_base_ref(
+                scope,
+                client,
+                token=None,
+                base_ref=item.dispatch_base_ref,
+            )
+            self._verify_pull_identity(
+                pull,
+                scope,
+                item,
+                expected_base=expected_base,
+            )
+        except ValueError as exc:
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
+            revision.status = "exhausted"
+            await github_dispatch_service.escalate(
+                db,
+                item,
+                "continuation_pr_identity_invalid",
+                f"Diagnostic PR identity verification failed: {exc}",
+            )
+            await db.commit()
+            return
+
+        verdict = self._classify_pull(pull)
+        if verdict == "merged":
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
+            revision.status = "completed"
+            revision.completed_at = datetime.utcnow()
+            self._mark_merged(item)
+            await db.commit()
+            await self._notify_blocker_merged(db, scope, item)
+            return
+        if verdict != "open":
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
+            revision.status = "superseded"
+            await github_dispatch_service.escalate_without_notification(
+                db,
+                item,
+                "pr_closed_unmerged",
+                f"PR #{item.pr_number} was closed without being merged.",
+            )
+            return
+
+        head_sha = self._head_sha(pull)
+        if not head_sha:
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
+            revision.status = "exhausted"
+            await github_dispatch_service.escalate(
+                db,
+                item,
+                "continuation_pr_identity_invalid",
+                "Diagnostic PR head is missing.",
+            )
+            await db.commit()
+            return
+        checks = await client.list_check_runs_for_ref(
+            scope.repo_owner,
+            scope.repo_name,
+            head_sha,
+        )
+        signal = "check_runs"
+        evidence_rows = self._diagnostic_check_evidence(checks)
+        if checks:
+            pending = [
+                check
+                for check in checks
+                if check.get("status") != "completed"
+                or check.get("conclusion") is None
+            ]
+            failed = [
+                check
+                for check in checks
+                if check not in pending
+                and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
+            ]
+            state = "red" if failed else "pending" if pending else "green"
+        else:
+            combined = await client.get_combined_status_for_ref(
+                scope.repo_owner,
+                scope.repo_name,
+                head_sha,
+            )
+            signal = "combined_status"
+            evidence_rows = self._diagnostic_status_evidence(combined)
+            combined_state = combined.get("state")
+            if combined_state in _STATUS_FAILURE_STATES:
+                state = "red"
+            elif combined_state in _STATUS_SUCCESS_STATES and evidence_rows:
+                state = "green"
+            else:
+                state = "pending"
+
+        if not await self._claim_current_diagnostic_context(db, item, revision):
+            return
+
+        envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
+        observations = dict(envelope.get("diagnostic_observations") or {})
+        observation = {
+            "head_sha": head_sha,
+            "signal": signal,
+            "state": state,
+            "checks": evidence_rows,
+        }
+        if observations.get(head_sha) != observation:
+            observations[head_sha] = observation
+            envelope["version"] = 1
+            envelope["diagnostic_observations"] = observations
+            revision.evidence = envelope
+
+        if state == "pending":
+            item.status_note = "Diagnostic checks are still running."
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
+        if state == "green":
+            item.status_note = (
+                "Diagnostic checks are green; restore the baseline tree before completion."
+            )
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
+        await db.flush()
+        await self._record_diagnostic_failure(
+            db,
+            scope,
+            item,
+            revision,
+            head_sha,
+        )
+
+    async def _record_diagnostic_failure(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        head_sha: str,
+    ) -> None:
+        await db.refresh(item)
+        await db.refresh(revision)
+        if (
+            item.dispatch_status != "dispatched"
+            or item.active_scope_revision != revision.revision
+            or item.dispatch_nonce != revision.dispatch_nonce
+            or item.attempt_phase != "diagnostic"
+            or revision.phase != "diagnostic"
+            or revision.status != "active"
+        ):
+            raise ContinuationCompletionError("stale_continuation_context")
+        if item.diagnostic_last_verified_sha != head_sha:
+            total_failed_heads = int(
+                (
+                    await db.execute(
+                        select(
+                            func.coalesce(
+                                func.sum(GithubAttemptScopeRevision.failed_head_count),
+                                0,
+                            )
+                        ).where(
+                            GithubAttemptScopeRevision.work_item_id == item.id,
+                            GithubAttemptScopeRevision.dispatch_nonce
+                            == item.dispatch_nonce,
+                        )
+                    )
+                ).scalar_one()
+            )
+            revision.failed_head_count += 1
+            revision.last_failed_head_sha = head_sha
+            item.diagnostic_retry_count += 1
+            item.diagnostic_last_verified_sha = head_sha
+            item.status_note = "Diagnostic checks produced failure evidence."
+            item.updated_at = datetime.utcnow()
+            exhausted = (
+                revision.failed_head_count >= revision.max_failed_heads
+                or total_failed_heads + 1 >= scope.max_continuation_failed_heads
+            )
+            if exhausted:
+                revision.status = "exhausted"
+                await github_dispatch_service.escalate(
+                    db,
+                    item,
+                    "continuation_budget_exhausted",
+                    "Diagnostic failed-head budget was exhausted.",
+                )
+            await db.commit()
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject="Diagnostic checks produced evidence",
+            body_markdown=(
+                f"Diagnostic checks failed for issue #{item.issue_number} / "
+                f"PR #{item.pr_number} at head {head_sha}."
+            ),
+            payload={
+                "kind": "github_dispatch_diagnostic_check_failed",
+                "work_item_id": item.id,
+                "pr_number": item.pr_number,
+                "head_sha": head_sha,
+                "scope_revision": revision.revision,
+                "diagnostic_retry_count": item.diagnostic_retry_count,
+                "revision_failed_head_count": revision.failed_head_count,
+            },
+            delivery_key=(
+                f"github-diagnostic:{revision.id}:check-failure:{head_sha}"
+            ),
+        )
 
     async def _preset_slots(
         self, db: AsyncSession, scope: TeamGithubScope

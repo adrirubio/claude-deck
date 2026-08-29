@@ -350,6 +350,11 @@ async def test_continuation_proposal_persists_canonical_server_authority(
     assert revision.summary == "Apply one bounded correction"
     assert revision.baseline_head_sha == "a" * 40
     assert revision.baseline_tree_sha == "b" * 40
+    assert revision.expires_at is not None
+    assert revision.expires_at > datetime.utcnow()
+    assert revision.expires_at <= datetime.utcnow() + timedelta(
+        seconds=settings.github_continuation_proposal_expiry_seconds
+    )
     assert revision.expected_workspace_id == workspace.id
     assert revision.expected_lease_token_hash != workspace.lease_token
     assert github_approval_service.lease_token_matches(
@@ -367,10 +372,52 @@ async def test_continuation_proposal_persists_canonical_server_authority(
 
 
 @pytest.mark.asyncio
+async def test_expired_approved_revision_allows_identical_fresh_proposal(
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    scope, item, _workspace, owner_slot, owner = (
+        await _continuation_proposal_context(db, tmp_path)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposal = _continuation_proposal_kwargs(item, owner_slot, owner)
+    first_revision, first_approval, created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **proposal,
+        )
+    )
+    first_approval.status = "approved"
+    first_approval.reason = "Approved but never acknowledged"
+    first_approval.decided_at = datetime.utcnow()
+    first_revision.status = "expired"
+    first_revision.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+
+    second_revision, second_approval, second_created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **proposal,
+        )
+    )
+
+    assert created is True
+    assert second_created is True
+    assert second_revision.id != first_revision.id
+    assert second_revision.revision == 2
+    assert second_approval.id != first_approval.id
+    assert second_approval.status == "pending"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("override", "detail"),
     [
-        ({"phase": "diagnostic"}, "diagnostic_continuation_not_available"),
         ({"allowed_paths": ["src/**"]}, "allowed_paths_invalid"),
         ({"allowed_actions": ["run_anything"]}, "allowed_actions_invalid"),
         ({"lease_token": "wrong"}, "lease_token_mismatch"),
@@ -398,6 +445,148 @@ async def test_continuation_proposal_rejects_unbounded_or_stale_authority(
     assert (
         await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_proposal_persists_closed_hosted_policy(
+    db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(
+        phase="diagnostic",
+        execution_target="hosted_ci",
+        summary="Collect a gdb backtrace from hosted playback CI",
+        allowed_paths=[".github/workflows/playback.yml", "tests/playback_smoke.py.in"],
+        allowed_actions=[
+            "collect_hosted_logs",
+            "edit_ci_workflow",
+            "install_hosted_ci_tool",
+            "push_pr_head",
+            "revert_diagnostic_changes",
+        ],
+        allowed_commands=["git diff --check"],
+        tool_fallbacks={
+            "gdb": {
+                "target": "hosted_ci",
+                "if_missing": "install_temporarily",
+                "package": "gdb",
+                "revert_required": True,
+            }
+        },
+    )
+
+    revision, approval, created = await github_approval_service.create_continuation_request(
+        db,
+        item,
+        scope,
+        **payload,
+    )
+
+    assert created is True
+    assert revision.phase == "diagnostic"
+    assert revision.execution_target == "hosted_ci"
+    assert revision.summary == "Collect a gdb backtrace from hosted playback CI"
+    assert revision.tool_fallbacks == payload["tool_fallbacks"]
+    assert approval.scope_revision_id == revision.id
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("override", "detail"),
+    [
+        ({"allowed_actions": ["collect_hosted_logs"]}, "diagnostic_revert_required"),
+        (
+            {"allowed_commands": ["cmake -S . -B build"]},
+            "hosted_diagnostic_local_build_forbidden",
+        ),
+        (
+            {"tool_fallbacks": {}},
+            "hosted_tool_fallback_required",
+        ),
+        (
+            {
+                "tool_fallbacks": {
+                    "gdb": {
+                        "target": "hosted_ci",
+                        "if_missing": "install_temporarily",
+                        "package": "gdb",
+                        "revert_required": False,
+                    }
+                }
+            },
+            "tool_fallbacks_invalid",
+        ),
+    ],
+)
+async def test_diagnostic_proposal_rejects_unsafe_policy(
+    db, tmp_path, monkeypatch, override, detail
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(
+        phase="diagnostic",
+        execution_target="hosted_ci",
+        allowed_actions=[
+            "collect_hosted_logs",
+            "install_hosted_ci_tool",
+            "revert_diagnostic_changes",
+        ],
+        tool_fallbacks={
+            "gdb": {
+                "target": "hosted_ci",
+                "if_missing": "install_temporarily",
+                "package": "gdb",
+                "revert_required": True,
+            }
+        },
+    )
+    payload.update(override)
+
+    with pytest.raises(GithubApprovalError, match=detail) as exc_info:
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **payload,
+        )
+
+    assert exc_info.value.detail == detail
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_proposal_requires_scope_rollout_gate(
+    db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    scope.continuation_enabled = False
+    await db.commit()
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(
+        phase="diagnostic",
+        allowed_actions=["revert_diagnostic_changes"],
+    )
+
+    with pytest.raises(GithubApprovalError, match="continuation_disabled"):
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **payload,
+        )
 
 
 @pytest.mark.asyncio
@@ -1776,6 +1965,270 @@ async def test_continuation_completion_fails_closed_before_mutation(
     await db.refresh(revision)
     assert item.dispatch_status == "dispatched"
     assert revision.status == "active"
+
+
+def _diagnostic_completion_report(item):
+    return {
+        "work_item_id": item.id,
+        "status": "diagnostic_completed",
+        "lease_token": "lease-secret",
+        "revision": 1,
+        "dispatch_nonce": item.dispatch_nonce,
+        "current_head_sha": "d" * 40,
+        "summary": "Captured the hosted crash evidence and restored the tree",
+        "evidence": {"run_url": "https://example.test/runs/42"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_requires_exact_restored_tree_and_preserves_history(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    item.retry_count = 5
+    item.last_verified_sha = "product-head"
+    item.diagnostic_retry_count = 1
+    item.diagnostic_last_verified_sha = "diagnostic-head"
+    revision.phase = "diagnostic"
+    revision.originating_escalation_reason = "retry_count_exhausted"
+    revision.evidence = {
+        "version": 1,
+        "diagnostic_observations": {
+            "diagnostic-head": {"state": "red", "head_sha": "diagnostic-head"}
+        },
+    }
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    completed = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+    replay = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert completed.status_code == 200, completed.text
+    assert replay.status_code == 200, replay.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.active_scope_revision == 0
+    assert item.retry_count == 5
+    assert item.last_verified_sha == "product-head"
+    assert item.diagnostic_retry_count == 1
+    assert item.diagnostic_last_verified_sha == "diagnostic-head"
+    assert revision.status == "completed"
+    assert revision.result_summary == (
+        "Captured the hosted crash evidence and restored the tree"
+    )
+    assert revision.evidence["diagnostic_observations"]["diagnostic-head"]["state"] == "red"
+    assert revision.evidence["diagnostic_completion"] == {
+        "run_url": "https://example.test/runs/42"
+    }
+    assert revision.completed_at is not None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_rejects_tree_mismatch_and_missing_evidence(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, _workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="f" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    missing_evidence = _diagnostic_completion_report(item)
+    missing_evidence["evidence"] = {}
+    refused_missing = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=missing_evidence,
+    )
+    refused_tree = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused_missing.status_code == 400
+    assert refused_missing.json()["detail"] == "evidence_required"
+    assert refused_tree.status_code == 409
+    assert refused_tree.json()["detail"] == "diagnostic_tree_not_restored"
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.attempt_phase == "diagnostic"
+    assert item.active_scope_revision == 1
+    assert revision.status == "active"
+    assert revision.completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_rechecks_pr_head_after_tree_snapshot(
+    client,
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    await db.commit()
+    pull_calls = 0
+
+    async def moving_pull(*_args, **_kwargs):
+        nonlocal pull_calls
+        pull_calls += 1
+        sha = "d" * 40 if pull_calls == 1 else "e" * 40
+        return {"state": "open", "head": {"sha": sha}}
+
+    async def restored_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", moving_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", restored_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "continuation_head_changed"
+    assert pull_calls == 2
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "dispatched"
+    assert item.attempt_phase == "diagnostic"
+    assert item.active_scope_revision == 1
+    assert revision.status == "active"
+    assert revision.completed_at is None
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_does_not_overwrite_owner_handoff(
+    client,
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    target = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=2,
+        display_name="Handoff Target",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(target)
+    await db.commit()
+    target_id = target.id
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def snapshot_then_handoff(*_args, **_kwargs):
+        await db.execute(
+            update(GithubWorkItem)
+            .where(GithubWorkItem.id == item.id)
+            .values(
+                owner_slot_id=target_id,
+                dispatch_status="escalated",
+                escalation_reason="retry_count_exhausted",
+                attempt_phase="implementation",
+                status_note="Owner handoff requires a fresh revision.",
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(GithubAttemptScopeRevision.id == revision.id)
+            .values(status="superseded")
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", snapshot_then_handoff)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "stale_continuation_context"
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.owner_slot_id == target_id
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.active_scope_revision == 1
+    assert item.status_note == "Owner handoff requires a fresh revision."
+    assert revision.status == "superseded"
+    assert revision.completed_at is None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "lease-secret"
 
 
 @pytest.mark.asyncio

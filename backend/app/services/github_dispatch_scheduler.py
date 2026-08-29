@@ -120,15 +120,16 @@ class GithubDispatchScheduler:
                 .order_by(TeamGithubScope.id)
             )
         ).scalars().all()
+        await db.commit()
         for scope in scopes:
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.watcher.poll_scope(db, scope, client)
-            slots = (
-                await db.execute(
-                    select(AgentTeamSlot)
-                    .where(AgentTeamSlot.preset_id == scope.preset_id)
-                    .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-                )
-            ).scalars().all()
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
             issues_by_number = await self._pending_issues_by_number(db, scope, client)
             issue_labels_by_number = {
                 number: [label["name"] for label in issue.get("labels", []) if "name" in label]
@@ -144,17 +145,52 @@ class GithubDispatchScheduler:
                 issue_labels_by_number=issue_labels_by_number,
                 issue_details_by_number=issues_by_number,
             )
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.monitor_dispatched(db, scope, slots)
             await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
             scope, slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.monitor_continuation(db, scope, slots)
             await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
             scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.verification.process_scope(db, scope, client=client)
             await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.monitor_recovery(db, scope, slots)
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
             scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.remind_held_leases(db, scope)
             await db.commit()
+
+    async def _scope_remains_autonomous(
+        self,
+        db: AsyncSession,
+        scope_id: int,
+    ) -> bool:
+        return (
+            await db.scalar(
+                select(TeamGithubScope.id)
+                .join(
+                    AgentTeamPreset,
+                    AgentTeamPreset.id == TeamGithubScope.preset_id,
+                )
+                .where(
+                    TeamGithubScope.id == scope_id,
+                    TeamGithubScope.enabled.is_(True),
+                    AgentTeamPreset.autonomy_enabled.is_(True),
+                )
+            )
+        ) is not None
 
     async def _reload_scope_context(
         self,

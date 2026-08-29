@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     github_min_available_memory_mb: int = 3000
     github_stale_lease_backstop_seconds: int = 21600
     github_brief_delivery_max_nudges: int = 2
+    github_continuation_proposal_expiry_seconds: int = 3600
+    github_continuation_leader_nudge_cooldown_seconds: int = 180
+    github_continuation_owner_ack_nudge_cooldown_seconds: int = 180
+    github_recovery_nudge_cooldown_seconds: int = 180
 
     # Agent Mail identity settings
     mail_capability_tokens_required: bool = False

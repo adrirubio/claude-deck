@@ -365,67 +365,37 @@ async def decide_work_item_continuation(
                 request_id=request.approval_request_id,
             )
         )
-        delivery_key = f"github-approval:{approval.id}:decision"
-        if approval.decision_message_id is not None:
-            linked = await db.get(MailMessage, approval.decision_message_id)
-            if linked is None or not (
-                github_approval_service.matches_linked_continuation_decision_message(
+        async with github_approval_service.continuation_transport_lock(approval.id):
+            linked, decision_linked = (
+                await github_approval_service.ensure_continuation_decision_message(
+                    db,
+                    item,
                     approval,
                     revision,
-                    linked,
-                    delivery_key=delivery_key,
                 )
-            ):
-                raise GithubApprovalError("approval_decision_link_mismatch")
+            )
             message = await agent_mail_service._message_response(
                 db,
                 linked,
                 for_member_id=None,
             )
-        else:
-            message = await agent_mail_service.send_authoritative_decision(
-                db,
-                MailMessageCreate(
-                    kind="answer",
-                    sender_member_id=session.member_id,
-                    thread_root_id=approval.request_message_id,
-                    body_markdown=request.reason,
-                    payload=github_approval_service.continuation_decision_payload(
+            if approval.status == "approved":
+                if not await github_approval_service.expire_continuation_if_needed(
+                    db,
+                    approval,
+                    revision,
+                ):
+                    await github_approval_service.deliver_approved_continuation(
+                        db,
+                        item,
                         approval,
                         revision,
-                    ),
-                    decision=request.decision,
-                ),
-                authenticated_sender_member_id=session.member_id,
-                approval_round=approval.approval_round,
-                delivery_key=delivery_key,
-            )
-            link_result = await db.execute(
-                update(GithubApprovalRequest)
-                .where(
-                    GithubApprovalRequest.id == approval.id,
-                    GithubApprovalRequest.status == request.decision,
-                    GithubApprovalRequest.decision_message_id.is_(None),
+                    )
+            elif decision_linked:
+                await agent_mail_service.auto_nudge_members(
+                    db,
+                    {approval.owner_member_id},
                 )
-                .values(decision_message_id=message.id)
-                .execution_options(synchronize_session=False)
-            )
-            await db.commit()
-            await db.refresh(approval)
-            if link_result.rowcount != 1 and approval.decision_message_id != message.id:
-                raise GithubApprovalError("approval_decision_link_mismatch")
-        if approval.status == "approved":
-            await github_approval_service.deliver_approved_continuation(
-                db,
-                item,
-                approval,
-                revision,
-            )
-        else:
-            await agent_mail_service.auto_nudge_members(
-                db,
-                {approval.owner_member_id},
-            )
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailAuthorityError as exc:

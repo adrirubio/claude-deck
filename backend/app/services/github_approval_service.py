@@ -1,16 +1,20 @@
 """Normalized approval authority for autonomous GitHub work items."""
 
+import asyncio
 import hashlib
 import hmac
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import PurePosixPath
+from weakref import WeakValueDictionary
 
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.config import settings
 from app.models.database import (
     AgentTeamSlot,
     GithubApprovalRequest,
@@ -18,9 +22,11 @@ from app.models.database import (
     GithubWorkItem,
     GithubWorkspace,
     MailMessage,
+    MailReceipt,
     MailTeamMember,
     TeamGithubScope,
 )
+from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_app_auth_service import github_app_auth_service
 from app.services.github_client import github_client
@@ -50,6 +56,14 @@ _CONTINUATION_ACTIONS = frozenset(
 )
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
 _LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00"
+_HOSTED_ONLY_LOCAL_BUILD = re.compile(
+    r"(?:^|[;&|]\s*)(?:sudo\s+)?(?:env\s+(?:[^\s=]+=[^\s]+\s+)*)?"
+    r"(?:\./configure|cmake|make|ninja|meson|gcc|g\+\+|clang|clang\+\+|"
+    r"cargo\s+(?:build|test)|go\s+(?:build|test))(?:\s|$)"
+)
+_TOOL_FALLBACK_KEYS = frozenset(
+    {"target", "if_missing", "package", "revert_required"}
+)
 
 
 class GithubApprovalError(ValueError):
@@ -60,6 +74,18 @@ class GithubApprovalError(ValueError):
 
 
 class GithubApprovalService:
+    def __init__(self) -> None:
+        self._continuation_transport_locks: WeakValueDictionary[
+            int, asyncio.Lock
+        ] = WeakValueDictionary()
+
+    def continuation_transport_lock(self, request_id: int) -> asyncio.Lock:
+        lock = self._continuation_transport_locks.get(request_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._continuation_transport_locks[request_id] = lock
+        return lock
+
     @staticmethod
     def canonical_payload_bytes(payload: dict) -> bytes:
         return json.dumps(
@@ -133,6 +159,40 @@ class GithubApprovalService:
             ):
                 raise GithubApprovalError("allowed_paths_invalid", status_code=400)
         return paths
+
+    @classmethod
+    def _canonical_tool_fallbacks(
+        cls,
+        tool_fallbacks: dict,
+        *,
+        execution_target: str,
+    ) -> dict:
+        if not isinstance(tool_fallbacks, dict):
+            raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+        normalized: dict[str, dict] = {}
+        for tool, fallback in sorted(tool_fallbacks.items()):
+            if not isinstance(tool, str) or not tool.strip() or tool != tool.strip():
+                raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+            if not isinstance(fallback, dict) or set(fallback) != _TOOL_FALLBACK_KEYS:
+                raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+            package = fallback.get("package")
+            if (
+                fallback.get("target") != "hosted_ci"
+                or fallback.get("if_missing") != "install_temporarily"
+                or not isinstance(package, str)
+                or not package.strip()
+                or fallback.get("revert_required") is not True
+            ):
+                raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+            if execution_target not in {"hosted_ci", "workspace_and_hosted_ci"}:
+                raise GithubApprovalError("hosted_tool_target_required", status_code=400)
+            normalized[tool] = {
+                "target": "hosted_ci",
+                "if_missing": "install_temporarily",
+                "package": package.strip(),
+                "revert_required": True,
+            }
+        return normalized
 
     @classmethod
     def canonical_continuation_payload(
@@ -214,9 +274,7 @@ class GithubApprovalService:
             raise GithubApprovalError("continuation_pr_required")
         if item.dispatch_nonce != dispatch_nonce:
             raise GithubApprovalError("stale_nonce")
-        if phase == "diagnostic":
-            raise GithubApprovalError("diagnostic_continuation_not_available")
-        if phase != "implementation":
+        if phase not in {"implementation", "diagnostic"}:
             raise GithubApprovalError("continuation_phase_invalid", status_code=400)
         if execution_target not in {
             "workspace",
@@ -226,8 +284,6 @@ class GithubApprovalService:
             raise GithubApprovalError("execution_target_invalid", status_code=400)
         if not summary.strip():
             raise GithubApprovalError("continuation_summary_required", status_code=400)
-        if not isinstance(tool_fallbacks, dict):
-            raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
 
         owner, leader = await self._current_participants(db, item)
         if owner.id != authenticated_owner_member_id:
@@ -269,6 +325,33 @@ class GithubApprovalService:
             prohibited_actions,
             label="prohibited_actions",
         )
+        canonical_fallbacks = self._canonical_tool_fallbacks(
+            tool_fallbacks,
+            execution_target=execution_target,
+        )
+        if phase == "diagnostic":
+            if "revert_diagnostic_changes" not in canonical_actions:
+                raise GithubApprovalError("diagnostic_revert_required", status_code=400)
+            if execution_target == "hosted_ci" and any(
+                _HOSTED_ONLY_LOCAL_BUILD.search(command)
+                for command in canonical_commands
+            ):
+                raise GithubApprovalError(
+                    "hosted_diagnostic_local_build_forbidden",
+                    status_code=400,
+                )
+            installs_hosted_tool = "install_hosted_ci_tool" in canonical_actions
+            if installs_hosted_tool != bool(canonical_fallbacks):
+                raise GithubApprovalError(
+                    "hosted_tool_fallback_required",
+                    status_code=400,
+                )
+        elif "install_hosted_ci_tool" in canonical_actions:
+            if not canonical_fallbacks:
+                raise GithubApprovalError(
+                    "hosted_tool_fallback_required",
+                    status_code=400,
+                )
         if len(canonical_paths) > scope.max_scope_paths:
             raise GithubApprovalError("continuation_path_limit_exceeded")
         if len(canonical_commands) > scope.max_scope_commands:
@@ -276,17 +359,11 @@ class GithubApprovalService:
         if max_failed_heads > scope.max_failed_heads_per_revision:
             raise GithubApprovalError("continuation_failed_head_limit_exceeded")
 
-        revision_count, failed_head_count = (
-            await db.execute(
-                select(
-                    func.count(GithubAttemptScopeRevision.id),
-                    func.coalesce(func.sum(GithubAttemptScopeRevision.failed_head_count), 0),
-                ).where(
-                    GithubAttemptScopeRevision.work_item_id == item.id,
-                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
-                )
-            )
-        ).one()
+        revision_count, failed_head_count = await self.continuation_budget_usage(
+            db,
+            item.id,
+            dispatch_nonce,
+        )
         if revision_count >= scope.max_continuation_revisions:
             raise GithubApprovalError("continuation_budget_exhausted")
         remaining_failed_heads = (
@@ -328,7 +405,7 @@ class GithubApprovalService:
             allowed_commands=canonical_commands,
             prohibited_actions=canonical_prohibitions,
             max_failed_heads=max_failed_heads,
-            tool_fallbacks=tool_fallbacks,
+            tool_fallbacks=canonical_fallbacks,
             baseline_head_sha=snapshot.sha,
             baseline_tree_sha=snapshot.tree_sha,
             expected_workspace_id=workspace.id,
@@ -395,7 +472,10 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision,
                 terminal.scope_revision_id,
             )
-            if terminal_revision is not None:
+            if (
+                terminal_revision is not None
+                and terminal_revision.status in {"approved", "rejected"}
+            ):
                 return terminal_revision, terminal, False
 
         next_revision = (
@@ -448,13 +528,19 @@ class GithubApprovalService:
             allowed_actions=canonical_actions,
             allowed_commands=canonical_commands,
             prohibited_actions=canonical_prohibitions,
-            tool_fallbacks=tool_fallbacks,
+            tool_fallbacks=canonical_fallbacks,
             baseline_head_sha=snapshot.sha,
             baseline_tree_sha=snapshot.tree_sha,
             originating_escalation_reason=item.escalation_reason,
             expected_workspace_id=workspace.id,
             expected_lease_token_hash=self.lease_token_hash(lease_token),
             max_failed_heads=max_failed_heads,
+            expires_at=(
+                datetime.utcnow()
+                + timedelta(
+                    seconds=settings.github_continuation_proposal_expiry_seconds
+                )
+            ),
         )
         db.add(revision)
         await db.flush()
@@ -659,6 +745,450 @@ class GithubApprovalService:
             and message.payload == cls.continuation_delivery_payload(request, revision)
         )
 
+    async def ensure_continuation_request_message(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+    ) -> tuple[MailMessage, bool]:
+        if (
+            request.request_kind != "continuation"
+            or request.scope_revision_id != revision.id
+            or revision.approval_request_id != request.id
+            or request.status not in {"pending", "approved", "rejected"}
+            or revision.status not in {"proposed", "approved", "rejected"}
+        ):
+            raise GithubApprovalError("request_not_pending")
+        owner, leader = await self._current_participants(db, item)
+        if (
+            item.dispatch_nonce != request.dispatch_nonce
+            or revision.dispatch_nonce != request.dispatch_nonce
+            or item.approval_round_count != request.approval_round
+            or item.owner_slot_id != revision.owner_slot_id
+            or request.owner_member_id != owner.id
+            or revision.owner_member_id != owner.id
+            or request.leader_member_id != leader.id
+        ):
+            raise GithubApprovalError("stale_continuation_context")
+        delivery_key = f"github-approval:{request.id}:request"
+        if request.request_message_id is not None:
+            linked = await db.get(MailMessage, request.request_message_id)
+            if linked is None or not self.matches_linked_continuation_request_message(
+                request,
+                revision,
+                linked,
+                delivery_key=delivery_key,
+            ):
+                raise GithubApprovalError("approval_request_link_mismatch")
+            return linked, False
+        message = await agent_mail_service.send_message(
+            db,
+            MailMessageCreate(
+                kind="context_request",
+                sender_member_id=request.owner_member_id,
+                recipient_member_id=request.leader_member_id,
+                subject=(
+                    f"Continuation revision {revision.revision} for work item "
+                    f"{item.id}"
+                ),
+                body_markdown=revision.summary,
+                payload=self.continuation_request_payload(request, revision),
+            ),
+            authenticated_sender_member_id=request.owner_member_id,
+            delivery_key=delivery_key,
+            auto_nudge=False,
+        )
+        link_result = await db.execute(
+            update(GithubApprovalRequest)
+            .where(
+                GithubApprovalRequest.id == request.id,
+                GithubApprovalRequest.request_kind == "continuation",
+                GithubApprovalRequest.scope_revision_id == revision.id,
+                GithubApprovalRequest.status.in_(("pending", "approved", "rejected")),
+                GithubApprovalRequest.request_message_id.is_(None),
+            )
+            .values(request_message_id=message.id)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        await db.refresh(request)
+        if link_result.rowcount != 1 and request.request_message_id != message.id:
+            raise GithubApprovalError("approval_request_link_mismatch")
+        linked = await db.get(MailMessage, request.request_message_id)
+        if linked is None:
+            raise GithubApprovalError("approval_request_link_mismatch")
+        return linked, link_result.rowcount == 1
+
+    async def continuation_budget_usage(
+        self,
+        db: AsyncSession,
+        work_item_id: int,
+        dispatch_nonce: str,
+    ) -> tuple[int, int]:
+        revision_count, failed_head_count = (
+            await db.execute(
+                select(
+                    func.count(GithubAttemptScopeRevision.id),
+                    func.coalesce(
+                        func.sum(GithubAttemptScopeRevision.failed_head_count),
+                        0,
+                    ),
+                ).where(
+                    GithubAttemptScopeRevision.work_item_id == work_item_id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                )
+            )
+        ).one()
+        return int(revision_count), int(failed_head_count)
+
+    async def expire_continuation_if_needed(
+        self,
+        db: AsyncSession,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+        *,
+        now: datetime | None = None,
+    ) -> str | None:
+        current = now or datetime.utcnow()
+        if revision.expires_at is None or revision.expires_at > current:
+            return None
+        if request.status == "pending" and revision.status == "proposed":
+            request.status = "expired"
+            revision.status = "expired"
+            root = None
+            if request.request_message_id is not None:
+                root = await db.get(MailMessage, request.request_message_id)
+            if root is None:
+                root = (
+                    await db.execute(
+                        select(MailMessage).where(
+                            MailMessage.delivery_key
+                            == f"github-approval:{request.id}:request"
+                        )
+                    )
+                ).scalar_one_or_none()
+            if root is not None:
+                root.request_status = "superseded"
+            await db.commit()
+            return "expired_pending"
+        if (
+            request.status == "approved"
+            and revision.status == "approved"
+            and revision.acknowledged_at is None
+        ):
+            revision.status = "expired"
+            await db.commit()
+            return "expired_approved"
+        return None
+
+    async def ensure_continuation_decision_message(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+    ) -> tuple[MailMessage, bool]:
+        expected_revision_status = (
+            "approved" if request.status == "approved" else "rejected"
+        )
+        if (
+            request.request_kind != "continuation"
+            or request.status not in {"approved", "rejected"}
+            or request.reason is None
+            or request.request_message_id is None
+            or request.scope_revision_id != revision.id
+            or revision.approval_request_id != request.id
+            or revision.status != expected_revision_status
+        ):
+            raise GithubApprovalError("approval_request_already_decided")
+        owner, leader = await self._current_participants(db, item)
+        if (
+            item.dispatch_nonce != request.dispatch_nonce
+            or revision.dispatch_nonce != request.dispatch_nonce
+            or item.approval_round_count != request.approval_round
+            or item.owner_slot_id != revision.owner_slot_id
+            or request.owner_member_id != owner.id
+            or revision.owner_member_id != owner.id
+            or request.leader_member_id != leader.id
+        ):
+            raise GithubApprovalError("stale_continuation_context")
+        delivery_key = f"github-approval:{request.id}:decision"
+        if request.decision_message_id is not None:
+            linked = await db.get(MailMessage, request.decision_message_id)
+            if linked is None or not self.matches_linked_continuation_decision_message(
+                request,
+                revision,
+                linked,
+                delivery_key=delivery_key,
+            ):
+                raise GithubApprovalError("approval_decision_link_mismatch")
+            return linked, False
+        message = await agent_mail_service.send_authoritative_decision(
+            db,
+            MailMessageCreate(
+                kind="answer",
+                sender_member_id=request.leader_member_id,
+                thread_root_id=request.request_message_id,
+                body_markdown=request.reason,
+                payload=self.continuation_decision_payload(request, revision),
+                decision=request.status,
+            ),
+            authenticated_sender_member_id=request.leader_member_id,
+            approval_round=request.approval_round,
+            delivery_key=delivery_key,
+        )
+        link_result = await db.execute(
+            update(GithubApprovalRequest)
+            .where(
+                GithubApprovalRequest.id == request.id,
+                GithubApprovalRequest.status == request.status,
+                GithubApprovalRequest.scope_revision_id == revision.id,
+                GithubApprovalRequest.decision_message_id.is_(None),
+            )
+            .values(decision_message_id=message.id)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        await db.refresh(request)
+        if link_result.rowcount != 1 and request.decision_message_id != message.id:
+            raise GithubApprovalError("approval_decision_link_mismatch")
+        linked = await db.get(MailMessage, request.decision_message_id)
+        if linked is None:
+            raise GithubApprovalError("approval_decision_link_mismatch")
+        return linked, link_result.rowcount == 1
+
+    async def nudge_pending_continuation_leader(
+        self,
+        db: AsyncSession,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+        *,
+        cooldown: timedelta,
+    ) -> bool:
+        if request.request_message_id is None:
+            raise GithubApprovalError("approval_request_delivery_pending")
+        receipt = (
+            await db.execute(
+                select(MailReceipt).where(
+                    MailReceipt.message_id == request.request_message_id,
+                    MailReceipt.member_id == request.leader_member_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if receipt is None:
+            raise GithubApprovalError("approval_request_receipt_missing")
+        if receipt.read_at is not None:
+            return False
+        now = datetime.utcnow()
+        claim = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "proposed",
+                GithubAttemptScopeRevision.approval_request_id == request.id,
+                or_(
+                    GithubAttemptScopeRevision.last_delivery_attempt_at.is_(None),
+                    GithubAttemptScopeRevision.last_delivery_attempt_at
+                    <= now - cooldown,
+                ),
+                exists(
+                    select(GithubApprovalRequest.id).where(
+                        GithubApprovalRequest.id == request.id,
+                        GithubApprovalRequest.status == "pending",
+                        GithubApprovalRequest.request_message_id
+                        == request.request_message_id,
+                    )
+                ),
+            )
+            .values(
+                last_delivery_attempt_at=now,
+                delivery_attempt_count=(
+                    GithubAttemptScopeRevision.delivery_attempt_count + 1
+                ),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        await db.refresh(revision)
+        if claim.rowcount != 1:
+            return False
+        await agent_mail_service.auto_nudge_members(
+            db,
+            {request.leader_member_id},
+        )
+        return True
+
+    async def nudge_approved_continuation_owner(
+        self,
+        db: AsyncSession,
+        revision: GithubAttemptScopeRevision,
+        *,
+        cooldown: timedelta,
+    ) -> bool:
+        now = datetime.utcnow()
+        claim = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "approved",
+                GithubAttemptScopeRevision.delivery_message_id.is_not(None),
+                GithubAttemptScopeRevision.acknowledged_at.is_(None),
+                or_(
+                    GithubAttemptScopeRevision.last_ack_nudge_at.is_(None),
+                    GithubAttemptScopeRevision.last_ack_nudge_at <= now - cooldown,
+                ),
+            )
+            .values(last_ack_nudge_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        await db.refresh(revision)
+        if claim.rowcount != 1:
+            return False
+        await agent_mail_service.auto_nudge_members(
+            db,
+            {revision.owner_member_id},
+        )
+        return True
+
+    async def supersede_stale_continuation(
+        self,
+        db: AsyncSession,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+    ) -> None:
+        now = datetime.utcnow()
+        if request.status in {"pending", "approved", "rejected"}:
+            request.status = "superseded"
+            request.superseded_at = now
+        if revision.status in {"proposed", "approved", "rejected"}:
+            revision.status = "superseded"
+        root = None
+        if request.request_message_id is not None:
+            root = await db.get(MailMessage, request.request_message_id)
+        if root is None:
+            root = (
+                await db.execute(
+                    select(MailMessage).where(
+                        MailMessage.delivery_key
+                        == f"github-approval:{request.id}:request"
+                    )
+                )
+            ).scalar_one_or_none()
+        if root is not None:
+            root.request_status = "superseded"
+        await db.commit()
+
+    async def repair_continuation_transport(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+        *,
+        leader_nudge_cooldown: timedelta,
+        owner_ack_nudge_cooldown: timedelta,
+    ) -> str:
+        async with self.continuation_transport_lock(request.id):
+            return await self._repair_continuation_transport(
+                db,
+                item,
+                request,
+                revision,
+                leader_nudge_cooldown=leader_nudge_cooldown,
+                owner_ack_nudge_cooldown=owner_ack_nudge_cooldown,
+            )
+
+    async def _repair_continuation_transport(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+        *,
+        leader_nudge_cooldown: timedelta,
+        owner_ack_nudge_cooldown: timedelta,
+    ) -> str:
+        await db.refresh(item)
+        await db.refresh(request)
+        await db.refresh(revision)
+        if request.status == "pending":
+            expired = await self.expire_continuation_if_needed(
+                db,
+                request,
+                revision,
+            )
+            if expired == "expired_pending":
+                return expired
+        try:
+            await self.ensure_continuation_request_message(
+                db,
+                item,
+                request,
+                revision,
+            )
+        except GithubApprovalError as exc:
+            if exc.detail == "stale_continuation_context":
+                await self.supersede_stale_continuation(db, request, revision)
+                return "superseded_stale"
+            raise
+        if request.status == "pending":
+            if await self.nudge_pending_continuation_leader(
+                db,
+                request,
+                revision,
+                cooldown=leader_nudge_cooldown,
+            ):
+                return "nudge_leader"
+            return "await_leader"
+
+        try:
+            await self.ensure_continuation_decision_message(
+                db,
+                item,
+                request,
+                revision,
+            )
+        except GithubApprovalError as exc:
+            if exc.detail == "stale_continuation_context":
+                await self.supersede_stale_continuation(db, request, revision)
+                return "superseded_stale"
+            raise
+        if request.status == "rejected":
+            return "rejection_delivered"
+        expired = await self.expire_continuation_if_needed(
+            db,
+            request,
+            revision,
+        )
+        if expired == "expired_approved":
+            return expired
+        try:
+            _revision, delivered = await self.deliver_approved_continuation(
+                db,
+                item,
+                request,
+                revision,
+            )
+        except GithubApprovalError as exc:
+            if exc.detail == "stale_approval_owner":
+                await self.supersede_stale_continuation(db, request, revision)
+                return "superseded_stale"
+            raise
+        await db.refresh(revision)
+        if revision.acknowledged_at is not None or revision.status != "approved":
+            return "acknowledged"
+        if delivered:
+            return "nudge_owner_ack"
+        if await self.nudge_approved_continuation_owner(
+            db,
+            revision,
+            cooldown=owner_ack_nudge_cooldown,
+        ):
+            return "nudge_owner_ack"
+        return "await_owner_ack"
+
     async def deliver_approved_continuation(
         self,
         db: AsyncSession,
@@ -674,6 +1204,8 @@ class GithubApprovalService:
             raise GithubApprovalError("approval_revision_link_mismatch")
         if revision.approval_request_id != request.id or revision.status != "approved":
             raise GithubApprovalError("continuation_not_approved")
+        if revision.expires_at is not None and revision.expires_at <= datetime.utcnow():
+            raise GithubApprovalError("continuation_request_expired")
         owner, _leader = await self._current_participants(db, item)
         if (
             item.dispatch_nonce != revision.dispatch_nonce
@@ -732,6 +1264,7 @@ class GithubApprovalService:
                 delivery_attempt_count=(
                     GithubAttemptScopeRevision.delivery_attempt_count + 1
                 ),
+                last_ack_nudge_at=now,
             )
             .execution_options(synchronize_session=False)
         )
@@ -739,7 +1272,8 @@ class GithubApprovalService:
         await db.refresh(revision)
         if link_result.rowcount != 1 and revision.delivery_message_id != message.id:
             raise GithubApprovalError("continuation_delivery_link_mismatch")
-        await agent_mail_service.auto_nudge_members(db, {revision.owner_member_id})
+        if link_result.rowcount == 1:
+            await agent_mail_service.auto_nudge_members(db, {revision.owner_member_id})
         return revision, link_result.rowcount == 1
 
     async def current_pending(

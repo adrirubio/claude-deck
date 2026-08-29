@@ -19,7 +19,8 @@ unbounded recovery.
 **Spec:** `docs/superpowers/specs/2026-08-29-autonomous-attempt-recovery-design.md`,
 Revision 7, especially §§5.2–5.4, 6, 7.1–7.3, 8, 9.1.1–9.2, 11–13, and 14 PR3.
 
-**Dependency:** Merged PR2 implementation continuation. Record its integration merge SHA.
+**Dependency:** Merged PR2 implementation continuation at
+`e9e662de7e8d77d4ba4af27d93dfb8997a4af769`.
 
 **Target:** One PR into `feature/autonomous-github-dispatch`, never `master`.
 
@@ -51,6 +52,7 @@ the live Tizonia replay.
 | File | Action | Responsibility |
 |---|---|---|
 | `backend/app/models/schemas.py` | Modify | Diagnostic proposal/report/evidence schemas |
+| `backend/app/config.py` | Modify | Recovery expiry and nudge defaults |
 | `backend/app/services/github_approval_service.py` | Modify | Diagnostic policy, fallback, expiry, delivery repair |
 | `backend/app/services/github_verification_service.py` | Modify | Diagnostic check observer/accounting/restoration |
 | `backend/app/services/github_dispatch_service.py` | Modify | Recovery monitor, nudge state, phase transitions |
@@ -63,6 +65,26 @@ the live Tizonia replay.
 | `backend/tests/agent_teams/test_github_workspace_api.py` | Modify | Diagnostic proposal/report authorization |
 | `backend/tests/agent_mail/test_mcp_shim.py` | Modify | Diagnostic MCP and 409 detail propagation |
 | `docs/deploy/attempt-recovery-pr3-rollout.md` | Create | Backend recovery rollout with continuation still off |
+
+## Post-PR2 Drift Corrections
+
+- `continuation_enabled` is the only persisted rollout gate. PR3 does not add a second
+  diagnostic feature flag. Tests that remove the gate must prove diagnostic proposals are
+  refused while `continuation_enabled = false`.
+- The proposal `summary` is the persisted bounded evidence objective from spec §7.1. PR3
+  does not add a duplicate evidence-objective column.
+- A hosted-only diagnostic means `execution_target = hosted_ci`. No separate hosted-only
+  scope column exists. Such a proposal rejects local build/compile commands. A
+  `workspace_and_hosted_ci` proposal must keep each command/action consistent with its
+  declared target instead of inferring a target from prose.
+- Diagnostic check observations and owner completion evidence share the existing revision
+  `evidence` JSON column through a closed versioned envelope. Observer writes live under
+  `diagnostic_observations`, keyed by head SHA; owner-provided completion evidence lives
+  under `diagnostic_completion`. Neither writer may overwrite the other namespace.
+- Task 6 adds settings in `backend/app/config.py`: proposal expiry 3600 seconds, Leader
+  nudge cooldown 180 seconds, owner-ack nudge cooldown 180 seconds, and recovery proposal
+  nudge cooldown 180 seconds. Tests override these settings; disabled autonomy advances no
+  persisted clock.
 
 ## Task Index
 
@@ -91,11 +113,11 @@ the live Tizonia replay.
 - [ ] Require diagnostic proposals to include:
   - `execution_target`;
   - exact paths/actions/commands;
-  - evidence objective;
+  - a non-empty bounded `summary`, which is the evidence objective;
   - finite failed-head budget;
   - `revert_diagnostic_changes`;
   - hosted tool fallbacks for every named required hosted tool.
-- [ ] Reject local build/compile commands when scope/build policy or proposal is hosted-only.
+- [ ] Reject local build/compile commands when `execution_target = hosted_ci`.
 - [ ] Reject `install_hosted_ci_tool` unless target includes `hosted_ci`, a package/tool is
   named, installation is temporary, and revert is mandatory.
 - [ ] Normalize tool-fallback payloads into a closed schema. Unknown keys/actions fail.
@@ -103,7 +125,8 @@ the live Tizonia replay.
 - [ ] Count diagnostic proposals against attempt-wide revision caps.
 - [ ] Keep the item escalated until Leader approval, delivery, and owner ack.
 
-**Mutation checks:** allow diagnostic before PR3 flag; accept local gdb install; omit revert;
+**Mutation checks:** allow diagnostic while continuation is disabled; accept local gdb
+install; omit revert;
 infer target from command prose; permit unlimited failed heads.
 
 **Verify:**
@@ -125,7 +148,9 @@ venv/bin/pytest tests/agent_teams/test_github_workspace_api.py -q -p no:warnings
 - [ ] Add a diagnostic observer selected only for active diagnostic revision plus
   `dispatch_status = dispatched`.
 - [ ] Fetch/validate current PR identity using existing protections.
-- [ ] Record pending/green/red check evidence on the revision without moving review status.
+- [ ] Record pending/green/red check evidence in the revision's versioned
+  `diagnostic_observations` envelope without moving review status or overwriting owner
+  completion evidence.
 - [ ] On a distinct failed diagnostic head:
   - update `diagnostic_last_verified_sha`;
   - increment `diagnostic_retry_count` and revision failed-head count;
@@ -234,7 +259,8 @@ venv/bin/pytest tests/agent_teams/test_github_dispatch_service.py -q -p no:warni
 
 ## Task 5 — Repair Decision, Delivery, and Ack Boundaries
 
-**Files:** `backend/app/services/github_approval_service.py`,
+**Files:** `backend/app/config.py`,
+`backend/app/services/github_approval_service.py`,
 `backend/app/services/github_dispatch_service.py`,
 `backend/tests/agent_teams/test_github_dispatch_service.py`,
 `backend/tests/agent_mail/test_api.py`

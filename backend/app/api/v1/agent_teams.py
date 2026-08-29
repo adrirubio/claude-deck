@@ -700,6 +700,11 @@ _DISPATCH_STATUS_RULES: dict[str, _StatusRule] = {
         "not_item_owner",
         lease_token_required=True,
     ),
+    "diagnostic_completed": _StatusRule(
+        "owner",
+        "not_item_owner",
+        lease_token_required=True,
+    ),
     "workspace_released": _StatusRule(
         "owner",
         "not_item_owner",
@@ -1082,6 +1087,41 @@ async def report_dispatch_status(
             raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    elif report.status == "diagnostic_completed":
+        if report.revision is None:
+            raise HTTPException(status_code=400, detail="revision_required")
+        if not report.dispatch_nonce:
+            raise HTTPException(status_code=400, detail="dispatch_nonce_required")
+        if not report.current_head_sha:
+            raise HTTPException(status_code=400, detail="current_head_sha_required")
+        if not report.summary or not report.summary.strip():
+            raise HTTPException(status_code=400, detail="summary_required")
+        if not report.evidence:
+            raise HTTPException(status_code=400, detail="evidence_required")
+        if report.lease_token is None:
+            raise HTTPException(status_code=400, detail="lease_token_required")
+        try:
+            await github_verification_service.submit_diagnostic_completion(
+                db,
+                item,
+                scope,
+                authenticated_owner_member_id=session.member_id,
+                authenticated_owner_slot_id=int(report.reporting_slot_id),
+                revision_number=report.revision,
+                dispatch_nonce=report.dispatch_nonce,
+                current_head_sha=report.current_head_sha,
+                result_summary=report.summary.strip(),
+                evidence=report.evidence,
+                lease_token=report.lease_token,
+            )
+        except ContinuationCompletionError as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubAppAuthError as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from exc
+        except GithubClientResponseError as exc:
+            raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
     elif report.status == "in_progress":
         now = datetime.utcnow()
         item.last_nudge_at = None
@@ -1222,64 +1262,41 @@ async def request_github_work_item_continuation(
                 allowed_commands=request.allowed_commands,
                 prohibited_actions=request.prohibited_actions,
                 max_failed_heads=request.max_failed_heads,
-                tool_fallbacks=request.tool_fallbacks,
+                tool_fallbacks={
+                    name: fallback.model_dump()
+                    for name, fallback in request.tool_fallbacks.items()
+                },
                 lease_token=request.lease_token,
             )
         )
-        delivery_key = f"github-approval:{approval.id}:request"
-        if approval.request_message_id is not None:
-            linked = await db.get(MailMessage, approval.request_message_id)
-            if linked is None or not (
-                github_approval_service.matches_linked_continuation_request_message(
+        async with github_approval_service.continuation_transport_lock(approval.id):
+            if await github_approval_service.expire_continuation_if_needed(
+                db,
+                approval,
+                revision,
+            ):
+                raise GithubApprovalError("continuation_request_expired")
+            _root, linked = (
+                await github_approval_service.ensure_continuation_request_message(
+                    db,
+                    item,
                     approval,
                     revision,
-                    linked,
-                    delivery_key=delivery_key,
                 )
-            ):
-                raise GithubApprovalError("approval_request_link_mismatch")
-        elif approval.status == "pending":
-            message = await agent_mail_service.send_message(
-                db,
-                MailMessageCreate(
-                    kind="context_request",
-                    sender_member_id=approval.owner_member_id,
-                    recipient_member_id=approval.leader_member_id,
-                    subject=(
-                        f"Continuation revision {revision.revision} for work item "
-                        f"{item.id}"
-                    ),
-                    body_markdown=revision.summary,
-                    payload=github_approval_service.continuation_request_payload(
-                        approval,
-                        revision,
-                    ),
-                ),
-                authenticated_sender_member_id=session.member_id,
-                delivery_key=delivery_key,
-                auto_nudge=False,
             )
-            link_result = await db.execute(
-                update(GithubApprovalRequest)
-                .where(
-                    GithubApprovalRequest.id == approval.id,
-                    GithubApprovalRequest.status == "pending",
-                    GithubApprovalRequest.request_message_id.is_(None),
-                )
-                .values(request_message_id=message.id)
-                .execution_options(synchronize_session=False)
-            )
-            await db.commit()
-            await db.refresh(approval)
-            if link_result.rowcount != 1 and approval.request_message_id != message.id:
-                root = await db.get(MailMessage, message.id)
-                if root is not None and root.request_status == "pending":
-                    root.request_status = "superseded"
-                    await db.commit()
+            if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")
-        if approval.status != "pending":
-            raise GithubApprovalError("request_not_pending")
-        await agent_mail_service.auto_nudge_members(db, {approval.leader_member_id})
+            if linked:
+                await github_approval_service.nudge_pending_continuation_leader(
+                    db,
+                    approval,
+                    revision,
+                    cooldown=timedelta(
+                        seconds=(
+                            settings.github_continuation_leader_nudge_cooldown_seconds
+                        )
+                    ),
+                )
         return GithubContinuationRequestResponse(
             approval=_approval_authority_response(approval),
             revision=_scope_revision_response(revision),
