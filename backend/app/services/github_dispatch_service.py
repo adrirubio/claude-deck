@@ -16,6 +16,7 @@ from app.models.database import (
     AgentPaneBinding,
     AgentTeamSlot,
     GithubWorkItem,
+    GithubApprovalRequest,
     GithubWorkspace,
     MailReceipt,
     MailMessage,
@@ -1210,41 +1211,67 @@ class GithubDispatchService:
             )
         return None
 
-    async def advance_approval_round(
+    async def apply_approval_decision(
         self,
         db: AsyncSession,
         item: GithubWorkItem,
         scope: TeamGithubScope,
         *,
-        decision_message: MailMessageCreate,
-        authenticated_sender_member_id: int,
-    ) -> MailMessage:
-        if item.dispatch_status == "escalated":
-            raise ValueError("item_escalated")
-        message, _ = await agent_mail_service._create_message_row(
-            db,
-            decision_message,
-            authenticated_sender_member_id=authenticated_sender_member_id,
+        decision: str,
+        approval_round: int,
+    ) -> bool:
+        if decision == "approved":
+            if item.dispatch_status == "escalated":
+                raise ValueError("item_escalated")
+            if item.approval_round_count != approval_round:
+                raise ValueError("approval_round_mismatch")
+            item.updated_at = datetime.utcnow()
+            await db.commit()
+            return True
+
+        now = datetime.utcnow()
+        values = {
+            "ack_received_at": None,
+            "ack_approver_member_id": None,
+            "ack_evidence_message_id": None,
+            "ack_enforcement_epoch": None,
+            "ack_approval_round": None,
+            "last_nudge_at": None,
+            "updated_at": now,
+        }
+        exhausted = approval_round >= scope.max_approval_rounds
+        if exhausted:
+            values.update(
+                dispatch_status="escalated",
+                escalation_reason="approval_rounds_exhausted",
+                pending_reason=None,
+            )
+        else:
+            values["approval_round_count"] = approval_round + 1
+        result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status != "escalated",
+                GithubWorkItem.approval_round_count == approval_round,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
         )
-        if decision_message.decision == "approved":
-            item.updated_at = datetime.utcnow()
-            await db.commit()
-            return message
-
-        if item.approval_round_count < scope.max_approval_rounds:
-            item.ack_received_at = None
-            item.ack_approver_member_id = None
-            item.ack_evidence_message_id = None
-            item.ack_enforcement_epoch = None
-            item.ack_approval_round = None
-            item.last_nudge_at = None
-            item.approval_round_count += 1
-            item.updated_at = datetime.utcnow()
-            await db.commit()
-            return message
-
-        self._apply_escalation(item, "approval_rounds_exhausted")
         await db.commit()
+        await db.refresh(item)
+        if result.rowcount != 1:
+            if (
+                item.approval_round_count == approval_round + 1
+                or item.dispatch_status == "escalated"
+                and item.escalation_reason == "approval_rounds_exhausted"
+            ):
+                return False
+            if item.dispatch_status == "escalated":
+                raise ValueError("item_escalated")
+            raise ValueError("approval_round_mismatch")
+        if not exhausted:
+            return True
         try:
             await self._send_escalation_broadcast(
                 db,
@@ -1258,7 +1285,7 @@ class GithubDispatchService:
                 "Failed to notify after approval rounds exhausted for item %s",
                 item.id,
             )
-        return message
+        return True
 
     async def _ack_evidence(
         self,
@@ -1279,75 +1306,47 @@ class GithubDispatchService:
             return AckEvidence(False, "no_owner")
         if owner_member.id == leader_member.id:
             return AckEvidence(False, "self_ack")
-        roots = (
+        request = (
             await db.execute(
-                select(MailMessage).where(
-                    MailMessage.kind == "context_request",
-                    MailMessage.sender_member_id == owner_member.id,
-                    MailMessage.recipient_member_id == leader_member.id,
+                select(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.work_item_id == item.id,
+                    GithubApprovalRequest.request_kind == "initial_plan",
                 )
+                .order_by(GithubApprovalRequest.id.desc())
+                .limit(1)
             )
-        ).scalars().all()
-        linked = [
-            root
-            for root in roots
-            if (root.payload or {}).get("work_item_id") == item.id
-            and (root.payload or {}).get("approval_round") is not None
-        ]
-        if not linked:
+        ).scalar_one_or_none()
+        if request is None or request.request_message_id is None:
             return AckEvidence(False, "no_linkage")
         if item.dispatch_nonce is None:
             return AckEvidence(False, "stale_nonce")
-        nonce_matches = [
-            root
-            for root in linked
-            if (root.payload or {}).get("dispatch_nonce") == item.dispatch_nonce
-        ]
-        if not nonce_matches:
+        if request.dispatch_nonce != item.dispatch_nonce:
             return AckEvidence(False, "stale_nonce")
         if item.approval_round_count < 1:
             return AckEvidence(False, "stale_round")
-        round_matches = [
-            root
-            for root in nonce_matches
-            if (root.payload or {}).get("approval_round")
-            == item.approval_round_count
-        ]
-        if not round_matches:
+        if request.approval_round != item.approval_round_count:
             return AckEvidence(False, "stale_round")
-        root_ids = [root.id for root in round_matches]
-        answers = (
-            await db.execute(
-                select(MailMessage)
-                .where(
-                    MailMessage.kind == "answer",
-                    MailMessage.thread_root_id.in_(root_ids),
-                )
-                .order_by(MailMessage.created_at, MailMessage.id)
-            )
-        ).scalars().all()
-        leader_answers = [
-            answer
-            for answer in answers
-            if answer.sender_member_id == leader_member.id
-        ]
-        approved_answers = [
-            answer
-            for answer in leader_answers
-            if answer.decision == "approved"
-            and answer.approval_round == item.approval_round_count
-        ]
-        if not approved_answers:
-            if any(
-                answer.decision == "rejected"
-                and answer.approval_round == item.approval_round_count
-                for answer in leader_answers
-            ):
-                return AckEvidence(False, "rejected")
-            if leader_answers:
-                return AckEvidence(False, "no_decision")
+        if request.owner_member_id != owner_member.id:
+            return AckEvidence(False, "stale_approval_owner")
+        if request.leader_member_id != leader_member.id:
             return AckEvidence(False, "not_designated_approver")
-        answer = approved_answers[0]
+        if request.status == "rejected":
+            return AckEvidence(False, "rejected")
+        if request.status != "approved" or request.decision_message_id is None:
+            return AckEvidence(False, "no_decision")
+        answer = await db.get(MailMessage, request.decision_message_id)
+        if answer is None:
+            return AckEvidence(False, "no_decision")
+        if answer.sender_member_id != leader_member.id:
+            return AckEvidence(False, "not_designated_approver")
+        if (
+            answer.kind != "answer"
+            or answer.thread_root_id != request.request_message_id
+            or answer.decision != "approved"
+            or answer.approval_round != item.approval_round_count
+        ):
+            return AckEvidence(False, "no_decision")
         return AckEvidence(
             True,
             "ok",

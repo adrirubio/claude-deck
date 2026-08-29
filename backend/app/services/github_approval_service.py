@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,7 +94,7 @@ class GithubApprovalService:
             raise GithubApprovalError("owner_not_registered", status_code=409)
         if leader is None:
             raise GithubApprovalError("leader_not_registered", status_code=409)
-        if owner.id == leader.id:
+        if owner.id == leader.id or owner.team_slot_id == leader.team_slot_id:
             raise GithubApprovalError("owner_cannot_approve_own_work", status_code=409)
         return owner, leader
 
@@ -176,27 +176,13 @@ class GithubApprovalService:
             request = await db.get(GithubApprovalRequest, request_id)
             if request is None or request.work_item_id != item.id:
                 raise GithubApprovalError("approval_request_not_found", status_code=404)
+            if request.request_kind != "initial_plan":
+                raise GithubApprovalError("approval_request_not_found", status_code=404)
             return request
         pending = await self.current_pending(db, item.id)
         if pending is not None:
             return pending
-        request = (
-            await db.execute(
-                select(GithubApprovalRequest)
-                .where(
-                    GithubApprovalRequest.work_item_id == item.id,
-                    GithubApprovalRequest.request_kind == "initial_plan",
-                    GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
-                    GithubApprovalRequest.approval_round == item.approval_round_count,
-                    GithubApprovalRequest.status.in_(("approved", "rejected")),
-                )
-                .order_by(GithubApprovalRequest.id.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if request is None:
-            raise GithubApprovalError("no_current_approval_request", status_code=404)
-        return request
+        raise GithubApprovalError("no_current_approval_request", status_code=404)
 
     async def decide(
         self,
@@ -218,18 +204,44 @@ class GithubApprovalService:
             raise GithubApprovalError("stale_approval_recipient")
         if request.dispatch_nonce != item.dispatch_nonce:
             raise GithubApprovalError("stale_nonce")
-        if request.approval_round != item.approval_round_count:
-            raise GithubApprovalError("approval_round_mismatch")
+        if request.request_message_id is None:
+            raise GithubApprovalError("approval_request_delivery_pending")
         if request.status != "pending":
             if request.status == decision and request.reason == reason:
+                valid_rounds = {request.approval_round}
+                if decision == "rejected":
+                    valid_rounds.add(request.approval_round + 1)
+                if item.approval_round_count not in valid_rounds:
+                    raise GithubApprovalError("approval_round_mismatch")
                 return request, False
             raise GithubApprovalError("approval_request_already_decided")
-        request.status = decision
-        request.reason = reason
-        request.decided_at = datetime.utcnow()
+        if request.approval_round != item.approval_round_count:
+            raise GithubApprovalError("approval_round_mismatch")
+        result = await db.execute(
+            update(GithubApprovalRequest)
+            .where(
+                GithubApprovalRequest.id == request.id,
+                GithubApprovalRequest.status == "pending",
+                GithubApprovalRequest.request_kind == "initial_plan",
+                GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+                GithubApprovalRequest.approval_round == item.approval_round_count,
+                GithubApprovalRequest.owner_member_id == owner.id,
+                GithubApprovalRequest.leader_member_id == leader.id,
+            )
+            .values(
+                status=decision,
+                reason=reason,
+                decided_at=datetime.utcnow(),
+            )
+            .execution_options(synchronize_session=False)
+        )
         await db.commit()
         await db.refresh(request)
-        return request, True
+        if result.rowcount == 1:
+            return request, True
+        if request.status == decision and request.reason == reason:
+            return request, False
+        raise GithubApprovalError("approval_request_already_decided")
 
     async def cancel(
         self,

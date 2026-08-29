@@ -933,6 +933,57 @@ class AgentMailService:
     ) -> MailMessageResponse:
         if request.decision is not None:
             raise MailAuthorityError("use_decisions_route", status_code=409)
+        return await self._send_message(
+            db,
+            request,
+            auto_nudge=auto_nudge,
+            bypass_nudge_cooldown=bypass_nudge_cooldown,
+            nudge_prompt=nudge_prompt,
+            sender_actor_id=sender_actor_id,
+            authenticated_sender_member_id=authenticated_sender_member_id,
+            delivery_key=delivery_key,
+            commit=commit,
+        )
+
+    async def send_authoritative_decision(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        *,
+        authenticated_sender_member_id: int,
+        approval_round: int,
+        delivery_key: str,
+        auto_nudge: bool = False,
+    ) -> MailMessageResponse:
+        if request.decision not in {"approved", "rejected"}:
+            raise MailAuthorityError("decision_required", status_code=400)
+        if request.sender_member_id != authenticated_sender_member_id:
+            raise MailAuthorityError("conflicting_sender_member_id", status_code=403)
+        return await self._send_message(
+            db,
+            request,
+            auto_nudge=auto_nudge,
+            sender_actor_id=None,
+            authenticated_sender_member_id=authenticated_sender_member_id,
+            delivery_key=delivery_key,
+            authoritative_approval_round=approval_round,
+            commit=True,
+        )
+
+    async def _send_message(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        *,
+        auto_nudge: bool = True,
+        bypass_nudge_cooldown: bool = False,
+        nudge_prompt: str = INBOX_CHECK_PROMPT,
+        sender_actor_id: Optional[int] = None,
+        authenticated_sender_member_id: Optional[int] = None,
+        delivery_key: Optional[str] = None,
+        authoritative_approval_round: int | None = None,
+        commit: bool = True,
+    ) -> MailMessageResponse:
         created = True
         if delivery_key is None:
             message, recipients = await self._create_message_row(
@@ -940,6 +991,7 @@ class AgentMailService:
                 request,
                 sender_actor_id=sender_actor_id,
                 authenticated_sender_member_id=authenticated_sender_member_id,
+                authoritative_approval_round=authoritative_approval_round,
             )
         else:
             try:
@@ -950,6 +1002,7 @@ class AgentMailService:
                         sender_actor_id=sender_actor_id,
                         authenticated_sender_member_id=authenticated_sender_member_id,
                         delivery_key=delivery_key,
+                        authoritative_approval_round=authoritative_approval_round,
                     )
             except IntegrityError:
                 created = False
@@ -1032,6 +1085,7 @@ class AgentMailService:
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
+        authoritative_approval_round: int | None = None,
     ) -> tuple[MailMessage, set[int]]:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
@@ -1063,12 +1117,13 @@ class AgentMailService:
             )
             payload["approval_round"] = linked_item.approval_round_count
         if request.decision is not None:
-            linked_item = await self._validate_decision_message(
-                db,
-                request,
-                root,
-                authenticated_sender_member_id=authenticated_sender_member_id,
-            )
+            if authoritative_approval_round is None:
+                linked_item = await self._validate_decision_message(
+                    db,
+                    request,
+                    root,
+                    authenticated_sender_member_id=authenticated_sender_member_id,
+                )
 
         message = MailMessage(
             thread_root_id=request.thread_root_id,
@@ -1081,7 +1136,11 @@ class AgentMailService:
             payload=payload or None,
             request_status="pending" if request.kind in MAIL_REQUEST_KINDS else None,
             approval_round=(
-                linked_item.approval_round_count if linked_item is not None else None
+                authoritative_approval_round
+                if authoritative_approval_round is not None
+                else linked_item.approval_round_count
+                if linked_item is not None
+                else None
             ),
             decision=request.decision,
             delivery_key=delivery_key,

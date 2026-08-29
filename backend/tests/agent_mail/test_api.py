@@ -376,22 +376,18 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
     item, members, tokens = await _dispatch_approval_fixture(db)
     leader, owner = members
     request = await client.post(
-        "/api/v1/agent-mail/messages",
+        "/api/v1/agent-mail/approval-requests",
         headers={"X-Deck-Session-Token": tokens[1]},
         json={
-            "kind": "context_request",
-            "sender_member_id": owner.id,
-            "recipient_member_id": leader.id,
-            "body_markdown": "plan says no risky changes",
-            "payload": {
-                "work_item_id": item.id,
-                "dispatch_nonce": item.dispatch_nonce,
-            },
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "plan says no risky changes",
         },
     )
     assert request.status_code == 200
     assert request.json()["approval_round"] == 1
-    assert request.json()["payload"]["approval_round"] == 1
+    request_message_id = request.json()["request_message_id"]
+    approval_request_id = request.json()["id"]
 
     bypass = await client.post(
         "/api/v1/agent-mail/messages",
@@ -399,7 +395,7 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
         json={
             "kind": "answer",
             "sender_member_id": leader.id,
-            "thread_root_id": request.json()["id"],
+            "thread_root_id": request_message_id,
             "body_markdown": "approved",
             "decision": "approved",
         },
@@ -416,6 +412,7 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval_request_id,
             "decision": "approved",
             "reason": "No, this does not need revision; approved.",
         },
@@ -425,7 +422,137 @@ async def test_explicit_leader_decision_is_linked_to_current_round(
     assert decision.json()["decision"] == "approved"
     assert decision.json()["approval_round"] == 1
     stored = (await db.execute(select(MailMessage).where(MailMessage.decision == "approved"))).scalar_one()
-    assert stored.thread_root_id == request.json()["id"]
+    assert stored.thread_root_id == request_message_id
+    approval = await db.get(GithubApprovalRequest, approval_request_id)
+    assert approval.status == "approved"
+    assert approval.decision_message_id == stored.id
+    assert stored.delivery_key == f"github-approval:{approval.id}:decision"
+
+
+@pytest.mark.asyncio
+async def test_identical_rejection_replay_does_not_advance_twice(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _members, tokens = await _dispatch_approval_fixture(db)
+    approval_request = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "bounded plan",
+        },
+    )
+    approval_request_id = approval_request.json()["id"]
+    payload = {
+        "work_item_id": item.id,
+        "dispatch_nonce": item.dispatch_nonce,
+        "approval_request_id": approval_request_id,
+        "decision": "rejected",
+        "reason": "Revise the plan",
+    }
+
+    first = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=payload,
+    )
+    repeated = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=payload,
+    )
+    opposite = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={**payload, "decision": "approved"},
+    )
+
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.json()["id"] == first.json()["id"]
+    assert opposite.status_code == 409
+    assert opposite.json()["detail"] == "approval_request_already_decided"
+    await db.refresh(item)
+    assert item.approval_round_count == 2
+    decisions = (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all()
+    assert [message.id for message in decisions] == [first.json()["id"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable_mail", [False, True])
+async def test_decision_route_recovers_committed_authority(
+    client, db, monkeypatch, durable_mail
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    approval_response = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "bounded plan",
+        },
+    )
+    approval_id = approval_response.json()["id"]
+    approval, decided = await github_approval_service.decide(
+        db,
+        item,
+        authenticated_leader_member_id=members[0].id,
+        decision="rejected",
+        reason="Revise the plan",
+        request_id=approval_id,
+    )
+    assert decided is True
+    durable_message = None
+    if durable_mail:
+        durable_message = await agent_mail_service.send_authoritative_decision(
+            db,
+            MailMessageCreate(
+                kind="answer",
+                sender_member_id=members[0].id,
+                thread_root_id=approval.request_message_id,
+                body_markdown="Revise the plan",
+                payload={
+                    "approval_request_id": approval.id,
+                    "request_kind": approval.request_kind,
+                    "work_item_id": approval.work_item_id,
+                },
+                decision="rejected",
+            ),
+            authenticated_sender_member_id=members[0].id,
+            approval_round=approval.approval_round,
+            delivery_key=f"github-approval:{approval.id}:decision",
+        )
+        assert approval.decision_message_id is None
+
+    recovered = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval.id,
+            "decision": "rejected",
+            "reason": "Revise the plan",
+        },
+    )
+
+    assert recovered.status_code == 200
+    if durable_message is not None:
+        assert recovered.json()["id"] == durable_message.id
+    await db.refresh(approval)
+    await db.refresh(item)
+    assert approval.decision_message_id == recovered.json()["id"]
+    assert item.approval_round_count == 2
+    decisions = (
+        await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
+    ).scalars().all()
+    assert len(decisions) == 1
 
 
 @pytest.mark.asyncio
@@ -442,20 +569,16 @@ async def test_rejection_opens_next_round_and_clears_old_ack(
     item.ack_approval_round = 1
     item.last_nudge_at = datetime.utcnow()
     await db.commit()
-    await client.post(
-        "/api/v1/agent-mail/messages",
+    approval_request = await client.post(
+        "/api/v1/agent-mail/approval-requests",
         headers={"X-Deck-Session-Token": tokens[1]},
         json={
-            "kind": "context_request",
-            "sender_member_id": owner.id,
-            "recipient_member_id": leader.id,
-            "body_markdown": "plan",
-            "payload": {
-                "work_item_id": item.id,
-                "dispatch_nonce": item.dispatch_nonce,
-            },
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "plan",
         },
     )
+    assert approval_request.status_code == 200
 
     decision = await client.post(
         "/api/v1/agent-mail/decisions",
@@ -463,6 +586,7 @@ async def test_rejection_opens_next_round_and_clears_old_ack(
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval_request.json()["id"],
             "decision": "rejected",
             "reason": "Revise the plan",
         },
@@ -545,6 +669,16 @@ async def test_stale_leader_token_cannot_record_a_decision(client, db, monkeypat
 async def test_decision_route_refuses_the_owner_as_approver(client, db, monkeypatch):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     item, _members, tokens = await _dispatch_approval_fixture(db)
+    approval_request = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "plan",
+        },
+    )
+    assert approval_request.status_code == 200
 
     response = await client.post(
         "/api/v1/agent-mail/decisions",
@@ -552,6 +686,7 @@ async def test_decision_route_refuses_the_owner_as_approver(client, db, monkeypa
         json={
             "work_item_id": item.id,
             "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval_request.json()["id"],
             "decision": "approved",
             "reason": "self approval",
         },
@@ -565,7 +700,7 @@ async def test_decision_route_refuses_the_owner_as_approver(client, db, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_decision_route_requires_one_current_request(client, db, monkeypatch):
+async def test_decision_route_ignores_generic_context_roots(client, db, monkeypatch):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     item, _members, tokens = await _dispatch_approval_fixture(db)
     payload = {
@@ -584,7 +719,6 @@ async def test_decision_route_requires_one_current_request(client, db, monkeypat
 
     owner = _members[1]
     leader = _members[0]
-    root_ids = []
     for index in range(2):
         request = await client.post(
             "/api/v1/agent-mail/messages",
@@ -601,16 +735,14 @@ async def test_decision_route_requires_one_current_request(client, db, monkeypat
             },
         )
         assert request.status_code == 200
-        root_ids.append(request.json()["id"])
-
-    ambiguous = await client.post(
+    still_missing = await client.post(
         "/api/v1/agent-mail/decisions",
         headers={"X-Deck-Session-Token": tokens[0]},
         json=payload,
     )
 
-    assert ambiguous.status_code == 409
-    assert all(str(root_id) in ambiguous.json()["detail"] for root_id in root_ids)
+    assert still_missing.status_code == 404
+    assert still_missing.json()["detail"] == "no_current_approval_request"
     assert (
         await db.execute(select(MailMessage).where(MailMessage.decision.is_not(None)))
     ).scalars().all() == []
