@@ -39,6 +39,11 @@ Deploy PR1 after PR0 capability-token enforcement. Restart the backend once. Sta
 - `github_approval_requests` and its one-pending-request partial unique index;
 - the inert `github_attempt_scope_revisions` table.
 
+Startup also verifies both partial unique indexes by structure, not name alone. If an
+index has the expected name but the wrong uniqueness, columns, or predicate, Deck repairs
+it only after a duplicate-row preflight. Startup fails closed instead of dropping a
+malformed index when duplicate constrained rows already exist.
+
 The scope-revision table is persistence only in PR1. No route, scheduler, or monitor can
 activate a revision.
 
@@ -50,6 +55,9 @@ sqlite3 claude_registry.db <<'SQL'
 .schema github_attempt_scope_revisions
 PRAGMA index_list('github_approval_requests');
 PRAGMA index_list('mail_messages');
+SELECT name, applied_at
+FROM deck_compat_migrations
+WHERE name = 'pr1_historical_approval_reconciliation';
 SQL
 ```
 
@@ -58,8 +66,8 @@ The output must include `uix_github_approval_requests_pending_work_item` and
 
 ## 3. Reconcile Historical Approval Roots
 
-Startup reconciles only pending context roots that match the current work item, dispatch
-nonce, approval round, owner, and designated Leader:
+The first successful PR1 startup reconciles only pending context roots that match the
+current work item, dispatch nonce, approval round, owner, and designated Leader:
 
 - No matching root creates no normalized authority.
 - Exactly one matching root creates one pending `initial_plan` approval row linked to it.
@@ -89,12 +97,17 @@ deck_request_work_item_approval(
 
 Do not recreate approval with `deck_request_context`. Generic context mail remains useful
 for questions, but it creates no approval authority and cannot satisfy the ack/merge gate.
+The successful reconciliation writes the durable
+`pr1_historical_approval_reconciliation` marker shown above. Later restarts do not scan
+post-PR1 generic context messages. If startup stops before the required schema is present,
+it does not write the marker and retries the reconciliation on the next startup.
 
 ## 4. Restart Agent Panes
 
 Restart every participating agent pane after the backend is healthy. The MCP shim must
-reload before agents can see `deck_request_work_item_approval` or pass an
-`approval_request_id` to `deck_approve_work_item`.
+reload before agents can see `deck_request_work_item_approval`. The Leader must pass the
+returned `approval_request_id` to `deck_approve_work_item`; Deck does not infer a decision
+target from whichever request happens to be pending.
 
 PR0 capability-token rules still apply: the owner creates the request with its own session
 token, and only the authenticated designated Leader can decide it. A prose reply is not an
@@ -130,8 +143,8 @@ rollback, so preserve an incident copy first if they are needed for diagnosis.
 
 Measured on the isolated PR1 worktree on 2026-08-29:
 
-- Approval/Agent Mail/agent-team/migration scope: `833 passed in 89.08s`.
-- Whole backend suite: `1002 passed, 1 failed in 96.43s`; the only failure is the
+- Approval/Agent Mail/agent-team/migration scope: `849 passed in 83.18s`.
+- Whole backend suite: `1018 passed, 1 failed in 89.69s`; the only failure is the
   documented pre-existing `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke`
   tracked as issue #312.
 - Frontend production build: passed (`tsc -b && vite build`); Vite reported only the

@@ -1878,7 +1878,7 @@ class MailMessageCreate(BaseModel):
 class MailDecisionRequest(BaseModel):
     work_item_id: int
     dispatch_nonce: str
-    approval_request_id: Optional[int] = None
+    approval_request_id: int
     decision: Literal["approved", "rejected"]
     reason: str = Field(min_length=1)
 

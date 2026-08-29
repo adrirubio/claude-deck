@@ -64,7 +64,8 @@ class MailAuthorityError(ValueError):
 
 
 class MailDeliveryIntegrityError(RuntimeError):
-    pass
+    detail = "delivery_key_conflict"
+    status_code = 409
 
 
 class AgentMailService:
@@ -1182,7 +1183,7 @@ class AgentMailService:
             await db.execute(
                 select(MailTeamMember)
                 .where(MailTeamMember.team_slot_id == slot_id)
-                .order_by(MailTeamMember.updated_at.desc())
+                .order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()

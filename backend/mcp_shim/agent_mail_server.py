@@ -386,13 +386,12 @@ def deck_approve_work_item(
     dispatch_nonce: str,
     decision: str,
     reason: str,
-    approval_request_id: Optional[int] = None,
+    approval_request_id: int,
 ) -> dict:
     """Approve or reject a normalized initial-plan request as its designated Leader.
 
-    Pass approval_request_id from deck_request_work_item_approval when available.
-    Without it, Deck resolves the work item's unique pending request. A rejection
-    opens the next round automatically when one remains.
+    Pass approval_request_id from deck_request_work_item_approval. A rejection opens
+    the next round automatically when one remains.
     """
     if decision not in {"approved", "rejected"}:
         return {

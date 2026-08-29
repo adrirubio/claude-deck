@@ -76,15 +76,21 @@ async def health():
 # Serve static files from the frontend build directory
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend", "dist")
 
+
+async def spa_not_found_exception_handler(request, exc):
+    """Serve the SPA for UI routes without erasing API error details."""
+    if not request.url.path.startswith(settings.api_v1_prefix):
+        return FileResponse(os.path.join(frontend_path, "index.html"), status_code=200)
+    return JSONResponse(
+        {"detail": exc.detail},
+        status_code=exc.status_code,
+        headers=exc.headers,
+    )
+
+
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
-
-    @app.exception_handler(404)
-    async def not_found_exception_handler(request, exc):
-        """Standard 404 handler to serve index.html for SPA routing."""
-        if not request.url.path.startswith(settings.api_v1_prefix):
-            return FileResponse(os.path.join(frontend_path, "index.html"), status_code=200)
-        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    app.add_exception_handler(404, spa_not_found_exception_handler)
 else:
     @app.get("/")
     async def root():

@@ -452,7 +452,7 @@ def test_request_work_item_approval_uses_agent_mail_authority_route(monkeypatch)
     }
 
 
-def test_approve_work_item_sends_optional_request_id(monkeypatch):
+def test_approve_work_item_sends_required_request_id(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
     requests = []

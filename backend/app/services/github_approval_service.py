@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,60 @@ class GithubApprovalService:
     def fingerprint_payload(cls, payload: dict) -> str:
         return hashlib.sha256(cls.canonical_payload_bytes(payload)).hexdigest()
 
+    @classmethod
+    def initial_request_fingerprint(
+        cls,
+        *,
+        summary: str,
+        plan_metadata: dict | None,
+    ) -> str:
+        return cls.fingerprint_payload(
+            {
+                "plan_metadata": plan_metadata or {},
+                "summary": summary.strip(),
+            }
+        )
+
+    @classmethod
+    def matches_linked_request_message(
+        cls,
+        request: GithubApprovalRequest,
+        message: MailMessage,
+        *,
+        delivery_key: str,
+    ) -> bool:
+        valid_request_statuses = (
+            {"pending"}
+            if request.status == "pending"
+            else {"pending", "answered"}
+        )
+        if (
+            message.kind != "context_request"
+            or message.thread_root_id is not None
+            or message.request_status not in valid_request_statuses
+            or message.sender_member_id != request.owner_member_id
+            or message.recipient_member_id != request.leader_member_id
+            or message.delivery_key not in {None, delivery_key}
+        ):
+            return False
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        if (
+            payload.get("work_item_id") != request.work_item_id
+            or payload.get("dispatch_nonce") != request.dispatch_nonce
+            or payload.get("approval_round") != request.approval_round
+        ):
+            return False
+        summary = payload.get("summary")
+        if not isinstance(summary, str):
+            summary = message.body_markdown
+        plan_metadata = payload.get("plan_metadata")
+        if not isinstance(plan_metadata, dict):
+            plan_metadata = {}
+        return request.request_fingerprint == cls.initial_request_fingerprint(
+            summary=summary,
+            plan_metadata=plan_metadata,
+        )
+
     async def current_pending(
         self,
         db: AsyncSession,
@@ -49,6 +103,33 @@ class GithubApprovalService:
                     GithubApprovalRequest.work_item_id == work_item_id,
                     GithubApprovalRequest.status == "pending",
                 )
+            )
+        ).scalar_one_or_none()
+
+    async def current_terminal_for_attempt(
+        self,
+        db: AsyncSession,
+        *,
+        work_item_id: int,
+        dispatch_nonce: str,
+        approval_round: int,
+        owner_member_id: int,
+        leader_member_id: int,
+    ) -> GithubApprovalRequest | None:
+        return (
+            await db.execute(
+                select(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.work_item_id == work_item_id,
+                    GithubApprovalRequest.request_kind == "initial_plan",
+                    GithubApprovalRequest.dispatch_nonce == dispatch_nonce,
+                    GithubApprovalRequest.approval_round == approval_round,
+                    GithubApprovalRequest.owner_member_id == owner_member_id,
+                    GithubApprovalRequest.leader_member_id == leader_member_id,
+                    GithubApprovalRequest.status.in_({"approved", "rejected"}),
+                )
+                .order_by(GithubApprovalRequest.id.desc())
+                .limit(1)
             )
         ).scalar_one_or_none()
 
@@ -119,11 +200,10 @@ class GithubApprovalService:
         if owner.id != authenticated_owner_member_id:
             raise GithubApprovalError("not_item_owner", status_code=403)
 
-        canonical_payload = {
-            "plan_metadata": plan_metadata or {},
-            "summary": summary.strip(),
-        }
-        request_fingerprint = self.fingerprint_payload(canonical_payload)
+        request_fingerprint = self.initial_request_fingerprint(
+            summary=summary,
+            plan_metadata=plan_metadata,
+        )
         identity = {
             "request_kind": "initial_plan",
             "dispatch_nonce": item.dispatch_nonce,
@@ -144,6 +224,21 @@ class GithubApprovalService:
                 leader_member_id=leader.id,
             ):
                 raise GithubApprovalError("approval_request_already_pending")
+
+        terminal = await self.current_terminal_for_attempt(
+            db,
+            work_item_id=item.id,
+            dispatch_nonce=item.dispatch_nonce,
+            approval_round=item.approval_round_count,
+            owner_member_id=owner.id,
+            leader_member_id=leader.id,
+        )
+        if terminal is not None:
+            if self._same_request(terminal, **identity):
+                return terminal, False
+            raise GithubApprovalError("approval_request_already_decided")
+
+        if pending is not None:
             pending.status = "superseded"
             pending.superseded_at = datetime.utcnow()
             if pending.request_message_id is not None:
@@ -153,6 +248,54 @@ class GithubApprovalService:
             await db.flush()
 
         work_item_id = item.id
+        if owner.team_slot_id is None:
+            raise GithubApprovalError("stale_approval_owner")
+        terminal_exists = exists(
+            select(GithubApprovalRequest.id).where(
+                GithubApprovalRequest.work_item_id == work_item_id,
+                GithubApprovalRequest.request_kind == "initial_plan",
+                GithubApprovalRequest.dispatch_nonce == item.dispatch_nonce,
+                GithubApprovalRequest.approval_round == item.approval_round_count,
+                GithubApprovalRequest.owner_member_id == owner.id,
+                GithubApprovalRequest.leader_member_id == leader.id,
+                GithubApprovalRequest.status.in_({"approved", "rejected"}),
+            )
+        )
+        guard = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == work_item_id,
+                GithubWorkItem.dispatch_status != "escalated",
+                GithubWorkItem.dispatch_nonce == item.dispatch_nonce,
+                GithubWorkItem.approval_round_count == item.approval_round_count,
+                GithubWorkItem.owner_slot_id == owner.team_slot_id,
+                ~terminal_exists,
+            )
+            .values(updated_at=GithubWorkItem.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        if guard.rowcount != 1:
+            await db.rollback()
+            await db.refresh(item)
+            if item.dispatch_status == "escalated":
+                raise GithubApprovalError("item_escalated")
+            if item.dispatch_nonce != identity["dispatch_nonce"]:
+                raise GithubApprovalError("stale_nonce")
+            if item.approval_round_count != identity["approval_round"]:
+                raise GithubApprovalError("approval_round_mismatch")
+            terminal = await self.current_terminal_for_attempt(
+                db,
+                work_item_id=work_item_id,
+                dispatch_nonce=identity["dispatch_nonce"],
+                approval_round=identity["approval_round"],
+                owner_member_id=identity["owner_member_id"],
+                leader_member_id=identity["leader_member_id"],
+            )
+            if terminal is not None:
+                if self._same_request(terminal, **identity):
+                    return terminal, False
+                raise GithubApprovalError("approval_request_already_decided")
+            raise GithubApprovalError("stale_approval_owner")
         request = GithubApprovalRequest(work_item_id=work_item_id, **identity)
         db.add(request)
         try:
@@ -171,19 +314,14 @@ class GithubApprovalService:
         db: AsyncSession,
         item: GithubWorkItem,
         *,
-        request_id: int | None,
+        request_id: int,
     ) -> GithubApprovalRequest:
-        if request_id is not None:
-            request = await db.get(GithubApprovalRequest, request_id)
-            if request is None or request.work_item_id != item.id:
-                raise GithubApprovalError("approval_request_not_found", status_code=404)
-            if request.request_kind != "initial_plan":
-                raise GithubApprovalError("approval_request_not_found", status_code=404)
-            return request
-        pending = await self.current_pending(db, item.id)
-        if pending is not None:
-            return pending
-        raise GithubApprovalError("no_current_approval_request", status_code=404)
+        request = await db.get(GithubApprovalRequest, request_id)
+        if request is None or request.work_item_id != item.id:
+            raise GithubApprovalError("approval_request_not_found", status_code=404)
+        if request.request_kind != "initial_plan":
+            raise GithubApprovalError("approval_request_not_found", status_code=404)
+        return request
 
     async def decide(
         self,
@@ -193,7 +331,7 @@ class GithubApprovalService:
         authenticated_leader_member_id: int,
         decision: str,
         reason: str,
-        request_id: int | None = None,
+        request_id: int,
     ) -> tuple[GithubApprovalRequest, bool]:
         request = await self.resolve_for_decision(db, item, request_id=request_id)
         owner, leader = await self._current_participants(db, item)
@@ -218,8 +356,34 @@ class GithubApprovalService:
                     raise GithubApprovalError("approval_round_mismatch")
                 return request, False
             raise GithubApprovalError("approval_request_already_decided")
+        if item.dispatch_status == "escalated":
+            raise GithubApprovalError("item_escalated")
         if request.approval_round != item.approval_round_count:
             raise GithubApprovalError("approval_round_mismatch")
+        if owner.team_slot_id is None:
+            raise GithubApprovalError("stale_approval_owner")
+        item_guard = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status != "escalated",
+                GithubWorkItem.dispatch_nonce == request.dispatch_nonce,
+                GithubWorkItem.approval_round_count == request.approval_round,
+                GithubWorkItem.owner_slot_id == owner.team_slot_id,
+            )
+            .values(updated_at=GithubWorkItem.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        if item_guard.rowcount != 1:
+            await db.rollback()
+            await db.refresh(item)
+            if item.dispatch_status == "escalated":
+                raise GithubApprovalError("item_escalated")
+            if item.dispatch_nonce != request.dispatch_nonce:
+                raise GithubApprovalError("stale_nonce")
+            if item.approval_round_count != request.approval_round:
+                raise GithubApprovalError("approval_round_mismatch")
+            raise GithubApprovalError("stale_approval_owner")
         result = await db.execute(
             update(GithubApprovalRequest)
             .where(
@@ -230,6 +394,16 @@ class GithubApprovalService:
                 GithubApprovalRequest.approval_round == item.approval_round_count,
                 GithubApprovalRequest.owner_member_id == owner.id,
                 GithubApprovalRequest.leader_member_id == leader.id,
+                exists(
+                    select(GithubWorkItem.id).where(
+                        GithubWorkItem.id == request.work_item_id,
+                        GithubWorkItem.dispatch_status != "escalated",
+                        GithubWorkItem.dispatch_nonce == request.dispatch_nonce,
+                        GithubWorkItem.approval_round_count
+                        == request.approval_round,
+                        GithubWorkItem.owner_slot_id == owner.team_slot_id,
+                    )
+                ),
             )
             .values(
                 status=decision,
@@ -244,6 +418,15 @@ class GithubApprovalService:
             return request, True
         if request.status == decision and request.reason == reason:
             return request, False
+        await db.refresh(item)
+        if item.dispatch_status == "escalated":
+            raise GithubApprovalError("item_escalated")
+        if item.dispatch_nonce != request.dispatch_nonce:
+            raise GithubApprovalError("stale_nonce")
+        if item.approval_round_count != request.approval_round:
+            raise GithubApprovalError("approval_round_mismatch")
+        if item.owner_slot_id != owner.team_slot_id:
+            raise GithubApprovalError("stale_approval_owner")
         raise GithubApprovalError("approval_request_already_decided")
 
     async def cancel(
@@ -251,11 +434,17 @@ class GithubApprovalService:
         db: AsyncSession,
         request: GithubApprovalRequest,
         *,
-        requester_member_id: int | None = None,
-        operator: bool = False,
+        requester_member_id: int,
     ) -> tuple[GithubApprovalRequest, bool]:
-        if not operator and requester_member_id != request.owner_member_id:
+        if requester_member_id != request.owner_member_id:
             raise GithubApprovalError("not_approval_requester", status_code=403)
+        return await self._cancel_authorized(db, request)
+
+    async def _cancel_authorized(
+        self,
+        db: AsyncSession,
+        request: GithubApprovalRequest,
+    ) -> tuple[GithubApprovalRequest, bool]:
         if request.status == "superseded":
             return request, False
         if request.status != "pending":

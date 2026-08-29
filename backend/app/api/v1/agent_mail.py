@@ -6,12 +6,14 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import require_mail_session, resolve_request_pane
 from app.config import settings
 from app.database import get_db
 from app.models.database import (
+    GithubApprovalRequest,
     GithubWorkItem,
     MailAgentSession,
     MailMessage,
@@ -35,7 +37,11 @@ from app.models.schemas import (
     TeamListResponse,
 )
 from app.services import agent_mail_install_service
-from app.services.agent_mail_service import MailAuthorityError, agent_mail_service
+from app.services.agent_mail_service import (
+    MailAuthorityError,
+    MailDeliveryIntegrityError,
+    agent_mail_service,
+)
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_approval_service import (
     GithubApprovalError,
@@ -150,9 +156,15 @@ async def request_work_item_approval(
             linked_message = await db.get(MailMessage, approval.request_message_id)
             if (
                 linked_message is None
-                or linked_message.delivery_key != request_delivery_key
+                or not github_approval_service.matches_linked_request_message(
+                    approval,
+                    linked_message,
+                    delivery_key=request_delivery_key,
+                )
             ):
                 raise GithubApprovalError("approval_request_link_mismatch")
+        if approval.status != "pending":
+            return _approval_response(approval)
         if approval.request_message_id is None:
             message = await agent_mail_service.send_message(
                 db,
@@ -176,9 +188,32 @@ async def request_work_item_approval(
                 delivery_key=request_delivery_key,
                 auto_nudge=False,
             )
-            approval.request_message_id = message.id
+            link_result = await db.execute(
+                update(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.id == approval.id,
+                    GithubApprovalRequest.status == "pending",
+                    GithubApprovalRequest.request_message_id.is_(None),
+                )
+                .values(request_message_id=message.id)
+                .execution_options(synchronize_session=False)
+            )
             await db.commit()
             await db.refresh(approval)
+            if link_result.rowcount != 1 and not (
+                approval.status == "pending"
+                and approval.request_message_id == message.id
+            ):
+                root = await db.get(MailMessage, message.id)
+                if root is not None and root.request_status == "pending":
+                    root.request_status = "superseded"
+                    await db.commit()
+                raise GithubApprovalError("request_not_pending")
+        await db.refresh(approval)
+        if approval.status != "pending":
+            if approval.status in {"approved", "rejected"}:
+                return _approval_response(approval)
+            raise GithubApprovalError("request_not_pending")
         await agent_mail_service.auto_nudge_members(
             db,
             {approval.leader_member_id},
@@ -187,6 +222,8 @@ async def request_work_item_approval(
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailDeliveryIntegrityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
@@ -205,7 +242,7 @@ async def decide_work_item(
     if scope is None:
         raise HTTPException(status_code=404, detail="scope_not_found")
     try:
-        approval, decided = await github_approval_service.decide(
+        approval, _decided = await github_approval_service.decide(
             db,
             item,
             authenticated_leader_member_id=session.member_id,
@@ -245,14 +282,15 @@ async def decide_work_item(
             await db.refresh(approval)
         elif approval.decision_message_id != message.id:
             raise GithubApprovalError("approval_decision_link_mismatch")
-        if decided or request.decision == "rejected":
-            await github_dispatch_service.apply_approval_decision(
-                db,
-                item,
-                scope,
-                decision=request.decision,
-                approval_round=approval.approval_round,
-            )
+        await github_dispatch_service.apply_approval_decision(
+            db,
+            item,
+            scope,
+            decision=request.decision,
+            approval_round=approval.approval_round,
+            dispatch_nonce=approval.dispatch_nonce,
+            owner_member_id=approval.owner_member_id,
+        )
         await agent_mail_service.auto_nudge_members(
             db,
             {approval.owner_member_id},
@@ -260,6 +298,8 @@ async def decide_work_item(
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailDeliveryIntegrityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -1219,22 +1219,49 @@ class GithubDispatchService:
         *,
         decision: str,
         approval_round: int,
+        dispatch_nonce: str,
+        owner_member_id: int,
     ) -> bool:
+        current_owner_exists = exists(
+            select(MailTeamMember.id).where(
+                MailTeamMember.id == owner_member_id,
+                MailTeamMember.team_slot_id == GithubWorkItem.owner_slot_id,
+            )
+        )
         if decision == "approved":
-            if item.dispatch_status == "escalated":
-                raise ValueError("item_escalated")
-            if item.approval_round_count != approval_round:
-                raise ValueError("approval_round_mismatch")
-            item.updated_at = datetime.utcnow()
+            result = await db.execute(
+                update(GithubWorkItem)
+                .where(
+                    GithubWorkItem.id == item.id,
+                    GithubWorkItem.dispatch_status != "escalated",
+                    GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                    GithubWorkItem.approval_round_count == approval_round,
+                    current_owner_exists,
+                )
+                .values(updated_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
             await db.commit()
-            return True
+            await db.refresh(item)
+            if result.rowcount == 1:
+                return True
+            if item.dispatch_status == "escalated":
+                return False
+            if item.dispatch_nonce != dispatch_nonce:
+                raise ValueError("stale_nonce")
+            owner = await db.get(MailTeamMember, owner_member_id)
+            if owner is None or owner.team_slot_id != item.owner_slot_id:
+                raise ValueError("stale_approval_owner")
+            raise ValueError("approval_round_mismatch")
 
         now = datetime.utcnow()
         exhausted = approval_round >= scope.max_approval_rounds
         statement = update(GithubWorkItem).where(
             GithubWorkItem.id == item.id,
             GithubWorkItem.dispatch_status != "escalated",
+            GithubWorkItem.dispatch_nonce == dispatch_nonce,
             GithubWorkItem.approval_round_count == approval_round,
+            current_owner_exists,
         )
         if exhausted:
             statement = statement.values(
@@ -1273,7 +1300,12 @@ class GithubDispatchService:
             ):
                 return False
             if item.dispatch_status == "escalated":
-                raise ValueError("item_escalated")
+                return False
+            if item.dispatch_nonce != dispatch_nonce:
+                raise ValueError("stale_nonce")
+            owner = await db.get(MailTeamMember, owner_member_id)
+            if owner is None or owner.team_slot_id != item.owner_slot_id:
+                raise ValueError("stale_approval_owner")
             raise ValueError("approval_round_mismatch")
         if not exhausted:
             return True
@@ -1350,6 +1382,9 @@ class GithubDispatchService:
             or answer.thread_root_id != request.request_message_id
             or answer.decision != "approved"
             or answer.approval_round != item.approval_round_count
+            or answer.delivery_key != f"github-approval:{request.id}:decision"
+            or not isinstance(answer.payload, dict)
+            or answer.payload.get("approval_request_id") != request.id
         ):
             return AckEvidence(False, "no_decision")
         return AckEvidence(
@@ -2116,7 +2151,7 @@ class GithubDispatchService:
             await db.execute(
                 select(MailTeamMember)
                 .where(MailTeamMember.team_slot_id == slot_id)
-                .order_by(MailTeamMember.updated_at.desc())
+                .order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
