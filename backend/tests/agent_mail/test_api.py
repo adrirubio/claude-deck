@@ -12,6 +12,7 @@ from app.config import settings
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
     GithubWorkItem,
     MailAgentSession,
     MailMessage,
@@ -19,6 +20,10 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.services.agent_mail_service import agent_mail_service
+from app.services.github_approval_service import (
+    GithubApprovalError,
+    github_approval_service,
+)
 from app.utils import peer_process
 
 
@@ -150,6 +155,99 @@ async def _dispatch_approval_fixture(db):
     db.add(item)
     await db.commit()
     return item, members, tokens
+
+
+@pytest.mark.asyncio
+async def test_normalized_initial_request_is_idempotent_and_canonical(db):
+    item, members, _tokens = await _dispatch_approval_fixture(db)
+    request, created = await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="  bounded plan  ",
+        plan_metadata={"paths": ["b", "a"], "checks": {"lint": True}},
+    )
+    repeated, repeated_created = await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="bounded plan",
+        plan_metadata={"checks": {"lint": True}, "paths": ["b", "a"]},
+    )
+
+    assert created is True
+    assert repeated_created is False
+    assert repeated.id == request.id
+    assert len(request.request_fingerprint) == 64
+    assert (
+        await db.execute(select(GithubApprovalRequest))
+    ).scalars().all() == [request]
+
+
+@pytest.mark.asyncio
+async def test_normalized_initial_request_refuses_conflicting_pending_payload(db):
+    item, members, _tokens = await _dispatch_approval_fixture(db)
+    await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="first",
+    )
+
+    with pytest.raises(GithubApprovalError) as exc_info:
+        await github_approval_service.create_initial_request(
+            db,
+            item,
+            authenticated_owner_member_id=members[1].id,
+            summary="second",
+        )
+
+    assert exc_info.value.detail == "approval_request_already_pending"
+    assert len((await db.execute(select(GithubApprovalRequest))).scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_normalized_initial_request_supersedes_stale_attempt_identity(db):
+    item, members, _tokens = await _dispatch_approval_fixture(db)
+    first, _created = await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="first",
+    )
+    item.approval_round_count = 2
+    await db.commit()
+
+    second, created = await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="revised",
+    )
+    await db.refresh(first)
+
+    assert created is True
+    assert first.status == "superseded"
+    assert first.superseded_at is not None
+    assert second.approval_round == 2
+    assert second.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_normalized_initial_request_derives_current_owner_and_leader(db):
+    item, members, _tokens = await _dispatch_approval_fixture(db)
+
+    with pytest.raises(GithubApprovalError) as exc_info:
+        await github_approval_service.create_initial_request(
+            db,
+            item,
+            authenticated_owner_member_id=members[0].id,
+            summary="leader self-submits",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "not_item_owner"
+    assert (await db.execute(select(GithubApprovalRequest))).scalars().all() == []
 
 
 @pytest.mark.asyncio
