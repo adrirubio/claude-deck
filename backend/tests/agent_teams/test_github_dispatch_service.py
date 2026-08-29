@@ -961,6 +961,37 @@ async def test_promote_deferred_retry_waits_for_the_lease(db):
 
 
 @pytest.mark.asyncio
+async def test_promote_deferred_retry_never_resets_released_pr_attempt(db):
+    _, _, scope = await _team(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=915,
+        issue_title="preserved PR",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted",
+        retry_requested_at=datetime.utcnow(),
+        pr_number=88,
+        dispatch_nonce="preserved-nonce",
+        retry_count=5,
+        approval_round_count=2,
+    )
+    db.add(item)
+    await db.commit()
+
+    promoted = await github_dispatch_service.promote_deferred_retries(db, scope)
+
+    assert promoted == 0
+    assert item.dispatch_status == "escalated"
+    assert item.retry_requested_at is not None
+    assert item.pr_number == 88
+    assert item.dispatch_nonce == "preserved-nonce"
+    assert item.retry_count == 5
+    assert item.approval_round_count == 2
+
+
+@pytest.mark.asyncio
 async def test_retry_does_not_overtake_release_end_to_end(db, monkeypatch):
     _, _, scope = await _team(db)
     resets: list[str] = []

@@ -487,6 +487,29 @@ class GithubDispatchService:
         item.retry_requested_at = None
         item.updated_at = now
 
+    async def can_auto_retry_from_issue_update(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+    ) -> bool:
+        if (
+            item.pr_number is not None
+            or item.active_scope_revision != 0
+            or item.retry_requested_at is not None
+        ):
+            return False
+        pending_approval = (
+            await db.execute(
+                select(GithubApprovalRequest.id)
+                .where(
+                    GithubApprovalRequest.work_item_id == item.id,
+                    GithubApprovalRequest.status == "pending",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return pending_approval is None
+
     async def prepare_attempt(
         self,
         db: AsyncSession,
@@ -524,6 +547,14 @@ class GithubDispatchService:
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status.in_(("escalated", "failed")),
                     GithubWorkItem.retry_requested_at.is_not(None),
+                    GithubWorkItem.pr_number.is_(None),
+                    GithubWorkItem.active_scope_revision == 0,
+                    ~exists(
+                        select(GithubApprovalRequest.id).where(
+                            GithubApprovalRequest.work_item_id == GithubWorkItem.id,
+                            GithubApprovalRequest.status == "pending",
+                        )
+                    ),
                     GithubWorkspace.id.is_(None),
                 )
                 .order_by(GithubWorkItem.id)
