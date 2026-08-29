@@ -838,6 +838,7 @@ def test_shim_exposes_dispatch_status_tool():
     shim = importlib.import_module("mcp_shim.agent_mail_server")
     assert hasattr(shim, "deck_report_dispatch_status")
     assert hasattr(shim, "deck_retry_work_item")
+    assert hasattr(shim, "deck_request_work_item_approval")
     assert hasattr(shim, "_dispatch_request")
 
 
@@ -907,7 +908,8 @@ def test_shim_approval_requires_registration(monkeypatch):
 
     monkeypatch.setattr(shim, "_request", unexpected_request)
 
-    assert shim.deck_approve_work_item(1, "nonce", "approved", "safe") == refusal
+    assert shim.deck_approve_work_item(1, "nonce", "approved", "safe", 41) == refusal
+    assert shim.deck_request_work_item_approval(1, "nonce", "safe plan") == refusal
 
 
 def test_shim_retry_work_item_posts_reason(monkeypatch):

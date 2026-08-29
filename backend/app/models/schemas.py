@@ -1878,8 +1878,34 @@ class MailMessageCreate(BaseModel):
 class MailDecisionRequest(BaseModel):
     work_item_id: int
     dispatch_nonce: str
+    approval_request_id: int
     decision: Literal["approved", "rejected"]
     reason: str = Field(min_length=1)
+
+
+class MailApprovalRequestCreate(BaseModel):
+    work_item_id: int
+    dispatch_nonce: str
+    summary: str = Field(min_length=1, max_length=12000)
+    plan_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GithubApprovalRequestResponse(BaseModel):
+    id: int
+    work_item_id: int
+    request_kind: str
+    dispatch_nonce: str
+    approval_round: int
+    owner_member_id: int
+    leader_member_id: int
+    request_message_id: Optional[int] = None
+    decision_message_id: Optional[int] = None
+    scope_revision_id: Optional[int] = None
+    status: str
+    reason: Optional[str] = None
+    created_at: datetime
+    decided_at: Optional[datetime] = None
+    superseded_at: Optional[datetime] = None
 
 
 class MailMessageResponse(BaseModel):

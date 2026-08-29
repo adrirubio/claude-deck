@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -16,6 +16,7 @@ from app.models.database import (
     AgentPaneBinding,
     AgentTeamSlot,
     GithubWorkItem,
+    GithubApprovalRequest,
     GithubWorkspace,
     MailReceipt,
     MailMessage,
@@ -797,9 +798,9 @@ class GithubDispatchService:
             else:
                 lines.append(f"- Team leader / approver: {leader.display_name}")
                 lines.append(
-                    "- Leader Agent Mail member id is not registered yet; call "
-                    "`deck_list_team` and select the connected team member whose "
-                    f"team slot/name is `{leader.display_name}` before requesting acknowledgment."
+                    "- The Leader Agent Mail member is not registered yet. The approval "
+                    "request route derives the current designated Leader server-side; "
+                    "do not guess or supply a member id."
                 )
         if labels:
             lines.append(f"- Labels: {', '.join(labels)}")
@@ -1083,26 +1084,25 @@ class GithubDispatchService:
             "reply is not approval, and self-approval is refused. After approval, "
             "call `deck_report_dispatch_status(status=\"ack_received\")` before "
             f"{before}. A rejection opens the next round automatically; revise the "
-            "plan and call `deck_request_context` again with the same work item and "
-            "nonce. Do not report `revision_requested`."
+            "plan and call `deck_request_work_item_approval` again with the same work "
+            "item and nonce. Do not report `revision_requested`."
         )
         if leader_member is not None:
             return (
-                "- Send the team leader a short plan via Agent Mail using "
-                f"`deck_request_context(to_member_id={leader_member.id}, "
-                f"work_item_id={item.id if item is not None else '<id>'}, "
-                f"dispatch_nonce=\"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
+                "- Submit the short plan for Leader approval using "
+                f"`deck_request_work_item_approval(work_item_id="
+                f"{item.id if item is not None else '<id>'}, dispatch_nonce=\""
+                f"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
                 f"then wait for the explicit decision before {before}." + report
             )
         if leader is not None:
             return (
-                "- Send the team leader a short plan via Agent Mail and wait for "
-                f"an explicit decision before {before}; first call `deck_list_team` to "
-                f"resolve the Agent Mail member id for `{leader.display_name}`."
+                "- Submit the short plan with `deck_request_work_item_approval` and wait "
+                f"for an explicit decision before {before}."
                 + report
             )
         return (
-            "- Send the team leader a short plan via Agent Mail and wait for "
+            "- Submit the short plan with `deck_request_work_item_approval` and wait for "
             f"an explicit decision before {before}; if no leader is registered, report blocked."
             + report
         )
@@ -1211,41 +1211,104 @@ class GithubDispatchService:
             )
         return None
 
-    async def advance_approval_round(
+    async def apply_approval_decision(
         self,
         db: AsyncSession,
         item: GithubWorkItem,
         scope: TeamGithubScope,
         *,
-        decision_message: MailMessageCreate,
-        authenticated_sender_member_id: int,
-    ) -> MailMessage:
-        if item.dispatch_status == "escalated":
-            raise ValueError("item_escalated")
-        message, _ = await agent_mail_service._create_message_row(
-            db,
-            decision_message,
-            authenticated_sender_member_id=authenticated_sender_member_id,
+        decision: str,
+        approval_round: int,
+        dispatch_nonce: str,
+        owner_member_id: int,
+    ) -> bool:
+        current_owner_exists = exists(
+            select(MailTeamMember.id).where(
+                MailTeamMember.id == owner_member_id,
+                MailTeamMember.team_slot_id == GithubWorkItem.owner_slot_id,
+            )
         )
-        if decision_message.decision == "approved":
-            item.updated_at = datetime.utcnow()
+        if decision == "approved":
+            result = await db.execute(
+                update(GithubWorkItem)
+                .where(
+                    GithubWorkItem.id == item.id,
+                    GithubWorkItem.dispatch_status != "escalated",
+                    GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                    GithubWorkItem.approval_round_count == approval_round,
+                    current_owner_exists,
+                )
+                .values(updated_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
             await db.commit()
-            return message
+            await db.refresh(item)
+            if result.rowcount == 1:
+                return True
+            if item.dispatch_status == "escalated":
+                return False
+            if item.dispatch_nonce != dispatch_nonce:
+                raise ValueError("stale_nonce")
+            owner = await db.get(MailTeamMember, owner_member_id)
+            if owner is None or owner.team_slot_id != item.owner_slot_id:
+                raise ValueError("stale_approval_owner")
+            raise ValueError("approval_round_mismatch")
 
-        if item.approval_round_count < scope.max_approval_rounds:
-            item.ack_received_at = None
-            item.ack_approver_member_id = None
-            item.ack_evidence_message_id = None
-            item.ack_enforcement_epoch = None
-            item.ack_approval_round = None
-            item.last_nudge_at = None
-            item.approval_round_count += 1
-            item.updated_at = datetime.utcnow()
-            await db.commit()
-            return message
-
-        self._apply_escalation(item, "approval_rounds_exhausted")
+        now = datetime.utcnow()
+        exhausted = approval_round >= scope.max_approval_rounds
+        statement = update(GithubWorkItem).where(
+            GithubWorkItem.id == item.id,
+            GithubWorkItem.dispatch_status != "escalated",
+            GithubWorkItem.dispatch_nonce == dispatch_nonce,
+            GithubWorkItem.approval_round_count == approval_round,
+            current_owner_exists,
+        )
+        if exhausted:
+            statement = statement.values(
+                ack_received_at=None,
+                ack_approver_member_id=None,
+                ack_evidence_message_id=None,
+                ack_enforcement_epoch=None,
+                ack_approval_round=None,
+                last_nudge_at=None,
+                dispatch_status="escalated",
+                escalation_reason="approval_rounds_exhausted",
+                pending_reason=None,
+                updated_at=now,
+            )
+        else:
+            statement = statement.values(
+                ack_received_at=None,
+                ack_approver_member_id=None,
+                ack_evidence_message_id=None,
+                ack_enforcement_epoch=None,
+                ack_approval_round=None,
+                last_nudge_at=None,
+                approval_round_count=approval_round + 1,
+                updated_at=now,
+            )
+        result = await db.execute(
+            statement.execution_options(synchronize_session=False)
+        )
         await db.commit()
+        await db.refresh(item)
+        if result.rowcount != 1:
+            if (
+                item.approval_round_count == approval_round + 1
+                or item.dispatch_status == "escalated"
+                and item.escalation_reason == "approval_rounds_exhausted"
+            ):
+                return False
+            if item.dispatch_status == "escalated":
+                return False
+            if item.dispatch_nonce != dispatch_nonce:
+                raise ValueError("stale_nonce")
+            owner = await db.get(MailTeamMember, owner_member_id)
+            if owner is None or owner.team_slot_id != item.owner_slot_id:
+                raise ValueError("stale_approval_owner")
+            raise ValueError("approval_round_mismatch")
+        if not exhausted:
+            return True
         try:
             await self._send_escalation_broadcast(
                 db,
@@ -1259,7 +1322,7 @@ class GithubDispatchService:
                 "Failed to notify after approval rounds exhausted for item %s",
                 item.id,
             )
-        return message
+        return True
 
     async def _ack_evidence(
         self,
@@ -1280,75 +1343,50 @@ class GithubDispatchService:
             return AckEvidence(False, "no_owner")
         if owner_member.id == leader_member.id:
             return AckEvidence(False, "self_ack")
-        roots = (
+        request = (
             await db.execute(
-                select(MailMessage).where(
-                    MailMessage.kind == "context_request",
-                    MailMessage.sender_member_id == owner_member.id,
-                    MailMessage.recipient_member_id == leader_member.id,
+                select(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.work_item_id == item.id,
+                    GithubApprovalRequest.request_kind == "initial_plan",
                 )
+                .order_by(GithubApprovalRequest.id.desc())
+                .limit(1)
             )
-        ).scalars().all()
-        linked = [
-            root
-            for root in roots
-            if (root.payload or {}).get("work_item_id") == item.id
-            and (root.payload or {}).get("approval_round") is not None
-        ]
-        if not linked:
+        ).scalar_one_or_none()
+        if request is None or request.request_message_id is None:
             return AckEvidence(False, "no_linkage")
         if item.dispatch_nonce is None:
             return AckEvidence(False, "stale_nonce")
-        nonce_matches = [
-            root
-            for root in linked
-            if (root.payload or {}).get("dispatch_nonce") == item.dispatch_nonce
-        ]
-        if not nonce_matches:
+        if request.dispatch_nonce != item.dispatch_nonce:
             return AckEvidence(False, "stale_nonce")
         if item.approval_round_count < 1:
             return AckEvidence(False, "stale_round")
-        round_matches = [
-            root
-            for root in nonce_matches
-            if (root.payload or {}).get("approval_round")
-            == item.approval_round_count
-        ]
-        if not round_matches:
+        if request.approval_round != item.approval_round_count:
             return AckEvidence(False, "stale_round")
-        root_ids = [root.id for root in round_matches]
-        answers = (
-            await db.execute(
-                select(MailMessage)
-                .where(
-                    MailMessage.kind == "answer",
-                    MailMessage.thread_root_id.in_(root_ids),
-                )
-                .order_by(MailMessage.created_at, MailMessage.id)
-            )
-        ).scalars().all()
-        leader_answers = [
-            answer
-            for answer in answers
-            if answer.sender_member_id == leader_member.id
-        ]
-        approved_answers = [
-            answer
-            for answer in leader_answers
-            if answer.decision == "approved"
-            and answer.approval_round == item.approval_round_count
-        ]
-        if not approved_answers:
-            if any(
-                answer.decision == "rejected"
-                and answer.approval_round == item.approval_round_count
-                for answer in leader_answers
-            ):
-                return AckEvidence(False, "rejected")
-            if leader_answers:
-                return AckEvidence(False, "no_decision")
+        if request.owner_member_id != owner_member.id:
+            return AckEvidence(False, "stale_approval_owner")
+        if request.leader_member_id != leader_member.id:
             return AckEvidence(False, "not_designated_approver")
-        answer = approved_answers[0]
+        if request.status == "rejected":
+            return AckEvidence(False, "rejected")
+        if request.status != "approved" or request.decision_message_id is None:
+            return AckEvidence(False, "no_decision")
+        answer = await db.get(MailMessage, request.decision_message_id)
+        if answer is None:
+            return AckEvidence(False, "no_decision")
+        if answer.sender_member_id != leader_member.id:
+            return AckEvidence(False, "not_designated_approver")
+        if (
+            answer.kind != "answer"
+            or answer.thread_root_id != request.request_message_id
+            or answer.decision != "approved"
+            or answer.approval_round != item.approval_round_count
+            or answer.delivery_key != f"github-approval:{request.id}:decision"
+            or not isinstance(answer.payload, dict)
+            or answer.payload.get("approval_request_id") != request.id
+        ):
+            return AckEvidence(False, "no_decision")
         return AckEvidence(
             True,
             "ok",
@@ -2113,7 +2151,7 @@ class GithubDispatchService:
             await db.execute(
                 select(MailTeamMember)
                 .where(MailTeamMember.team_slot_id == slot_id)
-                .order_by(MailTeamMember.updated_at.desc())
+                .order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()

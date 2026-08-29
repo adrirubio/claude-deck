@@ -473,7 +473,25 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
     assert direct_non_null_escalation_writes[0].path.as_posix() == (
         "services/github_dispatch_service.py"
     )
-    assert _escalation_call_reasons() == ESCALATION_REASONS
+    conditional_escalation_writes = [
+        write
+        for write in writes
+        if write.field == "escalation_reason"
+        and write.form == "values"
+        and write.value is not None
+    ]
+    assert [
+        (write.path.as_posix(), write.value)
+        for write in conditional_escalation_writes
+    ] == [
+        (
+            "services/github_dispatch_service.py",
+            "approval_rounds_exhausted",
+        )
+    ]
+    assert _escalation_call_reasons() | {
+        write.value for write in conditional_escalation_writes
+    } == ESCALATION_REASONS
 
     pending_literals = {
         write.value

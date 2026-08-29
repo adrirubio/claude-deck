@@ -17,6 +17,7 @@ from app.models.database import (
     AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
@@ -1276,13 +1277,30 @@ async def test_report_ack_received_records_approved_leader_evidence(
     )
     db.add(root)
     await db.flush()
+    approval = GithubApprovalRequest(
+        work_item_id=item.id,
+        request_kind="initial_plan",
+        dispatch_nonce=item.dispatch_nonce,
+        approval_round=1,
+        owner_member_id=owner_member.id,
+        leader_member_id=leader_member.id,
+        request_message_id=root.id,
+        request_fingerprint="approved-plan",
+        status="approved",
+        reason="approved",
+        decided_at=datetime.utcnow(),
+    )
+    db.add(approval)
+    await db.flush()
     answer = MailMessage(
         kind="answer",
         thread_root_id=root.id,
         sender_member_id=leader_member.id,
         body_markdown="approved",
+        payload={"approval_request_id": approval.id},
         approval_round=1,
         decision="approved",
+        delivery_key=f"github-approval:{approval.id}:decision",
         created_at=datetime.utcnow(),
     )
     later_answer = MailMessage(
@@ -1295,6 +1313,8 @@ async def test_report_ack_received_records_approved_leader_evidence(
         created_at=datetime.utcnow() + timedelta(seconds=1),
     )
     db.add_all([answer, later_answer])
+    await db.flush()
+    approval.decision_message_id = answer.id
     await db.commit()
 
     evidence = await github_dispatch_service.record_ack_received(db, item, scope)
@@ -1326,6 +1346,7 @@ async def test_report_ack_received_records_approved_leader_evidence(
         ("no_owner", "no_owner"),
         ("rejected", "rejected"),
         ("no_decision", "no_decision"),
+        ("wrong_delivery_key", "no_decision"),
     ],
 )
 async def test_ack_evidence_refusal_matrix(
@@ -1368,6 +1389,7 @@ async def test_ack_evidence_refusal_matrix(
     await db.flush()
 
     root = None
+    approval = None
     if case not in {"self_ack", "no_linkage", "no_leader", "no_owner"}:
         payload = {
             "work_item_id": item.id,
@@ -1394,7 +1416,14 @@ async def test_ack_evidence_refusal_matrix(
         db.add(root)
         await db.flush()
 
-    if case in {"non_leader", "slotless", "rejected", "no_decision"}:
+    answer = None
+    if case in {
+        "non_leader",
+        "slotless",
+        "rejected",
+        "no_decision",
+        "wrong_delivery_key",
+    }:
         sender = leader_member
         decision = "approved"
         if case == "non_leader":
@@ -1414,8 +1443,8 @@ async def test_ack_evidence_refusal_matrix(
             decision = "rejected"
         elif case == "no_decision":
             decision = None
-        db.add(
-            MailMessage(
+        if decision is not None:
+            answer = MailMessage(
                 kind="answer",
                 thread_root_id=root.id,
                 sender_member_id=sender.id,
@@ -1423,7 +1452,45 @@ async def test_ack_evidence_refusal_matrix(
                 approval_round=item_round,
                 decision=decision,
             )
+            db.add(answer)
+            await db.flush()
+    if case not in {
+        "self_ack",
+        "no_linkage",
+        "missing_round",
+        "no_leader",
+        "no_owner",
+    }:
+        request_nonce = (
+            "previous-attempt"
+            if case in {"stale_nonce", "null_item_nonce"}
+            else item_nonce
         )
+        request_round = 1 if case == "stale_round" else item_round
+        request_status = (
+            "rejected"
+            if case == "rejected"
+            else "approved"
+            if case in {"non_leader", "slotless", "wrong_delivery_key"}
+            else "pending"
+        )
+        approval = GithubApprovalRequest(
+            work_item_id=item.id,
+            request_kind="initial_plan",
+            dispatch_nonce=request_nonce,
+            approval_round=request_round,
+            owner_member_id=owner_member.id,
+            leader_member_id=leader_member.id,
+            request_message_id=root.id,
+            decision_message_id=answer.id if answer is not None else None,
+            request_fingerprint=f"case:{case}",
+            status=request_status,
+            reason="review" if request_status != "pending" else None,
+            decided_at=(
+                datetime.utcnow() if request_status != "pending" else None
+            ),
+        )
+        db.add(approval)
     await db.commit()
 
     evidence = await github_dispatch_service.record_ack_received(db, item, scope)
@@ -1441,6 +1508,41 @@ async def test_ack_evidence_refusal_matrix(
         )
     ).one()
     assert tuple(stored) == (None, None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_slot_member_resolution_uses_id_as_timestamp_tiebreak(db):
+    preset, slots, _scope = await _team(db)
+    tied_at = datetime.utcnow()
+    older = MailTeamMember(
+        identity_key="slot:tied:older",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Older",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+        updated_at=tied_at,
+    )
+    current = MailTeamMember(
+        identity_key="slot:tied:current",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Current",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+        updated_at=tied_at,
+    )
+    db.add_all([older, current])
+    await db.commit()
+
+    resolved = await github_dispatch_service._slot_member(db, slots[1].id)
+
+    assert current.id > older.id
+    assert resolved.id == current.id
 
 
 @pytest.mark.asyncio
@@ -1853,9 +1955,9 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert "https://github.com/o/r/issues/833" in prompt
     assert "Acceptance criteria and verification steps." in prompt
     assert "deck_report_dispatch_status" in prompt
-    assert "deck_request_context" in prompt
+    assert "deck_request_work_item_approval" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
-    assert f"to_member_id={leader_member.id}" in prompt
+    assert f"work_item_id={item.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
     assert "wait for the explicit decision before starting implementation" in prompt
@@ -1878,7 +1980,7 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert "Issue: #833 — Add agent docs" in message.body_markdown
     assert "Acceptance criteria and verification steps." in message.body_markdown
     assert f"Agent Mail member_id={leader_member.id}" in message.body_markdown
-    assert f"to_member_id={leader_member.id}" in message.body_markdown
+    assert f"work_item_id={item.id}" in message.body_markdown
     assert f"slot_id={architect.id}" not in message.body_markdown
     assert "wait for the explicit decision before starting implementation" in message.body_markdown
     assert item.brief_message_id == message.id
@@ -2013,7 +2115,7 @@ async def test_design_dispatch_brief_uses_design_pipeline_language(db):
     assert "do not rely on CI or auto-merge" in prompt
     assert "human-reviewed PR" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
-    assert f"to_member_id={leader_member.id}" in prompt
+    assert f"work_item_id={item.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
 
 
@@ -2053,9 +2155,9 @@ async def test_dispatch_brief_uses_discovery_when_leader_member_missing(db):
 
     prompt = launched["request"].slot_prompt_overrides[backend.id]
     assert "Team leader / approver: Architect" in prompt
-    assert "Leader Agent Mail member id is not registered yet" in prompt
-    assert "deck_list_team" in prompt
-    assert "resolve the Agent Mail member id for `Architect`" in prompt
+    assert "Leader Agent Mail member is not registered yet" in prompt
+    assert "derives the current designated Leader server-side" in prompt
+    assert "do not guess or supply a member id" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
 
@@ -3036,6 +3138,18 @@ async def test_scope_concurrency_ignores_human_review_and_escalated_items(db):
 async def test_approval_round_cap_escalates(db, monkeypatch):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 3
+    owner = MailTeamMember(
+        identity_key="slot:approval-owner",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Owner",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+    )
+    db.add(owner)
+    await db.flush()
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=30,
@@ -3043,43 +3157,45 @@ async def test_approval_round_cap_escalates(db, monkeypatch):
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatch_nonce="approval-round-nonce",
         approval_round_count=1,
     )
     db.add(item)
     await db.commit()
 
-    async def build_decision(db_, request, **_kwargs):
-        message = MailMessage(
-            kind="answer",
-            body_markdown=request.body_markdown,
-            decision=request.decision,
-            approval_round=item.approval_round_count,
-        )
-        db_.add(message)
-        await db_.flush()
-        return message, set()
-
-    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
-    decision = MailMessageCreate(
-        kind="answer",
-        thread_root_id=1,
-        body_markdown="revise",
+    await github_dispatch_service.apply_approval_decision(
+        db,
+        item,
+        scope,
         decision="rejected",
-    )
-    await github_dispatch_service.advance_approval_round(
-        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+        approval_round=1,
+        dispatch_nonce=item.dispatch_nonce,
+        owner_member_id=owner.id,
     )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.approval_round_count == 2
-    await github_dispatch_service.advance_approval_round(
-        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    await github_dispatch_service.apply_approval_decision(
+        db,
+        item,
+        scope,
+        decision="rejected",
+        approval_round=2,
+        dispatch_nonce=item.dispatch_nonce,
+        owner_member_id=owner.id,
     )
     await db.refresh(item)
     assert item.dispatch_status == "dispatched"
     assert item.approval_round_count == 3
-    await github_dispatch_service.advance_approval_round(
-        db, item, scope, decision_message=decision, authenticated_sender_member_id=1
+    await github_dispatch_service.apply_approval_decision(
+        db,
+        item,
+        scope,
+        decision="rejected",
+        approval_round=3,
+        dispatch_nonce=item.dispatch_nonce,
+        owner_member_id=owner.id,
     )
     await db.refresh(item)
     assert item.dispatch_status == "escalated"
@@ -3091,8 +3207,20 @@ async def test_approval_round_cap_escalates(db, monkeypatch):
 async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 1
-    db.add(
-        MailTeamMember(
+    owner = MailTeamMember(
+        identity_key="slot:approval-owner-broadcast",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Owner",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+    )
+    db.add_all(
+        [
+            owner,
+            MailTeamMember(
             identity_key="slot:1",
             repo_id="r",
             repo_path="/tmp/r",
@@ -3101,8 +3229,10 @@ async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
             participant_kind="team_slot",
             team_preset_id=preset.id,
             team_slot_id=slots[0].id,
-        )
+            ),
+        ]
     )
+    await db.flush()
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=36,
@@ -3110,38 +3240,21 @@ async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatch_nonce="approval-broadcast-nonce",
         approval_round_count=1,
     )
     db.add(item)
     await db.commit()
 
-    original_builder = agent_mail_service._create_message_row
-
-    async def build_decision(db_, request, **kwargs):
-        if request.decision is None:
-            return await original_builder(db_, request, **kwargs)
-        message = MailMessage(
-            kind="answer",
-            body_markdown=request.body_markdown,
-            decision="rejected",
-            approval_round=1,
-        )
-        db_.add(message)
-        await db_.flush()
-        return message, set()
-
-    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
-    await github_dispatch_service.advance_approval_round(
+    await github_dispatch_service.apply_approval_decision(
         db,
         item,
         scope,
-        decision_message=MailMessageCreate(
-            kind="answer",
-            thread_root_id=1,
-            body_markdown="revise",
-            decision="rejected",
-        ),
-        authenticated_sender_member_id=1,
+        decision="rejected",
+        approval_round=1,
+        dispatch_nonce=item.dispatch_nonce,
+        owner_member_id=owner.id,
     )
 
     messages = (await db.execute(select(MailMessage))).scalars().all()
@@ -3153,6 +3266,18 @@ async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
 async def test_escalation_state_persists_when_notification_fails(db, monkeypatch):
     preset, slots, scope = await _team(db)
     scope.max_approval_rounds = 1
+    owner = MailTeamMember(
+        identity_key="slot:approval-owner-failure",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Owner",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+    )
+    db.add(owner)
+    await db.flush()
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=37,
@@ -3160,23 +3285,12 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
         issue_url="u",
         github_updated_at=datetime.utcnow(),
         dispatch_status="dispatched",
+        owner_slot_id=slots[1].id,
+        dispatch_nonce="approval-failure-nonce",
         approval_round_count=1,
     )
     db.add(item)
     await db.commit()
-
-    async def build_decision(db_, request, **_kwargs):
-        message = MailMessage(
-            kind="answer",
-            body_markdown=request.body_markdown,
-            decision="rejected",
-            approval_round=1,
-        )
-        db_.add(message)
-        await db_.flush()
-        return message, set()
-
-    monkeypatch.setattr(agent_mail_service, "_create_message_row", build_decision)
 
     async def fail_broadcast(
         db_, item_, reason, note, *, owner_may_be_active=False
@@ -3189,17 +3303,14 @@ async def test_escalation_state_persists_when_notification_fails(db, monkeypatch
         fail_broadcast,
     )
 
-    await github_dispatch_service.advance_approval_round(
+    await github_dispatch_service.apply_approval_decision(
         db,
         item,
         scope,
-        decision_message=MailMessageCreate(
-            kind="answer",
-            thread_root_id=1,
-            body_markdown="revise",
-            decision="rejected",
-        ),
-        authenticated_sender_member_id=1,
+        decision="rejected",
+        approval_round=1,
+        dispatch_nonce=item.dispatch_nonce,
+        owner_member_id=owner.id,
     )
 
     await db.refresh(item)

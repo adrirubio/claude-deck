@@ -368,6 +368,130 @@ def test_http_error_result_preserves_backend_block_code():
     assert result["error"]["block_code"] == "reasoning_effort_unsupported"
 
 
+def test_http_conflict_preserves_detail_code_without_credentials():
+    import mcp_shim.agent_mail_server as shim
+
+    request = shim.httpx.Request(
+        "POST",
+        "http://deck/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": "request-secret"},
+    )
+    response = shim.httpx.Response(
+        409,
+        request=request,
+        headers={"X-Debug-Token": "response-secret"},
+        json={"detail": "request_not_pending"},
+    )
+    error = shim.httpx.HTTPStatusError("conflict", request=request, response=response)
+
+    result = shim._http_error_result(error)
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "request_not_pending",
+            "status_code": 409,
+            "message": "request_not_pending",
+        },
+    }
+    assert "request-secret" not in repr(result)
+    assert "response-secret" not in repr(result)
+
+
+def test_request_work_item_approval_uses_agent_mail_authority_route(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if path == "/approval-requests":
+            return {
+                "ok": True,
+                "data": {
+                    "id": 41,
+                    "request_message_id": 73,
+                    "status": "pending",
+                    "approval_round": 2,
+                },
+            }
+        if path.startswith("/agent/inbox"):
+            return {"ok": True, "data": {"unread_count": 0, "pending_count": 1}}
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+
+    result = shim.deck_request_work_item_approval(
+        19,
+        "nonce-19",
+        "Change one file.",
+        {"paths": ["src/example.py"]},
+    )
+
+    assert requests[0] == (
+        "POST",
+        "/approval-requests",
+        {
+            "json": {
+                "work_item_id": 19,
+                "dispatch_nonce": "nonce-19",
+                "summary": "Change one file.",
+                "plan_metadata": {"paths": ["src/example.py"]},
+            }
+        },
+    )
+    assert result == {
+        "ok": True,
+        "approval_request_id": 41,
+        "request_message_id": 73,
+        "status": "pending",
+        "approval_round": 2,
+        "unread_count": 0,
+        "pending_count": 1,
+    }
+
+
+def test_approve_work_item_sends_required_request_id(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if path == "/decisions":
+            return {"ok": True, "data": {"id": 81, "decision": "approved"}}
+        if path.startswith("/agent/inbox"):
+            return {"ok": True, "data": {"unread_count": 0, "pending_count": 0}}
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+
+    result = shim.deck_approve_work_item(
+        19,
+        "nonce-19",
+        "approved",
+        "Safe to proceed.",
+        approval_request_id=41,
+    )
+
+    assert requests[0] == (
+        "POST",
+        "/decisions",
+        {
+            "json": {
+                "work_item_id": 19,
+                "dispatch_nonce": "nonce-19",
+                "approval_request_id": 41,
+                "decision": "approved",
+                "reason": "Safe to proceed.",
+            }
+        },
+    )
+    assert result["message_id"] == 81
+
+
 def test_deck_create_team_posts_to_team_api(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 

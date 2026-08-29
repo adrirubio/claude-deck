@@ -52,20 +52,24 @@ def _http_error_result(exc: httpx.HTTPStatusError) -> dict:
     response = exc.response
     message = response.text
     block_code = None
+    detail_code = None
     try:
         body = response.json()
         detail = body.get("detail") if isinstance(body, dict) else body
         if isinstance(detail, str):
             message = detail
+            if detail.replace("_", "").isalnum():
+                detail_code = detail
         elif isinstance(detail, dict):
             message = str(detail.get("message") or detail)
             block_code = detail.get("block_code")
+            detail_code = detail.get("code") or block_code
         elif detail is not None:
             message = str(detail)
     except ValueError:
         pass
     error = {
-        "code": "deck_http_error",
+        "code": detail_code or "deck_http_error",
         "status_code": response.status_code,
         "message": message,
     }
@@ -338,14 +342,57 @@ def deck_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def deck_request_work_item_approval(
+    work_item_id: int,
+    dispatch_nonce: str,
+    summary: str,
+    plan_metadata: Optional[dict[str, Any]] = None,
+) -> dict:
+    """Submit the current work item's initial plan to its designated Leader.
+
+    This creates normalized approval authority and returns its stable request id.
+    Do not use deck_request_context for initial-plan approval; ordinary context
+    questions are non-authoritative.
+    """
+    err = _guard()
+    if err:
+        return err
+    result = _request(
+        "POST",
+        "/approval-requests",
+        json={
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "summary": summary,
+            "plan_metadata": plan_metadata or {},
+        },
+    )
+    if not result["ok"]:
+        return result
+    approval = result["data"]
+    return {
+        "ok": True,
+        "approval_request_id": approval["id"],
+        "request_message_id": approval.get("request_message_id"),
+        "status": approval["status"],
+        "approval_round": approval["approval_round"],
+        **_counts(),
+    }
+
+
+@mcp.tool()
 def deck_approve_work_item(
     work_item_id: int,
     dispatch_nonce: str,
     decision: str,
     reason: str,
+    approval_request_id: int,
 ) -> dict:
-    """Approve or reject the current dispatch approval round as its designated
-    leader. A rejection opens the next round automatically when one remains."""
+    """Approve or reject a normalized initial-plan request as its designated Leader.
+
+    Pass approval_request_id from deck_request_work_item_approval. A rejection opens
+    the next round automatically when one remains.
+    """
     if decision not in {"approved", "rejected"}:
         return {
             "ok": False,
@@ -363,6 +410,7 @@ def deck_approve_work_item(
         json={
             "work_item_id": work_item_id,
             "dispatch_nonce": dispatch_nonce,
+            "approval_request_id": approval_request_id,
             "decision": decision,
             "reason": reason,
         },
@@ -403,8 +451,12 @@ def deck_request_context(
     work_item_id: Optional[int] = None,
     dispatch_nonce: Optional[str] = None,
 ) -> dict:
-    """Ask another Agent Mail participant a structured question about something they know.
-    Creates a pending context request they will be nudged to answer."""
+    """Ask another Agent Mail participant a non-authoritative structured question.
+
+    Creates a pending context request they will be nudged to answer. For initial-plan
+    approval, use deck_request_work_item_approval instead; a context answer cannot
+    authorize implementation.
+    """
     err = _guard()
     if err:
         return err

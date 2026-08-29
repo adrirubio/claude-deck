@@ -2,10 +2,14 @@
 from datetime import datetime, timedelta
 
 import pytest
+from sqlalchemy import func, select
 
-from app.models.database import MailMessage, MailTeamMember
+from app.models.database import MailMessage, MailReceipt, MailTeamMember
 from app.models.schemas import MailMessageCreate
-from app.services.agent_mail_service import AgentMailService
+from app.services.agent_mail_service import (
+    AgentMailService,
+    MailDeliveryIntegrityError,
+)
 
 
 @pytest.fixture
@@ -115,6 +119,38 @@ async def test_context_request_lifecycle_pending_answered_acknowledged(db, svc):
     await svc.ack_message(db, answer.id, a.id)
     thread = await svc.get_thread(db, req.id)
     assert thread.root.request_status == "acknowledged"
+
+
+@pytest.mark.asyncio
+async def test_superseded_context_request_is_terminal(db, svc):
+    requester = await _member(db, "ra", "alpha")
+    recipient = await _member(db, "rb", "beta")
+    request = await svc.send_message(
+        db,
+        MailMessageCreate(
+            kind="context_request",
+            sender_member_id=requester.id,
+            recipient_member_id=recipient.id,
+            body_markdown="Approve this plan.",
+        ),
+    )
+    root = await db.get(MailMessage, request.id)
+    root.request_status = "superseded"
+    await db.commit()
+
+    with pytest.raises(ValueError, match="superseded context requests cannot be answered"):
+        await svc.send_message(
+            db,
+            MailMessageCreate(
+                kind="answer",
+                sender_member_id=recipient.id,
+                thread_root_id=request.id,
+                body_markdown="Too late.",
+            ),
+        )
+
+    _unread, pending = await svc.counts_for_member(db, recipient.id)
+    assert pending == 0
 
 
 @pytest.mark.asyncio
@@ -317,3 +353,66 @@ async def test_invalid_kind_rejected(db, svc):
                 body_markdown="x",
             ),
         )
+
+
+@pytest.mark.asyncio
+async def test_server_delivery_key_recovers_exact_message_without_duplicate_receipt(
+    db, svc, monkeypatch
+):
+    recipient = await _member(db, "rb", "beta")
+    nudges = []
+
+    async def record_nudge(*_args, **_kwargs):
+        nudges.append(True)
+
+    monkeypatch.setattr(svc, "auto_nudge_members", record_nudge)
+    request = MailMessageCreate(
+        recipient_member_id=recipient.id,
+        subject="Approval request",
+        body_markdown="Review the bounded plan.",
+        payload={"work_item_id": 7, "summary": "bounded"},
+    )
+    first = await svc.send_message(db, request, delivery_key="approval:7:request")
+    repeated = await svc.send_message(db, request, delivery_key="approval:7:request")
+
+    assert repeated.id == first.id
+    assert nudges == [True]
+    assert (
+        await db.execute(select(func.count()).select_from(MailMessage))
+    ).scalar_one() == 1
+    assert (
+        await db.execute(select(func.count()).select_from(MailReceipt))
+    ).scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_server_delivery_key_rejects_different_message(db, svc):
+    recipient = await _member(db, "rb", "beta")
+    await svc.send_message(
+        db,
+        MailMessageCreate(
+            recipient_member_id=recipient.id,
+            body_markdown="original",
+            payload={"work_item_id": 7},
+        ),
+        delivery_key="approval:7:request",
+    )
+
+    with pytest.raises(MailDeliveryIntegrityError):
+        await svc.send_message(
+            db,
+            MailMessageCreate(
+                recipient_member_id=recipient.id,
+                body_markdown="changed",
+                payload={"work_item_id": 7},
+            ),
+            delivery_key="approval:7:request",
+        )
+
+    messages = (await db.execute(select(MailMessage))).scalars().all()
+    assert len(messages) == 1
+    assert messages[0].body_markdown == "original"
+
+
+def test_delivery_key_is_not_agent_authored_schema():
+    assert "delivery_key" not in MailMessageCreate.model_fields
