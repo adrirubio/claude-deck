@@ -122,6 +122,38 @@ async def test_context_request_lifecycle_pending_answered_acknowledged(db, svc):
 
 
 @pytest.mark.asyncio
+async def test_superseded_context_request_is_terminal(db, svc):
+    requester = await _member(db, "ra", "alpha")
+    recipient = await _member(db, "rb", "beta")
+    request = await svc.send_message(
+        db,
+        MailMessageCreate(
+            kind="context_request",
+            sender_member_id=requester.id,
+            recipient_member_id=recipient.id,
+            body_markdown="Approve this plan.",
+        ),
+    )
+    root = await db.get(MailMessage, request.id)
+    root.request_status = "superseded"
+    await db.commit()
+
+    with pytest.raises(ValueError, match="superseded context requests cannot be answered"):
+        await svc.send_message(
+            db,
+            MailMessageCreate(
+                kind="answer",
+                sender_member_id=recipient.id,
+                thread_root_id=request.id,
+                body_markdown="Too late.",
+            ),
+        )
+
+    _unread, pending = await svc.counts_for_member(db, recipient.id)
+    assert pending == 0
+
+
+@pytest.mark.asyncio
 async def test_handoff_ack_by_recipient_closes_it(db, svc):
     a = await _member(db, "ra", "alpha")
     b = await _member(db, "rb", "beta")

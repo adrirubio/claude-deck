@@ -207,6 +207,8 @@ class GithubApprovalService:
         if request.request_message_id is None:
             raise GithubApprovalError("approval_request_delivery_pending")
         if request.status != "pending":
+            if request.status not in {"approved", "rejected"}:
+                raise GithubApprovalError("request_not_pending")
             if request.status == decision and request.reason == reason:
                 valid_rounds = {request.approval_round}
                 if decision == "rejected":
@@ -257,16 +259,35 @@ class GithubApprovalService:
             return request, False
         if request.status != "pending":
             raise GithubApprovalError("request_not_pending")
-        now = datetime.utcnow()
-        request.status = "superseded"
-        request.superseded_at = now
+        current = await self.current_pending(db, request.work_item_id)
+        if current is None or current.id != request.id:
+            raise GithubApprovalError("request_not_pending")
+        revision = None
         if request.scope_revision_id is not None:
             revision = await db.get(
                 GithubAttemptScopeRevision,
                 request.scope_revision_id,
             )
-            if revision is not None:
-                revision.status = "superseded"
+            if revision is None or revision.status != "proposed":
+                raise GithubApprovalError("request_not_pending")
+        now = datetime.utcnow()
+        result = await db.execute(
+            update(GithubApprovalRequest)
+            .where(
+                GithubApprovalRequest.id == request.id,
+                GithubApprovalRequest.status == "pending",
+            )
+            .values(status="superseded", superseded_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            await db.refresh(request)
+            if request.status == "superseded":
+                return request, False
+            raise GithubApprovalError("request_not_pending")
+        if revision is not None:
+            revision.status = "superseded"
         if request.request_message_id is not None:
             root = await db.get(MailMessage, request.request_message_id)
             if root is not None:

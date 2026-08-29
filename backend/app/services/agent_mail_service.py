@@ -1101,6 +1101,8 @@ class AgentMailService:
                 raise ValueError("answer messages can only resolve context requests")
             if root.recipient_member_id != request.sender_member_id:
                 raise ValueError("only the context request recipient can answer it")
+            if root.request_status == "superseded":
+                raise ValueError("superseded context requests cannot be answered")
         else:
             root = None
         if request.kind in MAIL_REQUEST_KINDS and request.recipient_member_id is None:

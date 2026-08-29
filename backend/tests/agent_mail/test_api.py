@@ -13,7 +13,9 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     GithubWorkItem,
+    GithubWorkspace,
     MailAgentSession,
     MailMessage,
     MailTeamMember,
@@ -232,6 +234,121 @@ async def test_normalized_initial_request_supersedes_stale_attempt_identity(db):
     assert first.superseded_at is not None
     assert second.approval_round == 2
     assert second.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_cancel_synchronizes_request_revision_and_mail_root(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    response = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "bounded plan",
+        },
+    )
+    approval = await db.get(GithubApprovalRequest, response.json()["id"])
+    workspace = GithubWorkspace(scope_id=item.scope_id, path="/tmp/cancel-workspace")
+    db.add(workspace)
+    await db.flush()
+    revision = GithubAttemptScopeRevision(
+        work_item_id=item.id,
+        dispatch_nonce=item.dispatch_nonce,
+        revision=1,
+        owner_slot_id=item.owner_slot_id,
+        owner_member_id=members[1].id,
+        phase="diagnostic",
+        execution_target="collect evidence",
+        summary="bounded plan",
+        allowed_paths=["src/example.py"],
+        allowed_actions=["inspect"],
+        allowed_commands=["pytest -q"],
+        prohibited_actions=["merge"],
+        tool_fallbacks={},
+        baseline_head_sha="a" * 40,
+        baseline_tree_sha="b" * 40,
+        originating_escalation_reason="retry_count_exhausted",
+        expected_workspace_id=workspace.id,
+        expected_lease_token_hash="lease-hash",
+        max_failed_heads=1,
+        status="proposed",
+        approval_request_id=approval.id,
+    )
+    db.add(revision)
+    await db.flush()
+    approval.scope_revision_id = revision.id
+    await db.commit()
+    unrelated = await _member(db, "unrelated", "unrelated")
+
+    with pytest.raises(GithubApprovalError) as exc_info:
+        await github_approval_service.cancel(
+            db,
+            approval,
+            requester_member_id=unrelated.id,
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "not_approval_requester"
+
+    cancelled, changed = await github_approval_service.cancel(
+        db,
+        approval,
+        requester_member_id=members[1].id,
+    )
+    repeated, repeated_changed = await github_approval_service.cancel(
+        db,
+        approval,
+        requester_member_id=members[1].id,
+    )
+
+    assert changed is True
+    assert repeated_changed is False
+    assert repeated.id == cancelled.id
+    assert cancelled.status == "superseded"
+    assert cancelled.superseded_at is not None
+    await db.refresh(revision)
+    assert revision.status == "superseded"
+    root = await db.get(MailMessage, cancelled.request_message_id)
+    assert root.request_status == "superseded"
+    _unread, pending = await agent_mail_service.counts_for_member(db, members[0].id)
+    assert pending == 0
+
+    decision = await client.post(
+        "/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval.id,
+            "decision": "approved",
+            "reason": "too late",
+        },
+    )
+    assert decision.status_code == 409
+    assert decision.json()["detail"] == "request_not_pending"
+
+
+@pytest.mark.asyncio
+async def test_operator_can_cancel_pending_approval_request(db):
+    item, members, _tokens = await _dispatch_approval_fixture(db)
+    approval, _created = await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="bounded plan",
+    )
+
+    cancelled, changed = await github_approval_service.cancel(
+        db,
+        approval,
+        operator=True,
+    )
+
+    assert changed is True
+    assert cancelled.status == "superseded"
 
 
 @pytest.mark.asyncio
