@@ -1719,6 +1719,24 @@ class GithubDispatchService:
             ).scalar_one_or_none()
             if scope is None:
                 raise ValueError("handoff scope is unavailable")
+            active_revision = None
+            if item.active_scope_revision > 0:
+                active_revision = (
+                    await db.execute(
+                        select(GithubAttemptScopeRevision)
+                        .where(
+                            GithubAttemptScopeRevision.work_item_id == item.id,
+                            GithubAttemptScopeRevision.dispatch_nonce
+                            == item.dispatch_nonce,
+                            GithubAttemptScopeRevision.revision
+                            == item.active_scope_revision,
+                            GithubAttemptScopeRevision.status.in_(
+                                ("active", "submitted")
+                            ),
+                        )
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one_or_none()
             old_owner_slot_id = expected_old_owner_slot_id
             expected_leased_at = workspace.leased_at
             lease_token = workspace.lease_token
@@ -1735,7 +1753,7 @@ class GithubDispatchService:
                 )
             )
             now = datetime.utcnow()
-            item_result = await db.execute(
+            item_update = (
                 update(GithubWorkItem)
                 .where(
                     GithubWorkItem.id == item.id,
@@ -1758,6 +1776,18 @@ class GithubDispatchService:
                 )
                 .execution_options(synchronize_session=False)
             )
+            if active_revision is not None:
+                item_update = item_update.values(
+                    dispatch_status="escalated",
+                    escalation_reason=active_revision.originating_escalation_reason,
+                    pending_reason=None,
+                    continuation_nudged_at=None,
+                    status_note=(
+                        "The active continuation was superseded by handoff. The new "
+                        "owner must propose and receive approval for a fresh revision."
+                    ),
+                )
+            item_result = await db.execute(item_update)
             workspace_result = await db.execute(
                 update(GithubWorkspace)
                 .where(
@@ -1776,7 +1806,24 @@ class GithubDispatchService:
                 )
                 .execution_options(synchronize_session=False)
             )
-            if item_result.rowcount != 1 or workspace_result.rowcount != 1:
+            revision_result = None
+            if active_revision is not None:
+                revision_result = await db.execute(
+                    update(GithubAttemptScopeRevision)
+                    .where(
+                        GithubAttemptScopeRevision.id == active_revision.id,
+                        GithubAttemptScopeRevision.status.in_(
+                            ("active", "submitted")
+                        ),
+                    )
+                    .values(status="superseded")
+                    .execution_options(synchronize_session=False)
+                )
+            if (
+                item_result.rowcount != 1
+                or workspace_result.rowcount != 1
+                or (revision_result is not None and revision_result.rowcount != 1)
+            ):
                 await db.rollback()
                 raise ValueError("handoff state changed before acceptance")
             try:
@@ -1854,6 +1901,7 @@ class GithubDispatchService:
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status == "dispatched",
                     GithubWorkItem.pr_number.is_(None),
+                    GithubWorkItem.active_scope_revision == 0,
                 )
             )
         ).scalars().all()
@@ -1915,6 +1963,169 @@ class GithubDispatchService:
             ):
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
+
+    @staticmethod
+    def _log_continuation_monitor(
+        item: GithubWorkItem,
+        *,
+        anchor: datetime | None,
+        elapsed_seconds: float | None,
+        action: str,
+        block_code: str | None = None,
+    ) -> None:
+        logger.debug(
+            "github continuation monitor",
+            extra={
+                "monitor_name": "monitor_continuation",
+                "work_item_id": item.id,
+                "active_scope_revision": item.active_scope_revision,
+                "attempt_phase": item.attempt_phase,
+                "dispatch_status": item.dispatch_status,
+                "grace_anchor": anchor.isoformat() if anchor is not None else None,
+                "elapsed_grace_seconds": elapsed_seconds,
+                "monitor_action": action,
+                "block_code": block_code,
+            },
+        )
+
+    async def monitor_continuation(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+    ) -> None:
+        enabled_slot_ids = {slot.id for slot in preset_slots if slot.enabled}
+        items = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "dispatched",
+                    GithubWorkItem.pr_number.is_not(None),
+                    GithubWorkItem.active_scope_revision > 0,
+                )
+            )
+        ).scalars().all()
+        now = datetime.utcnow()
+        idle_timeout = timedelta(
+            seconds=settings.github_owner_idle_timeout_seconds
+        )
+        nudge_grace = timedelta(seconds=settings.github_nudge_grace_seconds)
+
+        for item in items:
+            revision = (
+                await db.execute(
+                    select(GithubAttemptScopeRevision).where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == item.dispatch_nonce,
+                        GithubAttemptScopeRevision.revision
+                        == item.active_scope_revision,
+                        GithubAttemptScopeRevision.status == "active",
+                    )
+                )
+            ).scalar_one_or_none()
+            if revision is None:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=item.continuation_activated_at,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="active_revision_missing",
+                )
+                continue
+            if item.owner_slot_id not in enabled_slot_ids:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=item.continuation_activated_at,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="owner_slot_unavailable",
+                )
+                continue
+            owner_member = await self._owner_member(db, item)
+            if owner_member is None:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=item.continuation_activated_at,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="owner_member_unavailable",
+                )
+                continue
+            workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+            anchors = [
+                value
+                for value in (
+                    item.continuation_activated_at,
+                    workspace.lease_last_owner_contact_at
+                    if workspace is not None
+                    else None,
+                )
+                if value is not None
+            ]
+            if not anchors:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=None,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="continuation_anchor_missing",
+                )
+                continue
+            anchor = max(anchors)
+            elapsed = now - anchor
+            if elapsed <= idle_timeout:
+                continue
+            if (
+                item.continuation_nudged_at is None
+                or item.continuation_nudged_at < anchor
+            ):
+                await self.notify_owner(
+                    db,
+                    item,
+                    subject=f"Continuation progress check: issue #{item.issue_number}",
+                    body_markdown=(
+                        f"Continuation revision {item.active_scope_revision} for issue "
+                        f"#{item.issue_number} has not reported recent progress. "
+                        "Continue within the approved scope or request new approval; "
+                        "do not reset the preserved attempt."
+                    ),
+                    payload={
+                        "kind": "github_dispatch_continuation_idle_nudge",
+                        "work_item_id": item.id,
+                        "scope_revision": item.active_scope_revision,
+                    },
+                )
+                item.continuation_nudged_at = now
+                item.updated_at = now
+                await db.commit()
+                self._log_continuation_monitor(
+                    item,
+                    anchor=anchor,
+                    elapsed_seconds=elapsed.total_seconds(),
+                    action="nudge_owner",
+                )
+                continue
+            if now - item.continuation_nudged_at <= nudge_grace:
+                continue
+            revision.status = "superseded"
+            await self.escalate(
+                db,
+                item,
+                "owner_idle_timeout",
+                (
+                    f"Continuation revision {revision.revision} became idle after "
+                    "one progress nudge. The PR, workspace, nonce, and attempt "
+                    "history remain preserved."
+                ),
+            )
+            await db.commit()
+            self._log_continuation_monitor(
+                item,
+                anchor=anchor,
+                elapsed_seconds=elapsed.total_seconds(),
+                action="escalate_idle",
+            )
 
     async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
         """Return whether this attempt's brief reached its owner."""

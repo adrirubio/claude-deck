@@ -18,6 +18,7 @@ from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
     GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
@@ -409,6 +410,69 @@ async def _create_registered_slot_member(db, slot: AgentTeamSlot) -> MailTeamMem
     await db.commit()
     assert member.id != slot.id
     return member
+
+
+async def _active_continuation(
+    db,
+    scope,
+    owner_slot,
+    *,
+    issue_number,
+    activated_at,
+    owner_contact_at,
+):
+    owner_member = await _create_registered_slot_member(db, owner_slot)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=issue_number,
+        issue_title="Continuation",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="dispatched",
+        owner_slot_id=owner_slot.id,
+        dispatch_nonce=f"nonce-{issue_number}",
+        dispatch_head_ref=f"deck/slot-{owner_slot.id}/issue-{issue_number}",
+        dispatch_base_ref="origin/master",
+        pr_number=issue_number,
+        active_scope_revision=1,
+        attempt_phase="implementation",
+        continuation_activated_at=activated_at,
+        dispatched_at=activated_at - timedelta(days=1),
+        updated_at=activated_at - timedelta(days=1),
+    )
+    db.add(item)
+    await db.flush()
+    workspace = await _lease_for(
+        db,
+        scope,
+        item,
+        lease_last_owner_contact_at=owner_contact_at,
+    )
+    revision = GithubAttemptScopeRevision(
+        work_item_id=item.id,
+        dispatch_nonce=item.dispatch_nonce,
+        revision=1,
+        owner_slot_id=owner_slot.id,
+        owner_member_id=owner_member.id,
+        phase="implementation",
+        execution_target="workspace",
+        summary="Continue one bounded fix",
+        allowed_paths=["src/fix.py"],
+        allowed_actions=["push_pr_head", "request_verification"],
+        allowed_commands=["pytest -q"],
+        prohibited_actions=[],
+        tool_fallbacks={},
+        baseline_head_sha="base-head",
+        baseline_tree_sha="base-tree",
+        originating_escalation_reason="retry_count_exhausted",
+        expected_workspace_id=workspace.id,
+        expected_lease_token_hash="hash",
+        max_failed_heads=2,
+        status="active",
+    )
+    db.add(revision)
+    await db.commit()
+    return item, workspace, revision, owner_member
 
 
 async def _create_live_slot_launch_session(
@@ -3468,6 +3532,56 @@ async def test_two_phase_handoff(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handoff_supersedes_active_continuation_and_requires_fresh_scope(
+    db, monkeypatch
+):
+    async def config_runner(_args):
+        return 0, ""
+
+    async def revoke(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    monkeypatch.setattr(github_workspace_service, "revoke_push_token", revoke)
+    _preset, slots, scope = await _team(db)
+    old_owner, target = slots[:2]
+    item, workspace, revision, _member = await _active_continuation(
+        db,
+        scope,
+        old_owner,
+        issue_number=45,
+        activated_at=datetime.utcnow(),
+        owner_contact_at=datetime.utcnow(),
+    )
+    item.handoff_state = "pending"
+    item.handoff_target_slot_id = target.id
+    await db.commit()
+
+    await github_dispatch_service.accept_handoff(
+        db,
+        item,
+        target.id,
+        accepting_pane_pid=202,
+        accepting_pane_proc_start="2002",
+    )
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    await db.refresh(revision)
+    assert item.owner_slot_id == target.id
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.active_scope_revision == 1
+    assert item.pr_number == 45
+    assert item.dispatch_nonce == "nonce-45"
+    assert "fresh revision" in item.status_note
+    assert revision.status == "superseded"
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "t1"
+    assert workspace.leased_owner_pid == 202
+
+
+@pytest.mark.asyncio
 async def test_handoff_config_failure_keeps_old_owner_and_identity(db, monkeypatch):
     _, slots, scope = await _team(db)
     old_owner, target = slots[:2]
@@ -3881,6 +3995,131 @@ async def test_repeated_lease_release_reminders_never_escalate(db):
 
     assert item.dispatch_status == "merged"
     assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_initial_monitor_excludes_pr_bearing_active_continuation(db):
+    preset, slots, scope = await _team(db)
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds
+        + settings.github_nudge_grace_seconds
+        + 60
+    )
+    item, _workspace, revision, _member = await _active_continuation(
+        db,
+        scope,
+        slots[1],
+        issue_number=940,
+        activated_at=old,
+        owner_contact_at=old,
+    )
+
+    await github_dispatch_service.monitor_dispatched(
+        db,
+        scope,
+        preset_slots=slots,
+        wake_state_by_slot={slots[0].id: "wakeable", slots[1].id: "wakeable"},
+    )
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.last_nudge_at is None
+    assert item.continuation_nudged_at is None
+    assert revision.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_continuation_monitor_uses_activation_and_owner_contact_clocks(db):
+    _preset, slots, scope = await _team(db)
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds + 60
+    )
+    recent = datetime.utcnow()
+    item, _workspace, revision, _member = await _active_continuation(
+        db,
+        scope,
+        slots[1],
+        issue_number=941,
+        activated_at=recent,
+        owner_contact_at=old,
+    )
+    item.continuation_nudged_at = old
+    await db.commit()
+
+    await github_dispatch_service.monitor_continuation(db, scope, slots)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.continuation_nudged_at == old
+    assert revision.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_continuation_monitor_nudges_once_then_escalates_without_reset(
+    db, caplog
+):
+    caplog.set_level("DEBUG", logger="app.services.github_dispatch_service")
+    _preset, slots, scope = await _team(db)
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds + 60
+    )
+    item, workspace, revision, member = await _active_continuation(
+        db,
+        scope,
+        slots[1],
+        issue_number=942,
+        activated_at=old,
+        owner_contact_at=old,
+    )
+
+    await github_dispatch_service.monitor_continuation(db, scope, slots)
+
+    await db.refresh(item)
+    assert item.continuation_nudged_at is not None
+    assert item.dispatch_status == "dispatched"
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.recipient_member_id == member.id,
+                MailMessage.subject.like("Continuation progress check:%"),
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+
+    item.continuation_nudged_at = datetime.utcnow() - timedelta(
+        seconds=settings.github_nudge_grace_seconds + 5
+    )
+    await db.commit()
+    await github_dispatch_service.monitor_continuation(db, scope, slots)
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "owner_idle_timeout"
+    assert item.pr_number == 942
+    assert item.dispatch_nonce == "nonce-942"
+    assert item.active_scope_revision == 1
+    assert item.retry_count == 0
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "t1"
+    assert revision.status == "superseded"
+    actions = [
+        record.monitor_action
+        for record in caplog.records
+        if hasattr(record, "monitor_action")
+    ]
+    assert actions == ["nudge_owner", "escalate_idle"]
+    for record in caplog.records:
+        if hasattr(record, "monitor_action"):
+            assert record.monitor_name == "monitor_continuation"
+            assert record.work_item_id == item.id
+            assert record.active_scope_revision == 1
+    assert "t1" not in caplog.text
+    assert "pytest -q" not in caplog.text
 
 
 @pytest.mark.asyncio

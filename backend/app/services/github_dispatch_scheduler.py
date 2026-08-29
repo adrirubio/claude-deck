@@ -145,8 +145,38 @@ class GithubDispatchScheduler:
                 issue_details_by_number=issues_by_number,
             )
             await self.dispatch.monitor_dispatched(db, scope, slots)
-            await self.dispatch.remind_held_leases(db, scope)
+            await db.commit()
+            scope, slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.monitor_continuation(db, scope, slots)
+            await db.commit()
+            scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.verification.process_scope(db, scope, client=client)
+            await db.commit()
+            scope, _slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.remind_held_leases(db, scope)
+            await db.commit()
+
+    async def _reload_scope_context(
+        self,
+        db: AsyncSession,
+        scope_id: int,
+    ) -> tuple[TeamGithubScope, list[AgentTeamSlot]]:
+        scope = (
+            await db.execute(
+                select(TeamGithubScope)
+                .where(TeamGithubScope.id == scope_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        slots = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalars().all()
+        return scope, list(slots)
 
     async def _pending_issues_by_number(
         self,
