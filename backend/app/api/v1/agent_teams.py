@@ -11,7 +11,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +80,7 @@ from app.services.agent_mail_service import (
     agent_mail_service,
 )
 from app.services.github_approval_service import (
+    CONTINUABLE_ESCALATIONS,
     GithubApprovalError,
     github_approval_service,
 )
@@ -1214,6 +1215,80 @@ async def claim_github_work_item_continuation(
         if leader is not None
         else None
     )
+    active_revision = None
+    if item.active_scope_revision > 0 and item.dispatch_nonce is not None:
+        active_revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == item.active_scope_revision,
+                )
+            )
+        ).scalar_one_or_none()
+    pending_approval = (
+        await db.execute(
+            select(GithubApprovalRequest).where(
+                GithubApprovalRequest.work_item_id == item.id,
+                GithubApprovalRequest.status == "pending",
+            )
+        )
+    ).scalar_one_or_none()
+    pending_revision = None
+    if pending_approval is not None and pending_approval.scope_revision_id is not None:
+        pending_revision = await db.get(
+            GithubAttemptScopeRevision,
+            pending_approval.scope_revision_id,
+        )
+    elif active_revision is None:
+        pending_revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision)
+                .where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                    GithubAttemptScopeRevision.status == "approved",
+                )
+                .order_by(GithubAttemptScopeRevision.revision.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    revision_count, failed_head_count = (
+        await db.execute(
+            select(
+                func.count(GithubAttemptScopeRevision.id),
+                func.coalesce(func.sum(GithubAttemptScopeRevision.failed_head_count), 0),
+            ).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+            )
+        )
+    ).one()
+    if not scope.continuation_enabled:
+        continuation_block_code = "continuation_disabled"
+    elif pending_approval is not None:
+        continuation_block_code = "approval_pending"
+    elif pending_revision is not None and pending_revision.delivery_message_id is None:
+        continuation_block_code = "continuation_delivery_pending"
+    elif pending_revision is not None:
+        continuation_block_code = "continuation_ack_required"
+    elif active_revision is not None and active_revision.status == "active":
+        continuation_block_code = None
+    elif item.dispatch_status != "escalated":
+        continuation_block_code = "continuation_not_escalated"
+    elif item.escalation_reason not in CONTINUABLE_ESCALATIONS:
+        continuation_block_code = "continuation_reason_not_allowed"
+    elif item.pr_number is None:
+        continuation_block_code = "continuation_pr_required"
+    elif workspace is None:
+        continuation_block_code = "workspace_lease_required"
+    elif (
+        revision_count >= scope.max_continuation_revisions
+        or failed_head_count >= scope.max_continuation_failed_heads
+    ):
+        continuation_block_code = "continuation_budget_exhausted"
+    else:
+        continuation_block_code = None
     response.headers["Cache-Control"] = "no-store"
     return GithubWorkItemContinuationResponse(
         work_item_id=item.id,
@@ -1224,6 +1299,8 @@ async def claim_github_work_item_continuation(
         repo_owner=scope.repo_owner,
         repo_name=scope.repo_name,
         dispatch_status=item.dispatch_status,
+        attempt_phase=item.attempt_phase,
+        active_scope_revision=item.active_scope_revision,
         approval_round_count=item.approval_round_count,
         dispatch_nonce=item.dispatch_nonce,
         dispatch_head_ref=item.dispatch_head_ref,
@@ -1231,6 +1308,31 @@ async def claim_github_work_item_continuation(
         lease_token=workspace.lease_token if workspace is not None else None,
         leader_member_id=leader_member.id if leader_member is not None else None,
         status_note=item.status_note,
+        active_revision=(
+            _scope_revision_response(active_revision)
+            if active_revision is not None
+            else None
+        ),
+        pending_approval=(
+            _approval_authority_response(pending_approval)
+            if pending_approval is not None
+            else None
+        ),
+        pending_revision=(
+            _scope_revision_response(pending_revision)
+            if pending_revision is not None
+            else None
+        ),
+        continuation_block_code=continuation_block_code,
+        continuation_budget={
+            "max_revisions": scope.max_continuation_revisions,
+            "used_revisions": int(revision_count),
+            "max_failed_heads": scope.max_continuation_failed_heads,
+            "used_failed_heads": int(failed_head_count),
+            "max_failed_heads_per_revision": scope.max_failed_heads_per_revision,
+            "max_paths": scope.max_scope_paths,
+            "max_commands": scope.max_scope_commands,
+        },
     )
 
 

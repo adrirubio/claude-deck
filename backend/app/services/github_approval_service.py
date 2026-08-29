@@ -23,7 +23,7 @@ from app.services.github_app_auth_service import github_app_auth_service
 from app.services.github_client import github_client
 
 
-_CONTINUABLE_ESCALATIONS = frozenset(
+CONTINUABLE_ESCALATIONS = frozenset(
     {
         "retry_count_exhausted",
         "plan_blocked",
@@ -205,7 +205,7 @@ class GithubApprovalService:
             raise GithubApprovalError("scope_mismatch")
         if item.dispatch_status != "escalated":
             raise GithubApprovalError("continuation_not_escalated")
-        if item.escalation_reason not in _CONTINUABLE_ESCALATIONS:
+        if item.escalation_reason not in CONTINUABLE_ESCALATIONS:
             raise GithubApprovalError("continuation_reason_not_allowed")
         if item.pr_number is None:
             raise GithubApprovalError("continuation_pr_required")

@@ -1223,6 +1223,90 @@ async def test_owner_claims_persisted_continuation_with_no_store(
 
 
 @pytest.mark.asyncio
+async def test_restarted_owner_reads_the_same_active_continuation_scope(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    scope, item, workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    item.dispatch_status = "dispatched"
+    item.escalation_reason = None
+    item.active_scope_revision = 1
+    item.attempt_phase = "implementation"
+    revision = GithubAttemptScopeRevision(
+        work_item_id=item.id,
+        dispatch_nonce=item.dispatch_nonce,
+        revision=1,
+        owner_slot_id=owner_slot.id,
+        owner_member_id=owner.id,
+        phase="implementation",
+        execution_target="workspace",
+        summary="Resume the same bounded work",
+        allowed_paths=["src/example.py"],
+        allowed_actions=["edit_production", "request_verification"],
+        allowed_commands=["pytest -q"],
+        prohibited_actions=["Do not edit CI"],
+        tool_fallbacks={},
+        baseline_head_sha="a" * 40,
+        baseline_tree_sha="b" * 40,
+        originating_escalation_reason="retry_count_exhausted",
+        expected_workspace_id=workspace.id,
+        expected_lease_token_hash=github_approval_service.lease_token_hash(
+            workspace.lease_token
+        ),
+        max_failed_heads=1,
+        status="active",
+        approved_at=datetime.utcnow(),
+        delivered_at=datetime.utcnow(),
+        acknowledged_at=datetime.utcnow(),
+    )
+    db.add(revision)
+    sessions = []
+    for index in range(2):
+        session = MailAgentSession(
+            member_id=owner.id,
+            provider="codex-cli",
+            source="mcp",
+            session_key=f"mcp:restart:{index}",
+            cwd="/tmp/r",
+            team_preset_id=scope.preset_id,
+            team_slot_id=owner_slot.id,
+            mailbox_status="connected",
+            last_seen_at=datetime.utcnow(),
+            bound_pane_pid=5000 + index,
+            bound_pane_proc_start=f"restart-{index}",
+        )
+        db.add(session)
+        sessions.append(session)
+    await db.commit()
+
+    async def first_session():
+        return sessions[0]
+
+    async def second_session():
+        return sessions[1]
+
+    app.dependency_overrides[mail_session] = first_session
+    first = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation"
+    )
+    app.dependency_overrides[mail_session] = second_session
+    second = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation"
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.headers["cache-control"] == "no-store"
+    assert first.json() == second.json()
+    assert first.json()["active_scope_revision"] == 1
+    assert first.json()["active_revision"]["allowed_paths"] == ["src/example.py"]
+    assert first.json()["continuation_block_code"] is None
+    assert first.json()["lease_token"] == "lease-secret"
+
+
+@pytest.mark.asyncio
 async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     _, scope = await _scope(db, tmp_path / "repo")
     item = GithubWorkItem(

@@ -2472,6 +2472,8 @@ class GithubWorkItemContinuationResponse(BaseModel):
     repo_owner: str
     repo_name: str
     dispatch_status: str
+    attempt_phase: str
+    active_scope_revision: int
     approval_round_count: int
     dispatch_nonce: Optional[str] = None
     dispatch_head_ref: Optional[str] = None
@@ -2479,6 +2481,11 @@ class GithubWorkItemContinuationResponse(BaseModel):
     lease_token: Optional[str] = None
     leader_member_id: Optional[int] = None
     status_note: Optional[str] = None
+    active_revision: Optional[GithubScopeRevisionResponse] = None
+    pending_approval: Optional[GithubApprovalRequestResponse] = None
+    pending_revision: Optional[GithubScopeRevisionResponse] = None
+    continuation_block_code: Optional[str] = None
+    continuation_budget: Dict[str, int] = Field(default_factory=dict)
 
 
 class AgentTeamLaunchPlanItem(BaseModel):
@@ -2529,6 +2536,11 @@ class DispatchStatusReport(BaseModel):
     note: Optional[str] = None
     reporting_slot_id: Optional[int] = None
     lease_token: Optional[str] = None
+    revision: Optional[int] = None
+    dispatch_nonce: Optional[str] = None
+    current_head_sha: Optional[str] = None
+    summary: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):
