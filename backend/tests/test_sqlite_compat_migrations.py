@@ -75,13 +75,224 @@ async def test_compat_migrations_add_pr1_approval_columns_idempotently():
                 "dispatch_head_ref",
                 "dispatch_base_ref",
             }
-            message_columns = {"approval_round", "decision"}
+            message_columns = {"approval_round", "decision", "delivery_key"}
             for _ in range(2):
                 await _run_sqlite_compat_migrations(conn)
                 assert work_item_columns <= await _sqlite_columns(
                     conn, "github_work_items"
                 )
                 assert message_columns <= await _sqlite_columns(conn, "mail_messages")
+            tables = {
+                row[0]
+                for row in (
+                    await conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type = 'table'"
+                        )
+                    )
+                ).all()
+            }
+            assert {
+                "github_approval_requests",
+                "github_attempt_scope_revisions",
+            } <= tables
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pr1_approval_reconciliation_is_idempotent_and_chooses_no_ambiguous_root():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            statements = [
+                """
+                CREATE TABLE agent_team_presets (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE agent_team_slots (
+                    id INTEGER PRIMARY KEY,
+                    preset_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    display_name VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    repo_id VARCHAR NOT NULL,
+                    repo_path VARCHAR NOT NULL,
+                    repo_name VARCHAR NOT NULL,
+                    launch_mode VARCHAR DEFAULT 'plain' NOT NULL,
+                    enabled BOOLEAN DEFAULT 1 NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE team_github_scopes (
+                    id INTEGER PRIMARY KEY,
+                    preset_id INTEGER NOT NULL,
+                    repo_owner VARCHAR NOT NULL,
+                    repo_name VARCHAR NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE github_work_items (
+                    id INTEGER PRIMARY KEY,
+                    scope_id INTEGER NOT NULL,
+                    owner_slot_id INTEGER,
+                    dispatch_nonce VARCHAR,
+                    approval_round_count INTEGER DEFAULT 0 NOT NULL,
+                    pr_number INTEGER,
+                    retry_requested_at DATETIME,
+                    status_note VARCHAR,
+                    issue_title VARCHAR,
+                    github_updated_at DATETIME
+                )
+                """,
+                """
+                CREATE TABLE mail_team_members (
+                    id INTEGER PRIMARY KEY,
+                    identity_key VARCHAR,
+                    repo_id VARCHAR NOT NULL,
+                    repo_path VARCHAR NOT NULL,
+                    repo_name VARCHAR NOT NULL,
+                    display_name VARCHAR NOT NULL,
+                    participant_kind VARCHAR DEFAULT 'repo',
+                    team_preset_id INTEGER,
+                    team_slot_id INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE mail_messages (
+                    id INTEGER PRIMARY KEY,
+                    kind VARCHAR NOT NULL,
+                    sender_member_id INTEGER,
+                    recipient_member_id INTEGER,
+                    payload JSON,
+                    request_status VARCHAR,
+                    body_markdown VARCHAR NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+            ]
+            for statement in statements:
+                await conn.execute(text(statement))
+            await conn.execute(
+                text("INSERT INTO agent_team_presets (id, name) VALUES (1, 'Tizonia')")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_team_slots "
+                    "(id, preset_id, position, display_name, provider, repo_id, "
+                    "repo_path, repo_name) VALUES "
+                    "(1, 1, 0, 'Leader', 'codex-cli', 'repo', '/tmp/repo', 'repo'), "
+                    "(2, 1, 1, 'Owner', 'codex-cli', 'repo', '/tmp/repo', 'repo')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO team_github_scopes "
+                    "(id, preset_id, repo_owner, repo_name) VALUES (1, 1, 'o', 'r')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO github_work_items "
+                    "(id, scope_id, owner_slot_id, dispatch_nonce, approval_round_count, "
+                    "pr_number, retry_requested_at, issue_title, github_updated_at) VALUES "
+                    "(1, 1, 2, 'nonce-1', 1, 101, '2026-08-01', 'one', '2026-08-01'), "
+                    "(2, 1, 2, 'nonce-2', 1, NULL, '2026-08-02', 'two', '2026-08-02')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_team_members "
+                    "(id, identity_key, repo_id, repo_path, repo_name, display_name, "
+                    "team_preset_id, team_slot_id) VALUES "
+                    "(1, 'slot:leader', 'repo', '/tmp/repo', 'repo', 'Leader', 1, 1), "
+                    "(2, 'slot:owner', 'repo', '/tmp/repo', 'repo', 'Owner', 1, 2)"
+                )
+            )
+            payload_one = (
+                '{"work_item_id":1,"dispatch_nonce":"nonce-1",'
+                '"approval_round":1,"summary":"one"}'
+            )
+            payload_two = (
+                '{"work_item_id":2,"dispatch_nonce":"nonce-2",'
+                '"approval_round":1,"summary":"two"}'
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_messages "
+                    "(id, kind, sender_member_id, recipient_member_id, payload, "
+                    "request_status, body_markdown) VALUES "
+                    "(10, 'context_request', 2, 1, :payload_one, 'pending', 'one'), "
+                    "(20, 'context_request', 2, 1, :payload_two, 'pending', 'two-a'), "
+                    "(21, 'context_request', 2, 1, :payload_two, 'pending', 'two-b')"
+                ),
+                {"payload_one": payload_one, "payload_two": payload_two},
+            )
+            await conn.commit()
+
+            snapshots = []
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                approvals = (
+                    await conn.execute(
+                        text(
+                            "SELECT work_item_id, request_message_id, status "
+                            "FROM github_approval_requests ORDER BY id"
+                        )
+                    )
+                ).all()
+                messages = (
+                    await conn.execute(
+                        text(
+                            "SELECT id, request_status FROM mail_messages "
+                            "WHERE id IN (10, 20, 21) ORDER BY id"
+                        )
+                    )
+                ).all()
+                items = (
+                    await conn.execute(
+                        text(
+                            "SELECT id, retry_requested_at, status_note, issue_title, "
+                            "github_updated_at FROM github_work_items ORDER BY id"
+                        )
+                    )
+                ).all()
+                snapshots.append((approvals, messages, items))
+
+            assert snapshots[0] == snapshots[1]
+            approvals, messages, items = snapshots[0]
+            assert approvals == [(1, 10, "pending")]
+            assert messages == [
+                (10, "pending"),
+                (20, "superseded"),
+                (21, "superseded"),
+            ]
+            assert items[0][1:] == (None, None, "one", "2026-08-01")
+            assert items[1][1] == "2026-08-02"
+            assert "submit one fresh approval request" in items[1][2]
+
+            indexes = {
+                row[0]
+                for row in (
+                    await conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type = 'index'"
+                        )
+                    )
+                ).all()
+            }
+            assert "ix_mail_messages_delivery_key" in indexes
+            assert "uix_github_approval_requests_pending_work_item" in indexes
     finally:
         await engine.dispose()
 

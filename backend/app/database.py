@@ -1,4 +1,7 @@
 """Database setup with SQLAlchemy async."""
+import hashlib
+import json
+
 from sqlalchemy import event
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -64,6 +67,207 @@ def _sqlite_ident(name: str) -> str:
 async def _sqlite_columns(conn, table_name: str) -> set[str]:
     result = await conn.execute(text(f"PRAGMA table_info({_sqlite_ident(table_name)})"))
     return {row[1] for row in result.fetchall()}
+
+
+async def _sqlite_create_approval_tables(conn) -> None:
+    from app.models.database import GithubApprovalRequest, GithubAttemptScopeRevision
+
+    def create_tables(sync_conn) -> None:
+        GithubApprovalRequest.__table__.create(sync_conn, checkfirst=True)
+        GithubAttemptScopeRevision.__table__.create(sync_conn, checkfirst=True)
+        for table in (
+            GithubApprovalRequest.__table__,
+            GithubAttemptScopeRevision.__table__,
+        ):
+            for index in table.indexes:
+                index.create(sync_conn, checkfirst=True)
+
+    await conn.run_sync(create_tables)
+
+
+def _canonical_payload_fingerprint(payload: dict) -> str:
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+async def _sqlite_reconcile_historical_approvals(conn) -> None:
+    required_columns = {
+        "github_work_items": {
+            "id",
+            "scope_id",
+            "owner_slot_id",
+            "dispatch_nonce",
+            "approval_round_count",
+            "status_note",
+        },
+        "team_github_scopes": {"id", "preset_id"},
+        "agent_team_slots": {"id", "preset_id", "position", "enabled"},
+        "mail_team_members": {"id", "team_slot_id"},
+        "mail_messages": {
+            "id",
+            "kind",
+            "sender_member_id",
+            "recipient_member_id",
+            "payload",
+            "request_status",
+        },
+    }
+    for table_name, columns in required_columns.items():
+        if not columns <= await _sqlite_columns(conn, table_name):
+            return
+
+    items = (
+        await conn.execute(
+            text(
+                """
+                SELECT item.id,
+                       item.dispatch_nonce,
+                       item.approval_round_count,
+                       owner.id AS owner_member_id,
+                       leader.id AS leader_member_id
+                FROM github_work_items AS item
+                JOIN team_github_scopes AS scope ON scope.id = item.scope_id
+                JOIN mail_team_members AS owner
+                  ON owner.team_slot_id = item.owner_slot_id
+                JOIN agent_team_slots AS leader_slot
+                  ON leader_slot.id = (
+                      SELECT candidate.id
+                      FROM agent_team_slots AS candidate
+                      WHERE candidate.preset_id = scope.preset_id
+                        AND candidate.enabled = 1
+                      ORDER BY candidate.position, candidate.id
+                      LIMIT 1
+                  )
+                JOIN mail_team_members AS leader
+                  ON leader.team_slot_id = leader_slot.id
+                WHERE item.dispatch_nonce IS NOT NULL
+                  AND item.approval_round_count >= 1
+                """
+            )
+        )
+    ).mappings().all()
+
+    for item in items:
+        existing = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM github_approval_requests
+                    WHERE work_item_id = :work_item_id
+                      AND status = 'pending'
+                    LIMIT 1
+                    """
+                ),
+                {"work_item_id": item["id"]},
+            )
+        ).first()
+        if existing is not None:
+            continue
+        roots = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT id, payload
+                    FROM mail_messages
+                    WHERE kind = 'context_request'
+                      AND sender_member_id = :owner_member_id
+                      AND recipient_member_id = :leader_member_id
+                      AND request_status = 'pending'
+                    ORDER BY id
+                    """
+                ),
+                {
+                    "owner_member_id": item["owner_member_id"],
+                    "leader_member_id": item["leader_member_id"],
+                },
+            )
+        ).mappings().all()
+        matches: list[tuple[int, dict]] = []
+        for root in roots:
+            payload = root["payload"]
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(payload, dict):
+                continue
+            if (
+                payload.get("work_item_id") == item["id"]
+                and payload.get("dispatch_nonce") == item["dispatch_nonce"]
+                and payload.get("approval_round") == item["approval_round_count"]
+            ):
+                matches.append((root["id"], payload))
+
+        if len(matches) == 1:
+            request_message_id, payload = matches[0]
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO github_approval_requests (
+                        work_item_id,
+                        request_kind,
+                        dispatch_nonce,
+                        approval_round,
+                        owner_member_id,
+                        leader_member_id,
+                        request_message_id,
+                        request_fingerprint,
+                        status,
+                        created_at
+                    ) VALUES (
+                        :work_item_id,
+                        'initial_plan',
+                        :dispatch_nonce,
+                        :approval_round,
+                        :owner_member_id,
+                        :leader_member_id,
+                        :request_message_id,
+                        :request_fingerprint,
+                        'pending',
+                        CURRENT_TIMESTAMP
+                    )
+                    """
+                ),
+                {
+                    "work_item_id": item["id"],
+                    "dispatch_nonce": item["dispatch_nonce"],
+                    "approval_round": item["approval_round_count"],
+                    "owner_member_id": item["owner_member_id"],
+                    "leader_member_id": item["leader_member_id"],
+                    "request_message_id": request_message_id,
+                    "request_fingerprint": _canonical_payload_fingerprint(payload),
+                },
+            )
+        elif len(matches) > 1:
+            await conn.execute(
+                text(
+                    "UPDATE mail_messages SET request_status = 'superseded' "
+                    "WHERE id IN (" + ", ".join(str(match[0]) for match in matches) + ")"
+                )
+            )
+            await conn.execute(
+                text(
+                    """
+                    UPDATE github_work_items
+                    SET status_note = :status_note
+                    WHERE id = :work_item_id
+                    """
+                ),
+                {
+                    "work_item_id": item["id"],
+                    "status_note": (
+                        "Multiple current approval requests were found during migration; "
+                        "submit one fresh approval request."
+                    ),
+                },
+            )
 
 
 async def _sqlite_has_unique_repo_id_index(conn) -> bool:
@@ -515,6 +719,25 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN approval_round INTEGER"))
     if message_columns and "decision" not in message_columns:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN decision VARCHAR"))
+    if message_columns and "delivery_key" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN delivery_key VARCHAR"))
+    if message_columns:
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_mail_messages_delivery_key "
+                "ON mail_messages (delivery_key) WHERE delivery_key IS NOT NULL"
+            )
+        )
+
+    await _sqlite_create_approval_tables(conn)
+    await _sqlite_reconcile_historical_approvals(conn)
+    if {"pr_number", "retry_requested_at"} <= work_item_columns:
+        await conn.execute(
+            text(
+                "UPDATE github_work_items SET retry_requested_at = NULL "
+                "WHERE pr_number IS NOT NULL AND retry_requested_at IS NOT NULL"
+            )
+        )
     await conn.commit()
 
 
