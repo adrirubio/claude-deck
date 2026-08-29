@@ -1,10 +1,12 @@
 """Normalized approval authority for autonomous GitHub work items."""
 
 import hashlib
+import hmac
 import json
 from datetime import datetime
+from pathlib import PurePosixPath
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,9 +14,39 @@ from app.models.database import (
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
     GithubWorkItem,
+    GithubWorkspace,
     MailMessage,
+    TeamGithubScope,
 )
 from app.services.agent_mail_service import agent_mail_service
+from app.services.github_app_auth_service import github_app_auth_service
+from app.services.github_client import github_client
+
+
+_CONTINUABLE_ESCALATIONS = frozenset(
+    {
+        "retry_count_exhausted",
+        "plan_blocked",
+        "owner_idle_timeout",
+        "owner_offline",
+        "leader_offline",
+        "leader_ack_timeout",
+    }
+)
+_CONTINUATION_ACTIONS = frozenset(
+    {
+        "edit_production",
+        "edit_tests",
+        "edit_ci_workflow",
+        "install_hosted_ci_tool",
+        "push_pr_head",
+        "collect_hosted_logs",
+        "revert_diagnostic_changes",
+        "request_verification",
+    }
+)
+_PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
+_LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00"
 
 
 class GithubApprovalError(ValueError):
@@ -51,6 +83,359 @@ class GithubApprovalService:
                 "summary": summary.strip(),
             }
         )
+
+    @staticmethod
+    def lease_token_hash(lease_token: str) -> str:
+        return hashlib.sha256(
+            _LEASE_HASH_DOMAIN + lease_token.encode("utf-8")
+        ).hexdigest()
+
+    @classmethod
+    def lease_token_matches(cls, lease_token: str, expected_hash: str) -> bool:
+        return hmac.compare_digest(cls.lease_token_hash(lease_token), expected_hash)
+
+    @staticmethod
+    def _canonical_strings(
+        values: list[str],
+        *,
+        label: str,
+        allow_empty: bool = True,
+    ) -> list[str]:
+        normalized: set[str] = set()
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                raise GithubApprovalError(f"{label}_invalid", status_code=400)
+            normalized.add(value.strip())
+        if not allow_empty and not normalized:
+            raise GithubApprovalError(f"{label}_required", status_code=400)
+        return sorted(normalized)
+
+    @classmethod
+    def _canonical_paths(cls, values: list[str]) -> list[str]:
+        paths = cls._canonical_strings(
+            values,
+            label="allowed_paths",
+            allow_empty=False,
+        )
+        for path in paths:
+            candidate = PurePosixPath(path)
+            parts = path.split("/")
+            if (
+                path in {".", "./"}
+                or path.startswith("/")
+                or "\\" in path
+                or any(part in {"", ".", ".."} for part in parts)
+                or any(character in path for character in _PATH_GLOB_CHARACTERS)
+                or str(candidate) != path
+            ):
+                raise GithubApprovalError("allowed_paths_invalid", status_code=400)
+        return paths
+
+    @classmethod
+    def canonical_continuation_payload(
+        cls,
+        *,
+        phase: str,
+        execution_target: str,
+        summary: str,
+        allowed_paths: list[str],
+        allowed_actions: list[str],
+        allowed_commands: list[str],
+        prohibited_actions: list[str],
+        max_failed_heads: int,
+        tool_fallbacks: dict,
+        baseline_head_sha: str,
+        baseline_tree_sha: str,
+        expected_workspace_id: int,
+        originating_escalation_reason: str,
+    ) -> dict:
+        return {
+            "allowed_actions": allowed_actions,
+            "allowed_commands": allowed_commands,
+            "allowed_paths": allowed_paths,
+            "baseline_head_sha": baseline_head_sha,
+            "baseline_tree_sha": baseline_tree_sha,
+            "execution_target": execution_target,
+            "expected_workspace_id": expected_workspace_id,
+            "max_failed_heads": max_failed_heads,
+            "originating_escalation_reason": originating_escalation_reason,
+            "phase": phase,
+            "prohibited_actions": prohibited_actions,
+            "summary": summary,
+            "tool_fallbacks": tool_fallbacks,
+        }
+
+    @staticmethod
+    async def _github_read_token(scope: TeamGithubScope) -> str | None:
+        if scope.github_auth_mode != "app":
+            return None
+        if scope.github_app_installation_id is None:
+            raise GithubApprovalError("app_installation_id_missing")
+        return await github_app_auth_service.mint_repository_token(
+            scope.github_app_installation_id,
+            scope.repo_owner,
+            scope.repo_name,
+            purpose="pull_request",
+            cache_subject="continuation",
+        )
+
+    async def create_continuation_request(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        authenticated_owner_member_id: int,
+        authenticated_owner_slot_id: int | None,
+        dispatch_nonce: str,
+        phase: str,
+        execution_target: str,
+        summary: str,
+        allowed_paths: list[str],
+        allowed_actions: list[str],
+        allowed_commands: list[str],
+        prohibited_actions: list[str],
+        max_failed_heads: int,
+        tool_fallbacks: dict,
+        lease_token: str,
+    ) -> tuple[GithubAttemptScopeRevision, GithubApprovalRequest, bool]:
+        if not scope.continuation_enabled:
+            raise GithubApprovalError("continuation_disabled")
+        if item.scope_id != scope.id:
+            raise GithubApprovalError("scope_mismatch")
+        if item.dispatch_status != "escalated":
+            raise GithubApprovalError("continuation_not_escalated")
+        if item.escalation_reason not in _CONTINUABLE_ESCALATIONS:
+            raise GithubApprovalError("continuation_reason_not_allowed")
+        if item.pr_number is None:
+            raise GithubApprovalError("continuation_pr_required")
+        if item.dispatch_nonce != dispatch_nonce:
+            raise GithubApprovalError("stale_nonce")
+        if phase == "diagnostic":
+            raise GithubApprovalError("diagnostic_continuation_not_available")
+        if phase != "implementation":
+            raise GithubApprovalError("continuation_phase_invalid", status_code=400)
+        if execution_target not in {
+            "workspace",
+            "hosted_ci",
+            "workspace_and_hosted_ci",
+        }:
+            raise GithubApprovalError("execution_target_invalid", status_code=400)
+        if not summary.strip():
+            raise GithubApprovalError("continuation_summary_required", status_code=400)
+        if not isinstance(tool_fallbacks, dict):
+            raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+
+        owner, leader = await self._current_participants(db, item)
+        if owner.id != authenticated_owner_member_id:
+            raise GithubApprovalError("not_item_owner", status_code=403)
+        if (
+            authenticated_owner_slot_id is None
+            or owner.team_slot_id != authenticated_owner_slot_id
+            or item.owner_slot_id != authenticated_owner_slot_id
+        ):
+            raise GithubApprovalError("stale_approval_owner", status_code=409)
+
+        workspace = (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.scope_id == scope.id,
+                    GithubWorkspace.leased_item_id == item.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if workspace is None or workspace.lease_token is None:
+            raise GithubApprovalError("workspace_lease_required")
+        if not hmac.compare_digest(workspace.lease_token, lease_token):
+            raise GithubApprovalError("lease_token_mismatch", status_code=403)
+
+        canonical_paths = self._canonical_paths(allowed_paths)
+        canonical_actions = self._canonical_strings(
+            allowed_actions,
+            label="allowed_actions",
+            allow_empty=False,
+        )
+        unknown_actions = set(canonical_actions) - _CONTINUATION_ACTIONS
+        if unknown_actions:
+            raise GithubApprovalError("allowed_actions_invalid", status_code=400)
+        canonical_commands = self._canonical_strings(
+            allowed_commands,
+            label="allowed_commands",
+        )
+        canonical_prohibitions = self._canonical_strings(
+            prohibited_actions,
+            label="prohibited_actions",
+        )
+        if len(canonical_paths) > scope.max_scope_paths:
+            raise GithubApprovalError("continuation_path_limit_exceeded")
+        if len(canonical_commands) > scope.max_scope_commands:
+            raise GithubApprovalError("continuation_command_limit_exceeded")
+        if max_failed_heads > scope.max_failed_heads_per_revision:
+            raise GithubApprovalError("continuation_failed_head_limit_exceeded")
+
+        revision_count, failed_head_count = (
+            await db.execute(
+                select(
+                    func.count(GithubAttemptScopeRevision.id),
+                    func.coalesce(func.sum(GithubAttemptScopeRevision.failed_head_count), 0),
+                ).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                )
+            )
+        ).one()
+        if revision_count >= scope.max_continuation_revisions:
+            raise GithubApprovalError("continuation_budget_exhausted")
+        remaining_failed_heads = (
+            scope.max_continuation_failed_heads - int(failed_head_count)
+        )
+        if remaining_failed_heads < max_failed_heads:
+            raise GithubApprovalError("continuation_budget_exhausted")
+
+        token = await self._github_read_token(scope)
+        pull = await github_client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        if pull.get("state") != "open":
+            raise GithubApprovalError("continuation_pr_not_open")
+        head = pull.get("head")
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        snapshot = await github_client.get_commit_snapshot(
+            scope.repo_owner,
+            scope.repo_name,
+            head_sha,
+            token=token,
+        )
+        await github_client.get_recursive_tree(
+            scope.repo_owner,
+            scope.repo_name,
+            snapshot.tree_sha,
+            token=token,
+        )
+
+        canonical_payload = self.canonical_continuation_payload(
+            phase=phase,
+            execution_target=execution_target,
+            summary=summary.strip(),
+            allowed_paths=canonical_paths,
+            allowed_actions=canonical_actions,
+            allowed_commands=canonical_commands,
+            prohibited_actions=canonical_prohibitions,
+            max_failed_heads=max_failed_heads,
+            tool_fallbacks=tool_fallbacks,
+            baseline_head_sha=snapshot.sha,
+            baseline_tree_sha=snapshot.tree_sha,
+            expected_workspace_id=workspace.id,
+            originating_escalation_reason=item.escalation_reason,
+        )
+        request_fingerprint = self.fingerprint_payload(canonical_payload)
+        identity = {
+            "request_kind": "continuation",
+            "dispatch_nonce": dispatch_nonce,
+            "approval_round": item.approval_round_count,
+            "owner_member_id": owner.id,
+            "leader_member_id": leader.id,
+            "request_fingerprint": request_fingerprint,
+        }
+        pending = await self.current_pending(db, item.id)
+        if pending is not None:
+            if self._same_request(pending, **identity) and pending.scope_revision_id:
+                revision = await db.get(
+                    GithubAttemptScopeRevision,
+                    pending.scope_revision_id,
+                )
+                if revision is not None:
+                    return revision, pending, False
+            raise GithubApprovalError("approval_request_already_pending")
+
+        next_revision = (
+            await db.execute(
+                select(
+                    func.coalesce(func.max(GithubAttemptScopeRevision.revision), 0) + 1
+                ).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                )
+            )
+        ).scalar_one()
+        lease_exists = exists(
+            select(GithubWorkspace.id).where(
+                GithubWorkspace.id == workspace.id,
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.lease_token == lease_token,
+            )
+        )
+        item_guard = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "escalated",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.approval_round_count == item.approval_round_count,
+                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                GithubWorkItem.pr_number == item.pr_number,
+                GithubWorkItem.escalation_reason == item.escalation_reason,
+                lease_exists,
+            )
+            .values(updated_at=GithubWorkItem.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        if item_guard.rowcount != 1:
+            await db.rollback()
+            raise GithubApprovalError("stale_continuation_context")
+
+        revision = GithubAttemptScopeRevision(
+            work_item_id=item.id,
+            dispatch_nonce=dispatch_nonce,
+            revision=int(next_revision),
+            owner_slot_id=authenticated_owner_slot_id,
+            owner_member_id=owner.id,
+            phase=phase,
+            execution_target=execution_target,
+            summary=canonical_payload["summary"],
+            allowed_paths=canonical_paths,
+            allowed_actions=canonical_actions,
+            allowed_commands=canonical_commands,
+            prohibited_actions=canonical_prohibitions,
+            tool_fallbacks=tool_fallbacks,
+            baseline_head_sha=snapshot.sha,
+            baseline_tree_sha=snapshot.tree_sha,
+            originating_escalation_reason=item.escalation_reason,
+            expected_workspace_id=workspace.id,
+            expected_lease_token_hash=self.lease_token_hash(lease_token),
+            max_failed_heads=max_failed_heads,
+        )
+        db.add(revision)
+        await db.flush()
+        approval = GithubApprovalRequest(
+            work_item_id=item.id,
+            scope_revision_id=revision.id,
+            **identity,
+        )
+        db.add(approval)
+        try:
+            await db.flush()
+            revision.approval_request_id = approval.id
+            await db.commit()
+            await db.refresh(revision)
+            await db.refresh(approval)
+            return revision, approval, True
+        except IntegrityError:
+            await db.rollback()
+            winner = await self.current_pending(db, item.id)
+            if winner is not None and self._same_request(winner, **identity):
+                if winner.scope_revision_id is not None:
+                    winner_revision = await db.get(
+                        GithubAttemptScopeRevision,
+                        winner.scope_revision_id,
+                    )
+                    if winner_revision is not None:
+                        return winner_revision, winner, False
+            raise GithubApprovalError("approval_request_already_pending")
 
     @classmethod
     def matches_linked_request_message(

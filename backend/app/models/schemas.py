@@ -1890,6 +1890,55 @@ class MailApprovalRequestCreate(BaseModel):
     plan_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class GithubContinuationProposalCreate(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    phase: Literal["implementation", "diagnostic"]
+    execution_target: Literal["workspace", "hosted_ci", "workspace_and_hosted_ci"]
+    summary: str = Field(min_length=1, max_length=12000)
+    allowed_paths: List[str]
+    allowed_actions: List[str]
+    allowed_commands: List[str]
+    prohibited_actions: List[str]
+    max_failed_heads: int = Field(ge=1)
+    tool_fallbacks: Dict[str, Any]
+    lease_token: str = Field(min_length=1)
+
+
+class GithubScopeRevisionResponse(BaseModel):
+    id: int
+    work_item_id: int
+    dispatch_nonce: str
+    revision: int
+    owner_slot_id: int
+    owner_member_id: int
+    phase: str
+    execution_target: str
+    summary: str
+    allowed_paths: List[str]
+    allowed_actions: List[str]
+    allowed_commands: List[str]
+    prohibited_actions: List[str]
+    tool_fallbacks: Dict[str, Any]
+    baseline_head_sha: str
+    baseline_tree_sha: str
+    originating_escalation_reason: str
+    expected_workspace_id: int
+    max_failed_heads: int
+    failed_head_count: int
+    last_failed_head_sha: Optional[str] = None
+    status: str
+    approval_request_id: Optional[int] = None
+    delivery_message_id: Optional[int] = None
+    approved_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    acknowledged_at: Optional[datetime] = None
+    result_summary: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
+    completed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+
+
 class GithubApprovalRequestResponse(BaseModel):
     id: int
     work_item_id: int

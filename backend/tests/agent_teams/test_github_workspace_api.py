@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.api.v1.deps import mail_session
 from app.config import settings
@@ -13,6 +13,8 @@ from app.database import get_db
 from app.main import app
 from app.models.database import (
     AgentPaneBinding,
+    GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
@@ -27,6 +29,15 @@ from app.services.github_app_auth_service import (
     GithubAppNotInstalled,
     GithubAppUnconfigured,
     github_app_auth_service,
+)
+from app.services.github_approval_service import (
+    GithubApprovalError,
+    github_approval_service,
+)
+from app.services.github_client import (
+    GithubCommitSnapshot,
+    GithubTreeEntry,
+    github_client,
 )
 from app.services.github_workspace_service import (
     GithubWorkspaceCredentialRevokeError,
@@ -200,6 +211,227 @@ async def _slot(db, preset, position, *, enabled=True):
     db.add(slot)
     await db.flush()
     return slot
+
+
+async def _continuation_proposal_context(db, tmp_path):
+    preset, scope = await _scope(db, tmp_path / "continuation-proposal-repo")
+    scope.continuation_enabled = True
+    scope.github_auth_mode = "ambient"
+    leader_slot = await _slot(db, preset, 0)
+    owner_slot = await _slot(db, preset, 1)
+    leader = MailTeamMember(
+        identity_key=f"leader:{leader_slot.id}",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Leader",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=leader_slot.id,
+    )
+    owner = MailTeamMember(
+        identity_key=f"owner:{owner_slot.id}",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Owner",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=owner_slot.id,
+    )
+    db.add_all([leader, owner])
+    await db.flush()
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=73,
+        issue_title="Continue safely",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        issue_type="code",
+        dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted",
+        owner_slot_id=owner_slot.id,
+        dispatch_nonce="continuation-nonce",
+        approval_round_count=2,
+        pr_number=42,
+    )
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "continuation-proposal-worktree"),
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-secret",
+    )
+    db.add(workspace)
+    await db.commit()
+    return scope, item, workspace, owner_slot, owner
+
+
+def _continuation_proposal_kwargs(item, owner_slot, owner):
+    return {
+        "authenticated_owner_member_id": owner.id,
+        "authenticated_owner_slot_id": owner_slot.id,
+        "dispatch_nonce": item.dispatch_nonce,
+        "phase": "implementation",
+        "execution_target": "workspace",
+        "summary": " Apply one bounded correction ",
+        "allowed_paths": ["src/z.py", "src/a.py", "src/z.py"],
+        "allowed_actions": [
+            "request_verification",
+            "edit_production",
+            "edit_production",
+        ],
+        "allowed_commands": ["pytest -q", "git diff --check", "pytest -q"],
+        "prohibited_actions": ["Do not edit CI", "Do not edit CI"],
+        "max_failed_heads": 2,
+        "tool_fallbacks": {},
+        "lease_token": "lease-secret",
+    }
+
+
+def _stub_continuation_github(monkeypatch):
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "a" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="a" * 40, tree_sha="b" * 40)
+
+    async def get_recursive_tree(*_args, **_kwargs):
+        return [
+            GithubTreeEntry(
+                path="src/a.py",
+                mode="100644",
+                object_type="blob",
+                sha="c" * 40,
+            )
+        ]
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+    monkeypatch.setattr(github_client, "get_recursive_tree", get_recursive_tree)
+
+
+@pytest.mark.asyncio
+async def test_continuation_proposal_persists_canonical_server_authority(
+    db, tmp_path, monkeypatch
+):
+    scope, item, workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+
+    revision, approval, created = await github_approval_service.create_continuation_request(
+        db,
+        item,
+        scope,
+        **_continuation_proposal_kwargs(item, owner_slot, owner),
+    )
+    replay_revision, replay_approval, replay_created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **_continuation_proposal_kwargs(item, owner_slot, owner),
+        )
+    )
+
+    assert created is True
+    assert replay_created is False
+    assert replay_revision.id == revision.id
+    assert replay_approval.id == approval.id
+    assert revision.revision == 1
+    assert revision.allowed_paths == ["src/a.py", "src/z.py"]
+    assert revision.allowed_actions == ["edit_production", "request_verification"]
+    assert revision.allowed_commands == ["git diff --check", "pytest -q"]
+    assert revision.summary == "Apply one bounded correction"
+    assert revision.baseline_head_sha == "a" * 40
+    assert revision.baseline_tree_sha == "b" * 40
+    assert revision.expected_workspace_id == workspace.id
+    assert revision.expected_lease_token_hash != workspace.lease_token
+    assert github_approval_service.lease_token_matches(
+        "lease-secret", revision.expected_lease_token_hash
+    )
+    assert approval.request_kind == "continuation"
+    assert approval.scope_revision_id == revision.id
+    assert revision.approval_request_id == approval.id
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
+    ) == 1
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubApprovalRequest))
+    ) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("override", "detail"),
+    [
+        ({"phase": "diagnostic"}, "diagnostic_continuation_not_available"),
+        ({"allowed_paths": ["src/**"]}, "allowed_paths_invalid"),
+        ({"allowed_actions": ["run_anything"]}, "allowed_actions_invalid"),
+        ({"lease_token": "wrong"}, "lease_token_mismatch"),
+    ],
+)
+async def test_continuation_proposal_rejects_unbounded_or_stale_authority(
+    db, tmp_path, monkeypatch, override, detail
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(override)
+
+    with pytest.raises(GithubApprovalError, match=detail) as exc_info:
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **payload,
+        )
+
+    assert exc_info.value.detail == detail
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_continuation_proposal_guard_rejects_database_current_non_escalated_item(
+    db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+
+    async def transition_during_snapshot(*_args, **_kwargs):
+        await db.execute(
+            update(GithubWorkItem)
+            .where(GithubWorkItem.id == item.id)
+            .values(dispatch_status="ready_for_review")
+            .execution_options(synchronize_session=False)
+        )
+        return []
+
+    monkeypatch.setattr(github_client, "get_recursive_tree", transition_during_snapshot)
+
+    with pytest.raises(GithubApprovalError, match="stale_continuation_context"):
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **_continuation_proposal_kwargs(item, owner_slot, owner),
+        )
+
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
+    ) == 0
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubApprovalRequest))
+    ) == 0
 
 
 async def _credential_context(db, tmp_path):
