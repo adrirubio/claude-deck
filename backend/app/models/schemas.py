@@ -1951,6 +1951,7 @@ class GithubScopeRevisionResponse(BaseModel):
     completed_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
+    approval_request: Optional["GithubApprovalRequestResponse"] = None
 
 
 class GithubContinuationRequestResponse(BaseModel):
@@ -2464,11 +2465,15 @@ class GithubWorkItemResponse(BaseModel):
     active_scope_status: Optional[str] = None
     pending_approval_request_id: Optional[int] = None
     pending_approval_kind: Optional[str] = None
+    pending_approval_status: Optional[str] = None
     attempt_phase: str
     diagnostic_retry_count: int
     diagnostic_last_verified_sha: Optional[str] = None
     revision_failed_head_count: Optional[int] = None
     revision_failed_head_budget: Optional[int] = None
+    revision_approved_at: Optional[datetime] = None
+    revision_delivered_at: Optional[datetime] = None
+    revision_acknowledged_at: Optional[datetime] = None
     continuation_block_code: Optional[str] = None
     retry_allowed: bool
     retry_block_code: Optional[str] = None

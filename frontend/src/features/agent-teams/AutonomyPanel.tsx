@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, ExternalLink, GitPullRequest, Plus, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertCircle, ExternalLink, GitPullRequest, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,14 +26,18 @@ import { MODAL_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import type {
   AgentTeamPreset,
+  GithubScopeRevision,
   GithubWorkItem,
+  TeamGithubContinuationPolicyUpdate,
   TeamGithubMergePolicy,
   TeamGithubScope,
   TeamGithubScopeInput,
   TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
+import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 
 type ScopeDialogState = { mode: 'add' | 'edit'; scope?: TeamGithubScope } | null
+type PolicyDialogState = { scope: TeamGithubScope } | null
 
 const emptyScope: TeamGithubScopeInput = {
   repo_owner: '',
@@ -108,6 +112,39 @@ function statusBadgeClass(status: string) {
 function prUrl(item: GithubWorkItem) {
   if (!item.pr_number) return null
   return `https://github.com/${item.repo_owner}/${item.repo_name}/pull/${item.pr_number}`
+}
+
+function requestOperatorToken(): string | null {
+  const current = getOperatorToken()
+  if (current) return current
+  const entered = window.prompt(
+    'Enter the Deck operator token for this tab. It is stored only in sessionStorage.'
+  )?.trim()
+  if (!entered) return null
+  setOperatorToken(entered)
+  return entered
+}
+
+function recoveryBlockLabel(code?: string | null) {
+  if (!code) return 'Recovery can continue within the current bounded attempt.'
+  return code.replaceAll('_', ' ')
+}
+
+function safeEvidenceLinks(evidence?: Record<string, unknown> | null) {
+  if (!evidence) return []
+  const links: Array<{ label: string; url: string }> = []
+  for (const [label, value] of Object.entries(evidence)) {
+    if (typeof value !== 'string') continue
+    try {
+      const url = new URL(value)
+      if (url.protocol === 'https:' || url.protocol === 'http:') {
+        links.push({ label, url: url.toString() })
+      }
+    } catch {
+      continue
+    }
+  }
+  return links
 }
 
 function ScopeDialog({
@@ -304,22 +341,192 @@ function ScopeDialog({
   )
 }
 
+function ContinuationPolicyDialog({
+  state,
+  autonomyEnabled,
+  onOpenChange,
+  onSave,
+}: {
+  state: PolicyDialogState
+  autonomyEnabled: boolean
+  onOpenChange: (state: PolicyDialogState) => void
+  onSave: (
+    scopeId: number,
+    input: TeamGithubContinuationPolicyUpdate,
+    operatorToken: string
+  ) => Promise<void>
+}) {
+  const scope = state?.scope ?? null
+  const [form, setForm] = useState<TeamGithubContinuationPolicyUpdate | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!scope) return
+    queueMicrotask(() => {
+      setForm({
+        continuation_enabled: scope.continuation_enabled,
+        max_continuation_revisions: scope.max_continuation_revisions,
+        max_continuation_failed_heads: scope.max_continuation_failed_heads,
+        max_failed_heads_per_revision: scope.max_failed_heads_per_revision,
+        max_scope_paths: scope.max_scope_paths,
+        max_scope_commands: scope.max_scope_commands,
+      })
+      setErrorMessage(null)
+    })
+  }, [scope])
+
+  const updateNumber = (key: keyof TeamGithubContinuationPolicyUpdate, value: string) => {
+    const parsed = Number.parseInt(value, 10)
+    setForm((current) => current ? { ...current, [key]: Number.isFinite(parsed) ? Math.max(1, parsed) : 1 } : current)
+  }
+
+  const submit = async () => {
+    if (!scope || !form) return
+    if (form.max_failed_heads_per_revision > form.max_continuation_failed_heads) {
+      setErrorMessage('Per-revision failed heads cannot exceed the attempt-wide failed-head cap.')
+      return
+    }
+    if (
+      form.continuation_enabled
+      && !scope.continuation_enabled
+      && autonomyEnabled
+      && !window.confirm(
+        'Autonomy is already enabled. Enabling continuation lets eligible escalated attempts recover automatically. Continue?'
+      )
+    ) return
+    const token = requestOperatorToken()
+    if (!token) {
+      setErrorMessage('The Deck operator token is required for policy changes.')
+      return
+    }
+    setSaving(true)
+    setErrorMessage(null)
+    try {
+      await onSave(scope.id, form, token)
+      onOpenChange(null)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save recovery policy')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={state !== null} onOpenChange={(open) => onOpenChange(open ? state : null)}>
+      <DialogContent className={MODAL_SIZES.SM}>
+        <DialogHeader>
+          <DialogTitle>Attempt recovery policy</DialogTitle>
+          <DialogDescription>
+            {scope ? `${scope.repo_owner}/${scope.repo_name}` : 'Configure finite continuation limits.'}
+          </DialogDescription>
+        </DialogHeader>
+        {errorMessage && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            {errorMessage}
+          </div>
+        )}
+        {form && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm md:col-span-2">
+              <Checkbox
+                checked={form.continuation_enabled}
+                onCheckedChange={(checked) => setForm({ ...form, continuation_enabled: checked === true })}
+              />
+              Enable bounded attempt continuation
+            </label>
+            {([
+              ['max_continuation_revisions', 'Attempt revision cap'],
+              ['max_continuation_failed_heads', 'Attempt failed-head cap'],
+              ['max_failed_heads_per_revision', 'Per-revision failed-head cap'],
+              ['max_scope_paths', 'Paths per revision'],
+              ['max_scope_commands', 'Commands per revision'],
+            ] as const).map(([key, label]) => (
+              <div className="grid gap-2" key={key}>
+                <Label htmlFor={`policy-${key}`}>{label}</Label>
+                <Input
+                  id={`policy-${key}`}
+                  type="number"
+                  min={1}
+                  value={form[key]}
+                  onChange={(event) => updateNumber(key, event.target.value)}
+                />
+              </div>
+            ))}
+            <p className="text-xs text-muted-foreground md:col-span-2">
+              Recovery runs only when both this policy and team autonomy are enabled. Finite caps stop repeated recovery honestly.
+            </p>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(null)}>Cancel</Button>
+          <Button onClick={submit} disabled={saving || !form}>
+            {saving ? 'Saving' : 'Save recovery policy'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function WorkItemDialog({
   item,
   ownerName,
   handoffTargetName,
   onOpenChange,
   onRetry,
+  onFetchScopeRevisions,
+  onCancelContinuationRequest,
 }: {
   item: GithubWorkItem | null
   ownerName?: string
   handoffTargetName?: string
   onOpenChange: (open: boolean) => void
   onRetry: (item: GithubWorkItem) => Promise<void>
+  onFetchScopeRevisions: (
+    item: GithubWorkItem,
+    operatorToken: string
+  ) => Promise<GithubScopeRevision[]>
+  onCancelContinuationRequest: (
+    item: GithubWorkItem,
+    requestId: number,
+    operatorToken: string
+  ) => Promise<void>
 }) {
   const [retrying, setRetrying] = useState(false)
+  const [loadingRevisions, setLoadingRevisions] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [revisions, setRevisions] = useState<GithubScopeRevision[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const loadedItemIdRef = useRef<number | null>(null)
   const open = item !== null
+
+  useEffect(() => {
+    if (!item || loadedItemIdRef.current === item.id) return
+    loadedItemIdRef.current = item.id
+    const token = requestOperatorToken()
+    if (!token) {
+      queueMicrotask(() => setErrorMessage('Operator token required to load exact recovery history.'))
+      return
+    }
+    let cancelled = false
+    queueMicrotask(() => setLoadingRevisions(true))
+    void onFetchScopeRevisions(item, token)
+      .then((rows) => {
+        if (!cancelled) setRevisions(rows)
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : 'Failed to load recovery history')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRevisions(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [item, onFetchScopeRevisions])
 
   const retry = async () => {
     if (!item) return
@@ -335,9 +542,33 @@ function WorkItemDialog({
     }
   }
 
+  const cancelPending = async (revision: GithubScopeRevision) => {
+    if (!item || !revision.approval_request || revision.approval_request.status !== 'pending') return
+    const approval = revision.approval_request
+    if (!window.confirm(
+      `Cancel continuation request #${approval.id} for revision ${revision.revision}?`
+    )) return
+    const token = requestOperatorToken()
+    if (!token) {
+      setErrorMessage('The Deck operator token is required to cancel a continuation request.')
+      return
+    }
+    setCancelling(true)
+    setErrorMessage(null)
+    try {
+      await onCancelContinuationRequest(item, approval.id, token)
+      const refreshed = await onFetchScopeRevisions(item, token)
+      setRevisions(refreshed)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to cancel continuation')
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={MODAL_SIZES.SM}>
+      <DialogContent className={cn(MODAL_SIZES.LG, 'overflow-y-auto')}>
         {item && (
           <>
             <DialogHeader>
@@ -383,7 +614,11 @@ function WorkItemDialog({
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Retries</dt>
-                    <dd>{item.retry_count}</dd>
+                    <dd>product {item.retry_count} · diagnostic {item.diagnostic_retry_count}</dd>
+                  </div>
+                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                    <dt className="text-muted-foreground">Attempt</dt>
+                    <dd>{item.attempt_phase} · revision {item.active_scope_revision}</dd>
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Workspace</dt>
@@ -395,10 +630,98 @@ function WorkItemDialog({
                   </div>
                 </dl>
               </div>
+              <section className="space-y-3 rounded-lg border p-4" aria-labelledby="attempt-recovery-title">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 id="attempt-recovery-title" className="font-semibold">Attempt recovery</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {recoveryBlockLabel(item.continuation_block_code)}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      clearOperatorToken()
+                      setErrorMessage('Operator token cleared for this tab.')
+                    }}
+                  >
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    Clear operator token
+                  </Button>
+                </div>
+                {loadingRevisions && <p className="text-sm text-muted-foreground">Loading recovery history...</p>}
+                {!loadingRevisions && revisions.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No continuation revisions recorded.</p>
+                )}
+                {revisions.map((revision) => {
+                  const approval = revision.approval_request
+                  const links = safeEvidenceLinks(revision.evidence)
+                  return (
+                    <article key={revision.id} className="space-y-3 rounded-md border bg-muted/20 p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline">revision {revision.revision}</Badge>
+                        <Badge variant="secondary">{revision.phase}</Badge>
+                        <span className="text-sm font-medium">{revision.status}</span>
+                        <span className="text-xs text-muted-foreground">
+                          failed heads {revision.failed_head_count}/{revision.max_failed_heads}
+                        </span>
+                      </div>
+                      <p className="whitespace-pre-wrap text-sm">{revision.summary}</p>
+                      <dl className="grid gap-2 text-sm md:grid-cols-2">
+                        <div><dt className="text-muted-foreground">Origin</dt><dd>{revision.originating_escalation_reason}</dd></div>
+                        <div><dt className="text-muted-foreground">Execution</dt><dd>{revision.execution_target}</dd></div>
+                        <div><dt className="text-muted-foreground">Owner</dt><dd>slot #{revision.owner_slot_id} · member #{revision.owner_member_id}</dd></div>
+                        <div><dt className="text-muted-foreground">Workspace</dt><dd>#{revision.expected_workspace_id}</dd></div>
+                        {approval && (
+                          <>
+                            <div><dt className="text-muted-foreground">Approval</dt><dd>request #{approval.id} · {approval.status}</dd></div>
+                            <div><dt className="text-muted-foreground">Leader</dt><dd>member #{approval.leader_member_id}</dd></div>
+                          </>
+                        )}
+                        <div><dt className="text-muted-foreground">Delivered</dt><dd>{formatDateTime(revision.delivered_at)}</dd></div>
+                        <div><dt className="text-muted-foreground">Acknowledged</dt><dd>{formatDateTime(revision.acknowledged_at)}</dd></div>
+                      </dl>
+                      <div className="grid gap-2 text-sm">
+                        <div><span className="text-muted-foreground">Paths:</span> <span className="break-all">{revision.allowed_paths.join(', ') || 'none'}</span></div>
+                        <div><span className="text-muted-foreground">Actions:</span> <span className="break-all">{revision.allowed_actions.join(', ') || 'none'}</span></div>
+                        <div><span className="text-muted-foreground">Commands:</span> <span className="whitespace-pre-wrap break-all">{revision.allowed_commands.join('\n') || 'none'}</span></div>
+                      </div>
+                      {revision.result_summary && <p className="text-sm">Result: {revision.result_summary}</p>}
+                      {links.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {links.map((link) => (
+                            <a
+                              key={`${revision.id}-${link.label}`}
+                              href={link.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-sm text-primary underline-offset-4 hover:underline"
+                            >
+                              {link.label}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                      {approval?.status === 'pending' && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          disabled={cancelling}
+                          onClick={() => void cancelPending(revision)}
+                        >
+                          <XCircle className="mr-2 h-4 w-4" />
+                          {cancelling ? 'Cancelling' : `Cancel request #${approval.id}`}
+                        </Button>
+                      )}
+                    </article>
+                  )
+                })}
+              </section>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
-              {item.dispatch_status === 'escalated' && (
+              {item.retry_allowed && (
                 <Button onClick={retry} disabled={retrying}>
                   <RotateCcw className="mr-2 h-4 w-4" />
                   {retrying ? 'Retrying' : 'Retry'}
@@ -422,8 +745,11 @@ export function AutonomyPanel({
   onToggleAutonomy,
   onCreateScope,
   onUpdateScope,
+  onUpdateContinuationPolicy,
   onDeleteScope,
   onRetryWorkItem,
+  onFetchScopeRevisions,
+  onCancelContinuationRequest,
 }: {
   preset: AgentTeamPreset
   scopes: TeamGithubScope[]
@@ -434,10 +760,25 @@ export function AutonomyPanel({
   onToggleAutonomy: (enabled: boolean) => Promise<void>
   onCreateScope: (input: TeamGithubScopeInput) => Promise<void>
   onUpdateScope: (scopeId: number, input: TeamGithubScopeUpdate) => Promise<void>
+  onUpdateContinuationPolicy: (
+    scopeId: number,
+    input: TeamGithubContinuationPolicyUpdate,
+    operatorToken: string
+  ) => Promise<void>
   onDeleteScope: (scope: TeamGithubScope) => Promise<void>
   onRetryWorkItem: (item: GithubWorkItem) => Promise<void>
+  onFetchScopeRevisions: (
+    item: GithubWorkItem,
+    operatorToken: string
+  ) => Promise<GithubScopeRevision[]>
+  onCancelContinuationRequest: (
+    item: GithubWorkItem,
+    requestId: number,
+    operatorToken: string
+  ) => Promise<void>
 }) {
   const [scopeDialog, setScopeDialog] = useState<ScopeDialogState>(null)
+  const [policyDialog, setPolicyDialog] = useState<PolicyDialogState>(null)
   const [detailItemId, setDetailItemId] = useState<number | null>(null)
   const [toggleSaving, setToggleSaving] = useState(false)
   const [retryingWorkItemId, setRetryingWorkItemId] = useState<number | null>(null)
@@ -519,6 +860,16 @@ export function AutonomyPanel({
           <p className="text-sm text-muted-foreground">{scopeCount} configured scope{scopeCount === 1 ? '' : 's'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              clearOperatorToken()
+              window.alert('The operator token for this tab has been cleared.')
+            }}
+          >
+            <KeyRound className="mr-2 h-4 w-4" />
+            Clear operator token
+          </Button>
           <Button variant="outline" onClick={onRefresh} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
@@ -552,6 +903,12 @@ export function AutonomyPanel({
                     >
                       code merge: {scope.merge_policy}
                     </Badge>
+                    <Badge
+                      variant="outline"
+                      className={scope.continuation_enabled ? 'border-emerald-500/70 text-emerald-600 dark:text-emerald-400' : undefined}
+                    >
+                      recovery: {scope.continuation_enabled ? 'enabled' : 'off'}
+                    </Badge>
                     {!scope.enabled && <Badge variant="secondary">disabled</Badge>}
                   </div>
                   <p className="mt-2 truncate text-sm text-muted-foreground">
@@ -560,8 +917,15 @@ export function AutonomyPanel({
                   <p className="mt-1 text-xs text-muted-foreground">
                     Approval rounds: {scope.max_approval_rounds} · Concurrent: {scope.max_concurrent_dispatched} · Verification retries: {scope.max_verification_retries} · Auto-merges/day: {scope.max_auto_merges_per_day} · Last polled {formatDateTime(scope.last_polled_at)}
                   </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Recovery limits: {scope.max_continuation_revisions} revisions · {scope.max_continuation_failed_heads} failed heads total · {scope.max_failed_heads_per_revision} per revision · {scope.max_scope_paths} paths · {scope.max_scope_commands} commands
+                  </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setPolicyDialog({ scope })}>
+                    <KeyRound className="mr-2 h-4 w-4" />
+                    Recovery policy
+                  </Button>
                   <Button variant="outline" size="sm" onClick={() => setScopeDialog({ mode: 'edit', scope })}>
                     Edit
                   </Button>
@@ -626,9 +990,15 @@ export function AutonomyPanel({
                           </p>
                         </td>
                         <td className="px-3 py-3">
-                          <Badge variant={item.issue_type === 'design' ? 'default' : 'secondary'}>
-                            {item.issue_type}
-                          </Badge>
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant={item.issue_type === 'design' ? 'default' : 'secondary'}>
+                              {item.issue_type}
+                            </Badge>
+                            <Badge variant="outline">{item.attempt_phase}</Badge>
+                          </div>
+                          {item.active_scope_revision > 0 && (
+                            <p className="mt-1 text-xs text-muted-foreground">revision {item.active_scope_revision}</p>
+                          )}
                         </td>
                         <td className="px-3 py-3">
                           <Badge variant="outline" className={statusBadgeClass(item.dispatch_status)}>
@@ -643,6 +1013,16 @@ export function AutonomyPanel({
                           )}
                           {item.escalation_reason && (
                             <p className="mt-1 text-xs text-destructive">{item.escalation_reason}</p>
+                          )}
+                          {item.pending_approval_request_id && (
+                            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                              approval #{item.pending_approval_request_id} · {item.pending_approval_status ?? 'pending'}
+                            </p>
+                          )}
+                          {item.pr_number && item.dispatch_status === 'escalated' && (
+                            <p className="mt-1 text-xs text-primary">
+                              Continue attempt · {recoveryBlockLabel(item.continuation_block_code)}
+                            </p>
                           )}
                         </td>
                         <td className="px-3 py-3">
@@ -663,13 +1043,18 @@ export function AutonomyPanel({
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
-                          {item.retry_count > 0 && (
-                            <p className="mt-1 text-xs text-muted-foreground">retries: {item.retry_count}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            product retries: {item.retry_count} · diagnostic heads: {item.diagnostic_retry_count}
+                          </p>
+                          {item.revision_failed_head_budget != null && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              revision heads: {item.revision_failed_head_count ?? 0}/{item.revision_failed_head_budget}
+                            </p>
                           )}
                         </td>
                         <td className="px-3 py-3 text-right">
                           <div className="flex justify-end gap-2">
-                            {item.dispatch_status === 'escalated' && (
+                            {item.retry_allowed && (
                               <Button
                                 size="sm"
                                 disabled={retryingWorkItemId !== null}
@@ -678,6 +1063,11 @@ export function AutonomyPanel({
                                 <RotateCcw className="mr-2 h-4 w-4" />
                                 {retryingWorkItemId === item.id ? 'Retrying' : 'Retry'}
                               </Button>
+                            )}
+                            {item.dispatch_status === 'escalated' && !item.retry_allowed && (
+                              <span className="max-w-44 text-left text-xs text-muted-foreground">
+                                Retry blocked: {recoveryBlockLabel(item.retry_block_code)}
+                              </span>
                             )}
                             <Button variant="outline" size="sm" onClick={() => setDetailItemId(item.id)}>
                               <ExternalLink className="mr-2 h-4 w-4" />
@@ -696,6 +1086,12 @@ export function AutonomyPanel({
       </Card>
 
       <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} />
+      <ContinuationPolicyDialog
+        state={policyDialog}
+        autonomyEnabled={preset.autonomy_enabled}
+        onOpenChange={setPolicyDialog}
+        onSave={onUpdateContinuationPolicy}
+      />
       <WorkItemDialog
         key={detailItem?.id ?? 'closed'}
         item={detailItem}
@@ -707,6 +1103,8 @@ export function AutonomyPanel({
         }
         onOpenChange={(open) => setDetailItemId(open ? detailItemId : null)}
         onRetry={onRetryWorkItem}
+        onFetchScopeRevisions={onFetchScopeRevisions}
+        onCancelContinuationRequest={onCancelContinuationRequest}
       />
     </div>
   )
