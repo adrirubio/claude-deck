@@ -4252,6 +4252,170 @@ async def test_continuation_monitor_nudge_recovers_after_mail_commit_crash(
     assert len(messages) == 1
 
 
+async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
+    preset, slots, scope = await _team(db)
+    preset.autonomy_enabled = autonomy
+    scope.continuation_enabled = continuation
+    owner = await _create_registered_slot_member(db, slots[1])
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=950,
+        issue_title="Recover the preserved attempt",
+        issue_url="u",
+        github_updated_at=datetime.utcnow(),
+        dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted",
+        status_note="Hosted playback check failed",
+        owner_slot_id=slots[1].id,
+        dispatch_nonce="recovery-nonce",
+        dispatch_head_ref=f"deck/slot-{slots[1].id}/issue-950-recovery",
+        dispatch_base_ref="origin/master",
+        pr_number=950,
+        retry_count=3,
+        last_verified_sha="failed-head",
+    )
+    db.add(item)
+    await db.flush()
+    workspace = await _lease_for(db, scope, item)
+    session = MailAgentSession(
+        member_id=owner.id,
+        provider=slots[1].provider,
+        source="observed",
+        session_key="tmux:recovery-owner",
+        cwd=slots[1].repo_path,
+        tmux_target="recovery:1.0",
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+        mailbox_status="observed",
+        last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token(
+            "recovery-owner-token"
+        ),
+    )
+    db.add(session)
+    await db.commit()
+    return preset, slots, scope, item, workspace, owner, session
+
+
+@pytest.mark.asyncio
+async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
+    db, monkeypatch
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    _preset, slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "merged_at": None}
+
+    monkeypatch.setattr("app.services.github_dispatch_service.github_client.get_pull", get_pull)
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+    first_nudge = item.continuation_nudged_at
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.recipient_member_id == owner.id,
+                MailMessage.subject.like("Recovery proposal requested:%"),
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+    assert item.continuation_nudged_at == first_nudge
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "t1"
+    assert await github_approval_service.current_pending(db, item.id) is None
+    assert "Perform read-only diagnosis first" in messages[0].body_markdown
+    assert "deck_request_continuation" in messages[0].body_markdown
+    assert messages[0].payload["failure_evidence"] == {
+        "escalation_reason": "retry_count_exhausted",
+        "status_note": "Hosted playback check failed",
+        "retry_count": 3,
+        "diagnostic_retry_count": 0,
+        "last_verified_sha": "failed-head",
+        "diagnostic_last_verified_sha": None,
+    }
+    assert "t1" not in str(messages[0].payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("autonomy", "continuation", "remove_session", "reason", "pr_number"),
+    [
+        (False, True, False, "retry_count_exhausted", 950),
+        (True, False, False, "retry_count_exhausted", 950),
+        (True, True, True, "retry_count_exhausted", 950),
+        (True, True, False, "abandoned_by_operator", 950),
+        (True, True, False, "retry_count_exhausted", None),
+    ],
+)
+async def test_recovery_monitor_refuses_disabled_offline_or_human_stop_items(
+    db,
+    monkeypatch,
+    autonomy,
+    continuation,
+    remove_session,
+    reason,
+    pr_number,
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    _preset, slots, scope, item, _workspace, _owner, session = (
+        await _recoverable_escalated_item(
+            db,
+            autonomy=autonomy,
+            continuation=continuation,
+        )
+    )
+    item.escalation_reason = reason
+    item.pr_number = pr_number
+    if remove_session:
+        await db.delete(session)
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "merged_at": None}
+
+    monkeypatch.setattr("app.services.github_dispatch_service.github_client.get_pull", get_pull)
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    assert item.continuation_nudged_at is None
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.subject.like("Recovery proposal requested:%")
+            )
+        )
+    ).scalars().all()
+    assert messages == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_monitor_refuses_closed_pr(db, monkeypatch):
+    _isolate_agent_mail_nudges(monkeypatch)
+    _preset, slots, scope, item, _workspace, _owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "closed", "merged_at": None}
+
+    monkeypatch.setattr("app.services.github_dispatch_service.github_client.get_pull", get_pull)
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    assert item.continuation_nudged_at is None
+
+
 @pytest.mark.asyncio
 async def test_delivery_proven_by_report_not_only_receipt(db, monkeypatch):
     _isolate_agent_mail_nudges(monkeypatch)

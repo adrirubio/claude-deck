@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.database import (
     AgentPaneBinding,
+    AgentTeamPreset,
     AgentTeamSlot,
     GithubWorkItem,
     GithubApprovalRequest,
@@ -33,7 +34,10 @@ from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
 )
-from app.services.github_approval_service import github_approval_service
+from app.services.github_approval_service import (
+    CONTINUABLE_ESCALATIONS,
+    github_approval_service,
+)
 from app.services.github_client import github_client
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
@@ -80,6 +84,8 @@ ESCALATION_REASONS = frozenset(
         "owner_idle_timeout",
         "retry_count_exhausted",
         "continuation_budget_exhausted",
+        "continuation_invalid_state",
+        "continuation_pr_identity_invalid",
         "dispatch_label_removed",
         "abandoned_by_operator",
         "prepared_owner_unavailable",
@@ -2213,6 +2219,123 @@ class GithubDispatchService:
                 elapsed_seconds=elapsed.total_seconds(),
                 action="escalate_idle",
             )
+
+    async def monitor_recovery(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+    ) -> None:
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        if (
+            preset is None
+            or not preset.autonomy_enabled
+            or not scope.enabled
+            or not scope.continuation_enabled
+        ):
+            return
+        enabled_slot_ids = {slot.id for slot in preset_slots if slot.enabled}
+        items = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "escalated",
+                )
+            )
+        ).scalars().all()
+        now = datetime.utcnow()
+        cooldown = timedelta(seconds=settings.github_nudge_grace_seconds)
+
+        for item in items:
+            if item.escalation_reason not in CONTINUABLE_ESCALATIONS:
+                continue
+            if (
+                item.pr_number is None
+                or item.owner_slot_id is None
+                or item.owner_slot_id not in enabled_slot_ids
+                or not item.dispatch_nonce
+            ):
+                continue
+            workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+            if workspace is None or workspace.lease_token is None:
+                continue
+            owner = await self._owner_member(db, item)
+            if owner is None or owner.team_slot_id != item.owner_slot_id:
+                continue
+            sessions = await agent_mail_service.nudgeable_sessions_for_slot(
+                db,
+                item.owner_slot_id,
+            )
+            authenticated_sessions = [
+                session
+                for session in sessions
+                if session.member_id == owner.id
+                and session.capability_token_hash is not None
+            ]
+            if not authenticated_sessions:
+                continue
+            if await github_approval_service.current_pending(db, item.id) is not None:
+                continue
+            if (
+                item.continuation_nudged_at is not None
+                and now - item.continuation_nudged_at < cooldown
+            ):
+                continue
+            try:
+                token = await github_approval_service.github_read_token(scope)
+                pull = await github_client.get_pull(
+                    scope.repo_owner,
+                    scope.repo_name,
+                    item.pr_number,
+                    token=token,
+                )
+            except Exception:
+                logger.exception(
+                    "Recovery monitor could not validate PR for work item %s",
+                    item.id,
+                )
+                continue
+            if pull.get("state") != "open" or pull.get("merged_at") is not None:
+                continue
+            evidence = {
+                "escalation_reason": item.escalation_reason,
+                "status_note": item.status_note,
+                "retry_count": item.retry_count,
+                "diagnostic_retry_count": item.diagnostic_retry_count,
+                "last_verified_sha": item.last_verified_sha,
+                "diagnostic_last_verified_sha": item.diagnostic_last_verified_sha,
+            }
+            await agent_mail_service.send_direct_message(
+                db,
+                recipient_member_id=owner.id,
+                subject=f"Recovery proposal requested: issue #{item.issue_number}",
+                body_markdown=(
+                    f"Work item {item.id} is preserving PR #{item.pr_number}, its "
+                    "workspace, branch, owner, nonce, and history after escalation "
+                    f"`{item.escalation_reason}`. Perform read-only diagnosis first. "
+                    "Do not edit, build, push, or report completion yet. Then call "
+                    "`deck_request_continuation` with the smallest exact paths, actions, "
+                    "commands, execution target, failed-head budget, and tool fallbacks "
+                    "needed for the next step. Wait for Leader approval and acknowledge "
+                    "the delivered revision before acting."
+                ),
+                payload={
+                    "kind": "github_dispatch_recovery_proposal_requested",
+                    "work_item_id": item.id,
+                    "issue_number": item.issue_number,
+                    "pr_number": item.pr_number,
+                    "dispatch_nonce": item.dispatch_nonce,
+                    "failure_evidence": evidence,
+                },
+                auto_nudge=False,
+                delivery_key=(
+                    f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal"
+                ),
+            )
+            await agent_mail_service.auto_nudge_members(db, {owner.id})
+            item.continuation_nudged_at = now
+            item.updated_at = now
+            await db.commit()
 
     async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
         """Return whether this attempt's brief reached its owner."""
