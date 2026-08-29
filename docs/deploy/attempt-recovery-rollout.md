@@ -81,7 +81,9 @@ scripts/attempt-recovery-preflight.sh \
 ```
 
 The command must report autonomy and continuation off, the expected item/PR identity, a
-preserved workspace, finite caps, and exactly one connected owner and Leader session.
+preserved workspace, finite caps, at least one fresh authenticated MCP registration for the
+owner and Leader, and exactly one observed tmux pane for each slot. Codex reports one physical
+session through separate MCP and hook rows; those rows must not be counted as separate agents.
 
 ## Rollback
 
