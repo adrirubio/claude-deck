@@ -312,6 +312,18 @@ class GithubDispatchService:
         )
         if snapshot.sha != revision.baseline_head_sha:
             raise ValueError("continuation_head_changed")
+        confirmed_pull = await github_client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        confirmed_head = confirmed_pull.get("head")
+        confirmed_head_sha = (
+            confirmed_head.get("sha") if isinstance(confirmed_head, dict) else None
+        )
+        if confirmed_pull.get("state") != "open" or confirmed_head_sha != snapshot.sha:
+            raise ValueError("continuation_head_changed")
 
         item_result = await db.execute(
             update(GithubWorkItem)

@@ -50,6 +50,8 @@ EXPECTED_ESCALATION_REASONS = frozenset(
         "owner_idle_timeout",
         "retry_count_exhausted",
         "continuation_budget_exhausted",
+        "continuation_invalid_state",
+        "continuation_pr_identity_invalid",
         "dispatch_label_removed",
         "abandoned_by_operator",
         "prepared_owner_unavailable",

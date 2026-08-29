@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -1712,6 +1712,93 @@ async def test_pending_diagnostic_observation_can_turn_green_without_retry(db):
     assert revision.evidence["diagnostic_observations"]["sha"]["state"] == "green"
     assert item.diagnostic_retry_count == 0
     assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_observer_does_not_write_after_owner_handoff(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    target = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=1,
+        display_name="Replacement Owner",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(target)
+    await db.flush()
+    target_id = target.id
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+        retry_count=4,
+        last_verified_sha="product-head",
+    )
+    revision, workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+
+    class HandoffClient(_Client):
+        async def list_check_runs_for_ref(self, owner, repo, ref):
+            await db.execute(
+                update(GithubWorkItem)
+                .where(GithubWorkItem.id == item.id)
+                .values(
+                    owner_slot_id=target_id,
+                    dispatch_status="escalated",
+                    escalation_reason="retry_count_exhausted",
+                    attempt_phase="implementation",
+                    status_note="Owner handoff requires a fresh revision.",
+                )
+                .execution_options(synchronize_session=False)
+            )
+            await db.execute(
+                update(GithubAttemptScopeRevision)
+                .where(GithubAttemptScopeRevision.id == revision.id)
+                .values(status="superseded")
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            return [
+                {
+                    "name": "diagnostic",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ]
+
+    await github_verification_service.process_scope(
+        db,
+        scope,
+        client=HandoffClient(),
+    )
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.owner_slot_id == target_id
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.status_note == "Owner handoff requires a fresh revision."
+    assert item.retry_count == 4
+    assert item.diagnostic_retry_count == 0
+    assert revision.status == "superseded"
+    assert revision.failed_head_count == 0
+    assert revision.evidence in (None, {})
+    assert workspace.leased_item_id == item.id
 
 
 @pytest.mark.asyncio

@@ -339,6 +339,21 @@ class GithubVerificationService:
         )
         if snapshot.tree_sha != revision.baseline_tree_sha:
             raise ContinuationCompletionError("diagnostic_tree_not_restored")
+        confirmed_pull = await client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        confirmed_head = confirmed_pull.get("head")
+        confirmed_head_sha = (
+            confirmed_head.get("sha") if isinstance(confirmed_head, dict) else None
+        )
+        if (
+            confirmed_pull.get("state") != "open"
+            or confirmed_head_sha != current_head_sha
+        ):
+            raise ContinuationCompletionError("continuation_head_changed")
 
         envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
         envelope["version"] = 1
@@ -1007,6 +1022,42 @@ class GithubVerificationService:
             if isinstance(context, dict)
         ]
 
+    async def _claim_current_diagnostic_context(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+    ) -> bool:
+        current_revision = exists(
+            select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == revision.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == revision.revision,
+                GithubAttemptScopeRevision.owner_slot_id == revision.owner_slot_id,
+                GithubAttemptScopeRevision.phase == "diagnostic",
+                GithubAttemptScopeRevision.status == "active",
+            )
+        )
+        claim = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_nonce == revision.dispatch_nonce,
+                GithubWorkItem.owner_slot_id == revision.owner_slot_id,
+                GithubWorkItem.active_scope_revision == revision.revision,
+                GithubWorkItem.attempt_phase == "diagnostic",
+                current_revision,
+            )
+            .values(updated_at=GithubWorkItem.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        if claim.rowcount == 1:
+            return True
+        await db.rollback()
+        return False
+
     async def _observe_diagnostic_checks(
         self,
         db: AsyncSession,
@@ -1036,6 +1087,8 @@ class GithubVerificationService:
                 expected_base=expected_base,
             )
         except ValueError as exc:
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
             revision.status = "exhausted"
             await github_dispatch_service.escalate(
                 db,
@@ -1048,6 +1101,8 @@ class GithubVerificationService:
 
         verdict = self._classify_pull(pull)
         if verdict == "merged":
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
             self._mark_merged(item)
@@ -1055,6 +1110,8 @@ class GithubVerificationService:
             await self._notify_blocker_merged(db, scope, item)
             return
         if verdict != "open":
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
             revision.status = "superseded"
             await github_dispatch_service.escalate_without_notification(
                 db,
@@ -1066,6 +1123,8 @@ class GithubVerificationService:
 
         head_sha = self._head_sha(pull)
         if not head_sha:
+            if not await self._claim_current_diagnostic_context(db, item, revision):
+                return
             revision.status = "exhausted"
             await github_dispatch_service.escalate(
                 db,
@@ -1112,6 +1171,9 @@ class GithubVerificationService:
             else:
                 state = "pending"
 
+        if not await self._claim_current_diagnostic_context(db, item, revision):
+            return
+
         envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
         observations = dict(envelope.get("diagnostic_observations") or {})
         observation = {
@@ -1138,7 +1200,7 @@ class GithubVerificationService:
             item.updated_at = datetime.utcnow()
             await db.commit()
             return
-        await db.commit()
+        await db.flush()
         await self._record_diagnostic_failure(
             db,
             scope,

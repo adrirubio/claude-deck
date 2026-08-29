@@ -7,7 +7,7 @@ from io import StringIO
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models.database  # noqa: F401
@@ -4853,6 +4853,148 @@ async def test_recovery_monitor_repairs_approved_transport_boundaries_once(
     assert revision.delivered_at is not None
     assert revision.last_ack_nudge_at is not None
     assert nudges == [{owner.id}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "proposal_authority",
+        "request_mail",
+        "decision_authority",
+        "decision_mail",
+        "delivery_mail",
+    ],
+)
+async def test_recovery_transport_freezes_with_autonomy_off_then_resumes_once(
+    db,
+    monkeypatch,
+    stage,
+):
+    monkeypatch.setattr(
+        settings,
+        "github_continuation_leader_nudge_cooldown_seconds",
+        3600,
+    )
+    monkeypatch.setattr(
+        settings,
+        "github_continuation_owner_ack_nudge_cooldown_seconds",
+        3600,
+    )
+    preset, slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db, autonomy=False)
+    )
+    approved = stage in {"decision_authority", "decision_mail", "delivery_mail"}
+    request, revision, leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status="approved" if approved else "pending",
+    )
+    if stage != "proposal_authority":
+        root = await _send_continuation_request_root(db, item, request, revision)
+        if stage != "request_mail":
+            request.request_message_id = root.id
+            await db.commit()
+    if stage in {"decision_mail", "delivery_mail"}:
+        decision = await _send_continuation_decision(db, request, revision)
+        if stage == "delivery_mail":
+            request.decision_message_id = decision.id
+            await db.commit()
+            await agent_mail_service.send_direct_message(
+                db,
+                recipient_member_id=revision.owner_member_id,
+                subject=(
+                    f"Approved continuation revision {revision.revision} for work item "
+                    f"{item.id}"
+                ),
+                body_markdown=(
+                    f"Continuation revision {revision.revision} is approved. "
+                    "Acknowledge it before making changes.\n\n"
+                    f"{revision.summary}"
+                ),
+                payload=github_approval_service.continuation_delivery_payload(
+                    request,
+                    revision,
+                ),
+                auto_nudge=False,
+                delivery_key=f"github-scope:{revision.id}:delivery",
+            )
+    before = {
+        "request_message_id": request.request_message_id,
+        "decision_message_id": request.decision_message_id,
+        "delivery_message_id": revision.delivery_message_id,
+        "delivery_attempt_count": revision.delivery_attempt_count,
+        "last_delivery_attempt_at": revision.last_delivery_attempt_at,
+        "last_ack_nudge_at": revision.last_ack_nudge_at,
+        "mail_count": await db.scalar(select(func.count()).select_from(MailMessage)),
+        "receipt_count": await db.scalar(select(func.count()).select_from(MailReceipt)),
+    }
+    nudges = []
+
+    async def record_nudge(_db, member_ids, **_kwargs):
+        nudges.append(set(member_ids))
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(request)
+    await db.refresh(revision)
+    after_disabled = {
+        "request_message_id": request.request_message_id,
+        "decision_message_id": request.decision_message_id,
+        "delivery_message_id": revision.delivery_message_id,
+        "delivery_attempt_count": revision.delivery_attempt_count,
+        "last_delivery_attempt_at": revision.last_delivery_attempt_at,
+        "last_ack_nudge_at": revision.last_ack_nudge_at,
+        "mail_count": await db.scalar(select(func.count()).select_from(MailMessage)),
+        "receipt_count": await db.scalar(select(func.count()).select_from(MailReceipt)),
+    }
+    assert after_disabled == before
+    assert nudges == []
+
+    preset.autonomy_enabled = True
+    await db.commit()
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(request)
+    await db.refresh(revision)
+    roots = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-approval:{request.id}:request"
+            )
+        )
+    ).scalars().all()
+    decisions = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-approval:{request.id}:decision"
+            )
+        )
+    ).scalars().all()
+    deliveries = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-scope:{revision.id}:delivery"
+            )
+        )
+    ).scalars().all()
+    assert len(roots) == 1
+    assert request.request_message_id == roots[0].id
+    if approved:
+        assert len(decisions) == 1
+        assert len(deliveries) == 1
+        assert request.decision_message_id == decisions[0].id
+        assert revision.delivery_message_id == deliveries[0].id
+        assert nudges == [{owner.id}]
+    else:
+        assert decisions == []
+        assert deliveries == []
+        assert nudges == [{leader.id}]
 
 
 @pytest.mark.asyncio

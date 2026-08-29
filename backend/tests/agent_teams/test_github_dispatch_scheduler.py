@@ -260,6 +260,75 @@ async def test_scheduler_orders_disjoint_monitors_around_verification(db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stop_after",
+    [
+        "dispatch",
+        "initial_monitor",
+        "continuation_monitor",
+        "verification",
+        "recovery_monitor",
+    ],
+)
+async def test_scheduler_stops_after_autonomy_is_disabled_between_stages(
+    db,
+    stop_after,
+):
+    scope = await _scope(db, autonomy=True, enabled=True)
+    order = []
+
+    async def record(db, current_scope, stage):
+        order.append(stage)
+        if stage == stop_after:
+            preset = await db.get(AgentTeamPreset, current_scope.preset_id)
+            preset.autonomy_enabled = False
+
+    class ToggleWatcher(_FakeWatcher):
+        async def poll_scope(self, db, scope, client):
+            order.append("watcher")
+
+    class ToggleDispatch(_FakeDispatch):
+        async def dispatch_pending(self, db, scope, slots, **kwargs):
+            await record(db, scope, "dispatch")
+
+        async def monitor_dispatched(self, db, scope, slots):
+            await record(db, scope, "initial_monitor")
+
+        async def monitor_continuation(self, db, scope, slots):
+            await record(db, scope, "continuation_monitor")
+
+        async def monitor_recovery(self, db, scope, slots):
+            await record(db, scope, "recovery_monitor")
+
+        async def remind_held_leases(self, db, scope):
+            order.append("lease_reminder")
+
+    class ToggleVerification(_FakeVerification):
+        async def process_scope(self, db, scope, client=None):
+            await record(db, scope, "verification")
+
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=ToggleWatcher(),
+        dispatch=ToggleDispatch(),
+        verification=ToggleVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+
+    stages = [
+        "watcher",
+        "dispatch",
+        "initial_monitor",
+        "continuation_monitor",
+        "verification",
+        "recovery_monitor",
+        "lease_reminder",
+    ]
+    assert order == stages[: stages.index(stop_after) + 1]
+
+
+@pytest.mark.asyncio
 async def test_scheduler_reloads_then_recovers_new_verification_escalation(db):
     scope = await _scope(db, autonomy=True, enabled=True)
     now = datetime.utcnow()

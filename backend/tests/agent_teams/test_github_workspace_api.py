@@ -2101,6 +2101,137 @@ async def test_diagnostic_completion_rejects_tree_mismatch_and_missing_evidence(
 
 
 @pytest.mark.asyncio
+async def test_diagnostic_completion_rechecks_pr_head_after_tree_snapshot(
+    client,
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    await db.commit()
+    pull_calls = 0
+
+    async def moving_pull(*_args, **_kwargs):
+        nonlocal pull_calls
+        pull_calls += 1
+        sha = "d" * 40 if pull_calls == 1 else "e" * 40
+        return {"state": "open", "head": {"sha": sha}}
+
+    async def restored_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", moving_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", restored_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "continuation_head_changed"
+    assert pull_calls == 2
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "dispatched"
+    assert item.attempt_phase == "diagnostic"
+    assert item.active_scope_revision == 1
+    assert revision.status == "active"
+    assert revision.completed_at is None
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_completion_does_not_overwrite_owner_handoff(
+    client,
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    target = AgentTeamSlot(
+        preset_id=scope.preset_id,
+        position=2,
+        display_name="Handoff Target",
+        provider="codex-cli",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+    )
+    db.add(target)
+    await db.commit()
+    target_id = target.id
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def snapshot_then_handoff(*_args, **_kwargs):
+        await db.execute(
+            update(GithubWorkItem)
+            .where(GithubWorkItem.id == item.id)
+            .values(
+                owner_slot_id=target_id,
+                dispatch_status="escalated",
+                escalation_reason="retry_count_exhausted",
+                attempt_phase="implementation",
+                status_note="Owner handoff requires a fresh revision.",
+            )
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(GithubAttemptScopeRevision.id == revision.id)
+            .values(status="superseded")
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", snapshot_then_handoff)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "stale_continuation_context"
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.owner_slot_id == target_id
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.active_scope_revision == 1
+    assert item.status_note == "Owner handoff requires a fresh revision."
+    assert revision.status == "superseded"
+    assert revision.completed_at is None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
 async def test_list_workspaces_derives_all_lease_states(client, db, tmp_path):
     _, scope = await _scope(db, tmp_path / "repo")
     item = GithubWorkItem(
