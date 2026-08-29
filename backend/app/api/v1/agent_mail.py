@@ -378,7 +378,18 @@ async def decide_work_item_continuation(
             await db.refresh(approval)
             if link_result.rowcount != 1 and approval.decision_message_id != message.id:
                 raise GithubApprovalError("approval_decision_link_mismatch")
-        await agent_mail_service.auto_nudge_members(db, {approval.owner_member_id})
+        if approval.status == "approved":
+            await github_approval_service.deliver_approved_continuation(
+                db,
+                item,
+                approval,
+                revision,
+            )
+        else:
+            await agent_mail_service.auto_nudge_members(
+                db,
+                {approval.owner_member_id},
+            )
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailAuthorityError as exc:

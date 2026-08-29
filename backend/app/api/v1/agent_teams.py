@@ -51,6 +51,7 @@ from app.models.schemas import (
     DispatchStatusReport,
     GithubApprovalRequestResponse,
     GithubContinuationProposalCreate,
+    GithubContinuationAckRequest,
     GithubContinuationRequestResponse,
     GithubScopeRevisionResponse,
     GithubWorkItemAbandonRequest,
@@ -1102,6 +1103,66 @@ async def cancel_github_work_item_continuation_request(
         return _approval_authority_response(cancelled)
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post(
+    "/github-work-items/{item_id}/scope-revisions/{revision_number}/ack",
+    response_model=GithubWorkItemResponse,
+)
+async def acknowledge_github_work_item_scope_revision(
+    item_id: int,
+    revision_number: int,
+    request: GithubContinuationAckRequest,
+    session: MailAgentSession | None = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    if session is None:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    slot_id = require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    revision = (
+        await db.execute(
+            select(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == request.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == revision_number,
+            )
+        )
+    ).scalar_one_or_none()
+    if revision is None:
+        raise HTTPException(status_code=404, detail="scope_revision_not_found")
+    try:
+        await github_dispatch_service.activate_continuation_revision(
+            db,
+            item,
+            scope,
+            revision,
+            authenticated_owner_member_id=session.member_id,
+            authenticated_owner_slot_id=slot_id,
+            dispatch_nonce=request.dispatch_nonce,
+            lease_token=request.lease_token,
+        )
+    except GithubAppAuthError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from exc
+    except GithubClientResponseError as exc:
+        raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 403 if detail in {"not_item_owner", "lease_token_mismatch"} else 409
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+    return _work_item_response(
+        item,
+        scope,
+        workspace.path if workspace is not None else None,
+    )
 
 
 @router.post(

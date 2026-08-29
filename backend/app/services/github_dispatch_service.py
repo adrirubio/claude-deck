@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import enum
+import hmac
 import logging
 import secrets
 import subprocess
@@ -17,6 +18,7 @@ from app.models.database import (
     AgentTeamSlot,
     GithubWorkItem,
     GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     GithubWorkspace,
     MailReceipt,
     MailMessage,
@@ -31,6 +33,8 @@ from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
 )
+from app.services.github_approval_service import github_approval_service
+from app.services.github_client import github_client
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceConfigError,
@@ -193,6 +197,174 @@ def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
 
 
 class GithubDispatchService:
+    async def activate_continuation_revision(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        revision: GithubAttemptScopeRevision,
+        *,
+        authenticated_owner_member_id: int,
+        authenticated_owner_slot_id: int,
+        dispatch_nonce: str,
+        lease_token: str,
+    ) -> bool:
+        await db.refresh(item)
+        await db.refresh(revision)
+        if item.scope_id != scope.id or revision.work_item_id != item.id:
+            raise ValueError("scope_revision_not_found")
+        if item.dispatch_nonce != dispatch_nonce or revision.dispatch_nonce != dispatch_nonce:
+            raise ValueError("stale_nonce")
+        owner = await self._owner_member(db, item)
+        if (
+            owner is None
+            or owner.id != authenticated_owner_member_id
+            or item.owner_slot_id != authenticated_owner_slot_id
+            or revision.owner_member_id != authenticated_owner_member_id
+            or revision.owner_slot_id != authenticated_owner_slot_id
+        ):
+            raise ValueError("not_item_owner")
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if (
+            workspace is None
+            or workspace.id != revision.expected_workspace_id
+            or workspace.lease_token is None
+        ):
+            raise ValueError("workspace_lease_changed")
+        if not hmac.compare_digest(workspace.lease_token, lease_token):
+            raise ValueError("lease_token_mismatch")
+        if not github_approval_service.lease_token_matches(
+            lease_token,
+            revision.expected_lease_token_hash,
+        ):
+            raise ValueError("workspace_lease_changed")
+        if (
+            revision.status == "active"
+            and item.active_scope_revision == revision.revision
+            and item.attempt_phase == revision.phase
+            and item.dispatch_status == "dispatched"
+        ):
+            return False
+        if revision.status != "approved":
+            raise ValueError("continuation_not_approved")
+        if revision.delivery_message_id is None or revision.delivered_at is None:
+            raise ValueError("continuation_delivery_pending")
+        now = datetime.utcnow()
+        if revision.expires_at is not None and revision.expires_at <= now:
+            raise ValueError("continuation_request_expired")
+        if item.dispatch_status != "escalated":
+            raise ValueError("continuation_not_escalated")
+        if item.escalation_reason != revision.originating_escalation_reason:
+            raise ValueError("continuation_escalation_changed")
+        if item.pr_number is None:
+            raise ValueError("continuation_pr_required")
+
+        token = await github_approval_service.github_read_token(scope)
+        pull = await github_client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        if pull.get("state") != "open":
+            raise ValueError("continuation_pr_not_open")
+        head = pull.get("head")
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        snapshot = await github_client.get_commit_snapshot(
+            scope.repo_owner,
+            scope.repo_name,
+            head_sha,
+            token=token,
+        )
+        if snapshot.sha != revision.baseline_head_sha:
+            raise ValueError("continuation_head_changed")
+
+        item_result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "escalated",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                GithubWorkItem.pr_number.is_not(None),
+                GithubWorkItem.escalation_reason
+                == revision.originating_escalation_reason,
+                GithubWorkItem.active_scope_revision < revision.revision,
+            )
+            .values(
+                active_scope_revision=revision.revision,
+                attempt_phase=revision.phase,
+                dispatch_status="dispatched",
+                continuation_activated_at=now,
+                continuation_nudged_at=None,
+                pending_reason=None,
+                escalation_reason=None,
+                last_nudge_at=None,
+                status_note=(
+                    f"Active continuation revision {revision.revision}: "
+                    f"{revision.summary}"
+                ),
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        revision_result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "approved",
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.owner_slot_id
+                == authenticated_owner_slot_id,
+                GithubAttemptScopeRevision.owner_member_id
+                == authenticated_owner_member_id,
+                GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+            )
+            .values(status="active", acknowledged_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        workspace_result = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.id == workspace.id,
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.lease_token == lease_token,
+                exists(
+                    select(GithubWorkItem.id).where(
+                        GithubWorkItem.id == item.id,
+                        GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                        GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                    )
+                ),
+            )
+            .values(lease_last_owner_contact_at=now, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(
+            update(MailReceipt)
+            .where(
+                MailReceipt.message_id == revision.delivery_message_id,
+                MailReceipt.member_id == authenticated_owner_member_id,
+            )
+            .values(
+                read_at=func.coalesce(MailReceipt.read_at, now),
+                acked_at=func.coalesce(MailReceipt.acked_at, now),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if (
+            item_result.rowcount != 1
+            or revision_result.rowcount != 1
+            or workspace_result.rowcount != 1
+        ):
+            await db.rollback()
+            raise ValueError("stale_continuation_context")
+        await db.commit()
+        await db.refresh(item)
+        await db.refresh(revision)
+        return True
+
     async def _resolve_scope_auth_mode(
         self,
         db: AsyncSession,

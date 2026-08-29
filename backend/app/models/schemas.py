@@ -1955,6 +1955,11 @@ class MailContinuationDecisionRequest(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class GithubContinuationAckRequest(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+
+
 class GithubApprovalRequestResponse(BaseModel):
     id: int
     work_item_id: int

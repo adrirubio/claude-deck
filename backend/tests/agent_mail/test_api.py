@@ -21,6 +21,7 @@ from app.models.database import (
     GithubWorkspace,
     MailAgentSession,
     MailMessage,
+    MailReceipt,
     MailTeamMember,
     TeamGithubScope,
 )
@@ -176,6 +177,8 @@ async def _continuation_approval_fixture(db):
     item.dispatch_status = "escalated"
     item.escalation_reason = "retry_count_exhausted"
     item.pr_number = 52
+    item.retry_count = 7
+    item.last_verified_sha = "f" * 40
     workspace = GithubWorkspace(
         scope_id=scope.id,
         path="/tmp/continuation-approval-workspace",
@@ -294,6 +297,8 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "retry_count_exhausted"
     assert approval.decision_message_id == decided.json()["id"]
+    assert revision.delivery_message_id is not None
+    assert revision.delivered_at is not None
     decisions = (
         await db.execute(
             select(MailMessage).where(
@@ -319,6 +324,48 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
             )
         ).scalars().all()
     ) == 1
+    activated = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision.revision}/ack",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "dispatch_nonce": item.dispatch_nonce,
+            "lease_token": "lease-secret",
+        },
+    )
+    activation_replay = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision.revision}/ack",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "dispatch_nonce": item.dispatch_nonce,
+            "lease_token": "lease-secret",
+        },
+    )
+    assert activated.status_code == 200
+    assert activation_replay.status_code == 200
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.active_scope_revision == revision.revision
+    assert item.attempt_phase == "implementation"
+    assert item.escalation_reason is None
+    assert item.continuation_activated_at is not None
+    assert item.pr_number == 52
+    assert item.dispatch_nonce == "0123456789abcdef"
+    assert item.retry_count == 7
+    assert item.last_verified_sha == "f" * 40
+    assert revision.status == "active"
+    assert revision.acknowledged_at is not None
+    receipt = (
+        await db.execute(
+            select(MailReceipt).where(
+                MailReceipt.message_id == revision.delivery_message_id,
+                MailReceipt.member_id == members[1].id,
+            )
+        )
+    ).scalar_one()
+    assert receipt.acked_at is not None
 
 
 @pytest.mark.asyncio
@@ -443,6 +490,75 @@ async def test_continuation_decision_guard_uses_database_current_escalation(
     await db.refresh(revision)
     assert approval.status == "pending"
     assert revision.status == "proposed"
+
+
+@pytest.mark.asyncio
+async def test_continuation_ack_rejects_wrong_acquisition_and_changed_head(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, _members, tokens, workspace = (
+        await _continuation_approval_fixture(db)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    approval_id = proposed.json()["approval"]["id"]
+    revision_number = proposed.json()["revision"]["revision"]
+    decided = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "approval_request_id": approval_id,
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "approved",
+        },
+    )
+    assert decided.status_code == 200
+
+    wrong_token = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision_number}/ack",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={"dispatch_nonce": item.dispatch_nonce, "lease_token": "wrong"},
+    )
+
+    async def changed_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="e" * 40)
+
+    monkeypatch.setattr(github_client, "get_commit_snapshot", changed_snapshot)
+    changed_head = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision_number}/ack",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "dispatch_nonce": item.dispatch_nonce,
+            "lease_token": "lease-secret",
+        },
+    )
+
+    assert wrong_token.status_code == 403
+    assert wrong_token.json()["detail"] == "lease_token_mismatch"
+    assert changed_head.status_code == 409
+    assert changed_head.json()["detail"] == "continuation_head_changed"
+    await db.refresh(item)
+    await db.refresh(workspace)
+    revision = (
+        await db.execute(
+            select(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.revision == revision_number,
+            )
+        )
+    ).scalar_one()
+    assert item.dispatch_status == "escalated"
+    assert revision.status == "approved"
+    assert workspace.lease_token == "lease-secret"
 
 
 @pytest.mark.asyncio
