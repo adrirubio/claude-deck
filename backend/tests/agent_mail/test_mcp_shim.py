@@ -399,6 +399,40 @@ def test_http_conflict_preserves_detail_code_without_credentials():
     assert "response-secret" not in repr(result)
 
 
+def test_http_conflict_preserves_structured_recovery_detail_without_payload():
+    import mcp_shim.agent_mail_server as shim
+
+    request = shim.httpx.Request(
+        "POST",
+        "http://deck/api/v1/agent-teams/github-work-items/23/dispatch-status",
+        json={"lease_token": "lease-secret", "allowed_commands": ["secret-command"]},
+    )
+    response = shim.httpx.Response(
+        409,
+        request=request,
+        json={
+            "detail": {
+                "code": "diagnostic_tree_not_restored",
+                "message": "The diagnostic tree does not match the persisted baseline.",
+            }
+        },
+    )
+    error = shim.httpx.HTTPStatusError("conflict", request=request, response=response)
+
+    result = shim._http_error_result(error)
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "diagnostic_tree_not_restored",
+            "status_code": 409,
+            "message": "The diagnostic tree does not match the persisted baseline.",
+        },
+    }
+    assert "lease-secret" not in repr(result)
+    assert "secret-command" not in repr(result)
+
+
 def test_request_work_item_approval_uses_agent_mail_authority_route(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
