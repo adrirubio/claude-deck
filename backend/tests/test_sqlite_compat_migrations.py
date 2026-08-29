@@ -235,6 +235,13 @@ async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
             )
             await conn.execute(
                 text(
+                    "CREATE TABLE github_attempt_scope_revisions ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "work_item_id INTEGER NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
                     "INSERT INTO team_github_scopes (id, repo_owner) "
                     "VALUES (1, 'owner')"
                 )
@@ -285,6 +292,12 @@ async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
                 7,
                 "0123456789abcdef",
                 "preserve me",
+            )
+            assert "submitted_head_sha" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert "submitted_at" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
             )
     finally:
         await engine.dispose()

@@ -74,6 +74,42 @@ def _approval_response(request) -> GithubApprovalRequestResponse:
     )
 
 
+def _redact_generic_continuation_message(
+    message: MailMessageResponse,
+) -> MailMessageResponse:
+    payload = message.payload
+    if not isinstance(payload, dict) or payload.get("request_kind") != "continuation":
+        return message
+    scope_revision = payload.get("scope_revision")
+    if not isinstance(scope_revision, dict):
+        return message
+    visible_keys = {
+        "execution_target",
+        "phase",
+        "revision",
+        "scope_revision_id",
+    }
+    redacted_payload = dict(payload)
+    redacted_payload["scope_revision"] = {
+        key: value
+        for key, value in scope_revision.items()
+        if key in visible_keys
+    }
+    return message.model_copy(update={"payload": redacted_payload})
+
+
+def _redact_generic_continuation_thread(
+    thread: MailThreadResponse,
+) -> MailThreadResponse:
+    return MailThreadResponse(
+        root=_redact_generic_continuation_message(thread.root),
+        replies=[
+            _redact_generic_continuation_message(reply)
+            for reply in thread.replies
+        ],
+    )
+
+
 @router.get("/team", response_model=TeamListResponse)
 async def get_team(sync: bool = True, db: AsyncSession = Depends(get_db)):
     """Team roster with sessions and inbox counts."""
@@ -403,7 +439,10 @@ async def decide_work_item_continuation(
 
 @router.get("/messages", response_model=list[MailMessageResponse])
 async def list_messages(db: AsyncSession = Depends(get_db)):
-    return await agent_mail_service.list_root_messages(db)
+    return [
+        _redact_generic_continuation_message(message)
+        for message in await agent_mail_service.list_root_messages(db)
+    ]
 
 
 @router.get("/messages/{message_id}/thread", response_model=MailThreadResponse)
@@ -413,7 +452,13 @@ async def get_thread(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        return await agent_mail_service.get_thread(db, message_id, for_member_id=member_id)
+        return _redact_generic_continuation_thread(
+            await agent_mail_service.get_thread(
+                db,
+                message_id,
+                for_member_id=member_id,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

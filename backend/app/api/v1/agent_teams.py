@@ -11,9 +11,10 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.api.v1.deps import (
     mail_session,
@@ -33,6 +34,7 @@ from app.models.database import (
     GithubWorkspace,
     MailAgentSession,
     MailMessage,
+    MailTeamMember,
     TeamGithubScope,
 )
 from app.models.schemas import (
@@ -435,6 +437,8 @@ def _scope_revision_response(
         last_ack_nudge_at=revision.last_ack_nudge_at,
         result_summary=revision.result_summary,
         evidence=revision.evidence,
+        submitted_head_sha=revision.submitted_head_sha,
+        submitted_at=revision.submitted_at,
         completed_at=revision.completed_at,
         expires_at=revision.expires_at,
         created_at=revision.created_at,
@@ -1444,6 +1448,9 @@ async def claim_github_work_item_continuation(
         raise HTTPException(status_code=404, detail="work item not found")
     if item.owner_slot_id != slot_id:
         raise HTTPException(status_code=403, detail="not_item_owner")
+    owner_member = await github_dispatch_service._owner_member(db, item)
+    if owner_member is None or owner_member.id != session.member_id:
+        raise HTTPException(status_code=403, detail="not_item_owner")
     scope = await db.get(TeamGithubScope, item.scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
@@ -1452,11 +1459,53 @@ async def claim_github_work_item_continuation(
         if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
             raise HTTPException(status_code=403, detail="bind_unverifiable")
         now = datetime.utcnow()
-        workspace.leased_owner_pid = session.bound_pane_pid
-        workspace.leased_owner_proc_start = session.bound_pane_proc_start
-        workspace.lease_last_owner_contact_at = now
-        workspace.updated_at = now
-        await db.commit()
+        current_member = aliased(MailTeamMember)
+        newer_member = aliased(MailTeamMember)
+        current_owner_exists = exists(
+            select(GithubWorkItem.id).where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.owner_slot_id == slot_id,
+                exists(
+                    select(current_member.id).where(
+                        current_member.id == session.member_id,
+                        current_member.team_slot_id == slot_id,
+                        ~exists(
+                            select(newer_member.id).where(
+                                newer_member.team_slot_id == current_member.team_slot_id,
+                                or_(
+                                    newer_member.updated_at > current_member.updated_at,
+                                    and_(
+                                        newer_member.updated_at
+                                        == current_member.updated_at,
+                                        newer_member.id > current_member.id,
+                                    ),
+                                ),
+                            )
+                        ),
+                    )
+                ),
+            )
+        )
+        claimed = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.id == workspace.id,
+                GithubWorkspace.scope_id == item.scope_id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.lease_token == workspace.lease_token,
+                current_owner_exists,
+            )
+            .values(
+                leased_owner_pid=session.bound_pane_pid,
+                leased_owner_proc_start=session.bound_pane_proc_start,
+                lease_last_owner_contact_at=now,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="continuation_context_changed")
     leader = github_dispatch_service._leader_slot(
         list(
             (
@@ -1547,8 +1596,7 @@ async def claim_github_work_item_continuation(
         continuation_block_code = "continuation_budget_exhausted"
     else:
         continuation_block_code = None
-    response.headers["Cache-Control"] = "no-store"
-    return GithubWorkItemContinuationResponse(
+    result = GithubWorkItemContinuationResponse(
         work_item_id=item.id,
         issue_number=item.issue_number,
         issue_title=item.issue_title,
@@ -1592,6 +1640,9 @@ async def claim_github_work_item_continuation(
             "max_commands": scope.max_scope_commands,
         },
     )
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.get("/presets", response_model=AgentTeamPresetListResponse)

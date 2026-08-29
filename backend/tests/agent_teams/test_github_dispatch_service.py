@@ -42,6 +42,7 @@ from app.services.github_workspace_service import (
     github_workspace_service,
 )
 from app.services.github_app_auth_service import github_app_auth_service
+from app.services.github_approval_service import github_approval_service
 
 
 @pytest_asyncio.fixture
@@ -3582,6 +3583,83 @@ async def test_handoff_supersedes_active_continuation_and_requires_fresh_scope(
 
 
 @pytest.mark.asyncio
+async def test_handoff_supersedes_pending_continuation_authority(db, monkeypatch):
+    async def config_runner(_args):
+        return 0, ""
+
+    async def revoke(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(github_workspace_service, "_runner", config_runner)
+    monkeypatch.setattr(github_workspace_service, "revoke_push_token", revoke)
+    _preset, slots, scope = await _team(db)
+    old_owner, target = slots[:2]
+    item, workspace, revision, owner_member = await _active_continuation(
+        db,
+        scope,
+        old_owner,
+        issue_number=46,
+        activated_at=datetime.utcnow(),
+        owner_contact_at=datetime.utcnow(),
+    )
+    target_member = await _create_registered_slot_member(db, target)
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "retry_count_exhausted"
+    item.active_scope_revision = 0
+    item.handoff_state = "pending"
+    item.handoff_target_slot_id = target.id
+    revision.status = "proposed"
+    root = MailMessage(
+        kind="context_request",
+        sender_member_id=owner_member.id,
+        recipient_member_id=target_member.id,
+        body_markdown=revision.summary,
+        payload={"request_kind": "continuation"},
+        request_status="pending",
+    )
+    db.add(root)
+    await db.flush()
+    approval = GithubApprovalRequest(
+        work_item_id=item.id,
+        request_kind="continuation",
+        dispatch_nonce=item.dispatch_nonce,
+        approval_round=item.approval_round_count,
+        owner_member_id=owner_member.id,
+        leader_member_id=target_member.id,
+        request_message_id=root.id,
+        scope_revision_id=revision.id,
+        request_fingerprint="pending-continuation",
+        status="pending",
+    )
+    db.add(approval)
+    await db.flush()
+    revision.approval_request_id = approval.id
+    await db.commit()
+
+    await github_dispatch_service.accept_handoff(
+        db,
+        item,
+        target.id,
+        accepting_pane_pid=202,
+        accepting_pane_proc_start="2002",
+    )
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    await db.refresh(revision)
+    await db.refresh(approval)
+    await db.refresh(root)
+    assert item.owner_slot_id == target.id
+    assert item.dispatch_status == "escalated"
+    assert revision.status == "superseded"
+    assert approval.status == "superseded"
+    assert root.request_status == "superseded"
+    assert await github_approval_service.current_pending(db, item.id) is None
+    assert workspace.lease_token == "t1"
+    assert workspace.leased_owner_pid == 202
+
+
+@pytest.mark.asyncio
 async def test_handoff_config_failure_keeps_old_owner_and_identity(db, monkeypatch):
     _, slots, scope = await _team(db)
     old_owner, target = slots[:2]
@@ -4120,6 +4198,58 @@ async def test_continuation_monitor_nudges_once_then_escalates_without_reset(
             assert record.active_scope_revision == 1
     assert "t1" not in caplog.text
     assert "pytest -q" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_continuation_monitor_nudge_recovers_after_mail_commit_crash(
+    db, monkeypatch
+):
+    _preset, slots, scope = await _team(db)
+    old = datetime.utcnow() - timedelta(
+        seconds=settings.github_owner_idle_timeout_seconds + 60
+    )
+    item, _workspace, _revision, member = await _active_continuation(
+        db,
+        scope,
+        slots[1],
+        issue_number=943,
+        activated_at=old,
+        owner_contact_at=old,
+    )
+    original_notify = github_dispatch_service.notify_owner
+    crashed = False
+
+    async def commit_mail_then_crash(*args, **kwargs):
+        nonlocal crashed
+        await original_notify(*args, **kwargs)
+        if not crashed:
+            crashed = True
+            raise RuntimeError("crash after durable nudge")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        commit_mail_then_crash,
+    )
+
+    with pytest.raises(RuntimeError, match="crash after durable nudge"):
+        await github_dispatch_service.monitor_continuation(db, scope, slots)
+    await db.refresh(item)
+    assert item.continuation_nudged_at is None
+
+    await github_dispatch_service.monitor_continuation(db, scope, slots)
+
+    await db.refresh(item)
+    assert item.continuation_nudged_at is not None
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.recipient_member_id == member.id,
+                MailMessage.subject.like("Continuation progress check:%"),
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
 
 
 @pytest.mark.asyncio

@@ -1937,6 +1937,8 @@ class GithubScopeRevisionResponse(BaseModel):
     last_ack_nudge_at: Optional[datetime] = None
     result_summary: Optional[str] = None
     evidence: Optional[Dict[str, Any]] = None
+    submitted_head_sha: Optional[str] = None
+    submitted_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     created_at: datetime

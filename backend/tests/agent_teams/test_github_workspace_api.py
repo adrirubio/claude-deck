@@ -1356,6 +1356,131 @@ async def test_owner_claims_persisted_continuation_with_no_store(
 
 
 @pytest.mark.asyncio
+async def test_stale_same_slot_member_cannot_claim_continuation_lease(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    scope, item, workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    stale_member = MailTeamMember(
+        identity_key=f"stale-owner:{owner_slot.id}",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Stale Owner",
+        participant_kind="team_slot",
+        team_preset_id=scope.preset_id,
+        team_slot_id=owner_slot.id,
+        created_at=owner.created_at - timedelta(days=1),
+        updated_at=owner.updated_at - timedelta(days=1),
+    )
+    db.add(stale_member)
+    await db.flush()
+    stale_session = MailAgentSession(
+        member_id=stale_member.id,
+        provider="codex-cli",
+        source="mcp",
+        session_key="mcp:stale-owner",
+        cwd="/tmp/r",
+        team_preset_id=scope.preset_id,
+        team_slot_id=owner_slot.id,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
+        bound_pane_pid=4321,
+        bound_pane_proc_start="9876",
+    )
+    db.add(stale_session)
+    await db.commit()
+
+    async def authenticated_session():
+        return stale_session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation"
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "not_item_owner"
+    assert "lease-secret" not in response.text
+    await db.refresh(workspace)
+    assert workspace.leased_owner_pid is None
+    assert workspace.leased_owner_proc_start is None
+
+
+@pytest.mark.asyncio
+async def test_claim_continuation_does_not_overwrite_handoff_owner_binding(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    scope, item, workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    target_slot = (
+        await db.execute(
+            select(AgentTeamSlot).where(
+                AgentTeamSlot.preset_id == scope.preset_id,
+                AgentTeamSlot.id != owner_slot.id,
+            )
+        )
+    ).scalars().first()
+    workspace.leased_owner_pid = 9999
+    workspace.leased_owner_proc_start = "target-start"
+    owner_session = MailAgentSession(
+        member_id=owner.id,
+        provider="codex-cli",
+        source="mcp",
+        session_key="mcp:handoff-race-owner",
+        cwd=str(tmp_path),
+        team_preset_id=scope.preset_id,
+        team_slot_id=owner_slot.id,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
+        bound_pane_pid=4321,
+        bound_pane_proc_start="9876",
+    )
+    db.add(owner_session)
+    await db.commit()
+    original_get = github_workspace_service.get_leased_workspace
+    moved = False
+
+    async def handoff_after_lookup(db_, item_id):
+        nonlocal moved
+        found = await original_get(db_, item_id)
+        if not moved:
+            moved = True
+            await db_.execute(
+                update(GithubWorkItem)
+                .where(GithubWorkItem.id == item.id)
+                .values(owner_slot_id=target_slot.id)
+                .execution_options(synchronize_session=False)
+            )
+        return found
+
+    monkeypatch.setattr(
+        github_workspace_service,
+        "get_leased_workspace",
+        handoff_after_lookup,
+    )
+
+    async def authenticated_session():
+        return owner_session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    response = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/claim-continuation"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "continuation_context_changed"
+    assert "lease-secret" not in response.text
+    await db.refresh(workspace)
+    assert workspace.leased_owner_pid == 9999
+    assert workspace.leased_owner_proc_start == "target-start"
+
+
+@pytest.mark.asyncio
 async def test_restarted_owner_reads_the_same_active_continuation_scope(
     client, db, tmp_path, monkeypatch
 ):
@@ -1544,7 +1669,8 @@ def _stub_completion_github(monkeypatch, *, extra_current=()):
         )
 
     async def get_recursive_tree(_owner, _repo, tree_sha, **_kwargs):
-        return baseline if tree_sha == "b" * 40 else current
+        entries = baseline if tree_sha == "b" * 40 else current
+        return {entry.path: entry for entry in entries}
 
     monkeypatch.setattr(github_client, "get_pull", get_pull)
     monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
@@ -1594,6 +1720,7 @@ async def test_continuation_completion_submits_exact_tree_diff_for_verification(
     await db.refresh(workspace)
     assert item.dispatch_status == "verifying"
     assert revision.status == "submitted"
+    assert revision.submitted_head_sha == "d" * 40
     assert revision.completed_at is None
     assert revision.result_summary == "Completed one bounded path"
     assert revision.evidence == {"checks": ["pytest -q"]}

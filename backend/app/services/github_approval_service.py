@@ -6,16 +6,19 @@ import json
 from datetime import datetime
 from pathlib import PurePosixPath
 
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.database import (
+    AgentTeamSlot,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     MailMessage,
+    MailTeamMember,
     TeamGithubScope,
 )
 from app.services.agent_mail_service import agent_mail_service
@@ -349,6 +352,26 @@ class GithubApprovalService:
                 )
                 if revision is not None:
                     return revision, pending, False
+            raise GithubApprovalError("approval_request_already_pending")
+        nonterminal_revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision)
+                .where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                    GithubAttemptScopeRevision.status.in_(
+                        ("proposed", "approved", "active", "submitted")
+                    ),
+                )
+                .order_by(GithubAttemptScopeRevision.revision.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if nonterminal_revision is not None:
+            if nonterminal_revision.status == "approved":
+                raise GithubApprovalError("continuation_ack_required")
+            if nonterminal_revision.status in {"active", "submitted"}:
+                raise GithubApprovalError("active_continuation")
             raise GithubApprovalError("approval_request_already_pending")
         terminal = (
             await db.execute(
@@ -1078,6 +1101,7 @@ class GithubApprovalService:
             request_id=request_id,
             expected_kind="continuation",
         )
+        work_item_id = item.id
         if request.scope_revision_id is None:
             raise GithubApprovalError("scope_revision_not_found", status_code=404)
         revision = await db.get(
@@ -1128,6 +1152,54 @@ class GithubApprovalService:
         if revision.expires_at is not None and revision.expires_at <= now:
             raise GithubApprovalError("continuation_request_expired")
 
+        leader_slot = aliased(AgentTeamSlot)
+        earlier_slot = aliased(AgentTeamSlot)
+        leader_member = aliased(MailTeamMember)
+        newer_leader_member = aliased(MailTeamMember)
+        current_leader_exists = exists(
+            select(leader_slot.id)
+            .join(
+                TeamGithubScope,
+                TeamGithubScope.preset_id == leader_slot.preset_id,
+            )
+            .join(
+                leader_member,
+                leader_member.team_slot_id == leader_slot.id,
+            )
+            .where(
+                TeamGithubScope.id == item.scope_id,
+                leader_slot.enabled.is_(True),
+                leader_member.id == authenticated_leader_member_id,
+                ~exists(
+                    select(earlier_slot.id).where(
+                        earlier_slot.preset_id == leader_slot.preset_id,
+                        earlier_slot.enabled.is_(True),
+                        or_(
+                            earlier_slot.position < leader_slot.position,
+                            and_(
+                                earlier_slot.position == leader_slot.position,
+                                earlier_slot.id < leader_slot.id,
+                            ),
+                        ),
+                    )
+                ),
+                ~exists(
+                    select(newer_leader_member.id).where(
+                        newer_leader_member.team_slot_id == leader_slot.id,
+                        or_(
+                            newer_leader_member.updated_at
+                            > leader_member.updated_at,
+                            and_(
+                                newer_leader_member.updated_at
+                                == leader_member.updated_at,
+                                newer_leader_member.id > leader_member.id,
+                            ),
+                        ),
+                    )
+                ),
+            )
+        )
+
         item_guard = await db.execute(
             update(GithubWorkItem)
             .where(
@@ -1157,6 +1229,7 @@ class GithubApprovalService:
                 GithubApprovalRequest.approval_round == item.approval_round_count,
                 GithubApprovalRequest.owner_member_id == owner.id,
                 GithubApprovalRequest.leader_member_id == leader.id,
+                current_leader_exists,
             )
             .values(status=decision, reason=reason, decided_at=now)
             .execution_options(synchronize_session=False)
@@ -1181,6 +1254,15 @@ class GithubApprovalService:
         )
         if approval_result.rowcount != 1 or revision_result.rowcount != 1:
             await db.rollback()
+            current_item = await db.get(GithubWorkItem, work_item_id)
+            if current_item is None:
+                raise GithubApprovalError("work_item_not_found", status_code=404)
+            _current_owner, current_leader = await self._current_participants(
+                db,
+                current_item,
+            )
+            if current_leader.id != authenticated_leader_member_id:
+                raise GithubApprovalError("stale_approval_recipient")
             raise GithubApprovalError("approval_request_already_decided")
         await db.commit()
         await db.refresh(request)

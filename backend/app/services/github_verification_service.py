@@ -5,6 +5,7 @@ import asyncio
 import hmac
 import logging
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 import httpx
@@ -70,13 +71,15 @@ class GithubVerificationService:
 
     @staticmethod
     def _changed_tree_paths(
-        baseline: list[GithubTreeEntry],
-        current: list[GithubTreeEntry],
+        baseline: Mapping[str, GithubTreeEntry],
+        current: Mapping[str, GithubTreeEntry],
     ) -> set[str]:
-        def snapshot(entries: list[GithubTreeEntry]) -> dict[str, tuple[str, str, str]]:
+        def snapshot(
+            entries: Mapping[str, GithubTreeEntry],
+        ) -> dict[str, tuple[str, str, str]]:
             return {
                 entry.path: (entry.mode, entry.object_type, entry.sha)
-                for entry in entries
+                for entry in entries.values()
                 if entry.object_type != "tree"
             }
 
@@ -197,6 +200,7 @@ class GithubVerificationService:
         if (
             revision.status == "submitted"
             and item.dispatch_status == "verifying"
+            and revision.submitted_head_sha == current_head_sha
             and revision.result_summary == result_summary
             and revision.evidence == evidence
         ):
@@ -241,6 +245,8 @@ class GithubVerificationService:
                 status="submitted",
                 result_summary=result_summary,
                 evidence=evidence,
+                submitted_head_sha=current_head_sha,
+                submitted_at=now,
             )
             .execution_options(synchronize_session=False)
         )
@@ -855,17 +861,30 @@ class GithubVerificationService:
             )
             return
         if verdict == "merged":
+            if revision is not None:
+                revision.status = "completed"
+                revision.completed_at = datetime.utcnow()
             self._mark_merged(item)
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
             return
         if verdict == "closed_unmerged":
+            if revision is not None:
+                revision.status = "superseded"
             await github_dispatch_service.escalate_without_notification(
                 db,
                 item,
                 "pr_closed_unmerged",
                 f"PR #{item.pr_number} was closed without being merged.",
             )
+            return
+
+        if revision is not None and not await self._submitted_head_is_current(
+            db,
+            item,
+            revision,
+            self._head_sha(pull),
+        ):
             return
 
         head_sha = self._head_sha(pull)
@@ -1227,7 +1246,11 @@ class GithubVerificationService:
         *,
         revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
-        grace_started_at = item.updated_at or item.created_at
+        grace_started_at = (
+            revision.submitted_at
+            if revision is not None and revision.submitted_at is not None
+            else item.updated_at or item.created_at
+        )
         grace_age = datetime.utcnow() - grace_started_at
         if grace_age < timedelta(seconds=settings.github_check_signal_grace_seconds):
             item.status_note = "Waiting for GitHub check-runs or commit statuses to appear."
@@ -1274,14 +1297,23 @@ class GithubVerificationService:
         *,
         revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
-        if pull.get("draft") and pull.get("node_id"):
+        was_draft = bool(pull.get("draft") and pull.get("node_id"))
+        if was_draft:
             await client.mark_pull_ready_for_review(str(pull["node_id"]))
+        if was_draft or revision is not None:
             pull = await client.get_pull(
                 scope.repo_owner,
                 scope.repo_name,
                 int(item.pr_number),
             )
         if revision is not None:
+            if not await self._submitted_head_is_current(
+                db,
+                item,
+                revision,
+                self._head_sha(pull),
+            ):
+                return
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
         item.last_verified_sha = head_sha
@@ -1292,6 +1324,53 @@ class GithubVerificationService:
             await self._notify_code_pr_ready_for_review(db, item)
         await db.commit()
         await self._process_review_item(db, scope, item, client, pull=pull)
+
+    async def _submitted_head_is_current(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        current_head_sha: str | None,
+    ) -> bool:
+        if (
+            revision.status == "submitted"
+            and revision.submitted_head_sha is not None
+            and hmac.compare_digest(revision.submitted_head_sha, current_head_sha or "")
+        ):
+            return True
+
+        now = datetime.utcnow()
+        revision.status = "active"
+        revision.submitted_head_sha = None
+        revision.submitted_at = None
+        item.dispatch_status = "dispatched"
+        item.continuation_activated_at = now
+        item.continuation_nudged_at = None
+        item.status_note = (
+            "The PR head changed after continuation completion; submit the current "
+            "head again so Deck can revalidate the approved paths."
+        )
+        item.updated_at = now
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject="Continuation head changed before verification",
+            body_markdown=(
+                f"PR #{item.pr_number} changed after scope revision "
+                f"{revision.revision} was submitted. Re-run the approved checks and "
+                "report continuation_completed for the current head; Deck will "
+                "revalidate the exact approved paths before verification resumes."
+            ),
+            payload={
+                "kind": "github_continuation_head_changed",
+                "work_item_id": item.id,
+                "pr_number": item.pr_number,
+                "scope_revision": revision.revision,
+                "current_head_sha": current_head_sha,
+            },
+        )
+        await db.commit()
+        return False
 
     async def _auto_merge_budget_exhausted(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -1408,18 +1487,6 @@ class GithubVerificationService:
             revision.failed_head_count > 0
             and revision.last_failed_head_sha == head_sha
         )
-        if same_head:
-            if item.dispatch_status != retry_status or revision.status != "active":
-                now = datetime.utcnow()
-                item.dispatch_status = retry_status
-                item.continuation_activated_at = now
-                item.continuation_nudged_at = None
-                item.updated_at = now
-                revision.status = "active"
-                self._set_failure_note(item, note)
-                await db.commit()
-            return
-
         total_failed_heads = int(
             (
                 await db.execute(
@@ -1436,24 +1503,54 @@ class GithubVerificationService:
                 )
             ).scalar_one()
         )
+        if same_head:
+            exhausted = (
+                revision.failed_head_count >= revision.max_failed_heads
+                or total_failed_heads >= scope.max_continuation_failed_heads
+            )
+            if exhausted:
+                revision.status = "exhausted"
+                await github_dispatch_service.escalate(
+                    db,
+                    item,
+                    "continuation_budget_exhausted",
+                    note,
+                )
+                await db.commit()
+            elif item.dispatch_status != retry_status or revision.status != "active":
+                now = datetime.utcnow()
+                item.dispatch_status = retry_status
+                item.continuation_activated_at = now
+                item.continuation_nudged_at = None
+                item.updated_at = now
+                revision.status = "active"
+                revision.submitted_head_sha = None
+                revision.submitted_at = None
+                self._set_failure_note(item, note)
+                await db.commit()
+            await github_dispatch_service.notify_owner(
+                db,
+                item,
+                subject=subject,
+                body_markdown=body_markdown,
+                payload={
+                    **payload,
+                    "retry_count": item.retry_count,
+                    "head_sha": head_sha,
+                    "scope_revision": revision.revision,
+                    "revision_failed_head_count": revision.failed_head_count,
+                },
+                delivery_key=(
+                    f"github-continuation:{revision.id}:verification-failure:"
+                    f"{head_sha or 'no-head'}"
+                ),
+            )
+            return
         revision.failed_head_count += 1
         revision.last_failed_head_sha = head_sha
         item.retry_count += 1
         item.last_verified_sha = head_sha
         self._set_failure_note(item, note)
-        await github_dispatch_service.notify_owner(
-            db,
-            item,
-            subject=subject,
-            body_markdown=body_markdown,
-            payload={
-                **payload,
-                "retry_count": item.retry_count,
-                "head_sha": head_sha,
-                "scope_revision": revision.revision,
-                "revision_failed_head_count": revision.failed_head_count,
-            },
-        )
         exhausted = (
             revision.failed_head_count >= revision.max_failed_heads
             or total_failed_heads + 1 >= scope.max_continuation_failed_heads
@@ -1469,11 +1566,30 @@ class GithubVerificationService:
         else:
             now = datetime.utcnow()
             revision.status = "active"
+            revision.submitted_head_sha = None
+            revision.submitted_at = None
             item.dispatch_status = retry_status
             item.continuation_activated_at = now
             item.continuation_nudged_at = None
             item.updated_at = now
         await db.commit()
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject=subject,
+            body_markdown=body_markdown,
+            payload={
+                **payload,
+                "retry_count": item.retry_count,
+                "head_sha": head_sha,
+                "scope_revision": revision.revision,
+                "revision_failed_head_count": revision.failed_head_count,
+            },
+            delivery_key=(
+                f"github-continuation:{revision.id}:verification-failure:"
+                f"{head_sha or 'no-head'}"
+            ),
+        )
 
     async def _record_failed_verification_attempt(
         self,

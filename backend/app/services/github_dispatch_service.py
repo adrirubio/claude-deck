@@ -1828,23 +1828,84 @@ class GithubDispatchService:
                 )
                 .execution_options(synchronize_session=False)
             )
-            revision_result = None
-            if active_revision is not None:
-                revision_result = await db.execute(
+            owner_bound_revisions = (
+                await db.execute(
+                    select(GithubAttemptScopeRevision).where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == item.dispatch_nonce,
+                        GithubAttemptScopeRevision.owner_slot_id
+                        == old_owner_slot_id,
+                        GithubAttemptScopeRevision.status.in_(
+                            ("proposed", "approved", "active", "submitted")
+                        ),
+                    )
+                )
+            ).scalars().all()
+            revision_ids = [revision.id for revision in owner_bound_revisions]
+            if revision_ids:
+                await db.execute(
                     update(GithubAttemptScopeRevision)
                     .where(
-                        GithubAttemptScopeRevision.id == active_revision.id,
+                        GithubAttemptScopeRevision.id.in_(revision_ids),
                         GithubAttemptScopeRevision.status.in_(
-                            ("active", "submitted")
+                            ("proposed", "approved", "active", "submitted")
                         ),
                     )
                     .values(status="superseded")
                     .execution_options(synchronize_session=False)
                 )
+                pending_requests = (
+                    await db.execute(
+                        select(GithubApprovalRequest).where(
+                            GithubApprovalRequest.scope_revision_id.in_(revision_ids),
+                            GithubApprovalRequest.request_kind == "continuation",
+                            GithubApprovalRequest.status == "pending",
+                        )
+                    )
+                ).scalars().all()
+                if pending_requests:
+                    request_ids = [request.id for request in pending_requests]
+                    request_message_ids = [
+                        request.request_message_id
+                        for request in pending_requests
+                        if request.request_message_id is not None
+                    ]
+                    await db.execute(
+                        update(GithubApprovalRequest)
+                        .where(
+                            GithubApprovalRequest.id.in_(request_ids),
+                            GithubApprovalRequest.status == "pending",
+                        )
+                        .values(status="superseded", superseded_at=now)
+                        .execution_options(synchronize_session=False)
+                    )
+                    if request_message_ids:
+                        await db.execute(
+                            update(MailMessage)
+                            .where(
+                                MailMessage.id.in_(request_message_ids),
+                                MailMessage.request_status == "pending",
+                            )
+                            .values(request_status="superseded")
+                            .execution_options(synchronize_session=False)
+                        )
+                remaining_authority = (
+                    await db.execute(
+                        select(func.count(GithubAttemptScopeRevision.id)).where(
+                            GithubAttemptScopeRevision.id.in_(revision_ids),
+                            GithubAttemptScopeRevision.status.in_(
+                                ("proposed", "approved", "active", "submitted")
+                            ),
+                        )
+                    )
+                ).scalar_one()
+                if remaining_authority:
+                    await db.rollback()
+                    raise ValueError("handoff continuation authority changed")
             if (
                 item_result.rowcount != 1
                 or workspace_result.rowcount != 1
-                or (revision_result is not None and revision_result.rowcount != 1)
             ):
                 await db.rollback()
                 raise ValueError("handoff state changed before acceptance")
@@ -2117,6 +2178,10 @@ class GithubDispatchService:
                         "work_item_id": item.id,
                         "scope_revision": item.active_scope_revision,
                     },
+                    delivery_key=(
+                        f"github-continuation:{item.id}:"
+                        f"{item.active_scope_revision}:idle:{anchor.isoformat()}"
+                    ),
                 )
                 item.continuation_nudged_at = now
                 item.updated_at = now
@@ -2409,6 +2474,7 @@ class GithubDispatchService:
         subject: str,
         body_markdown: str,
         payload: dict | None = None,
+        delivery_key: str | None = None,
     ) -> None:
         member = await self._owner_member(db, item)
         if member is None:
@@ -2421,6 +2487,7 @@ class GithubDispatchService:
             subject=subject,
             body_markdown=body_markdown,
             payload=payload,
+            delivery_key=delivery_key,
         )
 
     async def notify_team(

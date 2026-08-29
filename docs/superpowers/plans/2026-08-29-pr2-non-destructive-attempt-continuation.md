@@ -28,6 +28,21 @@ approval mutations against database-current work-item state. The Task 3, Task 4,
 requirements below supersede any older implementation inference that conflicts with those
 contracts.
 
+**Implementation-review corrections (2026-08-29):** The production GitHub tree client
+returns path-keyed mappings, not entry lists; completion must consume that exact contract.
+Persist the head accepted by `continuation_completed` and require it to remain current until
+green promotion, otherwise return the revision to `active` without charging a failed-head
+budget. Lease-bearing continuation context requires both the current slot and current member.
+An accepted handoff supersedes every nonterminal continuation revision owned by the previous
+slot, plus any linked pending approval/mail root, so stale authority cannot block the target.
+Only one proposed, approved, active, or submitted revision may exist for an attempt. Leader
+decisions and workspace claims re-check database-current slot/member authority in their
+conditional writes. Generic mail-list and thread projections redact continuation scope
+details; authenticated inbox delivery remains authoritative. Submission time is durable and
+anchors the no-check grace window. Terminal PR outcomes close submitted authority, product
+failure state commits before best-effort notification, and continuation idle nudges use
+deterministic delivery keys so a crash cannot duplicate mail.
+
 ## PR Boundary
 
 PR2 implements **implementation-phase continuation only**.
@@ -319,6 +334,8 @@ venv/bin/pytest tests/agent_teams/test_github_dispatch_service.py \
   exact scope, block code, and budgets.
 - [ ] Keep lease token visible only through the existing authenticated owner continuation
   context; list/audit endpoints omit it.
+- [ ] Require the claim caller to match both the database-current owner slot and member;
+  a stale session from a previous member in the same slot receives no lease context.
 - [ ] Add MCP tools:
   - `deck_request_continuation`;
   - `deck_decide_continuation(approval_request_id: int, work_item_id: int,
@@ -394,11 +411,16 @@ venv/bin/pytest tests/agent_teams/test_github_watcher_service.py \
   head, and lease in this branch before mutation.
 - [ ] Fetch current PR head and require it equals the report.
 - [ ] Fetch baseline/current recursive trees; refuse truncated/incomplete responses.
+- [ ] Consume the path-keyed mapping returned by the production recursive-tree client;
+  list-shaped test doubles are not an acceptable substitute for this interface.
 - [ ] Compute changed paths including mode/type changes and require every path is exactly
   allowed.
 - [ ] Require `push_pr_head` and `request_verification` actions.
 - [ ] Revalidate owner, nonce, revision active status, workspace id/token hash, and PR.
 - [ ] Set revision `submitted` and item `verifying`; do not mark completed yet.
+- [ ] Persist the submitted head SHA. Re-check it before reading CI and immediately before
+  green promotion; a changed head returns the revision to `active` for a new authenticated
+  completion report without incrementing either failure counter.
 - [ ] Return stable conflict codes for stale head, inconclusive diff, out-of-scope paths, and
   missing actions.
 
@@ -459,8 +481,9 @@ venv/bin/pytest tests/agent_teams/test_github_verification_service.py -q -p no:w
 `backend/tests/agent_teams/test_github_dispatch_service.py`,
 `backend/tests/agent_teams/test_github_dispatch_scheduler.py`
 
-- [ ] On accepted handoff, supersede active revision, restore originating escalation, and
-  require the target to propose a fresh revision.
+- [ ] On accepted handoff, supersede every previous-owner nonterminal revision, restore an
+  active revision's originating escalation, supersede linked pending approval/mail roots,
+  and require the target to propose a fresh revision.
 - [ ] Keep existing atomic owner/PID/lease-token handoff guarantees unchanged.
 - [ ] Add `monitor_continuation` query:
   `dispatched AND pr_number IS NOT NULL AND active_scope_revision > 0`.

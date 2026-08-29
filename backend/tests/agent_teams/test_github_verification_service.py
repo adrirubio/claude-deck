@@ -24,6 +24,7 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.services.github_verification_service import github_verification_service
+from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_app_auth_service import (
     GithubAppNotInstalled,
     github_app_auth_service,
@@ -212,6 +213,8 @@ async def _implementation_revision(
         failed_head_count=failed_head_count,
         last_failed_head_sha=last_failed_head_sha,
         status=status,
+        submitted_head_sha="sha" if status == "submitted" else None,
+        submitted_at=datetime.utcnow() if status == "submitted" else None,
     )
     db.add(revision)
     await db.commit()
@@ -1507,6 +1510,232 @@ async def test_dispatched_implementation_continuation_waits_for_completion_repor
 
 
 @pytest.mark.asyncio
+async def test_submitted_continuation_head_change_requires_scope_revalidation(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+        retry_count=7,
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+
+    class _HeadMovesAfterChecksClient(_Client):
+        async def get_pull(self, owner, repo, pr_number):
+            self.pull_calls += 1
+            pull = dict(self.pull)
+            pull["head"] = dict(self.pull["head"])
+            pull["head"]["sha"] = "sha" if self.pull_calls == 1 else "sha-2"
+            return pull
+
+    client = _HeadMovesAfterChecksClient(
+        pull={
+            "number": 5,
+            "node_id": "node",
+            "draft": False,
+            "merged": False,
+            "state": "open",
+            "merged_at": None,
+            "mergeable_state": "clean",
+            "head": {
+                "sha": "sha",
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": "o/r"},
+            },
+            "base": {"ref": "master", "repo": {"full_name": "o/r"}},
+            "user": {"login": "human"},
+        },
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert client.pull_calls == 2
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 7
+    assert item.last_verified_sha is None
+    assert revision.status == "active"
+    assert revision.submitted_head_sha is None
+    assert revision.failed_head_count == 0
+    assert revision.completed_at is None
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.subject
+                == "Continuation head changed before verification"
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_submitted_continuation_no_check_grace_uses_submission_clock(
+    db, monkeypatch
+):
+    monkeypatch.setattr(settings, "github_check_signal_grace_seconds", 60)
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+        updated_at=datetime.utcnow(),
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+    revision.submitted_at = datetime.utcnow() - timedelta(minutes=2)
+    await db.commit()
+
+    await github_verification_service.process_scope(
+        db,
+        scope,
+        client=_Client(check_runs=[]),
+    )
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert revision.status == "active"
+    assert revision.submitted_at is None
+    assert revision.failed_head_count == 1
+    assert "No GitHub check-runs or commit statuses" in item.status_note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pull_state", "merged", "merged_at", "expected_item", "expected_revision"),
+    [
+        ("closed", True, "2026-08-29T12:00:00Z", "merged", "completed"),
+        ("closed", False, None, "escalated", "superseded"),
+    ],
+)
+async def test_terminal_pull_closes_submitted_continuation_authority(
+    db,
+    pull_state,
+    merged,
+    merged_at,
+    expected_item,
+    expected_revision,
+):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+    client = _Client()
+    client.pull.update(
+        state=pull_state,
+        merged=merged,
+        merged_at=merged_at,
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == expected_item
+    assert revision.status == expected_revision
+    if expected_revision == "completed":
+        assert revision.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_exhausted_continuation_state_precedes_failure_notification(
+    db, monkeypatch
+):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=1,
+    )
+    original_notify = github_dispatch_service.notify_owner
+
+    async def commit_mail_then_crash(*args, **kwargs):
+        await original_notify(*args, **kwargs)
+        raise RuntimeError("crash after durable mail")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        commit_mail_then_crash,
+    )
+    client = _Client(
+        check_runs=[
+            {"name": "ci", "status": "completed", "conclusion": "failure"}
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="crash after durable mail"):
+        await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert revision.status == "exhausted"
+    assert revision.failed_head_count == 1
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert revision.status == "exhausted"
+
+
+@pytest.mark.asyncio
 async def test_continuation_failures_use_revision_budget_and_count_each_head_once(db):
     scope = await _scope(
         db,
@@ -1552,6 +1781,7 @@ async def test_continuation_failures_use_revision_budget_and_count_each_head_onc
 
     item.dispatch_status = "verifying"
     revision.status = "submitted"
+    revision.submitted_head_sha = "sha"
     await db.commit()
     await github_verification_service.process_scope(db, scope, client=client)
     await db.refresh(item)
@@ -1570,6 +1800,7 @@ async def test_continuation_failures_use_revision_budget_and_count_each_head_onc
     client.pull["head"]["sha"] = "sha-2"
     item.dispatch_status = "verifying"
     revision.status = "submitted"
+    revision.submitted_head_sha = "sha-2"
     await db.commit()
     await github_verification_service.process_scope(db, scope, client=client)
     await db.refresh(item)

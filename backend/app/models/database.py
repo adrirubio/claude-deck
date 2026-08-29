@@ -680,6 +680,8 @@ class GithubAttemptScopeRevision(Base):
     last_ack_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    submitted_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

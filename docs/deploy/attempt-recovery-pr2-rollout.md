@@ -94,8 +94,8 @@ items, PRs, and workspace leases still match the pre-deployment inventory.
 
 Measured on the isolated PR2 worktree on 2026-08-29:
 
-- Agent Mail, agent-team, and compatibility-migration scope: `902 passed`.
-- Whole backend suite: `1071 passed, 1 failed`; the only failure is the documented
+- Agent Mail, agent-team, and compatibility-migration scope: `912 passed`.
+- Whole backend suite: `1081 passed, 1 failed`; the only failure is the documented
   pre-existing `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke`
   tracked as issue #312.
 - Frontend production build: passed (`tsc -b && vite build`); Vite reported only the
@@ -104,3 +104,17 @@ Measured on the isolated PR2 worktree on 2026-08-29:
 
 No live Deck database was migrated, no autonomy or continuation flag was enabled, and no
 Tizonia dispatch or build was started during PR2 validation.
+
+Implementation-review hardening also binds a submitted continuation to the exact PR head
+that passed path validation. If the head changes before green promotion, Deck returns the
+same revision to the owner for a new completion report and does not spend its failed-head
+budget. Handoffs invalidate all nonterminal authority held by the previous owner, including
+pending approval roots, and lease-bearing continuation context requires the database-current
+owner member as well as the slot.
+
+The final implementation review also enforces one nonterminal revision per attempt, binds
+Leader decisions and lease claims to database-current membership at the write boundary, and
+redacts continuation scope details from generic mail-list/thread projections. A durable
+submission timestamp prevents check-signal grace from sliding across polls. Merged and
+closed PRs terminate submitted authority, failure counters and lifecycle state persist before
+notification, and idle-progress nudges use deterministic delivery keys for crash-safe replay.

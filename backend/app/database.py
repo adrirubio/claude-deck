@@ -935,6 +935,21 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
 
     await _sqlite_create_approval_tables(conn)
+    revision_columns = await _sqlite_columns(conn, "github_attempt_scope_revisions")
+    if revision_columns and "submitted_head_sha" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN submitted_head_sha VARCHAR"
+            )
+        )
+    if revision_columns and "submitted_at" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN submitted_at DATETIME"
+            )
+        )
     await _sqlite_ensure_unique_partial_index(
         conn,
         table_name="github_approval_requests",
