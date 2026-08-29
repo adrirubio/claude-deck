@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 
 from app.api.v1.deps import mail_session
 from app.config import settings
@@ -487,6 +487,7 @@ async def test_operator_lists_and_cancels_continuation_without_secret_projection
     assert unauthenticated.json()["detail"] == "operator_token_required"
     assert listed.status_code == 200
     assert len(listed.json()) == 1
+    assert listed.json()[0]["allowed_commands"] == []
     assert "expected_lease_token_hash" not in listed.text
     assert "lease-secret" not in listed.text
     assert cancelled.status_code == 200
@@ -495,6 +496,137 @@ async def test_operator_lists_and_cancels_continuation_without_secret_projection
     await db.refresh(root)
     assert revision.status == "superseded"
     assert root.request_status == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_work_item_feed_bulk_projects_normalized_continuation_authority(
+    client, db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    revision, approval, _created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **_continuation_proposal_kwargs(item, owner_slot, owner),
+        )
+    )
+    second_item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=74,
+        issue_title="No continuation authority",
+        issue_url="u2",
+        github_updated_at=datetime.utcnow(),
+    )
+    db.add(second_item)
+    await db.commit()
+    statements = []
+
+    def count_statement(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    event.listen(db.bind.sync_engine, "before_cursor_execute", count_statement)
+    try:
+        response = await client.get(
+            f"/api/v1/agent-teams/presets/{scope.preset_id}/github-work-items"
+        )
+    finally:
+        event.remove(db.bind.sync_engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    assert len(statements) <= 4
+    body = response.json()
+    assert len(body["items"]) == 2
+    projected = next(row for row in body["items"] if row["id"] == item.id)
+    assert projected["active_scope_revision"] == 0
+    assert projected["active_scope_summary"] is None
+    assert projected["active_scope_status"] is None
+    assert projected["pending_approval_request_id"] == approval.id
+    assert projected["pending_approval_kind"] == "continuation"
+    assert projected["revision_failed_head_count"] == 0
+    assert projected["revision_failed_head_budget"] == revision.max_failed_heads
+    assert projected["continuation_block_code"] == "approval_pending"
+    assert projected["retry_allowed"] is False
+    assert projected["retry_block_code"] == "approval_pending"
+    assert "allowed_commands" not in projected
+    assert "expected_lease_token_hash" not in response.text
+    assert "lease-secret" not in response.text
+
+    approval.status = "approved"
+    revision.status = "active"
+    item.active_scope_revision = revision.revision
+    item.dispatch_status = "dispatched"
+    item.escalation_reason = None
+    await db.commit()
+
+    active = await client.get(
+        f"/api/v1/agent-teams/presets/{scope.preset_id}/github-work-items"
+    )
+
+    assert active.status_code == 200
+    active_item = next(row for row in active.json()["items"] if row["id"] == item.id)
+    assert active_item["active_scope_summary"] == revision.summary
+    assert active_item["active_scope_status"] == "active"
+    assert active_item["pending_approval_request_id"] is None
+    assert active_item["pending_approval_kind"] is None
+    assert active_item["revision_failed_head_count"] == 0
+    assert active_item["revision_failed_head_budget"] == revision.max_failed_heads
+    assert active_item["continuation_block_code"] is None
+
+    abandoned = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/abandon",
+        json={"reason": "operator stopped the continuation"},
+    )
+
+    assert abandoned.status_code == 200
+    abandoned_item = abandoned.json()
+    assert abandoned_item["active_scope_summary"] == revision.summary
+    assert abandoned_item["active_scope_status"] == "active"
+    assert abandoned_item["retry_allowed"] is False
+    assert abandoned_item["retry_block_code"] == "active_continuation"
+
+
+@pytest.mark.asyncio
+async def test_retry_blocks_pending_approval_and_active_revision(
+    client, db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    revision, approval, _created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **_continuation_proposal_kwargs(item, owner_slot, owner),
+        )
+    )
+
+    pending = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry"
+    )
+
+    assert pending.status_code == 409
+    assert pending.json()["detail"]["block_code"] == "approval_pending"
+
+    approval.status = "approved"
+    revision.status = "active"
+    item.active_scope_revision = revision.revision
+    await db.commit()
+    active = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry"
+    )
+
+    assert active.status_code == 409
+    assert active.json()["detail"]["block_code"] == "active_continuation"
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+    assert item.pr_number == 42
 
 
 async def _credential_context(db, tmp_path):

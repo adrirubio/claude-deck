@@ -938,7 +938,22 @@ def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
                 "pr_number": item.get("pr_number"),
                 "attempt_phase": item.get("attempt_phase"),
                 "active_scope_revision": item.get("active_scope_revision"),
+                "active_scope_summary": item.get("active_scope_summary"),
+                "active_scope_status": item.get("active_scope_status"),
+                "pending_approval_request_id": item.get(
+                    "pending_approval_request_id"
+                ),
+                "pending_approval_kind": item.get("pending_approval_kind"),
                 "diagnostic_retry_count": item.get("diagnostic_retry_count"),
+                "revision_failed_head_count": item.get(
+                    "revision_failed_head_count"
+                ),
+                "revision_failed_head_budget": item.get(
+                    "revision_failed_head_budget"
+                ),
+                "continuation_block_code": item.get("continuation_block_code"),
+                "retry_allowed": item.get("retry_allowed"),
+                "retry_block_code": item.get("retry_block_code"),
                 "continuation_nudged_at": item.get("continuation_nudged_at"),
                 "continuation_activated_at": item.get("continuation_activated_at"),
             }

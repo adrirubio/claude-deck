@@ -2449,9 +2449,18 @@ class GithubWorkItemResponse(BaseModel):
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None
     active_scope_revision: int
+    active_scope_summary: Optional[str] = None
+    active_scope_status: Optional[str] = None
+    pending_approval_request_id: Optional[int] = None
+    pending_approval_kind: Optional[str] = None
     attempt_phase: str
     diagnostic_retry_count: int
     diagnostic_last_verified_sha: Optional[str] = None
+    revision_failed_head_count: Optional[int] = None
+    revision_failed_head_budget: Optional[int] = None
+    continuation_block_code: Optional[str] = None
+    retry_allowed: bool
+    retry_block_code: Optional[str] = None
     continuation_nudged_at: Optional[datetime] = None
     continuation_activated_at: Optional[datetime] = None
     workspace_path: Optional[str] = None

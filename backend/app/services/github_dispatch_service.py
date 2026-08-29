@@ -142,6 +142,12 @@ class AckEvidence:
     approval_round: int | None = None
 
 
+@dataclass(frozen=True)
+class RetryEligibility:
+    allowed: bool
+    block_code: str | None = None
+
+
 def attempt_state(item: GithubWorkItem) -> AttemptState:
     markers = [getattr(item, column) for column in _ATTEMPT_MARKERS]
     if all(marker is None for marker in markers) and item.approval_round_count == 0:
@@ -198,6 +204,22 @@ def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
 
 
 class GithubDispatchService:
+    @staticmethod
+    def retry_eligibility(
+        item: GithubWorkItem,
+        *,
+        pending_approval: bool,
+    ) -> RetryEligibility:
+        if item.dispatch_status != "escalated":
+            return RetryEligibility(False, "not_escalated")
+        if item.active_scope_revision > 0:
+            return RetryEligibility(False, "active_continuation")
+        if pending_approval:
+            return RetryEligibility(False, "approval_pending")
+        if item.pr_number is not None:
+            return RetryEligibility(False, "pr_preserved")
+        return RetryEligibility(True)
+
     async def activate_continuation_revision(
         self,
         db: AsyncSession,

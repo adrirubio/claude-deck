@@ -970,8 +970,20 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                         "id": 17,
                         "issue_number": 817,
                         "dispatch_status": "escalated",
-                        "escalation_reason": "plan_blocked",
-                        "status_note": "Blocked by #816",
+                            "escalation_reason": "plan_blocked",
+                            "status_note": "Blocked by #816",
+                            "active_scope_summary": "Fix one bounded path",
+                            "active_scope_status": "active",
+                            "pending_approval_request_id": 73,
+                            "pending_approval_kind": "continuation",
+                            "revision_failed_head_count": 1,
+                            "revision_failed_head_budget": 2,
+                            "continuation_block_code": "approval_pending",
+                            "retry_allowed": False,
+                            "retry_block_code": "approval_pending",
+                            "expected_lease_token_hash": "never-project",
+                            "lease_token": "never-project",
+                            "allowed_commands": ["never-project"],
                     },
                     {
                         "id": 16,
@@ -1001,10 +1013,19 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                 "ack_enforcement_epoch": None,
                 "dispatch_head_ref": None,
                 "pr_number": None,
-                "attempt_phase": None,
-                "active_scope_revision": None,
-                "diagnostic_retry_count": None,
-                "continuation_nudged_at": None,
+                    "attempt_phase": None,
+                    "active_scope_revision": None,
+                    "active_scope_summary": "Fix one bounded path",
+                    "active_scope_status": "active",
+                    "pending_approval_request_id": 73,
+                    "pending_approval_kind": "continuation",
+                    "diagnostic_retry_count": None,
+                    "revision_failed_head_count": 1,
+                    "revision_failed_head_budget": 2,
+                    "continuation_block_code": "approval_pending",
+                    "retry_allowed": False,
+                    "retry_block_code": "approval_pending",
+                    "continuation_nudged_at": None,
                 "continuation_activated_at": None,
             }
         ],
@@ -1016,6 +1037,10 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
             {"params": {"limit": 25}},
         )
     ]
+    projected = result["items"][0]
+    assert "expected_lease_token_hash" not in projected
+    assert "lease_token" not in projected
+    assert "allowed_commands" not in projected
 
 
 _OWNER_ONLY_STATUSES = [

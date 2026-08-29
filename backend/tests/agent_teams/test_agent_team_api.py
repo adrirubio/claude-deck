@@ -497,7 +497,9 @@ async def test_retry_rejected_when_pr_open(client, db):
     )
 
     assert response.status_code == 409
-    assert "865" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["block_code"] == "pr_preserved"
+    assert "865" in detail["message"]
     await db.refresh(item)
     assert item.pr_number == 865
     assert item.dispatch_status == "escalated"
@@ -513,6 +515,8 @@ async def test_retry_allowed_when_no_pr(client, db):
     )
 
     assert response.status_code == 200
+    assert response.json()["retry_allowed"] is False
+    assert response.json()["retry_block_code"] == "not_escalated"
     await db.refresh(item)
     assert item.dispatch_status == "pending"
 
@@ -540,4 +544,6 @@ async def test_retry_endpoint_defers_while_workspace_is_leased(client, db):
     assert item.dispatch_status == "escalated"
     assert item.retry_requested_at is not None
     assert body["retry_requested_at"] is not None
+    assert body["retry_allowed"] is True
+    assert body["retry_block_code"] is None
     assert workspace.leased_item_id == item.id
