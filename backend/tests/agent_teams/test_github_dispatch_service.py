@@ -5075,7 +5075,7 @@ async def test_recovery_monitor_nudges_only_current_owner_after_delivery_cooldow
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["pending", "approved"])
+@pytest.mark.parametrize("status", ["pending", "approved", "rejected"])
 @pytest.mark.parametrize("drift", ["nonce", "owner", "leader"])
 async def test_recovery_monitor_supersedes_stale_transport_without_delivery(
     db,

@@ -1629,7 +1629,11 @@ async def test_diagnostic_failure_counts_each_head_once_and_uses_only_diagnostic
     )
     client = _Client(
         check_runs=[
-            {"name": "diagnostic", "status": "completed", "conclusion": "failure"}
+            {
+                "name": "diagnostic",
+                "status": "completed",
+                "conclusion": "failure",
+            }
         ]
     )
 
@@ -1669,6 +1673,77 @@ async def test_diagnostic_failure_counts_each_head_once_and_uses_only_diagnostic
     assert revision.status == "exhausted"
     assert revision.failed_head_count == 2
     assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_failure_replay_repairs_mail_without_recounting(
+    db,
+    monkeypatch,
+):
+    scope = await _scope(db, max_continuation_failed_heads=3)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+    )
+    revision, _workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=2,
+    )
+    client = _Client(
+        check_runs=[
+            {"name": "diagnostic", "status": "completed", "conclusion": "failure"}
+        ]
+    )
+    original_notify = github_dispatch_service.notify_owner
+
+    async def crash_before_mail(*_args, **_kwargs):
+        raise RuntimeError("crash before diagnostic failure mail")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        crash_before_mail,
+    )
+    with pytest.raises(RuntimeError, match="crash before diagnostic failure mail"):
+        await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.diagnostic_retry_count == 1
+    assert revision.failed_head_count == 1
+    assert (await db.execute(select(MailMessage))).scalars().all() == []
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        original_notify,
+    )
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key
+                == f"github-diagnostic:{revision.id}:check-failure:sha"
+            )
+        )
+    ).scalars().all()
+    assert item.diagnostic_retry_count == 1
+    assert revision.failed_head_count == 1
+    assert len(messages) == 1
 
 
 @pytest.mark.asyncio

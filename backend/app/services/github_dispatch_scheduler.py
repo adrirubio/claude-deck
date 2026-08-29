@@ -120,15 +120,16 @@ class GithubDispatchScheduler:
                 .order_by(TeamGithubScope.id)
             )
         ).scalars().all()
+        await db.commit()
         for scope in scopes:
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.watcher.poll_scope(db, scope, client)
-            slots = (
-                await db.execute(
-                    select(AgentTeamSlot)
-                    .where(AgentTeamSlot.preset_id == scope.preset_id)
-                    .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-                )
-            ).scalars().all()
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
             issues_by_number = await self._pending_issues_by_number(db, scope, client)
             issue_labels_by_number = {
                 number: [label["name"] for label in issue.get("labels", []) if "name" in label]

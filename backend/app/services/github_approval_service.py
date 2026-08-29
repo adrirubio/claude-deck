@@ -1059,10 +1059,10 @@ class GithubApprovalService:
         revision: GithubAttemptScopeRevision,
     ) -> None:
         now = datetime.utcnow()
-        if request.status in {"pending", "approved"}:
+        if request.status in {"pending", "approved", "rejected"}:
             request.status = "superseded"
             request.superseded_at = now
-        if revision.status in {"proposed", "approved"}:
+        if revision.status in {"proposed", "approved", "rejected"}:
             revision.status = "superseded"
         root = None
         if request.request_message_id is not None:

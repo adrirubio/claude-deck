@@ -166,8 +166,8 @@ the backup. Re-read the recorded PRs and workspace leases before restarting any 
 
 Measured on the isolated PR3 worktree on 2026-08-29:
 
-- Agent Mail, agent-team, and compatibility-migration scope: `968 passed in 103.28s`.
-- Whole backend suite: `1137 passed, 1 failed in 109.73s`; the only failure is the
+- Agent Mail, agent-team, and compatibility-migration scope: `973 passed in 110.77s`.
+- Whole backend suite: `1142 passed, 1 failed in 113.20s`; the only failure is the
   documented pre-existing
   `tests/test_multi_provider_smoke.py::test_agent_bridge_session_filter_smoke` tracked as
   issue #312.

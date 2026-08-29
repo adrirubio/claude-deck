@@ -1228,42 +1228,42 @@ class GithubVerificationService:
             or revision.status != "active"
         ):
             raise ContinuationCompletionError("stale_continuation_context")
-        if item.diagnostic_last_verified_sha == head_sha:
-            return
-        total_failed_heads = int(
-            (
-                await db.execute(
-                    select(
-                        func.coalesce(
-                            func.sum(GithubAttemptScopeRevision.failed_head_count),
-                            0,
+        if item.diagnostic_last_verified_sha != head_sha:
+            total_failed_heads = int(
+                (
+                    await db.execute(
+                        select(
+                            func.coalesce(
+                                func.sum(GithubAttemptScopeRevision.failed_head_count),
+                                0,
+                            )
+                        ).where(
+                            GithubAttemptScopeRevision.work_item_id == item.id,
+                            GithubAttemptScopeRevision.dispatch_nonce
+                            == item.dispatch_nonce,
                         )
-                    ).where(
-                        GithubAttemptScopeRevision.work_item_id == item.id,
-                        GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
                     )
-                )
-            ).scalar_one()
-        )
-        revision.failed_head_count += 1
-        revision.last_failed_head_sha = head_sha
-        item.diagnostic_retry_count += 1
-        item.diagnostic_last_verified_sha = head_sha
-        item.status_note = "Diagnostic checks produced failure evidence."
-        item.updated_at = datetime.utcnow()
-        exhausted = (
-            revision.failed_head_count >= revision.max_failed_heads
-            or total_failed_heads + 1 >= scope.max_continuation_failed_heads
-        )
-        if exhausted:
-            revision.status = "exhausted"
-            await github_dispatch_service.escalate(
-                db,
-                item,
-                "continuation_budget_exhausted",
-                "Diagnostic failed-head budget was exhausted.",
+                ).scalar_one()
             )
-        await db.commit()
+            revision.failed_head_count += 1
+            revision.last_failed_head_sha = head_sha
+            item.diagnostic_retry_count += 1
+            item.diagnostic_last_verified_sha = head_sha
+            item.status_note = "Diagnostic checks produced failure evidence."
+            item.updated_at = datetime.utcnow()
+            exhausted = (
+                revision.failed_head_count >= revision.max_failed_heads
+                or total_failed_heads + 1 >= scope.max_continuation_failed_heads
+            )
+            if exhausted:
+                revision.status = "exhausted"
+                await github_dispatch_service.escalate(
+                    db,
+                    item,
+                    "continuation_budget_exhausted",
+                    "Diagnostic failed-head budget was exhausted.",
+                )
+            await db.commit()
         await github_dispatch_service.notify_owner(
             db,
             item,

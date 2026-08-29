@@ -263,6 +263,7 @@ async def test_scheduler_orders_disjoint_monitors_around_verification(db):
 @pytest.mark.parametrize(
     "stop_after",
     [
+        "watcher",
         "dispatch",
         "initial_monitor",
         "continuation_monitor",
@@ -285,7 +286,7 @@ async def test_scheduler_stops_after_autonomy_is_disabled_between_stages(
 
     class ToggleWatcher(_FakeWatcher):
         async def poll_scope(self, db, scope, client):
-            order.append("watcher")
+            await record(db, scope, "watcher")
 
     class ToggleDispatch(_FakeDispatch):
         async def dispatch_pending(self, db, scope, slots, **kwargs):
