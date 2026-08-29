@@ -355,6 +355,9 @@ def _work_item_response(
         pending_approval_kind=(
             pending_approval.request_kind if pending_approval is not None else None
         ),
+        pending_approval_status=(
+            pending_approval.status if pending_approval is not None else None
+        ),
         attempt_phase=item.attempt_phase,
         diagnostic_retry_count=item.diagnostic_retry_count,
         diagnostic_last_verified_sha=item.diagnostic_last_verified_sha,
@@ -365,6 +368,15 @@ def _work_item_response(
         ),
         revision_failed_head_budget=(
             current_revision.max_failed_heads if current_revision is not None else None
+        ),
+        revision_approved_at=(
+            current_revision.approved_at if current_revision is not None else None
+        ),
+        revision_delivered_at=(
+            current_revision.delivered_at if current_revision is not None else None
+        ),
+        revision_acknowledged_at=(
+            current_revision.acknowledged_at if current_revision is not None else None
         ),
         continuation_block_code=continuation_block_code,
         retry_allowed=retry_eligibility.allowed,
@@ -403,6 +415,7 @@ def _scope_revision_response(
     revision: GithubAttemptScopeRevision,
     *,
     include_commands: bool = True,
+    approval: GithubApprovalRequest | None = None,
 ) -> GithubScopeRevisionResponse:
     return GithubScopeRevisionResponse(
         id=revision.id,
@@ -442,6 +455,9 @@ def _scope_revision_response(
         completed_at=revision.completed_at,
         expires_at=revision.expires_at,
         created_at=revision.created_at,
+        approval_request=(
+            _approval_authority_response(approval) if approval is not None else None
+        ),
     )
 
 
@@ -1342,15 +1358,37 @@ async def list_github_work_item_scope_revisions(
             )
         )
     ).scalars().all()
+    revision_ids = [revision.id for revision in revisions]
+    approvals = (
+        (
+            await db.execute(
+                select(GithubApprovalRequest).where(
+                    GithubApprovalRequest.scope_revision_id.in_(revision_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+        if revision_ids
+        else []
+    )
+    approval_by_revision_id = {
+        approval.scope_revision_id: approval
+        for approval in approvals
+        if approval.scope_revision_id is not None
+    }
     return [
         _scope_revision_response(
             revision,
             include_commands=(
-                principal is not None
-                and principal.member_id == revision.owner_member_id
-                and principal.team_slot_id == revision.owner_slot_id
-                and item.owner_slot_id == revision.owner_slot_id
+                principal is None
+                or (
+                    principal.member_id == revision.owner_member_id
+                    and principal.team_slot_id == revision.owner_slot_id
+                    and item.owner_slot_id == revision.owner_slot_id
+                )
             ),
+            approval=approval_by_revision_id.get(revision.id),
         )
         for revision in revisions
     ]

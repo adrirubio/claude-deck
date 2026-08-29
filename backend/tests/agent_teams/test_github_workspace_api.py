@@ -676,7 +676,9 @@ async def test_operator_lists_and_cancels_continuation_without_secret_projection
     assert unauthenticated.json()["detail"] == "operator_token_required"
     assert listed.status_code == 200
     assert len(listed.json()) == 1
-    assert listed.json()[0]["allowed_commands"] == []
+    assert listed.json()[0]["allowed_commands"] == revision.allowed_commands
+    assert listed.json()[0]["approval_request"]["id"] == approval.id
+    assert listed.json()[0]["approval_request"]["leader_member_id"] == approval.leader_member_id
     assert "expected_lease_token_hash" not in listed.text
     assert "lease-secret" not in listed.text
     assert cancelled.status_code == 200
@@ -736,6 +738,7 @@ async def test_work_item_feed_bulk_projects_normalized_continuation_authority(
     assert projected["active_scope_status"] is None
     assert projected["pending_approval_request_id"] == approval.id
     assert projected["pending_approval_kind"] == "continuation"
+    assert projected["pending_approval_status"] == "pending"
     assert projected["revision_failed_head_count"] == 0
     assert projected["revision_failed_head_budget"] == revision.max_failed_heads
     assert projected["continuation_block_code"] == "approval_pending"
@@ -747,6 +750,7 @@ async def test_work_item_feed_bulk_projects_normalized_continuation_authority(
 
     approval.status = "approved"
     revision.status = "active"
+    revision.approved_at = datetime.utcnow()
     item.active_scope_revision = revision.revision
     item.dispatch_status = "dispatched"
     item.escalation_reason = None
@@ -762,8 +766,10 @@ async def test_work_item_feed_bulk_projects_normalized_continuation_authority(
     assert active_item["active_scope_status"] == "active"
     assert active_item["pending_approval_request_id"] is None
     assert active_item["pending_approval_kind"] is None
+    assert active_item["pending_approval_status"] is None
     assert active_item["revision_failed_head_count"] == 0
     assert active_item["revision_failed_head_budget"] == revision.max_failed_heads
+    assert active_item["revision_approved_at"] is not None
     assert active_item["continuation_block_code"] is None
 
     abandoned = await client.post(
