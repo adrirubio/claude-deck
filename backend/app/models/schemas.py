@@ -1932,11 +1932,27 @@ class GithubScopeRevisionResponse(BaseModel):
     approved_at: Optional[datetime] = None
     delivered_at: Optional[datetime] = None
     acknowledged_at: Optional[datetime] = None
+    last_delivery_attempt_at: Optional[datetime] = None
+    delivery_attempt_count: int
+    last_ack_nudge_at: Optional[datetime] = None
     result_summary: Optional[str] = None
     evidence: Optional[Dict[str, Any]] = None
     completed_at: Optional[datetime] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
+
+
+class GithubContinuationRequestResponse(BaseModel):
+    approval: "GithubApprovalRequestResponse"
+    revision: GithubScopeRevisionResponse
+
+
+class MailContinuationDecisionRequest(BaseModel):
+    approval_request_id: int
+    work_item_id: int
+    dispatch_nonce: str = Field(min_length=1)
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1)
 
 
 class GithubApprovalRequestResponse(BaseModel):

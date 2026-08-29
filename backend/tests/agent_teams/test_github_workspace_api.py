@@ -20,6 +20,7 @@ from app.models.database import (
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
+    MailMessage,
     MailTeamMember,
     TeamGithubScope,
 )
@@ -432,6 +433,67 @@ async def test_continuation_proposal_guard_rejects_database_current_non_escalate
     assert (
         await db.scalar(select(func.count()).select_from(GithubApprovalRequest))
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_operator_lists_and_cancels_continuation_without_secret_projection(
+    client, db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    revision, approval, _created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **_continuation_proposal_kwargs(item, owner_slot, owner),
+        )
+    )
+    root = MailMessage(
+        kind="context_request",
+        sender_member_id=approval.owner_member_id,
+        recipient_member_id=approval.leader_member_id,
+        subject="Continuation",
+        body_markdown=revision.summary,
+        payload=github_approval_service.continuation_request_payload(
+            approval,
+            revision,
+        ),
+        request_status="pending",
+        delivery_key=f"github-approval:{approval.id}:request",
+    )
+    db.add(root)
+    await db.flush()
+    approval.request_message_id = root.id
+    await db.commit()
+
+    unauthenticated = await client.get(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions"
+    )
+    listed = await client.get(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions",
+        headers=OPERATOR_HEADERS,
+    )
+    cancelled = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
+        f"{approval.id}/cancel",
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["detail"] == "operator_token_required"
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+    assert "expected_lease_token_hash" not in listed.text
+    assert "lease-secret" not in listed.text
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "superseded"
+    await db.refresh(revision)
+    await db.refresh(root)
+    assert revision.status == "superseded"
+    assert root.request_status == "superseded"
 
 
 async def _credential_context(db, tmp_path):

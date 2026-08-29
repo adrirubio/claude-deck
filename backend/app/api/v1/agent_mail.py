@@ -27,6 +27,7 @@ from app.models.schemas import (
     MailAgentRegisterRequest,
     MailAgentRegisterResponse,
     MailApprovalRequestCreate,
+    MailContinuationDecisionRequest,
     MailInboxResponse,
     MailDecisionRequest,
     MailMemberResponse,
@@ -304,6 +305,89 @@ async def decide_work_item(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await agent_mail_service._message_response(db, message, for_member_id=None)
+
+
+@router.post("/continuation-decisions", response_model=MailMessageResponse)
+async def decide_work_item_continuation(
+    request: MailContinuationDecisionRequest,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, request.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    if item.dispatch_nonce != request.dispatch_nonce:
+        raise HTTPException(status_code=409, detail="stale_nonce")
+    try:
+        approval, revision, _decided = (
+            await github_approval_service.decide_continuation(
+                db,
+                item,
+                authenticated_leader_member_id=session.member_id,
+                decision=request.decision,
+                reason=request.reason,
+                request_id=request.approval_request_id,
+            )
+        )
+        delivery_key = f"github-approval:{approval.id}:decision"
+        if approval.decision_message_id is not None:
+            linked = await db.get(MailMessage, approval.decision_message_id)
+            if linked is None or not (
+                github_approval_service.matches_linked_continuation_decision_message(
+                    approval,
+                    revision,
+                    linked,
+                    delivery_key=delivery_key,
+                )
+            ):
+                raise GithubApprovalError("approval_decision_link_mismatch")
+            message = await agent_mail_service._message_response(
+                db,
+                linked,
+                for_member_id=None,
+            )
+        else:
+            message = await agent_mail_service.send_authoritative_decision(
+                db,
+                MailMessageCreate(
+                    kind="answer",
+                    sender_member_id=session.member_id,
+                    thread_root_id=approval.request_message_id,
+                    body_markdown=request.reason,
+                    payload=github_approval_service.continuation_decision_payload(
+                        approval,
+                        revision,
+                    ),
+                    decision=request.decision,
+                ),
+                authenticated_sender_member_id=session.member_id,
+                approval_round=approval.approval_round,
+                delivery_key=delivery_key,
+            )
+            link_result = await db.execute(
+                update(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.id == approval.id,
+                    GithubApprovalRequest.status == request.decision,
+                    GithubApprovalRequest.decision_message_id.is_(None),
+                )
+                .values(decision_message_id=message.id)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            await db.refresh(approval)
+            if link_result.rowcount != 1 and approval.decision_message_id != message.id:
+                raise GithubApprovalError("approval_decision_link_mismatch")
+        await agent_mail_service.auto_nudge_members(db, {approval.owner_member_id})
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailDeliveryIntegrityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return message
 
 
 @router.get("/messages", response_model=list[MailMessageResponse])

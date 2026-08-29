@@ -144,3 +144,15 @@ async def require_operator(
         x_deck_operator_token.encode("utf-8"), expected.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="operator_token_invalid")
+
+
+async def require_mail_session_or_operator(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    x_deck_operator_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[MailAgentSession]:
+    """Authenticate either one agent session or the configured operator."""
+    if x_deck_session_token:
+        return await mail_session(x_deck_session_token, db)
+    await require_operator(x_deck_operator_token)
+    return None

@@ -11,12 +11,13 @@ import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import (
     mail_session,
+    require_mail_session_or_operator,
     require_operator,
     require_session_slot,
     resolve_request_pane_detailed,
@@ -26,9 +27,12 @@ from app.database import get_db
 from app.models.database import (
     AgentTeamSlot,
     AgentPaneBinding,
+    GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
+    MailMessage,
     TeamGithubScope,
 )
 from app.models.schemas import (
@@ -45,6 +49,10 @@ from app.models.schemas import (
     AgentTeamSlotReorderRequest,
     AgentTeamSlotUpdate,
     DispatchStatusReport,
+    GithubApprovalRequestResponse,
+    GithubContinuationProposalCreate,
+    GithubContinuationRequestResponse,
+    GithubScopeRevisionResponse,
     GithubWorkItemAbandonRequest,
     GithubWorkItemContinuationResponse,
     GithubWorkItemListResponse,
@@ -58,11 +66,21 @@ from app.models.schemas import (
     GithubWorkspaceForceReleaseResponse,
     GithubWorkspaceListResponse,
     GithubWorkspaceResponse,
+    MailMessageCreate,
     TeamGithubScopeCreate,
     TeamGithubContinuationPolicyUpdate,
     TeamGithubScopeListResponse,
     TeamGithubScopeResponse,
     TeamGithubScopeUpdate,
+)
+from app.services.agent_mail_service import (
+    MailAuthorityError,
+    MailDeliveryIntegrityError,
+    agent_mail_service,
+)
+from app.services.github_approval_service import (
+    GithubApprovalError,
+    github_approval_service,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
@@ -290,6 +308,70 @@ def _work_item_response(
         workspace_path=workspace_path,
         created_at=item.created_at,
         updated_at=item.updated_at,
+    )
+
+
+def _approval_authority_response(
+    approval: GithubApprovalRequest,
+) -> GithubApprovalRequestResponse:
+    return GithubApprovalRequestResponse(
+        id=approval.id,
+        work_item_id=approval.work_item_id,
+        request_kind=approval.request_kind,
+        dispatch_nonce=approval.dispatch_nonce,
+        approval_round=approval.approval_round,
+        owner_member_id=approval.owner_member_id,
+        leader_member_id=approval.leader_member_id,
+        request_message_id=approval.request_message_id,
+        decision_message_id=approval.decision_message_id,
+        scope_revision_id=approval.scope_revision_id,
+        status=approval.status,
+        reason=approval.reason,
+        created_at=approval.created_at,
+        decided_at=approval.decided_at,
+        superseded_at=approval.superseded_at,
+    )
+
+
+def _scope_revision_response(
+    revision: GithubAttemptScopeRevision,
+) -> GithubScopeRevisionResponse:
+    return GithubScopeRevisionResponse(
+        id=revision.id,
+        work_item_id=revision.work_item_id,
+        dispatch_nonce=revision.dispatch_nonce,
+        revision=revision.revision,
+        owner_slot_id=revision.owner_slot_id,
+        owner_member_id=revision.owner_member_id,
+        phase=revision.phase,
+        execution_target=revision.execution_target,
+        summary=revision.summary,
+        allowed_paths=revision.allowed_paths,
+        allowed_actions=revision.allowed_actions,
+        allowed_commands=revision.allowed_commands,
+        prohibited_actions=revision.prohibited_actions,
+        tool_fallbacks=revision.tool_fallbacks,
+        baseline_head_sha=revision.baseline_head_sha,
+        baseline_tree_sha=revision.baseline_tree_sha,
+        originating_escalation_reason=revision.originating_escalation_reason,
+        expected_workspace_id=revision.expected_workspace_id,
+        max_failed_heads=revision.max_failed_heads,
+        failed_head_count=revision.failed_head_count,
+        last_failed_head_sha=revision.last_failed_head_sha,
+        status=revision.status,
+        approval_request_id=revision.approval_request_id,
+        delivery_message_id=revision.delivery_message_id,
+        approved_at=revision.approved_at,
+        delivered_at=revision.delivered_at,
+        acknowledged_at=revision.acknowledged_at,
+        last_delivery_attempt_at=revision.last_delivery_attempt_at,
+        delivery_attempt_count=revision.delivery_attempt_count,
+        last_ack_nudge_at=revision.last_ack_nudge_at,
+        result_summary=revision.result_summary,
+        evidence=revision.evidence,
+        completed_at=revision.completed_at,
+        expires_at=revision.expires_at,
+        created_at=revision.created_at,
     )
 
 
@@ -854,6 +936,172 @@ async def report_dispatch_status(
         "handoff_state": item.handoff_state,
         "pr_number": item.pr_number,
     }
+
+
+@router.post(
+    "/github-work-items/{item_id}/continuation-requests",
+    response_model=GithubContinuationRequestResponse,
+)
+async def request_github_work_item_continuation(
+    item_id: int,
+    request: GithubContinuationProposalCreate,
+    session: MailAgentSession | None = Depends(mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    if session is None:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    slot_id = require_session_slot(session)
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    try:
+        revision, approval, _created = (
+            await github_approval_service.create_continuation_request(
+                db,
+                item,
+                scope,
+                authenticated_owner_member_id=session.member_id,
+                authenticated_owner_slot_id=slot_id,
+                **request.model_dump(),
+            )
+        )
+        delivery_key = f"github-approval:{approval.id}:request"
+        if approval.request_message_id is not None:
+            linked = await db.get(MailMessage, approval.request_message_id)
+            if linked is None or not (
+                github_approval_service.matches_linked_continuation_request_message(
+                    approval,
+                    revision,
+                    linked,
+                    delivery_key=delivery_key,
+                )
+            ):
+                raise GithubApprovalError("approval_request_link_mismatch")
+        elif approval.status == "pending":
+            message = await agent_mail_service.send_message(
+                db,
+                MailMessageCreate(
+                    kind="context_request",
+                    sender_member_id=approval.owner_member_id,
+                    recipient_member_id=approval.leader_member_id,
+                    subject=(
+                        f"Continuation revision {revision.revision} for work item "
+                        f"{item.id}"
+                    ),
+                    body_markdown=revision.summary,
+                    payload=github_approval_service.continuation_request_payload(
+                        approval,
+                        revision,
+                    ),
+                ),
+                authenticated_sender_member_id=session.member_id,
+                delivery_key=delivery_key,
+                auto_nudge=False,
+            )
+            link_result = await db.execute(
+                update(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.id == approval.id,
+                    GithubApprovalRequest.status == "pending",
+                    GithubApprovalRequest.request_message_id.is_(None),
+                )
+                .values(request_message_id=message.id)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            await db.refresh(approval)
+            if link_result.rowcount != 1 and approval.request_message_id != message.id:
+                root = await db.get(MailMessage, message.id)
+                if root is not None and root.request_status == "pending":
+                    root.request_status = "superseded"
+                    await db.commit()
+                raise GithubApprovalError("request_not_pending")
+        if approval.status != "pending":
+            raise GithubApprovalError("request_not_pending")
+        await agent_mail_service.auto_nudge_members(db, {approval.leader_member_id})
+        return GithubContinuationRequestResponse(
+            approval=_approval_authority_response(approval),
+            revision=_scope_revision_response(revision),
+        )
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except GithubAppAuthError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from exc
+    except GithubClientResponseError as exc:
+        raise HTTPException(status_code=409, detail="github_snapshot_invalid") from exc
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailDeliveryIntegrityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+
+
+@router.get(
+    "/github-work-items/{item_id}/scope-revisions",
+    response_model=list[GithubScopeRevisionResponse],
+)
+async def list_github_work_item_scope_revisions(
+    item_id: int,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    if principal is not None and principal.team_preset_id != scope.preset_id:
+        raise HTTPException(status_code=403, detail="not_team_member")
+    revisions = (
+        await db.execute(
+            select(GithubAttemptScopeRevision)
+            .where(GithubAttemptScopeRevision.work_item_id == item.id)
+            .order_by(
+                GithubAttemptScopeRevision.dispatch_nonce,
+                GithubAttemptScopeRevision.revision,
+            )
+        )
+    ).scalars().all()
+    return [_scope_revision_response(revision) for revision in revisions]
+
+
+@router.post(
+    "/github-work-items/{item_id}/continuation-requests/{request_id}/cancel",
+    response_model=GithubApprovalRequestResponse,
+)
+async def cancel_github_work_item_continuation_request(
+    item_id: int,
+    request_id: int,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    approval = await db.get(GithubApprovalRequest, request_id)
+    if (
+        approval is None
+        or approval.work_item_id != item_id
+        or approval.request_kind != "continuation"
+    ):
+        raise HTTPException(status_code=404, detail="approval_request_not_found")
+    try:
+        if principal is None:
+            cancelled, _changed = await github_approval_service._cancel_authorized(
+                db,
+                approval,
+            )
+        else:
+            cancelled, _changed = await github_approval_service.cancel(
+                db,
+                approval,
+                requester_member_id=principal.member_id,
+            )
+        return _approval_authority_response(cancelled)
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(

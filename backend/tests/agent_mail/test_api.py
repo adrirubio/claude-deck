@@ -6,7 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.database import get_db
@@ -33,6 +33,7 @@ from app.services.github_approval_service import (
     GithubApprovalError,
     github_approval_service,
 )
+from app.services.github_client import GithubCommitSnapshot, github_client
 from app.services.github_dispatch_service import github_dispatch_service
 from app.utils import peer_process
 
@@ -165,6 +166,283 @@ async def _dispatch_approval_fixture(db):
     db.add(item)
     await db.commit()
     return item, members, tokens
+
+
+async def _continuation_approval_fixture(db):
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    scope.continuation_enabled = True
+    scope.github_auth_mode = "ambient"
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "retry_count_exhausted"
+    item.pr_number = 52
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path="/tmp/continuation-approval-workspace",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="lease-secret",
+    )
+    db.add(workspace)
+    await db.commit()
+    return item, scope, members, tokens, workspace
+
+
+def _stub_continuation_github(monkeypatch):
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "a" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="a" * 40, tree_sha="b" * 40)
+
+    async def get_recursive_tree(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+    monkeypatch.setattr(github_client, "get_recursive_tree", get_recursive_tree)
+
+
+def _continuation_request_body(item):
+    return {
+        "dispatch_nonce": item.dispatch_nonce,
+        "phase": "implementation",
+        "execution_target": "workspace",
+        "summary": "Apply the approved bounded fix",
+        "allowed_paths": ["src/example.py"],
+        "allowed_actions": [
+            "edit_production",
+            "push_pr_head",
+            "request_verification",
+        ],
+        "allowed_commands": ["pytest -q"],
+        "prohibited_actions": ["Do not edit CI"],
+        "max_failed_heads": 1,
+        "tool_fallbacks": {},
+        "lease_token": "lease-secret",
+    }
+
+
+@pytest.mark.asyncio
+async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, members, tokens, _workspace = await _continuation_approval_fixture(
+        db
+    )
+    _stub_continuation_github(monkeypatch)
+
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    replay = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+
+    assert proposed.status_code == 200
+    assert replay.status_code == 200
+    approval_id = proposed.json()["approval"]["id"]
+    revision_id = proposed.json()["revision"]["id"]
+    assert replay.json()["approval"]["id"] == approval_id
+    assert replay.json()["revision"]["id"] == revision_id
+    assert "lease-secret" not in proposed.text
+    assert "expected_lease_token_hash" not in proposed.text
+    approval = await db.get(GithubApprovalRequest, approval_id)
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    assert approval.request_message_id is not None
+    request_roots = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-approval:{approval_id}:request"
+            )
+        )
+    ).scalars().all()
+    assert len(request_roots) == 1
+
+    decision_body = {
+        "approval_request_id": approval_id,
+        "work_item_id": item.id,
+        "dispatch_nonce": item.dispatch_nonce,
+        "decision": "approved",
+        "reason": "Approved bounded continuation",
+    }
+    decided = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=decision_body,
+    )
+    decision_replay = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=decision_body,
+    )
+
+    assert decided.status_code == 200
+    assert decision_replay.status_code == 200
+    assert decision_replay.json()["id"] == decided.json()["id"]
+    await db.refresh(approval)
+    await db.refresh(revision)
+    await db.refresh(item)
+    assert approval.status == "approved"
+    assert revision.status == "approved"
+    assert revision.approved_at is not None
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert approval.decision_message_id == decided.json()["id"]
+    decisions = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-approval:{approval_id}:decision"
+            )
+        )
+    ).scalars().all()
+    assert len(decisions) == 1
+    assert decisions[0].sender_member_id == members[0].id
+    late_replay = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    assert late_replay.status_code == 409
+    assert late_replay.json()["detail"] == "request_not_pending"
+    assert len(
+        (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id
+                )
+            )
+        ).scalars().all()
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_continuation_decision_refuses_initial_plan_authority(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _members, tokens = await _dispatch_approval_fixture(db)
+    requested = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "initial plan",
+        },
+    )
+
+    refused = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "approval_request_id": requested.json()["id"],
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "wrong route",
+        },
+    )
+
+    assert refused.status_code == 404
+    assert refused.json()["detail"] == "approval_request_not_found"
+
+
+@pytest.mark.asyncio
+async def test_continuation_requester_cancels_without_operator_impersonation(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, _members, tokens, _workspace = (
+        await _continuation_approval_fixture(db)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    approval_id = proposed.json()["approval"]["id"]
+    revision_id = proposed.json()["revision"]["id"]
+
+    refused = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
+        f"{approval_id}/cancel",
+        headers={"X-Deck-Session-Token": tokens[0]},
+    )
+    cancelled = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
+        f"{approval_id}/cancel",
+        headers={"X-Deck-Session-Token": tokens[1]},
+    )
+    repeated = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests/"
+        f"{approval_id}/cancel",
+        headers={"X-Deck-Session-Token": tokens[1]},
+    )
+
+    assert refused.status_code == 403
+    assert refused.json()["detail"] == "not_approval_requester"
+    assert cancelled.status_code == 200
+    assert repeated.status_code == 200
+    assert cancelled.json()["status"] == "superseded"
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    approval = await db.get(GithubApprovalRequest, approval_id)
+    root = await db.get(MailMessage, approval.request_message_id)
+    assert revision.status == "superseded"
+    assert root.request_status == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_continuation_decision_guard_uses_database_current_escalation(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, _members, tokens, _workspace = (
+        await _continuation_approval_fixture(db)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    approval_id = proposed.json()["approval"]["id"]
+    revision_id = proposed.json()["revision"]["id"]
+    maker = async_sessionmaker(db.bind, expire_on_commit=False)
+    async with maker() as concurrent_db:
+        await concurrent_db.execute(
+            update(GithubWorkItem)
+            .where(GithubWorkItem.id == item.id)
+            .values(dispatch_status="ready_for_review")
+        )
+        await concurrent_db.commit()
+
+    refused = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "approval_request_id": approval_id,
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "must not commit",
+        },
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "stale_continuation_context"
+    approval = await db.get(GithubApprovalRequest, approval_id)
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    await db.refresh(approval)
+    await db.refresh(revision)
+    assert approval.status == "pending"
+    assert revision.status == "proposed"
 
 
 @pytest.mark.asyncio
