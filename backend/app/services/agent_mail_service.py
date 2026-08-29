@@ -1,6 +1,7 @@
 """Agent Mail: durable team members, ephemeral sessions, messages, delivery context."""
 
 import hashlib
+import json
 import logging
 import os
 import secrets
@@ -60,6 +61,10 @@ class MailAuthorityError(ValueError):
         self.detail = detail
         self.status_code = status_code
         super().__init__(detail)
+
+
+class MailDeliveryIntegrityError(RuntimeError):
+    pass
 
 
 class AgentMailService:
@@ -923,20 +928,52 @@ class AgentMailService:
         nudge_prompt: str = INBOX_CHECK_PROMPT,
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
+        delivery_key: Optional[str] = None,
         commit: bool = True,
     ) -> MailMessageResponse:
         if request.decision is not None:
             raise MailAuthorityError("use_decisions_route", status_code=409)
-        message, recipients = await self._create_message_row(
-            db,
-            request,
-            sender_actor_id=sender_actor_id,
-            authenticated_sender_member_id=authenticated_sender_member_id,
-        )
+        created = True
+        if delivery_key is None:
+            message, recipients = await self._create_message_row(
+                db,
+                request,
+                sender_actor_id=sender_actor_id,
+                authenticated_sender_member_id=authenticated_sender_member_id,
+            )
+        else:
+            try:
+                async with db.begin_nested():
+                    message, recipients = await self._create_message_row(
+                        db,
+                        request,
+                        sender_actor_id=sender_actor_id,
+                        authenticated_sender_member_id=authenticated_sender_member_id,
+                        delivery_key=delivery_key,
+                    )
+            except IntegrityError:
+                created = False
+                message = (
+                    await db.execute(
+                        select(MailMessage).where(
+                            MailMessage.delivery_key == delivery_key
+                        )
+                    )
+                ).scalar_one_or_none()
+                if message is None or not self._same_delivery(
+                    message,
+                    request,
+                    sender_actor_id=sender_actor_id,
+                ):
+                    raise MailDeliveryIntegrityError(
+                        f"delivery key {delivery_key!r} conflicts with different mail"
+                    )
+                recipients = await self.recipient_ids_for_message(db, message.id)
         if commit:
-            await db.commit()
-            await db.refresh(message)
-            if auto_nudge:
+            if created:
+                await db.commit()
+                await db.refresh(message)
+            if created and auto_nudge:
                 await self.auto_nudge_members(
                     db,
                     recipients,
@@ -945,6 +982,48 @@ class AgentMailService:
                 )
         return await self._message_response(db, message, for_member_id=None)
 
+    @staticmethod
+    def _canonical_delivery_bytes(payload: dict) -> bytes:
+        return json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+    def _same_delivery(
+        self,
+        message: MailMessage,
+        request: MailMessageCreate,
+        *,
+        sender_actor_id: int | None,
+    ) -> bool:
+        expected = {
+            "body_markdown": request.body_markdown,
+            "decision": request.decision,
+            "kind": request.kind,
+            "payload": request.payload or None,
+            "recipient_member_id": request.recipient_member_id,
+            "sender_actor_id": sender_actor_id,
+            "sender_member_id": request.sender_member_id,
+            "subject": request.subject,
+            "thread_root_id": request.thread_root_id,
+        }
+        actual = {
+            "body_markdown": message.body_markdown,
+            "decision": message.decision,
+            "kind": message.kind,
+            "payload": message.payload or None,
+            "recipient_member_id": message.recipient_member_id,
+            "sender_actor_id": message.sender_actor_id,
+            "sender_member_id": message.sender_member_id,
+            "subject": message.subject,
+            "thread_root_id": message.thread_root_id,
+        }
+        return self._canonical_delivery_bytes(actual) == self._canonical_delivery_bytes(
+            expected
+        )
+
     async def _create_message_row(
         self,
         db: AsyncSession,
@@ -952,6 +1031,7 @@ class AgentMailService:
         *,
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
+        delivery_key: Optional[str] = None,
     ) -> tuple[MailMessage, set[int]]:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
@@ -1004,6 +1084,7 @@ class AgentMailService:
                 linked_item.approval_round_count if linked_item is not None else None
             ),
             decision=request.decision,
+            delivery_key=delivery_key,
         )
         db.add(message)
         await db.flush()
@@ -1136,6 +1217,7 @@ class AgentMailService:
         payload: dict | None = None,
         auto_nudge: bool = True,
         sender_actor_id: int | None = None,
+        delivery_key: str | None = None,
     ) -> MailMessageResponse:
         return await self.send_message(
             db,
@@ -1147,6 +1229,7 @@ class AgentMailService:
             ),
             auto_nudge=auto_nudge,
             sender_actor_id=sender_actor_id,
+            delivery_key=delivery_key,
         )
 
     async def send_direct_message(
@@ -1161,6 +1244,7 @@ class AgentMailService:
         bypass_nudge_cooldown: bool = False,
         nudge_prompt: str = INBOX_CHECK_PROMPT,
         sender_actor_id: int | None = None,
+        delivery_key: str | None = None,
     ) -> MailMessageResponse:
         return await self.send_message(
             db,
@@ -1175,6 +1259,7 @@ class AgentMailService:
             bypass_nudge_cooldown=bypass_nudge_cooldown,
             nudge_prompt=nudge_prompt,
             sender_actor_id=sender_actor_id,
+            delivery_key=delivery_key,
         )
 
     async def _sender_identity(
