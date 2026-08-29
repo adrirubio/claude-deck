@@ -63,8 +63,10 @@ With autonomy and continuation still off:
 
 1. Verify preset, scope, issue, work item, PR, owner slot, Leader slot, nonce, branch, and
    workspace acquisition from fresh API/DB reads.
-2. Verify exactly one connected session for the Specialist owner slot.
-3. Verify exactly one connected session for the distinct Leader slot.
+2. Verify exactly one observed tmux pane and at least one fresh authenticated MCP registration
+   for the Specialist owner slot.
+3. Verify exactly one observed tmux pane and at least one fresh authenticated MCP registration
+   for the distinct Leader slot. Ignore the auxiliary hook row when counting physical agents.
 4. Verify no duplicate Tizonia sessions are registered to either slot.
 5. Verify finite continuation caps are the reviewed values.
 6. Verify PR #875's current head and baseline restoration target are recorded.

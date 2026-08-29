@@ -21,6 +21,8 @@ done
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 69; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 69; }
 
+MCP_SESSION_FRESHNESS_SECONDS=3600
+
 get_json() {
   curl --silent --show-error --fail --request GET \
     --header 'Accept: application/json' "$1"
@@ -61,19 +63,62 @@ leader_slot_count=$(jq 'length' <<<"$leader_slots")
 [[ $leader_slot_count -eq 1 ]] || { echo "expected exactly one enabled Leader slot" >&2; exit 1; }
 leader_slot_id=$(jq -r '.[0].id' <<<"$leader_slots")
 
-connected_session_count() {
+fresh_mcp_session_count() {
   local slot_id=$1
-  jq --argjson preset "$preset_id" --argjson slot "$slot_id" '
+  local now_epoch
+  now_epoch=$(date -u +%s)
+  jq \
+    --argjson preset "$preset_id" \
+    --argjson slot "$slot_id" \
+    --argjson now "$now_epoch" \
+    --argjson freshness "$MCP_SESSION_FRESHNESS_SECONDS" '
+    def session_epoch:
+      if type == "string" and length > 0 then
+        (sub("\\.[0-9]+$"; "") + "Z" | fromdateiso8601?)
+      else
+        null
+      end;
     [.members[].sessions[]?
-      | select(.team_preset_id == $preset and .team_slot_id == $slot and .mailbox_status == "connected")]
+      | select(
+          .team_preset_id == $preset
+          and .team_slot_id == $slot
+          and .source == "mcp"
+          and .mailbox_status == "connected"
+        )
+      | (.last_seen_at | session_epoch) as $seen
+      | select(
+          $seen != null
+          and $seen <= $now
+          and $seen >= ($now - $freshness)
+        )]
     | length
   ' <<<"$team"
 }
 
-owner_sessions=$(connected_session_count "$owner_slot_id")
-leader_sessions=$(connected_session_count "$leader_slot_id")
-[[ $owner_sessions -eq 1 ]] || { echo "owner slot must have exactly one connected session" >&2; exit 1; }
-[[ $leader_sessions -eq 1 ]] || { echo "Leader slot must have exactly one connected session" >&2; exit 1; }
+observed_pane_count() {
+  local slot_id=$1
+  jq --argjson preset "$preset_id" --argjson slot "$slot_id" '
+    [.members[].sessions[]?
+      | select(
+          .team_preset_id == $preset
+          and .team_slot_id == $slot
+          and .source == "observed"
+          and .mailbox_status == "observed"
+          and (.tmux_target // "") != ""
+        )]
+    | unique_by(.tmux_target)
+    | length
+  ' <<<"$team"
+}
+
+owner_mcp_sessions=$(fresh_mcp_session_count "$owner_slot_id")
+leader_mcp_sessions=$(fresh_mcp_session_count "$leader_slot_id")
+owner_observed_panes=$(observed_pane_count "$owner_slot_id")
+leader_observed_panes=$(observed_pane_count "$leader_slot_id")
+[[ $owner_mcp_sessions -ge 1 ]] || { echo "owner slot has no fresh authenticated MCP session" >&2; exit 1; }
+[[ $leader_mcp_sessions -ge 1 ]] || { echo "Leader slot has no fresh authenticated MCP session" >&2; exit 1; }
+[[ $owner_observed_panes -eq 1 ]] || { echo "owner slot must have exactly one observed tmux pane" >&2; exit 1; }
+[[ $leader_observed_panes -eq 1 ]] || { echo "Leader slot must have exactly one observed tmux pane" >&2; exit 1; }
 
 jq -n \
   --arg deck_status "$(jq -r '.status' <<<"$health")" \
@@ -88,8 +133,10 @@ jq -n \
   --argjson active_revision "$(jq '.active_scope_revision' <<<"$item")" \
   --argjson owner_slot_id "$owner_slot_id" \
   --argjson leader_slot_id "$leader_slot_id" \
-  --argjson owner_sessions "$owner_sessions" \
-  --argjson leader_sessions "$leader_sessions" \
+  --argjson owner_mcp_sessions "$owner_mcp_sessions" \
+  --argjson leader_mcp_sessions "$leader_mcp_sessions" \
+  --argjson owner_observed_panes "$owner_observed_panes" \
+  --argjson leader_observed_panes "$leader_observed_panes" \
   --arg pending_approval "$(jq -r '.pending_approval_request_id // "none"' <<<"$item")" \
   --arg continuation_block "$(jq -r '.continuation_block_code // "none"' <<<"$item")" \
   --arg retry_block "$(jq -r '.retry_block_code // "none"' <<<"$item")" \
@@ -126,7 +173,15 @@ jq -n \
       retry_block: $retry_block
     },
     sessions: {
-      owner: {slot_id: $owner_slot_id, connected: $owner_sessions},
-      leader: {slot_id: $leader_slot_id, connected: $leader_sessions}
+      owner: {
+        slot_id: $owner_slot_id,
+        authenticated_mcp: $owner_mcp_sessions,
+        observed_panes: $owner_observed_panes
+      },
+      leader: {
+        slot_id: $leader_slot_id,
+        authenticated_mcp: $leader_mcp_sessions,
+        observed_panes: $leader_observed_panes
+      }
     }
   }'
