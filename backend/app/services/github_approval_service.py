@@ -107,6 +107,8 @@ class GithubApprovalService:
         summary: str,
         plan_metadata: dict | None = None,
     ) -> tuple[GithubApprovalRequest, bool]:
+        if not summary.strip():
+            raise GithubApprovalError("approval_summary_required", status_code=400)
         if item.dispatch_nonce is None:
             raise GithubApprovalError("dispatch_nonce_missing", status_code=409)
         if item.approval_round_count < 1:

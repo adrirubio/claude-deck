@@ -22,8 +22,10 @@ from app.models.database import (
 from app.models.schemas import (
     AgentMailInstallStatus,
     AgentMailSnippets,
+    GithubApprovalRequestResponse,
     MailAgentRegisterRequest,
     MailAgentRegisterResponse,
+    MailApprovalRequestCreate,
     MailInboxResponse,
     MailDecisionRequest,
     MailMemberResponse,
@@ -36,10 +38,34 @@ from app.models.schemas import (
 from app.services import agent_mail_install_service
 from app.services.agent_mail_service import MailAuthorityError, agent_mail_service
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_approval_service import (
+    GithubApprovalError,
+    github_approval_service,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _approval_response(request) -> GithubApprovalRequestResponse:
+    return GithubApprovalRequestResponse(
+        id=request.id,
+        work_item_id=request.work_item_id,
+        request_kind=request.request_kind,
+        dispatch_nonce=request.dispatch_nonce,
+        approval_round=request.approval_round,
+        owner_member_id=request.owner_member_id,
+        leader_member_id=request.leader_member_id,
+        request_message_id=request.request_message_id,
+        decision_message_id=request.decision_message_id,
+        scope_revision_id=request.scope_revision_id,
+        status=request.status,
+        reason=request.reason,
+        created_at=request.created_at,
+        decided_at=request.decided_at,
+        superseded_at=request.superseded_at,
+    )
 
 
 @router.get("/team", response_model=TeamListResponse)
@@ -96,6 +122,65 @@ async def send_message(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/approval-requests",
+    response_model=GithubApprovalRequestResponse,
+)
+async def request_work_item_approval(
+    request: MailApprovalRequestCreate,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, request.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    if item.dispatch_nonce != request.dispatch_nonce:
+        raise HTTPException(status_code=409, detail="stale_nonce")
+    try:
+        approval, _created = await github_approval_service.create_initial_request(
+            db,
+            item,
+            authenticated_owner_member_id=session.member_id,
+            summary=request.summary,
+            plan_metadata=request.plan_metadata,
+        )
+        if approval.request_message_id is None:
+            message = await agent_mail_service.send_message(
+                db,
+                MailMessageCreate(
+                    kind="context_request",
+                    sender_member_id=approval.owner_member_id,
+                    recipient_member_id=approval.leader_member_id,
+                    subject=f"Approval request for work item {item.id}",
+                    body_markdown=request.summary.strip(),
+                    payload={
+                        "approval_request_id": approval.id,
+                        "approval_round": approval.approval_round,
+                        "dispatch_nonce": approval.dispatch_nonce,
+                        "plan_metadata": request.plan_metadata,
+                        "request_kind": approval.request_kind,
+                        "summary": request.summary.strip(),
+                        "work_item_id": approval.work_item_id,
+                    },
+                ),
+                authenticated_sender_member_id=session.member_id,
+                delivery_key=f"github-approval:{approval.id}:request",
+                auto_nudge=False,
+            )
+            approval.request_message_id = message.id
+            await db.commit()
+            await db.refresh(approval)
+        await agent_mail_service.auto_nudge_members(
+            db,
+            {approval.leader_member_id},
+        )
+        return _approval_response(approval)
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post("/decisions", response_model=MailMessageResponse)

@@ -19,6 +19,7 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
+from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_approval_service import (
     GithubApprovalError,
@@ -247,6 +248,123 @@ async def test_normalized_initial_request_derives_current_owner_and_leader(db):
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "not_item_owner"
+    assert (await db.execute(select(GithubApprovalRequest))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_initial_approval_route_commits_authority_then_links_mail(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    observed_linkage = []
+
+    async def observe_nudge(nudge_db, member_ids, **_kwargs):
+        approval = (
+            await nudge_db.execute(select(GithubApprovalRequest))
+        ).scalar_one()
+        observed_linkage.append((approval.request_message_id, member_ids))
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", observe_nudge)
+    response = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "Change one bounded file and run its focused test.",
+            "plan_metadata": {"paths": ["src/example.py"]},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request_kind"] == "initial_plan"
+    assert payload["owner_member_id"] == members[1].id
+    assert payload["leader_member_id"] == members[0].id
+    assert payload["request_message_id"] is not None
+    assert observed_linkage == [
+        (payload["request_message_id"], {members[0].id})
+    ]
+    message = await db.get(MailMessage, payload["request_message_id"])
+    assert message.delivery_key == f"github-approval:{payload['id']}:request"
+    assert message.payload["approval_request_id"] == payload["id"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_initial_approval_route_repairs_unlinked_durable_mail(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+    approval, _created = await github_approval_service.create_initial_request(
+        db,
+        item,
+        authenticated_owner_member_id=members[1].id,
+        summary="bounded",
+    )
+    mail = await agent_mail_service.send_message(
+        db,
+        MailMessageCreate(
+            kind="context_request",
+            sender_member_id=members[1].id,
+            recipient_member_id=members[0].id,
+            subject=f"Approval request for work item {item.id}",
+            body_markdown="bounded",
+            payload={
+                "approval_request_id": approval.id,
+                "approval_round": approval.approval_round,
+                "dispatch_nonce": approval.dispatch_nonce,
+                "plan_metadata": {},
+                "request_kind": approval.request_kind,
+                "summary": "bounded",
+                "work_item_id": approval.work_item_id,
+            },
+        ),
+        authenticated_sender_member_id=members[1].id,
+        delivery_key=f"github-approval:{approval.id}:request",
+        auto_nudge=False,
+    )
+    assert approval.request_message_id is None
+
+    response = await client.post(
+        "/api/v1/agent-mail/approval-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "summary": "bounded",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["request_message_id"] == mail.id
+    assert len((await db.execute(select(MailMessage))).scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_context_request_creates_no_approval_authority(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, members, tokens = await _dispatch_approval_fixture(db)
+
+    response = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json={
+            "kind": "context_request",
+            "sender_member_id": members[1].id,
+            "recipient_member_id": members[0].id,
+            "body_markdown": "Question only",
+            "payload": {
+                "work_item_id": item.id,
+                "dispatch_nonce": item.dispatch_nonce,
+            },
+        },
+    )
+
+    assert response.status_code == 200
     assert (await db.execute(select(GithubApprovalRequest))).scalars().all() == []
 
 

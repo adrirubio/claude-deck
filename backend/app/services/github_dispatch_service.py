@@ -797,9 +797,9 @@ class GithubDispatchService:
             else:
                 lines.append(f"- Team leader / approver: {leader.display_name}")
                 lines.append(
-                    "- Leader Agent Mail member id is not registered yet; call "
-                    "`deck_list_team` and select the connected team member whose "
-                    f"team slot/name is `{leader.display_name}` before requesting acknowledgment."
+                    "- The Leader Agent Mail member is not registered yet. The approval "
+                    "request route derives the current designated Leader server-side; "
+                    "do not guess or supply a member id."
                 )
         if labels:
             lines.append(f"- Labels: {', '.join(labels)}")
@@ -1083,26 +1083,25 @@ class GithubDispatchService:
             "reply is not approval, and self-approval is refused. After approval, "
             "call `deck_report_dispatch_status(status=\"ack_received\")` before "
             f"{before}. A rejection opens the next round automatically; revise the "
-            "plan and call `deck_request_context` again with the same work item and "
-            "nonce. Do not report `revision_requested`."
+            "plan and call `deck_request_work_item_approval` again with the same work "
+            "item and nonce. Do not report `revision_requested`."
         )
         if leader_member is not None:
             return (
-                "- Send the team leader a short plan via Agent Mail using "
-                f"`deck_request_context(to_member_id={leader_member.id}, "
-                f"work_item_id={item.id if item is not None else '<id>'}, "
-                f"dispatch_nonce=\"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
+                "- Submit the short plan for Leader approval using "
+                f"`deck_request_work_item_approval(work_item_id="
+                f"{item.id if item is not None else '<id>'}, dispatch_nonce=\""
+                f"{item.dispatch_nonce if item is not None else '<nonce>'}\", ...)`, "
                 f"then wait for the explicit decision before {before}." + report
             )
         if leader is not None:
             return (
-                "- Send the team leader a short plan via Agent Mail and wait for "
-                f"an explicit decision before {before}; first call `deck_list_team` to "
-                f"resolve the Agent Mail member id for `{leader.display_name}`."
+                "- Submit the short plan with `deck_request_work_item_approval` and wait "
+                f"for an explicit decision before {before}."
                 + report
             )
         return (
-            "- Send the team leader a short plan via Agent Mail and wait for "
+            "- Submit the short plan with `deck_request_work_item_approval` and wait for "
             f"an explicit decision before {before}; if no leader is registered, report blocked."
             + report
         )

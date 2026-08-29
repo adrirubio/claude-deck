@@ -1853,9 +1853,9 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert "https://github.com/o/r/issues/833" in prompt
     assert "Acceptance criteria and verification steps." in prompt
     assert "deck_report_dispatch_status" in prompt
-    assert "deck_request_context" in prompt
+    assert "deck_request_work_item_approval" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
-    assert f"to_member_id={leader_member.id}" in prompt
+    assert f"work_item_id={item.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
     assert "wait for the explicit decision before starting implementation" in prompt
@@ -1878,7 +1878,7 @@ async def test_dispatch_pending_passes_issue_specific_owner_brief(db, monkeypatc
     assert "Issue: #833 — Add agent docs" in message.body_markdown
     assert "Acceptance criteria and verification steps." in message.body_markdown
     assert f"Agent Mail member_id={leader_member.id}" in message.body_markdown
-    assert f"to_member_id={leader_member.id}" in message.body_markdown
+    assert f"work_item_id={item.id}" in message.body_markdown
     assert f"slot_id={architect.id}" not in message.body_markdown
     assert "wait for the explicit decision before starting implementation" in message.body_markdown
     assert item.brief_message_id == message.id
@@ -2013,7 +2013,7 @@ async def test_design_dispatch_brief_uses_design_pipeline_language(db):
     assert "do not rely on CI or auto-merge" in prompt
     assert "human-reviewed PR" in prompt
     assert f"Agent Mail member_id={leader_member.id}" in prompt
-    assert f"to_member_id={leader_member.id}" in prompt
+    assert f"work_item_id={item.id}" in prompt
     assert f"slot_id={architect.id}" not in prompt
 
 
@@ -2053,9 +2053,9 @@ async def test_dispatch_brief_uses_discovery_when_leader_member_missing(db):
 
     prompt = launched["request"].slot_prompt_overrides[backend.id]
     assert "Team leader / approver: Architect" in prompt
-    assert "Leader Agent Mail member id is not registered yet" in prompt
-    assert "deck_list_team" in prompt
-    assert "resolve the Agent Mail member id for `Architect`" in prompt
+    assert "Leader Agent Mail member is not registered yet" in prompt
+    assert "derives the current designated Leader server-side" in prompt
+    assert "do not guess or supply a member id" in prompt
     assert f"slot_id={architect.id}" not in prompt
     assert f"to_member_id={architect.id}" not in prompt
 
