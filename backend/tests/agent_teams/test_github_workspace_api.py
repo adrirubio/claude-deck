@@ -37,6 +37,7 @@ from app.services.github_approval_service import (
 )
 from app.services.github_client import (
     GithubCommitSnapshot,
+    GithubClientResponseError,
     GithubTreeEntry,
     github_client,
 )
@@ -1304,6 +1305,218 @@ async def test_restarted_owner_reads_the_same_active_continuation_scope(
     assert first.json()["active_revision"]["allowed_paths"] == ["src/example.py"]
     assert first.json()["continuation_block_code"] is None
     assert first.json()["lease_token"] == "lease-secret"
+
+
+async def _active_completion_context(db, tmp_path, *, allowed_actions=None):
+    scope, item, workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    item.dispatch_status = "dispatched"
+    item.escalation_reason = None
+    item.active_scope_revision = 1
+    item.attempt_phase = "implementation"
+    revision = GithubAttemptScopeRevision(
+        work_item_id=item.id,
+        dispatch_nonce=item.dispatch_nonce,
+        revision=1,
+        owner_slot_id=owner_slot.id,
+        owner_member_id=owner.id,
+        phase="implementation",
+        execution_target="workspace",
+        summary="Complete one bounded path",
+        allowed_paths=["src/example.py"],
+        allowed_actions=(
+            allowed_actions
+            if allowed_actions is not None
+            else ["edit_production", "push_pr_head", "request_verification"]
+        ),
+        allowed_commands=["pytest -q"],
+        prohibited_actions=["Do not edit CI"],
+        tool_fallbacks={},
+        baseline_head_sha="a" * 40,
+        baseline_tree_sha="b" * 40,
+        originating_escalation_reason="retry_count_exhausted",
+        expected_workspace_id=workspace.id,
+        expected_lease_token_hash=github_approval_service.lease_token_hash(
+            workspace.lease_token
+        ),
+        max_failed_heads=1,
+        status="active",
+        approved_at=datetime.utcnow(),
+        delivered_at=datetime.utcnow(),
+        acknowledged_at=datetime.utcnow(),
+    )
+    session = MailAgentSession(
+        member_id=owner.id,
+        provider="codex-cli",
+        source="mcp",
+        session_key="mcp:completion",
+        cwd="/tmp/r",
+        team_preset_id=scope.preset_id,
+        team_slot_id=owner_slot.id,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
+        bound_pane_pid=6000,
+        bound_pane_proc_start="completion",
+    )
+    db.add_all([revision, session])
+    await db.commit()
+    return scope, item, workspace, revision, session
+
+
+def _stub_completion_github(monkeypatch, *, extra_current=()):
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="e" * 40)
+
+    baseline = [
+        GithubTreeEntry(
+            path="src",
+            mode="040000",
+            object_type="tree",
+            sha="1" * 40,
+        ),
+        GithubTreeEntry(
+            path="src/example.py",
+            mode="100644",
+            object_type="blob",
+            sha="c" * 40,
+        ),
+    ]
+    current = [
+        GithubTreeEntry(
+            path="src",
+            mode="040000",
+            object_type="tree",
+            sha="2" * 40,
+        ),
+        GithubTreeEntry(
+            path="src/example.py",
+            mode="100755",
+            object_type="blob",
+            sha="c" * 40,
+        ),
+        *extra_current,
+    ]
+    if extra_current:
+        baseline.extend(
+            GithubTreeEntry(
+                path=entry.path,
+                mode="100644",
+                object_type=entry.object_type,
+                sha=entry.sha,
+            )
+            for entry in extra_current
+        )
+
+    async def get_recursive_tree(_owner, _repo, tree_sha, **_kwargs):
+        return baseline if tree_sha == "b" * 40 else current
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+    monkeypatch.setattr(github_client, "get_recursive_tree", get_recursive_tree)
+
+
+def _completion_report(item):
+    return {
+        "work_item_id": item.id,
+        "status": "continuation_completed",
+        "lease_token": "lease-secret",
+        "revision": 1,
+        "dispatch_nonce": item.dispatch_nonce,
+        "current_head_sha": "d" * 40,
+        "summary": "Completed one bounded path",
+        "evidence": {"checks": ["pytest -q"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_continuation_completion_submits_exact_tree_diff_for_verification(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    _stub_completion_github(monkeypatch)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    submitted = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_completion_report(item),
+    )
+    replay = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_completion_report(item),
+    )
+
+    assert submitted.status_code == 200
+    assert replay.status_code == 200, replay.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "verifying"
+    assert revision.status == "submitted"
+    assert revision.completed_at is None
+    assert revision.result_summary == "Completed one bounded path"
+    assert revision.evidence == {"checks": ["pytest -q"]}
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "detail"),
+    [
+        ("missing_actions", "continuation_actions_missing"),
+        ("out_of_scope_mode", "continuation_paths_out_of_scope"),
+        ("inconclusive", "continuation_diff_inconclusive"),
+    ],
+)
+async def test_continuation_completion_fails_closed_before_mutation(
+    client, db, tmp_path, monkeypatch, failure, detail
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    actions = ["edit_production"] if failure == "missing_actions" else None
+    _scope, item, _workspace, revision, session = await _active_completion_context(
+        db,
+        tmp_path,
+        allowed_actions=actions,
+    )
+    extra = (
+        GithubTreeEntry(
+            path="scripts/run.sh",
+            mode="100755",
+            object_type="blob",
+            sha="9" * 40,
+        ),
+    ) if failure == "out_of_scope_mode" else ()
+    _stub_completion_github(monkeypatch, extra_current=extra)
+    if failure == "inconclusive":
+        async def inconclusive(*_args, **_kwargs):
+            raise GithubClientResponseError("truncated")
+
+        monkeypatch.setattr(github_client, "get_recursive_tree", inconclusive)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_completion_report(item),
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == detail
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert revision.status == "active"
 
 
 @pytest.mark.asyncio

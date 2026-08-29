@@ -1000,6 +1000,12 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                 "ack_approval_round": None,
                 "ack_enforcement_epoch": None,
                 "dispatch_head_ref": None,
+                "pr_number": None,
+                "attempt_phase": None,
+                "active_scope_revision": None,
+                "diagnostic_retry_count": None,
+                "continuation_nudged_at": None,
+                "continuation_activated_at": None,
             }
         ],
     }
@@ -1431,7 +1437,7 @@ async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_d
 
 def test_every_accepted_status_has_an_authorization_rule():
     accepted = _statuses_the_route_accepts()
-    assert len(accepted) == 10, f"branch count changed: {sorted(accepted)}"
+    assert len(accepted) == 11, f"branch count changed: {sorted(accepted)}"
     missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
     assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
 

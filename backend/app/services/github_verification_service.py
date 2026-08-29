@@ -2,24 +2,34 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import subprocess
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
     AgentTeamSlot,
+    GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     TeamGithubScope,
 )
 from app.services.github_app_auth_service import github_app_auth_service
-from app.services.github_client import GithubClient, github_client
+from app.services.agent_mail_service import agent_mail_service
+from app.services.github_approval_service import github_approval_service
+from app.services.github_client import (
+    GithubClient,
+    GithubClientResponseError,
+    GithubTreeEntry,
+    github_client,
+)
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_workspace_service import github_workspace_service
 
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _STATUS_SUCCESS_STATES = {"success"}
@@ -48,9 +58,198 @@ _PR_OPENED_RECOVERABLE_ESCALATIONS = frozenset(
 logger = logging.getLogger(__name__)
 
 
+class ContinuationCompletionError(ValueError):
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
 class GithubVerificationService:
     def __init__(self) -> None:
         self._pr_ready_locks: dict[int, asyncio.Lock] = {}
+
+    @staticmethod
+    def _changed_tree_paths(
+        baseline: list[GithubTreeEntry],
+        current: list[GithubTreeEntry],
+    ) -> set[str]:
+        def snapshot(entries: list[GithubTreeEntry]) -> dict[str, tuple[str, str, str]]:
+            return {
+                entry.path: (entry.mode, entry.object_type, entry.sha)
+                for entry in entries
+                if entry.object_type != "tree"
+            }
+
+        baseline_paths = snapshot(baseline)
+        current_paths = snapshot(current)
+        return {
+            path
+            for path in baseline_paths.keys() | current_paths.keys()
+            if baseline_paths.get(path) != current_paths.get(path)
+        }
+
+    async def submit_continuation_completion(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        *,
+        authenticated_owner_member_id: int,
+        authenticated_owner_slot_id: int,
+        revision_number: int,
+        dispatch_nonce: str,
+        current_head_sha: str,
+        result_summary: str,
+        evidence: dict,
+        lease_token: str,
+        client: GithubClient | None = None,
+    ) -> bool:
+        client = client or github_client
+        await db.refresh(item)
+        if item.scope_id != scope.id:
+            raise ContinuationCompletionError("scope_mismatch")
+        if item.dispatch_nonce != dispatch_nonce:
+            raise ContinuationCompletionError("stale_nonce")
+        if item.owner_slot_id != authenticated_owner_slot_id:
+            raise ContinuationCompletionError("not_item_owner")
+        owner, _leader = await agent_mail_service._dispatch_participants(db, item)
+        if owner is None or owner.id != authenticated_owner_member_id:
+            raise ContinuationCompletionError("not_item_owner")
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == revision_number,
+                )
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise ContinuationCompletionError("scope_revision_not_found")
+        await db.refresh(revision)
+        if (
+            item.active_scope_revision != revision.revision
+            or revision.owner_slot_id != authenticated_owner_slot_id
+            or revision.owner_member_id != authenticated_owner_member_id
+            or revision.phase != "implementation"
+        ):
+            raise ContinuationCompletionError("stale_scope_revision")
+        if revision.status not in {"active", "submitted"}:
+            raise ContinuationCompletionError("scope_revision_not_active")
+        required_actions = {"push_pr_head", "request_verification"}
+        if not required_actions.issubset(set(revision.allowed_actions)):
+            raise ContinuationCompletionError("continuation_actions_missing")
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if (
+            workspace is None
+            or workspace.id != revision.expected_workspace_id
+            or workspace.lease_token is None
+        ):
+            raise ContinuationCompletionError("workspace_lease_changed")
+        if not hmac.compare_digest(workspace.lease_token, lease_token):
+            raise ContinuationCompletionError("lease_token_mismatch")
+        if not github_approval_service.lease_token_matches(
+            lease_token,
+            revision.expected_lease_token_hash,
+        ):
+            raise ContinuationCompletionError("workspace_lease_changed")
+        if item.pr_number is None:
+            raise ContinuationCompletionError("continuation_pr_required")
+        token = await github_approval_service.github_read_token(scope)
+        pull = await client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        head = pull.get("head")
+        github_head_sha = head.get("sha") if isinstance(head, dict) else None
+        if pull.get("state") != "open":
+            raise ContinuationCompletionError("continuation_pr_not_open")
+        if github_head_sha != current_head_sha:
+            raise ContinuationCompletionError("continuation_head_changed")
+        current_snapshot = await client.get_commit_snapshot(
+            scope.repo_owner,
+            scope.repo_name,
+            current_head_sha,
+            token=token,
+        )
+        try:
+            baseline_tree = await client.get_recursive_tree(
+                scope.repo_owner,
+                scope.repo_name,
+                revision.baseline_tree_sha,
+                token=token,
+            )
+            current_tree = await client.get_recursive_tree(
+                scope.repo_owner,
+                scope.repo_name,
+                current_snapshot.tree_sha,
+                token=token,
+            )
+        except GithubClientResponseError as exc:
+            raise ContinuationCompletionError(
+                "continuation_diff_inconclusive"
+            ) from exc
+        changed_paths = self._changed_tree_paths(baseline_tree, current_tree)
+        if not changed_paths.issubset(set(revision.allowed_paths)):
+            raise ContinuationCompletionError("continuation_paths_out_of_scope")
+        if (
+            revision.status == "submitted"
+            and item.dispatch_status == "verifying"
+            and revision.result_summary == result_summary
+            and revision.evidence == evidence
+        ):
+            return False
+        if revision.status != "active" or item.dispatch_status != "dispatched":
+            raise ContinuationCompletionError("stale_continuation_context")
+
+        now = datetime.utcnow()
+        item_result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                GithubWorkItem.active_scope_revision == revision.revision,
+                GithubWorkItem.pr_number.is_not(None),
+                exists(
+                    select(GithubWorkspace.id).where(
+                        GithubWorkspace.id == workspace.id,
+                        GithubWorkspace.leased_item_id == item.id,
+                        GithubWorkspace.lease_token == lease_token,
+                    )
+                ),
+            )
+            .values(dispatch_status="verifying", updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        revision_result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "active",
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.owner_slot_id
+                == authenticated_owner_slot_id,
+                GithubAttemptScopeRevision.owner_member_id
+                == authenticated_owner_member_id,
+                GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+            )
+            .values(
+                status="submitted",
+                result_summary=result_summary,
+                evidence=evidence,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if item_result.rowcount != 1 or revision_result.rowcount != 1:
+            await db.rollback()
+            raise ContinuationCompletionError("stale_continuation_context")
+        await db.commit()
+        await db.refresh(item)
+        return True
 
     async def normalize_base_ref(
         self,
