@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -36,6 +36,7 @@ from app.services.github_app_auth_service import (
 )
 from app.services.github_approval_service import (
     CONTINUABLE_ESCALATIONS,
+    GithubApprovalError,
     github_approval_service,
 )
 from app.services.github_client import github_client
@@ -2262,6 +2263,51 @@ class GithubDispatchService:
             owner = await self._owner_member(db, item)
             if owner is None or owner.team_slot_id != item.owner_slot_id:
                 continue
+            transport = (
+                await db.execute(
+                    select(GithubApprovalRequest, GithubAttemptScopeRevision)
+                    .join(
+                        GithubAttemptScopeRevision,
+                        GithubAttemptScopeRevision.id
+                        == GithubApprovalRequest.scope_revision_id,
+                    )
+                    .where(
+                        GithubApprovalRequest.work_item_id == item.id,
+                        GithubApprovalRequest.request_kind == "continuation",
+                        or_(
+                            GithubApprovalRequest.status.in_(
+                                ("pending", "approved")
+                            ),
+                            (
+                                (GithubApprovalRequest.status == "rejected")
+                                & GithubApprovalRequest.decision_message_id.is_(None)
+                            ),
+                        ),
+                    )
+                    .order_by(GithubApprovalRequest.id.desc())
+                    .limit(1)
+                )
+            ).one_or_none()
+            if transport is not None:
+                request, revision = transport
+                try:
+                    _repair_action = (
+                        await github_approval_service.repair_continuation_transport(
+                            db,
+                            item,
+                            request,
+                            revision,
+                            nudge_cooldown=cooldown,
+                        )
+                    )
+                except GithubApprovalError:
+                    logger.exception(
+                        "Recovery monitor could not repair continuation transport "
+                        "for work item %s",
+                        item.id,
+                    )
+                    continue
+                continue
             sessions = await agent_mail_service.nudgeable_sessions_for_slot(
                 db,
                 item.owner_slot_id,
@@ -2273,8 +2319,6 @@ class GithubDispatchService:
                 and session.capability_token_hash is not None
             ]
             if not authenticated_sessions:
-                continue
-            if await github_approval_service.current_pending(db, item.id) is not None:
                 continue
             if (
                 item.continuation_nudged_at is not None

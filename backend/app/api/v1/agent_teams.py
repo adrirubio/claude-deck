@@ -1269,60 +1269,26 @@ async def request_github_work_item_continuation(
                 lease_token=request.lease_token,
             )
         )
-        delivery_key = f"github-approval:{approval.id}:request"
-        if approval.request_message_id is not None:
-            linked = await db.get(MailMessage, approval.request_message_id)
-            if linked is None or not (
-                github_approval_service.matches_linked_continuation_request_message(
+        async with github_approval_service.continuation_transport_lock(approval.id):
+            _root, linked = (
+                await github_approval_service.ensure_continuation_request_message(
+                    db,
+                    item,
                     approval,
                     revision,
-                    linked,
-                    delivery_key=delivery_key,
                 )
-            ):
-                raise GithubApprovalError("approval_request_link_mismatch")
-        elif approval.status == "pending":
-            message = await agent_mail_service.send_message(
-                db,
-                MailMessageCreate(
-                    kind="context_request",
-                    sender_member_id=approval.owner_member_id,
-                    recipient_member_id=approval.leader_member_id,
-                    subject=(
-                        f"Continuation revision {revision.revision} for work item "
-                        f"{item.id}"
-                    ),
-                    body_markdown=revision.summary,
-                    payload=github_approval_service.continuation_request_payload(
-                        approval,
-                        revision,
-                    ),
-                ),
-                authenticated_sender_member_id=session.member_id,
-                delivery_key=delivery_key,
-                auto_nudge=False,
             )
-            link_result = await db.execute(
-                update(GithubApprovalRequest)
-                .where(
-                    GithubApprovalRequest.id == approval.id,
-                    GithubApprovalRequest.status == "pending",
-                    GithubApprovalRequest.request_message_id.is_(None),
-                )
-                .values(request_message_id=message.id)
-                .execution_options(synchronize_session=False)
-            )
-            await db.commit()
-            await db.refresh(approval)
-            if link_result.rowcount != 1 and approval.request_message_id != message.id:
-                root = await db.get(MailMessage, message.id)
-                if root is not None and root.request_status == "pending":
-                    root.request_status = "superseded"
-                    await db.commit()
+            if approval.status != "pending":
                 raise GithubApprovalError("request_not_pending")
-        if approval.status != "pending":
-            raise GithubApprovalError("request_not_pending")
-        await agent_mail_service.auto_nudge_members(db, {approval.leader_member_id})
+            if linked:
+                await github_approval_service.nudge_pending_continuation_leader(
+                    db,
+                    approval,
+                    revision,
+                    cooldown=timedelta(
+                        seconds=settings.github_nudge_grace_seconds
+                    ),
+                )
         return GithubContinuationRequestResponse(
             approval=_approval_authority_response(approval),
             revision=_scope_revision_response(revision),
