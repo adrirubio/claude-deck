@@ -13,6 +13,9 @@ import type {
   AgentTeamSlotUpdate,
   GithubWorkItem,
   GithubWorkItemListResponse,
+  GithubApprovalRequest,
+  GithubScopeRevision,
+  TeamGithubContinuationPolicyUpdate,
   TeamGithubScope,
   TeamGithubScopeInput,
   TeamGithubScopeListResponse,
@@ -154,6 +157,43 @@ export function deleteTeamGithubScope(scopeId: number): Promise<Record<string, n
   return apiClient<Record<string, never>>(`agent-teams/github-scopes/${scopeId}`, {
     method: 'DELETE',
   })
+}
+
+function operatorHeaders(operatorToken: string): HeadersInit {
+  return { 'X-Deck-Operator-Token': operatorToken }
+}
+
+export function updateTeamGithubContinuationPolicy(
+  scopeId: number,
+  input: TeamGithubContinuationPolicyUpdate,
+  operatorToken: string
+): Promise<TeamGithubScope> {
+  return apiClient<TeamGithubScope>(`agent-teams/github-scopes/${scopeId}/continuation-policy`, {
+    method: 'PATCH',
+    headers: operatorHeaders(operatorToken),
+    body: JSON.stringify(input),
+  })
+}
+
+export function fetchGithubScopeRevisions(
+  workItemId: number,
+  operatorToken: string
+): Promise<GithubScopeRevision[]> {
+  return apiClient<GithubScopeRevision[]>(
+    `agent-teams/github-work-items/${workItemId}/scope-revisions`,
+    { headers: operatorHeaders(operatorToken) }
+  )
+}
+
+export function cancelGithubContinuationRequest(
+  workItemId: number,
+  requestId: number,
+  operatorToken: string
+): Promise<GithubApprovalRequest> {
+  return apiClient<GithubApprovalRequest>(
+    `agent-teams/github-work-items/${workItemId}/continuation-requests/${requestId}/cancel`,
+    { method: 'POST', headers: operatorHeaders(operatorToken) }
+  )
 }
 
 export function fetchGithubWorkItems(presetId: number, limit = 50): Promise<GithubWorkItemListResponse> {

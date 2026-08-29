@@ -51,15 +51,18 @@ import type {
   AgentTeamPreset,
   AgentTeamSlot,
   AgentTeamSlotInput,
+  GithubScopeRevision,
   GithubWorkItem,
   SlotLaunchOptions,
   TeamGithubScope,
+  TeamGithubContinuationPolicyUpdate,
   TeamGithubScopeInput,
   TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
+  cancelGithubContinuationRequest,
   createTeamGithubScope,
   createAgentTeamFromBridge,
   createAgentTeamFromMail,
@@ -70,6 +73,7 @@ import {
   duplicateAgentTeamPreset,
   fetchAgentTeamPresets,
   fetchGithubWorkItems,
+  fetchGithubScopeRevisions,
   fetchTeamGithubScopes,
   launchAgentTeam,
   planAgentTeamLaunch,
@@ -77,6 +81,7 @@ import {
   reorderAgentTeamSlots,
   updateAgentTeamPreset,
   updateAgentTeamSlot,
+  updateTeamGithubContinuationPolicy,
   updateTeamGithubScope,
 } from './api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
@@ -984,6 +989,43 @@ export function AgentTeamsPage() {
     }
   }
 
+  const updateGithubContinuationPolicy = async (
+    scopeId: number,
+    input: TeamGithubContinuationPolicyUpdate,
+    operatorToken: string
+  ) => {
+    if (!selectedPreset) return
+    try {
+      await updateTeamGithubContinuationPolicy(scopeId, input, operatorToken)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Attempt recovery policy saved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save recovery policy')
+      throw error
+    }
+  }
+
+  const loadGithubScopeRevisions = async (
+    item: GithubWorkItem,
+    operatorToken: string
+  ): Promise<GithubScopeRevision[]> => fetchGithubScopeRevisions(item.id, operatorToken)
+
+  const cancelGithubContinuation = async (
+    item: GithubWorkItem,
+    requestId: number,
+    operatorToken: string
+  ) => {
+    if (!selectedPreset) return
+    try {
+      await cancelGithubContinuationRequest(item.id, requestId, operatorToken)
+      await loadAutonomy(selectedPreset.id)
+      toast.success(`Continuation request #${requestId} cancelled`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to cancel continuation')
+      throw error
+    }
+  }
+
   const removeGithubScope = async (scope: TeamGithubScope) => {
     if (!selectedPreset) return
     const confirmed = window.confirm(`Remove watched repo ${scope.repo_owner}/${scope.repo_name}?`)
@@ -1354,8 +1396,11 @@ export function AgentTeamsPage() {
                     onToggleAutonomy={toggleAutonomy}
                     onCreateScope={createGithubScope}
                     onUpdateScope={updateGithubScope}
+                    onUpdateContinuationPolicy={updateGithubContinuationPolicy}
                     onDeleteScope={removeGithubScope}
                     onRetryWorkItem={retryWorkItem}
+                    onFetchScopeRevisions={loadGithubScopeRevisions}
+                    onCancelContinuationRequest={cancelGithubContinuation}
                   />
                 </TabsContent>
               </Tabs>
