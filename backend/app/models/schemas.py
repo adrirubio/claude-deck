@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ConfigFile(BaseModel):
@@ -2244,6 +2244,12 @@ class TeamGithubScopeResponse(BaseModel):
     build_dir_template: Optional[str] = None
     build_command_hint: Optional[str] = None
     max_build_parallelism: int
+    continuation_enabled: bool
+    max_continuation_revisions: int
+    max_continuation_failed_heads: int
+    max_failed_heads_per_revision: int
+    max_scope_paths: int
+    max_scope_commands: int
     enabled: bool
     last_polled_at: Optional[datetime] = None
     created_at: datetime
@@ -2252,6 +2258,24 @@ class TeamGithubScopeResponse(BaseModel):
 
 class TeamGithubScopeListResponse(BaseModel):
     scopes: List[TeamGithubScopeResponse] = Field(default_factory=list)
+
+
+class TeamGithubContinuationPolicyUpdate(BaseModel):
+    continuation_enabled: bool
+    max_continuation_revisions: int = Field(ge=1)
+    max_continuation_failed_heads: int = Field(ge=1)
+    max_failed_heads_per_revision: int = Field(ge=1)
+    max_scope_paths: int = Field(ge=1)
+    max_scope_commands: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_failed_head_caps(self):
+        if self.max_failed_heads_per_revision > self.max_continuation_failed_heads:
+            raise ValueError(
+                "max_failed_heads_per_revision cannot exceed "
+                "max_continuation_failed_heads"
+            )
+        return self
 
 
 class GithubWorkItemRetryRequest(BaseModel):
@@ -2354,6 +2378,12 @@ class GithubWorkItemResponse(BaseModel):
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None
+    active_scope_revision: int
+    attempt_phase: str
+    diagnostic_retry_count: int
+    diagnostic_last_verified_sha: Optional[str] = None
+    continuation_nudged_at: Optional[datetime] = None
+    continuation_activated_at: Optional[datetime] = None
     workspace_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime

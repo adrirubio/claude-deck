@@ -214,6 +214,83 @@ async def test_compat_migrations_add_pr1_approval_columns_idempotently():
 
 
 @pytest.mark.asyncio
+async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "CREATE TABLE team_github_scopes ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "repo_owner VARCHAR NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE github_work_items ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "pr_number INTEGER, retry_count INTEGER NOT NULL, "
+                    "dispatch_nonce VARCHAR, status_note VARCHAR)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO team_github_scopes (id, repo_owner) "
+                    "VALUES (1, 'owner')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO github_work_items "
+                    "(id, pr_number, retry_count, dispatch_nonce, status_note) "
+                    "VALUES (1, 42, 7, '0123456789abcdef', 'preserve me')"
+                )
+            )
+            await conn.commit()
+
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+
+            scope = (
+                await conn.execute(
+                    text(
+                        "SELECT continuation_enabled, max_continuation_revisions, "
+                        "max_continuation_failed_heads, max_failed_heads_per_revision, "
+                        "max_scope_paths, max_scope_commands "
+                        "FROM team_github_scopes WHERE id = 1"
+                    )
+                )
+            ).one()
+            item = (
+                await conn.execute(
+                    text(
+                        "SELECT active_scope_revision, attempt_phase, "
+                        "diagnostic_retry_count, diagnostic_last_verified_sha, "
+                        "continuation_nudged_at, continuation_activated_at, "
+                        "pr_number, retry_count, dispatch_nonce, status_note "
+                        "FROM github_work_items WHERE id = 1"
+                    )
+                )
+            ).one()
+
+            assert tuple(scope) == (0, 6, 8, 2, 32, 16)
+            assert tuple(item) == (
+                0,
+                "implementation",
+                0,
+                None,
+                None,
+                None,
+                42,
+                7,
+                "0123456789abcdef",
+                "preserve me",
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_pr1_approval_reconciliation_is_idempotent_and_chooses_no_ambiguous_root():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

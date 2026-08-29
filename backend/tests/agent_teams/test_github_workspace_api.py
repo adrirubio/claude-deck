@@ -77,6 +77,56 @@ async def _scope(db, repo_path: Path):
     return preset, scope
 
 
+@pytest.mark.asyncio
+async def test_continuation_policy_is_operator_only_and_updates_all_fields(
+    client, db, tmp_path
+):
+    _, scope = await _scope(db, tmp_path / "policy-repo")
+    payload = {
+        "continuation_enabled": True,
+        "max_continuation_revisions": 4,
+        "max_continuation_failed_heads": 6,
+        "max_failed_heads_per_revision": 2,
+        "max_scope_paths": 24,
+        "max_scope_commands": 12,
+    }
+
+    refused = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/continuation-policy",
+        json=payload,
+    )
+    updated = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/continuation-policy",
+        headers=OPERATOR_HEADERS,
+        json=payload,
+    )
+
+    assert refused.status_code == 401
+    assert refused.json()["detail"] == "operator_token_required"
+    assert updated.status_code == 200
+    assert {
+        key: updated.json()[key]
+        for key in payload
+    } == payload
+    await db.refresh(scope)
+    assert scope.continuation_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_generic_scope_patch_cannot_enable_continuation(client, db, tmp_path):
+    _, scope = await _scope(db, tmp_path / "generic-policy-repo")
+
+    response = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}",
+        json={"continuation_enabled": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["continuation_enabled"] is False
+    await db.refresh(scope)
+    assert scope.continuation_enabled is False
+
+
 class ApiGitRunner:
     def __init__(self, repo_path: Path):
         self.repo_path = repo_path

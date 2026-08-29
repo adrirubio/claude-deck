@@ -1,6 +1,7 @@
 """Schema tests for the autonomous GitHub dispatch tables."""
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -14,6 +15,7 @@ from app.models.database import (
     GithubWorkItem,
     GithubWorkspace,
 )
+from app.models.schemas import TeamGithubContinuationPolicyUpdate
 
 
 @pytest_asyncio.fixture
@@ -53,7 +55,37 @@ async def test_team_github_scope_round_trips(db):
     assert scope.build_dir_template == "build"
     assert scope.build_command_hint is None
     assert scope.max_build_parallelism == 4
+    assert scope.continuation_enabled is False
+    assert scope.max_continuation_revisions == 6
+    assert scope.max_continuation_failed_heads == 8
+    assert scope.max_failed_heads_per_revision == 2
+    assert scope.max_scope_paths == 32
+    assert scope.max_scope_commands == 16
     assert scope.enabled is True
+
+
+def test_continuation_policy_rejects_invalid_caps():
+    with pytest.raises(ValidationError):
+        TeamGithubContinuationPolicyUpdate(
+            continuation_enabled=True,
+            max_continuation_revisions=6,
+            max_continuation_failed_heads=2,
+            max_failed_heads_per_revision=3,
+            max_scope_paths=32,
+            max_scope_commands=16,
+        )
+    for field in ("max_scope_paths", "max_scope_commands"):
+        values = {
+            "continuation_enabled": True,
+            "max_continuation_revisions": 6,
+            "max_continuation_failed_heads": 8,
+            "max_failed_heads_per_revision": 2,
+            "max_scope_paths": 32,
+            "max_scope_commands": 16,
+        }
+        values[field] = 0
+        with pytest.raises(ValidationError):
+            TeamGithubContinuationPolicyUpdate(**values)
 
 
 @pytest.mark.asyncio
@@ -161,6 +193,12 @@ async def test_github_work_item_defaults(db):
     assert item.handoff_state is None
     assert item.status_note is None
     assert item.auto_merged_at is None
+    assert item.active_scope_revision == 0
+    assert item.attempt_phase == "implementation"
+    assert item.diagnostic_retry_count == 0
+    assert item.diagnostic_last_verified_sha is None
+    assert item.continuation_nudged_at is None
+    assert item.continuation_activated_at is None
 
 
 @pytest.mark.asyncio
@@ -226,4 +264,20 @@ async def test_compat_migration_adds_new_columns_to_legacy_db():
     assert "build_dir_template" in scope_cols
     assert "build_command_hint" in scope_cols
     assert "max_build_parallelism" in scope_cols
+    assert {
+        "continuation_enabled",
+        "max_continuation_revisions",
+        "max_continuation_failed_heads",
+        "max_failed_heads_per_revision",
+        "max_scope_paths",
+        "max_scope_commands",
+    } <= scope_cols
+    assert {
+        "active_scope_revision",
+        "attempt_phase",
+        "diagnostic_retry_count",
+        "diagnostic_last_verified_sha",
+        "continuation_nudged_at",
+        "continuation_activated_at",
+    } <= work_item_cols
     await engine.dispose()

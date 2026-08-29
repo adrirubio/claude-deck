@@ -240,6 +240,20 @@ class TeamGithubScope(Base):
     max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     github_auth_mode: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
     github_app_installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    continuation_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    max_continuation_revisions: Mapped[int] = mapped_column(
+        Integer, default=6, nullable=False
+    )
+    max_continuation_failed_heads: Mapped[int] = mapped_column(
+        Integer, default=8, nullable=False
+    )
+    max_failed_heads_per_revision: Mapped[int] = mapped_column(
+        Integer, default=2, nullable=False
+    )
+    max_scope_paths: Mapped[int] = mapped_column(Integer, default=32, nullable=False)
+    max_scope_commands: Mapped[int] = mapped_column(Integer, default=16, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -298,6 +312,22 @@ class GithubWorkItem(Base):
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    active_scope_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempt_phase: Mapped[str] = mapped_column(
+        String, default="implementation", nullable=False
+    )
+    diagnostic_retry_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    diagnostic_last_verified_sha: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )
+    continuation_nudged_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    continuation_activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

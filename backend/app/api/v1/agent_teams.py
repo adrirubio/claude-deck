@@ -59,6 +59,7 @@ from app.models.schemas import (
     GithubWorkspaceListResponse,
     GithubWorkspaceResponse,
     TeamGithubScopeCreate,
+    TeamGithubContinuationPolicyUpdate,
     TeamGithubScopeListResponse,
     TeamGithubScopeResponse,
     TeamGithubScopeUpdate,
@@ -195,6 +196,12 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         build_dir_template=scope.build_dir_template,
         build_command_hint=scope.build_command_hint,
         max_build_parallelism=scope.max_build_parallelism,
+        continuation_enabled=scope.continuation_enabled,
+        max_continuation_revisions=scope.max_continuation_revisions,
+        max_continuation_failed_heads=scope.max_continuation_failed_heads,
+        max_failed_heads_per_revision=scope.max_failed_heads_per_revision,
+        max_scope_paths=scope.max_scope_paths,
+        max_scope_commands=scope.max_scope_commands,
         enabled=scope.enabled,
         last_polled_at=scope.last_polled_at,
         created_at=scope.created_at,
@@ -274,6 +281,12 @@ def _work_item_response(
         escalation_reason=item.escalation_reason,
         status_note=item.status_note,
         auto_merged_at=item.auto_merged_at,
+        active_scope_revision=item.active_scope_revision,
+        attempt_phase=item.attempt_phase,
+        diagnostic_retry_count=item.diagnostic_retry_count,
+        diagnostic_last_verified_sha=item.diagnostic_last_verified_sha,
+        continuation_nudged_at=item.continuation_nudged_at,
+        continuation_activated_at=item.continuation_activated_at,
         workspace_path=workspace_path,
         created_at=item.created_at,
         updated_at=item.updated_at,
@@ -1072,6 +1085,26 @@ async def update_github_scope(
     except ValueError as exc:
         raise _bad_request(exc) from exc
     await _sync_github_jobs(db)
+    return _scope_response(scope)
+
+
+@router.patch(
+    "/github-scopes/{scope_id}/continuation-policy",
+    response_model=TeamGithubScopeResponse,
+)
+async def update_github_scope_continuation_policy(
+    scope_id: int,
+    request: TeamGithubContinuationPolicyUpdate,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    for field, value in request.model_dump().items():
+        setattr(scope, field, value)
+    await db.commit()
+    await db.refresh(scope)
     return _scope_response(scope)
 
 
