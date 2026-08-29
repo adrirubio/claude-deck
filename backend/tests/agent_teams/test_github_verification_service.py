@@ -16,6 +16,7 @@ from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
     MailMessage,
@@ -165,6 +166,56 @@ async def _owner(db, scope):
     db.add(member)
     await db.flush()
     return slot, member
+
+
+async def _implementation_revision(
+    db,
+    scope,
+    item,
+    slot,
+    member,
+    *,
+    status="submitted",
+    max_failed_heads=2,
+    failed_head_count=0,
+    last_failed_head_sha=None,
+):
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=f"/tmp/r-ws-{item.id}",
+        leased_item_id=item.id,
+        lease_token=f"lease-{item.id}",
+        leased_at=datetime.utcnow(),
+    )
+    db.add(workspace)
+    await db.flush()
+    revision = GithubAttemptScopeRevision(
+        work_item_id=item.id,
+        dispatch_nonce=item.dispatch_nonce,
+        revision=item.active_scope_revision,
+        owner_slot_id=slot.id,
+        owner_member_id=member.id,
+        phase="implementation",
+        execution_target="workspace",
+        summary="Bounded implementation follow-up",
+        allowed_paths=["src/fix.py"],
+        allowed_actions=["push_pr_head", "request_verification"],
+        allowed_commands=["pytest -q"],
+        prohibited_actions=[],
+        tool_fallbacks={},
+        baseline_head_sha="base-head",
+        baseline_tree_sha="base-tree",
+        originating_escalation_reason="retry_count_exhausted",
+        expected_workspace_id=workspace.id,
+        expected_lease_token_hash="hash",
+        max_failed_heads=max_failed_heads,
+        failed_head_count=failed_head_count,
+        last_failed_head_sha=last_failed_head_sha,
+        status=status,
+    )
+    db.add(revision)
+    await db.commit()
+    return revision, workspace
 
 
 @pytest.mark.asyncio
@@ -1418,6 +1469,193 @@ async def test_verify_green_code_pr_marks_ready_for_review(db):
     assert len(messages) == 1
     assert "Code PR #5 is ready for human review" in messages[0].body_markdown
     assert "Auto-merge fell back" not in messages[0].body_markdown
+
+
+@pytest.mark.asyncio
+async def test_dispatched_implementation_continuation_waits_for_completion_report(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        status="active",
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert client.pull_calls == 0
+    assert item.dispatch_status == "dispatched"
+    assert revision.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_continuation_failures_use_revision_budget_and_count_each_head_once(db):
+    scope = await _scope(
+        db,
+        max_verification_retries=0,
+        max_continuation_failed_heads=8,
+    )
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+        retry_count=7,
+        last_verified_sha="sha",
+    )
+    revision, workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=2,
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.escalation_reason is None
+    assert item.retry_count == 8
+    assert item.last_verified_sha == "sha"
+    assert revision.status == "active"
+    assert revision.failed_head_count == 1
+    assert revision.last_failed_head_sha == "sha"
+    assert item.continuation_activated_at is not None
+
+    item.dispatch_status = "verifying"
+    revision.status = "submitted"
+    await db.commit()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 8
+    assert revision.status == "active"
+    assert revision.failed_head_count == 1
+    failure_messages = (
+        await db.execute(
+            select(MailMessage).where(MailMessage.subject == "GitHub checks failed")
+        )
+    ).scalars().all()
+    assert len(failure_messages) == 1
+
+    client.pull["head"]["sha"] = "sha-2"
+    item.dispatch_status = "verifying"
+    revision.status = "submitted"
+    await db.commit()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert item.retry_count == 9
+    assert item.last_verified_sha == "sha-2"
+    assert item.pr_number == 5
+    assert item.dispatch_nonce == "attempt-1"
+    assert revision.status == "exhausted"
+    assert revision.failed_head_count == 2
+    assert revision.last_failed_head_sha == "sha-2"
+    assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_continuation_attempt_budget_can_exhaust_before_revision_budget(db):
+    scope = await _scope(db, max_continuation_failed_heads=1)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=2,
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert revision.status == "exhausted"
+    assert revision.failed_head_count == 1
+
+
+@pytest.mark.asyncio
+async def test_green_continuation_completes_revision_before_review_promotion(db):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "success"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "ready_for_review"
+    assert item.last_verified_sha == "sha"
+    assert revision.status == "completed"
+    assert revision.completed_at is not None
 
 
 @pytest.mark.asyncio

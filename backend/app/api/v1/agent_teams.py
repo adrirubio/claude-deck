@@ -1008,7 +1008,17 @@ async def request_github_work_item_continuation(
                 scope,
                 authenticated_owner_member_id=session.member_id,
                 authenticated_owner_slot_id=slot_id,
-                **request.model_dump(),
+                dispatch_nonce=request.dispatch_nonce,
+                phase=request.phase,
+                execution_target=request.execution_target,
+                summary=request.summary,
+                allowed_paths=request.allowed_paths,
+                allowed_actions=request.allowed_actions,
+                allowed_commands=request.allowed_commands,
+                prohibited_actions=request.prohibited_actions,
+                max_failed_heads=request.max_failed_heads,
+                tool_fallbacks=request.tool_fallbacks,
+                lease_token=request.lease_token,
             )
         )
         delivery_key = f"github-approval:{approval.id}:request"
@@ -1553,8 +1563,12 @@ async def update_github_scope_continuation_policy(
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
-    for field, value in request.model_dump().items():
-        setattr(scope, field, value)
+    scope.continuation_enabled = request.continuation_enabled
+    scope.max_continuation_revisions = request.max_continuation_revisions
+    scope.max_continuation_failed_heads = request.max_continuation_failed_heads
+    scope.max_failed_heads_per_revision = request.max_failed_heads_per_revision
+    scope.max_scope_paths = request.max_scope_paths
+    scope.max_scope_commands = request.max_scope_commands
     await db.commit()
     await db.refresh(scope)
     return _scope_response(scope)

@@ -8,7 +8,7 @@ import subprocess
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -725,7 +725,24 @@ class GithubVerificationService:
         for item in items:
             try:
                 if item.dispatch_status in ("dispatched", "verifying"):
-                    await self._verify_item(db, scope, item, client)
+                    revision = await self._active_implementation_revision(db, item)
+                    if item.active_scope_revision > 0:
+                        if revision is None:
+                            logger.warning(
+                                "Skipping product verification for work item %s: "
+                                "active continuation revision is inconsistent",
+                                item.id,
+                            )
+                            continue
+                        if item.dispatch_status == "dispatched":
+                            continue
+                    await self._verify_item(
+                        db,
+                        scope,
+                        item,
+                        client,
+                        revision=revision,
+                    )
                 else:
                     await self._process_review_item(db, scope, item, client)
             except httpx.HTTPError as exc:
@@ -737,6 +754,34 @@ class GithubVerificationService:
                 )
                 item.updated_at = datetime.utcnow()
                 await db.commit()
+
+    async def _active_implementation_revision(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+    ) -> GithubAttemptScopeRevision | None:
+        if item.active_scope_revision == 0:
+            return None
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision)
+                .where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                    GithubAttemptScopeRevision.revision
+                    == item.active_scope_revision,
+                    GithubAttemptScopeRevision.phase == "implementation",
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if (
+            revision is None
+            or item.attempt_phase != "implementation"
+            or revision.status not in {"active", "submitted"}
+        ):
+            return None
+        return revision
 
     async def _preset_slots(
         self, db: AsyncSession, scope: TeamGithubScope
@@ -774,6 +819,8 @@ class GithubVerificationService:
         scope: TeamGithubScope,
         item: GithubWorkItem,
         client: GithubClient,
+        *,
+        revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
         if not await self._validate_polled_pull_identity(
@@ -783,16 +830,17 @@ class GithubVerificationService:
             client,
             pull,
             retry_status="dispatched",
+            revision=revision,
         ):
             return
         verdict = self._classify_pull(pull)
         if verdict is None:
             note = f"PR #{item.pr_number} returned a state Deck cannot classify."
-            await self._record_failed_verification_attempt(
+            await self._record_product_verification_failure(
                 db,
                 scope,
                 item,
-                None,
+                self._head_sha(pull) if revision is not None else None,
                 note,
                 subject="GitHub verification could not classify the PR",
                 body_markdown=note,
@@ -803,6 +851,7 @@ class GithubVerificationService:
                     "pull_state": pull.get("state"),
                 },
                 retry_status="dispatched",
+                revision=revision,
             )
             return
         if verdict == "merged":
@@ -826,9 +875,22 @@ class GithubVerificationService:
             head_sha or "",
         )
         if not checks:
-            if await self._process_combined_status(db, scope, item, client, pull):
+            if await self._process_combined_status(
+                db,
+                scope,
+                item,
+                client,
+                pull,
+                revision=revision,
+            ):
                 return
-            await self._handle_no_check_signal(db, item)
+            await self._handle_no_check_signal(
+                db,
+                scope,
+                item,
+                head_sha,
+                revision=revision,
+            )
             return
 
         pending = [
@@ -842,7 +904,7 @@ class GithubVerificationService:
             if check not in pending and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
         ]
         if failed:
-            await self._record_failed_verification_attempt(
+            await self._record_product_verification_failure(
                 db,
                 scope,
                 item,
@@ -859,6 +921,7 @@ class GithubVerificationService:
                     "pr_number": item.pr_number,
                 },
                 retry_status="dispatched",
+                revision=revision,
             )
             return
         if pending:
@@ -867,7 +930,15 @@ class GithubVerificationService:
             await db.commit()
             return
         if all(check.get("conclusion") in _SUCCESS_CONCLUSIONS for check in checks):
-            await self._promote_verified_item(db, scope, item, client, pull, head_sha)
+            await self._promote_verified_item(
+                db,
+                scope,
+                item,
+                client,
+                pull,
+                head_sha,
+                revision=revision,
+            )
 
     async def _process_review_item(
         self,
@@ -995,6 +1066,7 @@ class GithubVerificationService:
         pull: dict,
         *,
         retry_status: str,
+        revision: GithubAttemptScopeRevision | None = None,
     ) -> bool:
         try:
             if item.dispatch_base_ref is None:
@@ -1013,11 +1085,11 @@ class GithubVerificationService:
             )
         except ValueError as exc:
             note = f"PR #{item.pr_number} identity verification failed: {exc}"
-            await self._record_failed_verification_attempt(
+            await self._record_product_verification_failure(
                 db,
                 scope,
                 item,
-                None,
+                self._head_sha(pull) if revision is not None else None,
                 note,
                 subject="GitHub pull request identity verification failed",
                 body_markdown=note,
@@ -1027,6 +1099,7 @@ class GithubVerificationService:
                     "pr_number": item.pr_number,
                 },
                 retry_status=retry_status,
+                revision=revision,
             )
             return False
         return True
@@ -1094,6 +1167,8 @@ class GithubVerificationService:
         item: GithubWorkItem,
         client: GithubClient,
         pull: dict,
+        *,
+        revision: GithubAttemptScopeRevision | None = None,
     ) -> bool:
         head_sha = self._head_sha(pull)
         status = await client.get_combined_status_for_ref(
@@ -1106,11 +1181,19 @@ class GithubVerificationService:
             return False
         state = status.get("state")
         if state in _STATUS_SUCCESS_STATES:
-            await self._promote_verified_item(db, scope, item, client, pull, head_sha)
+            await self._promote_verified_item(
+                db,
+                scope,
+                item,
+                client,
+                pull,
+                head_sha,
+                revision=revision,
+            )
             return True
         if state in _STATUS_FAILURE_STATES:
             note = f"GitHub commit status failed: {state}"
-            await self._record_failed_verification_attempt(
+            await self._record_product_verification_failure(
                 db,
                 scope,
                 item,
@@ -1127,6 +1210,7 @@ class GithubVerificationService:
                     "pr_number": item.pr_number,
                 },
                 retry_status="dispatched",
+                revision=revision,
             )
             return True
         item.status_note = "GitHub commit statuses are still pending."
@@ -1137,7 +1221,11 @@ class GithubVerificationService:
     async def _handle_no_check_signal(
         self,
         db: AsyncSession,
+        scope: TeamGithubScope,
         item: GithubWorkItem,
+        head_sha: str | None,
+        *,
+        revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
         grace_started_at = item.updated_at or item.created_at
         grace_age = datetime.utcnow() - grace_started_at
@@ -1145,6 +1233,27 @@ class GithubVerificationService:
             item.status_note = "Waiting for GitHub check-runs or commit statuses to appear."
             item.updated_at = datetime.utcnow()
             await db.commit()
+            return
+        if revision is not None:
+            await self._record_product_verification_failure(
+                db,
+                scope,
+                item,
+                head_sha,
+                "No GitHub check-runs or commit statuses found for PR.",
+                subject="GitHub verification found no check signal",
+                body_markdown=(
+                    f"No GitHub check-runs or commit statuses appeared for issue "
+                    f"#{item.issue_number} / PR #{item.pr_number}."
+                ),
+                payload={
+                    "kind": "github_dispatch_no_check_signal",
+                    "work_item_id": item.id,
+                    "pr_number": item.pr_number,
+                },
+                retry_status="dispatched",
+                revision=revision,
+            )
             return
         await github_dispatch_service.escalate(
             db,
@@ -1162,6 +1271,8 @@ class GithubVerificationService:
         client: GithubClient,
         pull: dict,
         head_sha: str | None,
+        *,
+        revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
         if pull.get("draft") and pull.get("node_id"):
             await client.mark_pull_ready_for_review(str(pull["node_id"]))
@@ -1170,6 +1281,9 @@ class GithubVerificationService:
                 scope.repo_name,
                 int(item.pr_number),
             )
+        if revision is not None:
+            revision.status = "completed"
+            revision.completed_at = datetime.utcnow()
         item.last_verified_sha = head_sha
         item.dispatch_status = "ready_for_review"
         item.status_note = f"PR #{item.pr_number} is ready for review."
@@ -1250,6 +1364,116 @@ class GithubVerificationService:
             return item.status_note
         item.status_note = note
         return note
+
+    async def _record_product_verification_failure(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        head_sha: str | None,
+        note: str,
+        *,
+        subject: str,
+        body_markdown: str,
+        payload: dict,
+        retry_status: str,
+        revision: GithubAttemptScopeRevision | None,
+    ) -> None:
+        if revision is None:
+            await self._record_failed_verification_attempt(
+                db,
+                scope,
+                item,
+                head_sha,
+                note,
+                subject=subject,
+                body_markdown=body_markdown,
+                payload=payload,
+                retry_status=retry_status,
+            )
+            return
+
+        await db.refresh(item)
+        await db.refresh(revision)
+        if (
+            item.active_scope_revision != revision.revision
+            or item.dispatch_nonce != revision.dispatch_nonce
+            or item.attempt_phase != "implementation"
+            or revision.phase != "implementation"
+            or revision.status not in {"active", "submitted"}
+        ):
+            raise ContinuationCompletionError("stale_continuation_context")
+
+        same_head = (
+            revision.failed_head_count > 0
+            and revision.last_failed_head_sha == head_sha
+        )
+        if same_head:
+            if item.dispatch_status != retry_status or revision.status != "active":
+                now = datetime.utcnow()
+                item.dispatch_status = retry_status
+                item.continuation_activated_at = now
+                item.continuation_nudged_at = None
+                item.updated_at = now
+                revision.status = "active"
+                self._set_failure_note(item, note)
+                await db.commit()
+            return
+
+        total_failed_heads = int(
+            (
+                await db.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(GithubAttemptScopeRevision.failed_head_count),
+                            0,
+                        )
+                    ).where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == item.dispatch_nonce,
+                    )
+                )
+            ).scalar_one()
+        )
+        revision.failed_head_count += 1
+        revision.last_failed_head_sha = head_sha
+        item.retry_count += 1
+        item.last_verified_sha = head_sha
+        self._set_failure_note(item, note)
+        await github_dispatch_service.notify_owner(
+            db,
+            item,
+            subject=subject,
+            body_markdown=body_markdown,
+            payload={
+                **payload,
+                "retry_count": item.retry_count,
+                "head_sha": head_sha,
+                "scope_revision": revision.revision,
+                "revision_failed_head_count": revision.failed_head_count,
+            },
+        )
+        exhausted = (
+            revision.failed_head_count >= revision.max_failed_heads
+            or total_failed_heads + 1 >= scope.max_continuation_failed_heads
+        )
+        if exhausted:
+            revision.status = "exhausted"
+            await github_dispatch_service.escalate(
+                db,
+                item,
+                "continuation_budget_exhausted",
+                note,
+            )
+        else:
+            now = datetime.utcnow()
+            revision.status = "active"
+            item.dispatch_status = retry_status
+            item.continuation_activated_at = now
+            item.continuation_nudged_at = None
+            item.updated_at = now
+        await db.commit()
 
     async def _record_failed_verification_attempt(
         self,
