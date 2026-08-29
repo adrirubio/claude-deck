@@ -49,6 +49,7 @@ EXPECTED_ESCALATION_REASONS = frozenset(
         "leader_ack_timeout",
         "owner_idle_timeout",
         "retry_count_exhausted",
+        "continuation_budget_exhausted",
         "dispatch_label_removed",
         "abandoned_by_operator",
         "prepared_owner_unavailable",
@@ -459,6 +460,8 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
         if write.field == "dispatch_status" and write.form == "assignment_unknown"
     ]
     assert sorted(write.path.as_posix() for write in dynamic_dispatch) == [
+        "services/github_verification_service.py",
+        "services/github_verification_service.py",
         "services/github_verification_service.py",
         "services/github_verification_service.py",
     ]

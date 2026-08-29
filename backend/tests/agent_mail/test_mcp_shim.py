@@ -1,5 +1,6 @@
 """Standalone Agent Mail MCP shim behavior."""
 import json
+import inspect
 from io import StringIO
 from types import SimpleNamespace
 
@@ -490,6 +491,234 @@ def test_approve_work_item_sends_required_request_id(monkeypatch):
         },
     )
     assert result["message_id"] == 81
+
+
+def test_continuation_mcp_tools_forward_explicit_authority(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    dispatch_requests = []
+    mail_requests = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+
+    def fake_dispatch(method, path, **kwargs):
+        dispatch_requests.append((method, path, kwargs))
+        if path.endswith("/continuation-requests"):
+            return {
+                "ok": True,
+                "data": {
+                    "approval": {"id": 71, "status": "pending"},
+                    "revision": {"id": 81, "revision": 2},
+                },
+            }
+        if path.endswith("/ack"):
+            return {"ok": True, "data": {"id": 19, "dispatch_status": "dispatched"}}
+        if path.endswith("/scope-revisions"):
+            return {"ok": True, "data": [{"id": 81, "revision": 2}]}
+        raise AssertionError((method, path, kwargs))
+
+    def fake_mail(method, path, **kwargs):
+        mail_requests.append((method, path, kwargs))
+        return {"ok": True, "data": {"id": 91, "decision": "approved"}}
+
+    monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch)
+    monkeypatch.setattr(shim, "_request", fake_mail)
+
+    requested = shim.deck_request_continuation(
+        19,
+        "nonce-19",
+        "implementation",
+        "workspace",
+        "One bounded change",
+        ["src/example.py"],
+        ["edit_production", "push_pr_head", "request_verification"],
+        ["pytest -q"],
+        ["Do not edit CI"],
+        1,
+        {},
+        "lease-secret",
+    )
+    decided = shim.deck_decide_continuation(
+        71,
+        19,
+        "nonce-19",
+        "approved",
+        "Approved",
+    )
+    acknowledged = shim.deck_ack_continuation(
+        19,
+        2,
+        "nonce-19",
+        "lease-secret",
+    )
+    listed = shim.deck_list_scope_revisions(19)
+
+    assert requested["approval"]["id"] == 71
+    assert decided == {"ok": True, "message_id": 91, "decision": "approved"}
+    assert acknowledged["work_item"]["dispatch_status"] == "dispatched"
+    assert listed["revisions"] == [{"id": 81, "revision": 2}]
+    assert dispatch_requests[0] == (
+        "POST",
+        "/github-work-items/19/continuation-requests",
+        {
+            "json": {
+                "dispatch_nonce": "nonce-19",
+                "phase": "implementation",
+                "execution_target": "workspace",
+                "summary": "One bounded change",
+                "allowed_paths": ["src/example.py"],
+                "allowed_actions": [
+                    "edit_production",
+                    "push_pr_head",
+                    "request_verification",
+                ],
+                "allowed_commands": ["pytest -q"],
+                "prohibited_actions": ["Do not edit CI"],
+                "max_failed_heads": 1,
+                "tool_fallbacks": {},
+                "lease_token": "lease-secret",
+            }
+        },
+    )
+    assert mail_requests == [
+        (
+            "POST",
+            "/continuation-decisions",
+            {
+                "json": {
+                    "approval_request_id": 71,
+                    "work_item_id": 19,
+                    "dispatch_nonce": "nonce-19",
+                    "decision": "approved",
+                    "reason": "Approved",
+                }
+            },
+        )
+    ]
+    signature = inspect.signature(shim.deck_decide_continuation)
+    assert list(signature.parameters) == [
+        "approval_request_id",
+        "work_item_id",
+        "dispatch_nonce",
+        "decision",
+        "reason",
+    ]
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for parameter in signature.parameters.values()
+    )
+
+
+def test_continuation_mcp_preserves_backend_conflict_code(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(
+        shim,
+        "_dispatch_request",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "error": {
+                "code": "continuation_head_changed",
+                "status_code": 409,
+                "message": "continuation_head_changed",
+            },
+        },
+    )
+
+    result = shim.deck_ack_continuation(
+        19,
+        2,
+        "nonce-19",
+        "lease-secret",
+    )
+
+    assert result["error"] == {
+        "code": "continuation_head_changed",
+        "status_code": 409,
+        "message": "continuation_head_changed",
+    }
+    assert "lease-secret" not in repr(result)
+
+
+def test_dispatch_status_tool_carries_completion_evidence(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    monkeypatch.setattr(
+        shim,
+        "_dispatch_request",
+        lambda method, path, **kwargs: requests.append((method, path, kwargs))
+        or {"ok": True},
+    )
+
+    result = shim.deck_report_dispatch_status(
+        19,
+        "continuation_completed",
+        lease_token="lease-secret",
+        revision=2,
+        dispatch_nonce="nonce-19",
+        current_head_sha="a" * 40,
+        summary="Completed the bounded change",
+        evidence={"checks": ["pytest -q"]},
+    )
+
+    assert result == {"ok": True}
+    assert requests[0][2]["json"] == {
+        "work_item_id": 19,
+        "status": "continuation_completed",
+        "pr_number": None,
+        "head_ref": None,
+        "reassign_to_slot_id": None,
+        "note": None,
+        "lease_token": "lease-secret",
+        "revision": 2,
+        "dispatch_nonce": "nonce-19",
+        "current_head_sha": "a" * 40,
+        "summary": "Completed the bounded change",
+        "evidence": {"checks": ["pytest -q"]},
+    }
+
+
+def test_list_work_items_projects_safe_continuation_fields(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    monkeypatch.setattr(
+        shim,
+        "_ensure_registered",
+        lambda: {"ok": True, "data": {"member": {"team_preset_id": 4}}},
+    )
+    monkeypatch.setattr(
+        shim,
+        "_dispatch_request",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "data": {
+                "items": [
+                    {
+                        "id": 19,
+                        "issue_number": 867,
+                        "dispatch_status": "dispatched",
+                        "pr_number": 875,
+                        "attempt_phase": "implementation",
+                        "active_scope_revision": 2,
+                        "diagnostic_retry_count": 1,
+                        "continuation_nudged_at": "2026-08-29T10:00:00",
+                        "continuation_activated_at": "2026-08-29T10:01:00",
+                        "lease_token": "must-not-project",
+                    }
+                ]
+            },
+        },
+    )
+
+    result = shim.deck_list_work_items(status="")
+
+    assert result["items"][0]["active_scope_revision"] == 2
+    assert result["items"][0]["pr_number"] == 875
+    assert "lease_token" not in result["items"][0]
+    assert "must-not-project" not in repr(result)
 
 
 def test_deck_create_team_posts_to_team_api(monkeypatch):

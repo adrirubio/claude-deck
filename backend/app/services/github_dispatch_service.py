@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import enum
+import hmac
 import logging
 import secrets
 import subprocess
@@ -17,6 +18,7 @@ from app.models.database import (
     AgentTeamSlot,
     GithubWorkItem,
     GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     GithubWorkspace,
     MailReceipt,
     MailMessage,
@@ -31,6 +33,8 @@ from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
 )
+from app.services.github_approval_service import github_approval_service
+from app.services.github_client import github_client
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceConfigError,
@@ -75,6 +79,7 @@ ESCALATION_REASONS = frozenset(
         "leader_ack_timeout",
         "owner_idle_timeout",
         "retry_count_exhausted",
+        "continuation_budget_exhausted",
         "dispatch_label_removed",
         "abandoned_by_operator",
         "prepared_owner_unavailable",
@@ -137,6 +142,12 @@ class AckEvidence:
     approval_round: int | None = None
 
 
+@dataclass(frozen=True)
+class RetryEligibility:
+    allowed: bool
+    block_code: str | None = None
+
+
 def attempt_state(item: GithubWorkItem) -> AttemptState:
     markers = [getattr(item, column) for column in _ATTEMPT_MARKERS]
     if all(marker is None for marker in markers) and item.approval_round_count == 0:
@@ -193,6 +204,190 @@ def prepared_attempt_from_row(item: GithubWorkItem) -> PreparedAttempt:
 
 
 class GithubDispatchService:
+    @staticmethod
+    def retry_eligibility(
+        item: GithubWorkItem,
+        *,
+        pending_approval: bool,
+    ) -> RetryEligibility:
+        if item.dispatch_status != "escalated":
+            return RetryEligibility(False, "not_escalated")
+        if item.active_scope_revision > 0:
+            return RetryEligibility(False, "active_continuation")
+        if pending_approval:
+            return RetryEligibility(False, "approval_pending")
+        if item.pr_number is not None:
+            return RetryEligibility(False, "pr_preserved")
+        return RetryEligibility(True)
+
+    async def activate_continuation_revision(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        scope: TeamGithubScope,
+        revision: GithubAttemptScopeRevision,
+        *,
+        authenticated_owner_member_id: int,
+        authenticated_owner_slot_id: int,
+        dispatch_nonce: str,
+        lease_token: str,
+    ) -> bool:
+        await db.refresh(item)
+        await db.refresh(revision)
+        if item.scope_id != scope.id or revision.work_item_id != item.id:
+            raise ValueError("scope_revision_not_found")
+        if item.dispatch_nonce != dispatch_nonce or revision.dispatch_nonce != dispatch_nonce:
+            raise ValueError("stale_nonce")
+        owner = await self._owner_member(db, item)
+        if (
+            owner is None
+            or owner.id != authenticated_owner_member_id
+            or item.owner_slot_id != authenticated_owner_slot_id
+            or revision.owner_member_id != authenticated_owner_member_id
+            or revision.owner_slot_id != authenticated_owner_slot_id
+        ):
+            raise ValueError("not_item_owner")
+        workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+        if (
+            workspace is None
+            or workspace.id != revision.expected_workspace_id
+            or workspace.lease_token is None
+        ):
+            raise ValueError("workspace_lease_changed")
+        if not hmac.compare_digest(workspace.lease_token, lease_token):
+            raise ValueError("lease_token_mismatch")
+        if not github_approval_service.lease_token_matches(
+            lease_token,
+            revision.expected_lease_token_hash,
+        ):
+            raise ValueError("workspace_lease_changed")
+        if (
+            revision.status == "active"
+            and item.active_scope_revision == revision.revision
+            and item.attempt_phase == revision.phase
+            and item.dispatch_status == "dispatched"
+        ):
+            return False
+        if revision.status != "approved":
+            raise ValueError("continuation_not_approved")
+        if revision.delivery_message_id is None or revision.delivered_at is None:
+            raise ValueError("continuation_delivery_pending")
+        now = datetime.utcnow()
+        if revision.expires_at is not None and revision.expires_at <= now:
+            raise ValueError("continuation_request_expired")
+        if item.dispatch_status != "escalated":
+            raise ValueError("continuation_not_escalated")
+        if item.escalation_reason != revision.originating_escalation_reason:
+            raise ValueError("continuation_escalation_changed")
+        if item.pr_number is None:
+            raise ValueError("continuation_pr_required")
+
+        token = await github_approval_service.github_read_token(scope)
+        pull = await github_client.get_pull(
+            scope.repo_owner,
+            scope.repo_name,
+            item.pr_number,
+            token=token,
+        )
+        if pull.get("state") != "open":
+            raise ValueError("continuation_pr_not_open")
+        head = pull.get("head")
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        snapshot = await github_client.get_commit_snapshot(
+            scope.repo_owner,
+            scope.repo_name,
+            head_sha,
+            token=token,
+        )
+        if snapshot.sha != revision.baseline_head_sha:
+            raise ValueError("continuation_head_changed")
+
+        item_result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "escalated",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                GithubWorkItem.pr_number.is_not(None),
+                GithubWorkItem.escalation_reason
+                == revision.originating_escalation_reason,
+                GithubWorkItem.active_scope_revision < revision.revision,
+            )
+            .values(
+                active_scope_revision=revision.revision,
+                attempt_phase=revision.phase,
+                dispatch_status="dispatched",
+                continuation_activated_at=now,
+                continuation_nudged_at=None,
+                pending_reason=None,
+                escalation_reason=None,
+                last_nudge_at=None,
+                status_note=(
+                    f"Active continuation revision {revision.revision}: "
+                    f"{revision.summary}"
+                ),
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        revision_result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.status == "approved",
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.owner_slot_id
+                == authenticated_owner_slot_id,
+                GithubAttemptScopeRevision.owner_member_id
+                == authenticated_owner_member_id,
+                GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+            )
+            .values(status="active", acknowledged_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        workspace_result = await db.execute(
+            update(GithubWorkspace)
+            .where(
+                GithubWorkspace.id == workspace.id,
+                GithubWorkspace.scope_id == scope.id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.lease_token == lease_token,
+                exists(
+                    select(GithubWorkItem.id).where(
+                        GithubWorkItem.id == item.id,
+                        GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+                        GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                    )
+                ),
+            )
+            .values(lease_last_owner_contact_at=now, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(
+            update(MailReceipt)
+            .where(
+                MailReceipt.message_id == revision.delivery_message_id,
+                MailReceipt.member_id == authenticated_owner_member_id,
+            )
+            .values(
+                read_at=func.coalesce(MailReceipt.read_at, now),
+                acked_at=func.coalesce(MailReceipt.acked_at, now),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if (
+            item_result.rowcount != 1
+            or revision_result.rowcount != 1
+            or workspace_result.rowcount != 1
+        ):
+            await db.rollback()
+            raise ValueError("stale_continuation_context")
+        await db.commit()
+        await db.refresh(item)
+        await db.refresh(revision)
+        return True
+
     async def _resolve_scope_auth_mode(
         self,
         db: AsyncSession,
@@ -315,6 +510,29 @@ class GithubDispatchService:
         item.retry_requested_at = None
         item.updated_at = now
 
+    async def can_auto_retry_from_issue_update(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+    ) -> bool:
+        if (
+            item.pr_number is not None
+            or item.active_scope_revision != 0
+            or item.retry_requested_at is not None
+        ):
+            return False
+        pending_approval = (
+            await db.execute(
+                select(GithubApprovalRequest.id)
+                .where(
+                    GithubApprovalRequest.work_item_id == item.id,
+                    GithubApprovalRequest.status == "pending",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return pending_approval is None
+
     async def prepare_attempt(
         self,
         db: AsyncSession,
@@ -352,6 +570,14 @@ class GithubDispatchService:
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status.in_(("escalated", "failed")),
                     GithubWorkItem.retry_requested_at.is_not(None),
+                    GithubWorkItem.pr_number.is_(None),
+                    GithubWorkItem.active_scope_revision == 0,
+                    ~exists(
+                        select(GithubApprovalRequest.id).where(
+                            GithubApprovalRequest.work_item_id == GithubWorkItem.id,
+                            GithubApprovalRequest.status == "pending",
+                        )
+                    ),
                     GithubWorkspace.id.is_(None),
                 )
                 .order_by(GithubWorkItem.id)
@@ -1515,6 +1741,24 @@ class GithubDispatchService:
             ).scalar_one_or_none()
             if scope is None:
                 raise ValueError("handoff scope is unavailable")
+            active_revision = None
+            if item.active_scope_revision > 0:
+                active_revision = (
+                    await db.execute(
+                        select(GithubAttemptScopeRevision)
+                        .where(
+                            GithubAttemptScopeRevision.work_item_id == item.id,
+                            GithubAttemptScopeRevision.dispatch_nonce
+                            == item.dispatch_nonce,
+                            GithubAttemptScopeRevision.revision
+                            == item.active_scope_revision,
+                            GithubAttemptScopeRevision.status.in_(
+                                ("active", "submitted")
+                            ),
+                        )
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar_one_or_none()
             old_owner_slot_id = expected_old_owner_slot_id
             expected_leased_at = workspace.leased_at
             lease_token = workspace.lease_token
@@ -1531,7 +1775,7 @@ class GithubDispatchService:
                 )
             )
             now = datetime.utcnow()
-            item_result = await db.execute(
+            item_update = (
                 update(GithubWorkItem)
                 .where(
                     GithubWorkItem.id == item.id,
@@ -1554,6 +1798,18 @@ class GithubDispatchService:
                 )
                 .execution_options(synchronize_session=False)
             )
+            if active_revision is not None:
+                item_update = item_update.values(
+                    dispatch_status="escalated",
+                    escalation_reason=active_revision.originating_escalation_reason,
+                    pending_reason=None,
+                    continuation_nudged_at=None,
+                    status_note=(
+                        "The active continuation was superseded by handoff. The new "
+                        "owner must propose and receive approval for a fresh revision."
+                    ),
+                )
+            item_result = await db.execute(item_update)
             workspace_result = await db.execute(
                 update(GithubWorkspace)
                 .where(
@@ -1572,7 +1828,85 @@ class GithubDispatchService:
                 )
                 .execution_options(synchronize_session=False)
             )
-            if item_result.rowcount != 1 or workspace_result.rowcount != 1:
+            owner_bound_revisions = (
+                await db.execute(
+                    select(GithubAttemptScopeRevision).where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == item.dispatch_nonce,
+                        GithubAttemptScopeRevision.owner_slot_id
+                        == old_owner_slot_id,
+                        GithubAttemptScopeRevision.status.in_(
+                            ("proposed", "approved", "active", "submitted")
+                        ),
+                    )
+                )
+            ).scalars().all()
+            revision_ids = [revision.id for revision in owner_bound_revisions]
+            if revision_ids:
+                await db.execute(
+                    update(GithubAttemptScopeRevision)
+                    .where(
+                        GithubAttemptScopeRevision.id.in_(revision_ids),
+                        GithubAttemptScopeRevision.status.in_(
+                            ("proposed", "approved", "active", "submitted")
+                        ),
+                    )
+                    .values(status="superseded")
+                    .execution_options(synchronize_session=False)
+                )
+                pending_requests = (
+                    await db.execute(
+                        select(GithubApprovalRequest).where(
+                            GithubApprovalRequest.scope_revision_id.in_(revision_ids),
+                            GithubApprovalRequest.request_kind == "continuation",
+                            GithubApprovalRequest.status == "pending",
+                        )
+                    )
+                ).scalars().all()
+                if pending_requests:
+                    request_ids = [request.id for request in pending_requests]
+                    request_message_ids = [
+                        request.request_message_id
+                        for request in pending_requests
+                        if request.request_message_id is not None
+                    ]
+                    await db.execute(
+                        update(GithubApprovalRequest)
+                        .where(
+                            GithubApprovalRequest.id.in_(request_ids),
+                            GithubApprovalRequest.status == "pending",
+                        )
+                        .values(status="superseded", superseded_at=now)
+                        .execution_options(synchronize_session=False)
+                    )
+                    if request_message_ids:
+                        await db.execute(
+                            update(MailMessage)
+                            .where(
+                                MailMessage.id.in_(request_message_ids),
+                                MailMessage.request_status == "pending",
+                            )
+                            .values(request_status="superseded")
+                            .execution_options(synchronize_session=False)
+                        )
+                remaining_authority = (
+                    await db.execute(
+                        select(func.count(GithubAttemptScopeRevision.id)).where(
+                            GithubAttemptScopeRevision.id.in_(revision_ids),
+                            GithubAttemptScopeRevision.status.in_(
+                                ("proposed", "approved", "active", "submitted")
+                            ),
+                        )
+                    )
+                ).scalar_one()
+                if remaining_authority:
+                    await db.rollback()
+                    raise ValueError("handoff continuation authority changed")
+            if (
+                item_result.rowcount != 1
+                or workspace_result.rowcount != 1
+            ):
                 await db.rollback()
                 raise ValueError("handoff state changed before acceptance")
             try:
@@ -1650,6 +1984,7 @@ class GithubDispatchService:
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status == "dispatched",
                     GithubWorkItem.pr_number.is_(None),
+                    GithubWorkItem.active_scope_revision == 0,
                 )
             )
         ).scalars().all()
@@ -1711,6 +2046,173 @@ class GithubDispatchService:
             ):
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
+
+    @staticmethod
+    def _log_continuation_monitor(
+        item: GithubWorkItem,
+        *,
+        anchor: datetime | None,
+        elapsed_seconds: float | None,
+        action: str,
+        block_code: str | None = None,
+    ) -> None:
+        logger.debug(
+            "github continuation monitor",
+            extra={
+                "monitor_name": "monitor_continuation",
+                "work_item_id": item.id,
+                "active_scope_revision": item.active_scope_revision,
+                "attempt_phase": item.attempt_phase,
+                "dispatch_status": item.dispatch_status,
+                "grace_anchor": anchor.isoformat() if anchor is not None else None,
+                "elapsed_grace_seconds": elapsed_seconds,
+                "monitor_action": action,
+                "block_code": block_code,
+            },
+        )
+
+    async def monitor_continuation(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        preset_slots: list[AgentTeamSlot],
+    ) -> None:
+        enabled_slot_ids = {slot.id for slot in preset_slots if slot.enabled}
+        items = (
+            await db.execute(
+                select(GithubWorkItem).where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "dispatched",
+                    GithubWorkItem.pr_number.is_not(None),
+                    GithubWorkItem.active_scope_revision > 0,
+                )
+            )
+        ).scalars().all()
+        now = datetime.utcnow()
+        idle_timeout = timedelta(
+            seconds=settings.github_owner_idle_timeout_seconds
+        )
+        nudge_grace = timedelta(seconds=settings.github_nudge_grace_seconds)
+
+        for item in items:
+            revision = (
+                await db.execute(
+                    select(GithubAttemptScopeRevision).where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == item.dispatch_nonce,
+                        GithubAttemptScopeRevision.revision
+                        == item.active_scope_revision,
+                        GithubAttemptScopeRevision.status == "active",
+                    )
+                )
+            ).scalar_one_or_none()
+            if revision is None:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=item.continuation_activated_at,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="active_revision_missing",
+                )
+                continue
+            if item.owner_slot_id not in enabled_slot_ids:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=item.continuation_activated_at,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="owner_slot_unavailable",
+                )
+                continue
+            owner_member = await self._owner_member(db, item)
+            if owner_member is None:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=item.continuation_activated_at,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="owner_member_unavailable",
+                )
+                continue
+            workspace = await github_workspace_service.get_leased_workspace(db, item.id)
+            anchors = [
+                value
+                for value in (
+                    item.continuation_activated_at,
+                    workspace.lease_last_owner_contact_at
+                    if workspace is not None
+                    else None,
+                )
+                if value is not None
+            ]
+            if not anchors:
+                self._log_continuation_monitor(
+                    item,
+                    anchor=None,
+                    elapsed_seconds=None,
+                    action="skip",
+                    block_code="continuation_anchor_missing",
+                )
+                continue
+            anchor = max(anchors)
+            elapsed = now - anchor
+            if elapsed <= idle_timeout:
+                continue
+            if (
+                item.continuation_nudged_at is None
+                or item.continuation_nudged_at < anchor
+            ):
+                await self.notify_owner(
+                    db,
+                    item,
+                    subject=f"Continuation progress check: issue #{item.issue_number}",
+                    body_markdown=(
+                        f"Continuation revision {item.active_scope_revision} for issue "
+                        f"#{item.issue_number} has not reported recent progress. "
+                        "Continue within the approved scope or request new approval; "
+                        "do not reset the preserved attempt."
+                    ),
+                    payload={
+                        "kind": "github_dispatch_continuation_idle_nudge",
+                        "work_item_id": item.id,
+                        "scope_revision": item.active_scope_revision,
+                    },
+                    delivery_key=(
+                        f"github-continuation:{item.id}:"
+                        f"{item.active_scope_revision}:idle:{anchor.isoformat()}"
+                    ),
+                )
+                item.continuation_nudged_at = now
+                item.updated_at = now
+                await db.commit()
+                self._log_continuation_monitor(
+                    item,
+                    anchor=anchor,
+                    elapsed_seconds=elapsed.total_seconds(),
+                    action="nudge_owner",
+                )
+                continue
+            if now - item.continuation_nudged_at <= nudge_grace:
+                continue
+            revision.status = "superseded"
+            await self.escalate(
+                db,
+                item,
+                "owner_idle_timeout",
+                (
+                    f"Continuation revision {revision.revision} became idle after "
+                    "one progress nudge. The PR, workspace, nonce, and attempt "
+                    "history remain preserved."
+                ),
+            )
+            await db.commit()
+            self._log_continuation_monitor(
+                item,
+                anchor=anchor,
+                elapsed_seconds=elapsed.total_seconds(),
+                action="escalate_idle",
+            )
 
     async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
         """Return whether this attempt's brief reached its owner."""
@@ -1972,6 +2474,7 @@ class GithubDispatchService:
         subject: str,
         body_markdown: str,
         payload: dict | None = None,
+        delivery_key: str | None = None,
     ) -> None:
         member = await self._owner_member(db, item)
         if member is None:
@@ -1984,6 +2487,7 @@ class GithubDispatchService:
             subject=subject,
             body_markdown=body_markdown,
             payload=payload,
+            delivery_key=delivery_key,
         )
 
     async def notify_team(

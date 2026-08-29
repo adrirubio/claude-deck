@@ -755,6 +755,48 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(
             text("ALTER TABLE team_github_scopes ADD COLUMN github_app_installation_id INTEGER")
         )
+    if scope_columns and "continuation_enabled" not in scope_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE team_github_scopes ADD COLUMN "
+                "continuation_enabled BOOLEAN DEFAULT 0 NOT NULL"
+            )
+        )
+    if scope_columns and "max_continuation_revisions" not in scope_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE team_github_scopes ADD COLUMN "
+                "max_continuation_revisions INTEGER DEFAULT 6 NOT NULL"
+            )
+        )
+    if scope_columns and "max_continuation_failed_heads" not in scope_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE team_github_scopes ADD COLUMN "
+                "max_continuation_failed_heads INTEGER DEFAULT 8 NOT NULL"
+            )
+        )
+    if scope_columns and "max_failed_heads_per_revision" not in scope_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE team_github_scopes ADD COLUMN "
+                "max_failed_heads_per_revision INTEGER DEFAULT 2 NOT NULL"
+            )
+        )
+    if scope_columns and "max_scope_paths" not in scope_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE team_github_scopes ADD COLUMN "
+                "max_scope_paths INTEGER DEFAULT 32 NOT NULL"
+            )
+        )
+    if scope_columns and "max_scope_commands" not in scope_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE team_github_scopes ADD COLUMN "
+                "max_scope_commands INTEGER DEFAULT 16 NOT NULL"
+            )
+        )
 
     result = await conn.execute(text("PRAGMA table_info(github_work_items)"))
     work_item_columns = {row[1] for row in result.fetchall()}
@@ -792,6 +834,47 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_head_ref VARCHAR"))
     if work_item_columns and "dispatch_base_ref" not in work_item_columns:
         await conn.execute(text("ALTER TABLE github_work_items ADD COLUMN dispatch_base_ref VARCHAR"))
+    if work_item_columns and "active_scope_revision" not in work_item_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_work_items ADD COLUMN "
+                "active_scope_revision INTEGER DEFAULT 0 NOT NULL"
+            )
+        )
+    if work_item_columns and "attempt_phase" not in work_item_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_work_items ADD COLUMN "
+                "attempt_phase VARCHAR DEFAULT 'implementation' NOT NULL"
+            )
+        )
+    if work_item_columns and "diagnostic_retry_count" not in work_item_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_work_items ADD COLUMN "
+                "diagnostic_retry_count INTEGER DEFAULT 0 NOT NULL"
+            )
+        )
+    if work_item_columns and "diagnostic_last_verified_sha" not in work_item_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_work_items ADD COLUMN "
+                "diagnostic_last_verified_sha VARCHAR"
+            )
+        )
+    if work_item_columns and "continuation_nudged_at" not in work_item_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_work_items ADD COLUMN continuation_nudged_at DATETIME"
+            )
+        )
+    if work_item_columns and "continuation_activated_at" not in work_item_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_work_items ADD COLUMN "
+                "continuation_activated_at DATETIME"
+            )
+        )
 
     workspace_columns = await _sqlite_columns(conn, "github_workspaces")
     if workspace_columns and "lease_token" not in workspace_columns:
@@ -852,6 +935,21 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
 
     await _sqlite_create_approval_tables(conn)
+    revision_columns = await _sqlite_columns(conn, "github_attempt_scope_revisions")
+    if revision_columns and "submitted_head_sha" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN submitted_head_sha VARCHAR"
+            )
+        )
+    if revision_columns and "submitted_at" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN submitted_at DATETIME"
+            )
+        )
     await _sqlite_ensure_unique_partial_index(
         conn,
         table_name="github_approval_requests",

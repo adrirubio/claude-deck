@@ -12,6 +12,7 @@ from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
     GithubWorkItem,
     GithubWorkspace,
     MailMessage,
@@ -247,6 +248,98 @@ async def test_escalated_item_recovers_on_updated_timestamp(db):
     assert item.handoff_target_slot_id is None
     assert item.retry_count == 0
     assert item.approval_round_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guard", ["pr", "active_revision", "pending_approval", "deferred"])
+async def test_issue_updates_preserve_pr_and_continuation_attempts(db, guard):
+    scope = await _make_scope(db)
+    item = GithubWorkItem(
+        scope_id=scope.id,
+        issue_number=55,
+        issue_title="old title",
+        issue_url="u",
+        github_updated_at=datetime(2026, 7, 1),
+        issue_type="code",
+        dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted",
+        dispatch_nonce="preserved-nonce",
+        retry_count=4,
+        approval_round_count=2,
+        status_note="preserved context",
+        pr_number=42 if guard == "pr" else None,
+        active_scope_revision=1 if guard == "active_revision" else 0,
+        retry_requested_at=(
+            datetime(2026, 7, 2) if guard == "deferred" else None
+        ),
+    )
+    db.add(item)
+    await db.flush()
+    if guard == "pending_approval":
+        owner = MailTeamMember(
+            identity_key="watcher-owner",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Owner",
+        )
+        leader = MailTeamMember(
+            identity_key="watcher-leader",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+            display_name="Leader",
+        )
+        db.add_all([owner, leader])
+        await db.flush()
+        db.add(
+            GithubApprovalRequest(
+                work_item_id=item.id,
+                request_kind="continuation",
+                dispatch_nonce=item.dispatch_nonce,
+                approval_round=item.approval_round_count,
+                owner_member_id=owner.id,
+                leader_member_id=leader.id,
+                request_fingerprint="a" * 64,
+                status="pending",
+            )
+        )
+    if guard == "deferred":
+        db.add(
+            GithubWorkspace(
+                scope_id=scope.id,
+                path="/tmp/watcher-preserved-workspace",
+                leased_item_id=item.id,
+                lease_token="lease",
+            )
+        )
+    await db.commit()
+    retry_requested_at = item.retry_requested_at
+    client = _FakeClient(
+        labeled=[
+            {
+                **_issue(
+                    55,
+                    ["claude-deck-ready", "claude-deck-design"],
+                    updated="2026-07-04T00:00:00Z",
+                ),
+                "title": "new title",
+            }
+        ]
+    )
+
+    await github_watcher_service.poll_scope(db, scope, client)
+    await db.refresh(item)
+
+    assert item.dispatch_status == "escalated"
+    assert item.issue_title == "new title"
+    assert item.issue_type == "code"
+    assert item.dispatch_nonce == "preserved-nonce"
+    assert item.retry_count == 4
+    assert item.approval_round_count == 2
+    assert item.status_note == "preserved context"
+    if guard == "deferred":
+        assert item.retry_requested_at == retry_requested_at
 
 
 @pytest.mark.asyncio

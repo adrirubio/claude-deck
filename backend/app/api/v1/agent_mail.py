@@ -27,6 +27,7 @@ from app.models.schemas import (
     MailAgentRegisterRequest,
     MailAgentRegisterResponse,
     MailApprovalRequestCreate,
+    MailContinuationDecisionRequest,
     MailInboxResponse,
     MailDecisionRequest,
     MailMemberResponse,
@@ -70,6 +71,42 @@ def _approval_response(request) -> GithubApprovalRequestResponse:
         created_at=request.created_at,
         decided_at=request.decided_at,
         superseded_at=request.superseded_at,
+    )
+
+
+def _redact_generic_continuation_message(
+    message: MailMessageResponse,
+) -> MailMessageResponse:
+    payload = message.payload
+    if not isinstance(payload, dict) or payload.get("request_kind") != "continuation":
+        return message
+    scope_revision = payload.get("scope_revision")
+    if not isinstance(scope_revision, dict):
+        return message
+    visible_keys = {
+        "execution_target",
+        "phase",
+        "revision",
+        "scope_revision_id",
+    }
+    redacted_payload = dict(payload)
+    redacted_payload["scope_revision"] = {
+        key: value
+        for key, value in scope_revision.items()
+        if key in visible_keys
+    }
+    return message.model_copy(update={"payload": redacted_payload})
+
+
+def _redact_generic_continuation_thread(
+    thread: MailThreadResponse,
+) -> MailThreadResponse:
+    return MailThreadResponse(
+        root=_redact_generic_continuation_message(thread.root),
+        replies=[
+            _redact_generic_continuation_message(reply)
+            for reply in thread.replies
+        ],
     )
 
 
@@ -306,9 +343,106 @@ async def decide_work_item(
     return await agent_mail_service._message_response(db, message, for_member_id=None)
 
 
+@router.post("/continuation-decisions", response_model=MailMessageResponse)
+async def decide_work_item_continuation(
+    request: MailContinuationDecisionRequest,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, request.work_item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    if item.dispatch_nonce != request.dispatch_nonce:
+        raise HTTPException(status_code=409, detail="stale_nonce")
+    try:
+        approval, revision, _decided = (
+            await github_approval_service.decide_continuation(
+                db,
+                item,
+                authenticated_leader_member_id=session.member_id,
+                decision=request.decision,
+                reason=request.reason,
+                request_id=request.approval_request_id,
+            )
+        )
+        delivery_key = f"github-approval:{approval.id}:decision"
+        if approval.decision_message_id is not None:
+            linked = await db.get(MailMessage, approval.decision_message_id)
+            if linked is None or not (
+                github_approval_service.matches_linked_continuation_decision_message(
+                    approval,
+                    revision,
+                    linked,
+                    delivery_key=delivery_key,
+                )
+            ):
+                raise GithubApprovalError("approval_decision_link_mismatch")
+            message = await agent_mail_service._message_response(
+                db,
+                linked,
+                for_member_id=None,
+            )
+        else:
+            message = await agent_mail_service.send_authoritative_decision(
+                db,
+                MailMessageCreate(
+                    kind="answer",
+                    sender_member_id=session.member_id,
+                    thread_root_id=approval.request_message_id,
+                    body_markdown=request.reason,
+                    payload=github_approval_service.continuation_decision_payload(
+                        approval,
+                        revision,
+                    ),
+                    decision=request.decision,
+                ),
+                authenticated_sender_member_id=session.member_id,
+                approval_round=approval.approval_round,
+                delivery_key=delivery_key,
+            )
+            link_result = await db.execute(
+                update(GithubApprovalRequest)
+                .where(
+                    GithubApprovalRequest.id == approval.id,
+                    GithubApprovalRequest.status == request.decision,
+                    GithubApprovalRequest.decision_message_id.is_(None),
+                )
+                .values(decision_message_id=message.id)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            await db.refresh(approval)
+            if link_result.rowcount != 1 and approval.decision_message_id != message.id:
+                raise GithubApprovalError("approval_decision_link_mismatch")
+        if approval.status == "approved":
+            await github_approval_service.deliver_approved_continuation(
+                db,
+                item,
+                approval,
+                revision,
+            )
+        else:
+            await agent_mail_service.auto_nudge_members(
+                db,
+                {approval.owner_member_id},
+            )
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailDeliveryIntegrityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return message
+
+
 @router.get("/messages", response_model=list[MailMessageResponse])
 async def list_messages(db: AsyncSession = Depends(get_db)):
-    return await agent_mail_service.list_root_messages(db)
+    return [
+        _redact_generic_continuation_message(message)
+        for message in await agent_mail_service.list_root_messages(db)
+    ]
 
 
 @router.get("/messages/{message_id}/thread", response_model=MailThreadResponse)
@@ -318,7 +452,13 @@ async def get_thread(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        return await agent_mail_service.get_thread(db, message_id, for_member_id=member_id)
+        return _redact_generic_continuation_thread(
+            await agent_mail_service.get_thread(
+                db,
+                message_id,
+                for_member_id=member_id,
+            )
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

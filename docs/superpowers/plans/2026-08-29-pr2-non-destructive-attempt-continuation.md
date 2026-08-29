@@ -22,6 +22,27 @@ the PR description.
 
 **Target:** One PR into `feature/autonomous-github-dispatch`, never `master`.
 
+**Post-PR1 drift corrections (2026-08-29):** Merged PR1 commit `88f06be` made decision
+targeting explicit, removed caller-controlled operator cancellation, and serialized
+approval mutations against database-current work-item state. The Task 3, Task 4, and Task 6
+requirements below supersede any older implementation inference that conflicts with those
+contracts.
+
+**Implementation-review corrections (2026-08-29):** The production GitHub tree client
+returns path-keyed mappings, not entry lists; completion must consume that exact contract.
+Persist the head accepted by `continuation_completed` and require it to remain current until
+green promotion, otherwise return the revision to `active` without charging a failed-head
+budget. Lease-bearing continuation context requires both the current slot and current member.
+An accepted handoff supersedes every nonterminal continuation revision owned by the previous
+slot, plus any linked pending approval/mail root, so stale authority cannot block the target.
+Only one proposed, approved, active, or submitted revision may exist for an attempt. Leader
+decisions and workspace claims re-check database-current slot/member authority in their
+conditional writes. Generic mail-list and thread projections redact continuation scope
+details; authenticated inbox delivery remains authoritative. Submission time is durable and
+anchors the no-check grace window. Terminal PR outcomes close submitted authority, product
+failure state commits before best-effort notification, and continuation idle nudges use
+deterministic delivery keys so a crash cannot duplicate mail.
+
 ## PR Boundary
 
 PR2 implements **implementation-phase continuation only**.
@@ -186,6 +207,11 @@ venv/bin/pytest tests/agent_teams/test_github_client.py -q -p no:warnings
   `hmac.compare_digest`; never store or return plaintext.
 - [ ] Allocate `COALESCE(MAX(revision), 0) + 1` inside the transaction and rely on the unique
   constraint under races.
+- [ ] Before inserting revision or approval authority, serialize on a conditional
+  `GithubWorkItem` update that requires database-current `dispatch_status == "escalated"`,
+  nonce, approval round, owner slot, PR, and originating escalation. Do not reuse PR1's
+  initial-plan `dispatch_status != "escalated"` predicate. A concurrent transition out of
+  escalation fails closed without creating either row.
 - [ ] Resolve the circular links without partial commits: insert/flush the revision, insert/
   flush the approval pointing to it, set `revision.approval_request_id`, then commit once.
 - [ ] On conflict, roll back and return the identical winner or
@@ -194,7 +220,8 @@ venv/bin/pytest tests/agent_teams/test_github_client.py -q -p no:warnings
   canonical request, and one pending normalized approval.
 
 **Mutation checks:** baseline from body; wildcard path accepted; revision cap checked after
-insert; owner slot without member; hash omitted; race allocates two revisions.
+insert; owner slot without member; hash omitted; race allocates two revisions; proposal
+guard accepts a database-current non-escalated item.
 
 **Verify:**
 
@@ -220,15 +247,29 @@ venv/bin/pytest tests/agent_teams/test_github_workspace_api.py -q -p no:warnings
   mail root by stable delivery key.
 - [ ] Add Leader-authenticated `POST /agent-mail/continuation-decisions` taking approval id,
   decision, and reason—not a thread id.
+- [ ] Require an explicit `approval_request_id` and resolve only
+  `request_kind == "continuation"`. Parameterize PR1's resolver with an expected kind or add
+  a dedicated continuation resolver; never route continuation decisions through the
+  initial-plan-only resolver and never infer whichever request is pending.
 - [ ] Validate distinct current Leader, request owner, nonce, round, revision, pending status,
   and expiry.
+- [ ] Serialize the decision mutation on a conditional `GithubWorkItem` update requiring
+  database-current `dispatch_status == "escalated"`, nonce, approval round, owner slot, PR,
+  and originating escalation. A concurrent transition out of escalation leaves the
+  approval and revision pending and returns a stable conflict.
 - [ ] Commit decision authority before decision mail; link decision evidence idempotently.
 - [ ] On approval, leave the item escalated and revision approved.
 - [ ] On rejection, mark request/revision terminal and leave the item escalated.
-- [ ] Add owner/operator cancellation route using PR1's synchronized service transition.
+- [ ] Add cancellation with two authenticated pathways and no caller-controlled privilege
+  flag: an authenticated requester session calls
+  `github_approval_service.cancel(..., requester_member_id=session.member_id)`; an operator
+  route protected by `require_operator` calls the neutral private authorized transition.
+  Neither pathway may manufacture a `MailAgentSession` or member id.
 - [ ] Add audited revision-list route; never return lease hash or secrets.
 
-**Mutation checks:** choose mail thread; approval changes item status; operator approves;
+**Mutation checks:** choose mail thread; omit or change `approval_request_id`; resolve an
+`initial_plan` request as continuation; approval changes item status; decision guard accepts
+a database-current non-escalated item; operator approves; unprotected operator cancellation;
 cancel updates one row; decision replay reverses terminal decision.
 
 **Verify:**
@@ -293,9 +334,13 @@ venv/bin/pytest tests/agent_teams/test_github_dispatch_service.py \
   exact scope, block code, and budgets.
 - [ ] Keep lease token visible only through the existing authenticated owner continuation
   context; list/audit endpoints omit it.
+- [ ] Require the claim caller to match both the database-current owner slot and member;
+  a stale session from a previous member in the same slot receives no lease context.
 - [ ] Add MCP tools:
   - `deck_request_continuation`;
-  - `deck_decide_continuation`;
+  - `deck_decide_continuation(approval_request_id: int, work_item_id: int,
+    dispatch_nonce: str, decision: str, reason: str)` with every argument required and no
+    pending-request fallback;
   - `deck_ack_continuation`;
   - `deck_list_scope_revisions`.
 - [ ] Extend `deck_list_work_items` with safe continuation fields.
@@ -366,11 +411,16 @@ venv/bin/pytest tests/agent_teams/test_github_watcher_service.py \
   head, and lease in this branch before mutation.
 - [ ] Fetch current PR head and require it equals the report.
 - [ ] Fetch baseline/current recursive trees; refuse truncated/incomplete responses.
+- [ ] Consume the path-keyed mapping returned by the production recursive-tree client;
+  list-shaped test doubles are not an acceptable substitute for this interface.
 - [ ] Compute changed paths including mode/type changes and require every path is exactly
   allowed.
 - [ ] Require `push_pr_head` and `request_verification` actions.
 - [ ] Revalidate owner, nonce, revision active status, workspace id/token hash, and PR.
 - [ ] Set revision `submitted` and item `verifying`; do not mark completed yet.
+- [ ] Persist the submitted head SHA. Re-check it before reading CI and immediately before
+  green promotion; a changed head returns the revision to `active` for a new authenticated
+  completion report without incrementing either failure counter.
 - [ ] Return stable conflict codes for stale head, inconclusive diff, out-of-scope paths, and
   missing actions.
 
@@ -431,8 +481,9 @@ venv/bin/pytest tests/agent_teams/test_github_verification_service.py -q -p no:w
 `backend/tests/agent_teams/test_github_dispatch_service.py`,
 `backend/tests/agent_teams/test_github_dispatch_scheduler.py`
 
-- [ ] On accepted handoff, supersede active revision, restore originating escalation, and
-  require the target to propose a fresh revision.
+- [ ] On accepted handoff, supersede every previous-owner nonterminal revision, restore an
+  active revision's originating escalation, supersede linked pending approval/mail roots,
+  and require the target to propose a fresh revision.
 - [ ] Keep existing atomic owner/PID/lease-token handoff guarantees unchanged.
 - [ ] Add `monitor_continuation` query:
   `dispatched AND pr_number IS NOT NULL AND active_scope_revision > 0`.

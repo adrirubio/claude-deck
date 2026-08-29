@@ -8,6 +8,8 @@ enforce that with a read-only token rather than relying on this module.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+import re
 from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
@@ -15,10 +17,30 @@ import httpx
 from app.config import settings
 
 _GITHUB_API = "https://api.github.com"
+_GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+_GIT_ENTRY_MODES = {
+    "blob": {"100644", "100755", "120000"},
+    "tree": {"040000"},
+    "commit": {"160000"},
+}
 
 
 class GithubClientResponseError(RuntimeError):
     """GitHub returned a response Deck cannot safely interpret."""
+
+
+@dataclass(frozen=True)
+class GithubCommitSnapshot:
+    sha: str
+    tree_sha: str
+
+
+@dataclass(frozen=True)
+class GithubTreeEntry:
+    path: str
+    mode: str
+    object_type: str
+    sha: str
 
 
 class GithubClient:
@@ -39,6 +61,40 @@ class GithubClient:
         if authorization:
             headers["Authorization"] = f"Bearer {authorization}"
         return headers
+
+    @staticmethod
+    def _git_sha(value: object, label: str) -> str:
+        if not isinstance(value, str) or _GIT_SHA_RE.fullmatch(value) is None:
+            raise GithubClientResponseError(f"GitHub {label} SHA was invalid")
+        return value
+
+    @staticmethod
+    def _require_expected_response(
+        response: httpx.Response,
+        *,
+        endpoint: str,
+        label: str,
+    ) -> None:
+        parsed = urlsplit(str(response.request.url))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.github.com"
+            or parsed.port is not None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path != endpoint
+        ):
+            raise GithubClientResponseError(
+                f"Unsafe GitHub {label} response location"
+            )
+
+    @staticmethod
+    def _git_path(value: object) -> str:
+        if not isinstance(value, str) or not value or "\x00" in value:
+            raise GithubClientResponseError("GitHub tree entry path was invalid")
+        if value.startswith("/") or any(part in {"", ".", ".."} for part in value.split("/")):
+            raise GithubClientResponseError("GitHub tree entry path was invalid")
+        return value
 
     @staticmethod
     def _json_object(response: httpx.Response, label: str) -> dict:
@@ -169,6 +225,116 @@ class GithubClient:
                 return None
             response.raise_for_status()
             return self._json_object(response, "git ref")
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def get_commit_snapshot(
+        self,
+        owner: str,
+        repo: str,
+        sha: str,
+        *,
+        token: str,
+    ) -> GithubCommitSnapshot:
+        requested_sha = self._git_sha(sha, "commit request")
+        endpoint = f"/repos/{owner}/{repo}/git/commits/{requested_sha}"
+        client = self._client()
+        try:
+            response = await client.get(endpoint, headers=self._headers(token))
+            response.raise_for_status()
+            self._require_expected_response(
+                response,
+                endpoint=endpoint,
+                label="commit",
+            )
+            body = self._json_object(response, "commit")
+            response_sha = self._git_sha(body.get("sha"), "commit response")
+            if response_sha != requested_sha:
+                raise GithubClientResponseError(
+                    "GitHub commit response did not match the requested SHA"
+                )
+            tree = body.get("tree")
+            if not isinstance(tree, dict):
+                raise GithubClientResponseError(
+                    "GitHub commit response did not contain tree metadata"
+                )
+            return GithubCommitSnapshot(
+                sha=response_sha,
+                tree_sha=self._git_sha(tree.get("sha"), "commit tree"),
+            )
+        finally:
+            if self._http is None:
+                await client.aclose()
+
+    async def get_recursive_tree(
+        self,
+        owner: str,
+        repo: str,
+        tree_sha: str,
+        *,
+        token: str,
+    ) -> dict[str, GithubTreeEntry]:
+        requested_sha = self._git_sha(tree_sha, "tree request")
+        endpoint = f"/repos/{owner}/{repo}/git/trees/{requested_sha}"
+        client = self._client()
+        try:
+            response = await client.get(
+                endpoint,
+                params={"recursive": "1"},
+                headers=self._headers(token),
+            )
+            response.raise_for_status()
+            self._require_expected_response(
+                response,
+                endpoint=endpoint,
+                label="tree",
+            )
+            body = self._json_object(response, "tree")
+            response_sha = self._git_sha(body.get("sha"), "tree response")
+            if response_sha != requested_sha:
+                raise GithubClientResponseError(
+                    "GitHub tree response did not match the requested SHA"
+                )
+            if body.get("truncated") is not False:
+                raise GithubClientResponseError(
+                    "GitHub recursive tree response was truncated or inconclusive"
+                )
+            raw_entries = body.get("tree")
+            if not isinstance(raw_entries, list):
+                raise GithubClientResponseError(
+                    "GitHub tree response did not contain an entry list"
+                )
+            entries: dict[str, GithubTreeEntry] = {}
+            for raw_entry in raw_entries:
+                if not isinstance(raw_entry, dict):
+                    raise GithubClientResponseError(
+                        "GitHub tree response contained a non-object entry"
+                    )
+                path = self._git_path(raw_entry.get("path"))
+                mode = raw_entry.get("mode")
+                object_type = raw_entry.get("type")
+                if (
+                    not isinstance(mode, str)
+                    or not isinstance(object_type, str)
+                    or mode not in _GIT_ENTRY_MODES.get(object_type, set())
+                ):
+                    raise GithubClientResponseError(
+                        "GitHub tree entry mode or object type was invalid"
+                    )
+                entry = GithubTreeEntry(
+                    path=path,
+                    mode=mode,
+                    object_type=object_type,
+                    sha=self._git_sha(raw_entry.get("sha"), "tree entry"),
+                )
+                existing = entries.get(path)
+                if existing is not None and existing != entry:
+                    raise GithubClientResponseError(
+                        "GitHub tree response contained conflicting duplicate paths"
+                    )
+                entries[path] = entry
+            return entries
         finally:
             if self._http is None:
                 await client.aclose()

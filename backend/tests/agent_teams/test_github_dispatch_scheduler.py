@@ -72,6 +72,7 @@ class _FakeDispatch:
     def __init__(self):
         self.dispatch_calls = []
         self.monitor_calls = []
+        self.continuation_calls = []
         self.remind_calls = []
 
     async def dispatch_pending(self, db, scope, slots, **kwargs):
@@ -79,6 +80,9 @@ class _FakeDispatch:
 
     async def monitor_dispatched(self, db, scope, slots):
         self.monitor_calls.append(scope.id)
+
+    async def monitor_continuation(self, db, scope, slots):
+        self.continuation_calls.append(scope.id)
 
     async def remind_held_leases(self, db, scope):
         self.remind_calls.append(scope.id)
@@ -97,6 +101,9 @@ class _RoutingDispatch:
         await github_dispatch_service.dispatch_pending(*args, **kwargs)
 
     async def monitor_dispatched(self, db, scope, slots):
+        return None
+
+    async def monitor_continuation(self, db, scope, slots):
         return None
 
     async def remind_held_leases(self, db, scope):
@@ -189,8 +196,55 @@ async def test_run_repo_once_only_processes_enabled_autonomy_scopes(db):
     assert watcher.calls == [active.id]
     assert [call[0] for call in dispatch.dispatch_calls] == [active.id]
     assert dispatch.monitor_calls == [active.id]
+    assert dispatch.continuation_calls == [active.id]
     assert dispatch.remind_calls == [active.id]
     assert verification.calls == [active.id]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_orders_disjoint_monitors_around_verification(db):
+    scope = await _scope(db, autonomy=True, enabled=True)
+    order = []
+
+    class OrderedWatcher(_FakeWatcher):
+        async def poll_scope(self, db, scope, client):
+            order.append("watcher")
+
+    class OrderedDispatch(_FakeDispatch):
+        async def dispatch_pending(self, db, scope, slots, **kwargs):
+            order.append("dispatch")
+
+        async def monitor_dispatched(self, db, scope, slots):
+            order.append("initial_monitor")
+
+        async def monitor_continuation(self, db, scope, slots):
+            order.append("continuation_monitor")
+
+        async def remind_held_leases(self, db, scope):
+            order.append("lease_reminder")
+
+    class OrderedVerification(_FakeVerification):
+        async def process_scope(self, db, scope, client=None):
+            order.append("verification")
+
+    service = GithubDispatchScheduler(
+        scheduler=_FakeScheduler(),
+        watcher=OrderedWatcher(),
+        dispatch=OrderedDispatch(),
+        verification=OrderedVerification(),
+    )
+
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+
+    assert scope.id is not None
+    assert order == [
+        "watcher",
+        "dispatch",
+        "initial_monitor",
+        "continuation_monitor",
+        "verification",
+        "lease_reminder",
+    ]
 
 
 @pytest.mark.asyncio
@@ -248,6 +302,7 @@ async def test_scheduler_checks_held_leases_with_no_enabled_slots(db):
     await service.run_repo_once(db, "o", "r", client=_FakeClient())
 
     assert dispatch.monitor_calls == [scope.id]
+    assert dispatch.continuation_calls == [scope.id]
     assert dispatch.remind_calls == [scope.id]
 
 
@@ -293,6 +348,7 @@ async def test_torn_attempt_does_not_skip_scope_monitoring(db, monkeypatch):
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "plan_blocked"
     assert dispatch.monitor_calls == [scope.id]
+    assert dispatch.continuation_calls == [scope.id]
     assert dispatch.remind_calls == [scope.id]
     assert verification.calls == [scope.id]
 

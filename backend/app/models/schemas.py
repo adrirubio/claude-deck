@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ConfigFile(BaseModel):
@@ -1890,6 +1890,78 @@ class MailApprovalRequestCreate(BaseModel):
     plan_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class GithubContinuationProposalCreate(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    phase: Literal["implementation", "diagnostic"]
+    execution_target: Literal["workspace", "hosted_ci", "workspace_and_hosted_ci"]
+    summary: str = Field(min_length=1, max_length=12000)
+    allowed_paths: List[str]
+    allowed_actions: List[str]
+    allowed_commands: List[str]
+    prohibited_actions: List[str]
+    max_failed_heads: int = Field(ge=1)
+    tool_fallbacks: Dict[str, Any]
+    lease_token: str = Field(min_length=1)
+
+
+class GithubScopeRevisionResponse(BaseModel):
+    id: int
+    work_item_id: int
+    dispatch_nonce: str
+    revision: int
+    owner_slot_id: int
+    owner_member_id: int
+    phase: str
+    execution_target: str
+    summary: str
+    allowed_paths: List[str]
+    allowed_actions: List[str]
+    allowed_commands: List[str]
+    prohibited_actions: List[str]
+    tool_fallbacks: Dict[str, Any]
+    baseline_head_sha: str
+    baseline_tree_sha: str
+    originating_escalation_reason: str
+    expected_workspace_id: int
+    max_failed_heads: int
+    failed_head_count: int
+    last_failed_head_sha: Optional[str] = None
+    status: str
+    approval_request_id: Optional[int] = None
+    delivery_message_id: Optional[int] = None
+    approved_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    acknowledged_at: Optional[datetime] = None
+    last_delivery_attempt_at: Optional[datetime] = None
+    delivery_attempt_count: int
+    last_ack_nudge_at: Optional[datetime] = None
+    result_summary: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
+    submitted_head_sha: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class GithubContinuationRequestResponse(BaseModel):
+    approval: "GithubApprovalRequestResponse"
+    revision: GithubScopeRevisionResponse
+
+
+class MailContinuationDecisionRequest(BaseModel):
+    approval_request_id: int
+    work_item_id: int
+    dispatch_nonce: str = Field(min_length=1)
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1)
+
+
+class GithubContinuationAckRequest(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+
+
 class GithubApprovalRequestResponse(BaseModel):
     id: int
     work_item_id: int
@@ -2244,6 +2316,12 @@ class TeamGithubScopeResponse(BaseModel):
     build_dir_template: Optional[str] = None
     build_command_hint: Optional[str] = None
     max_build_parallelism: int
+    continuation_enabled: bool
+    max_continuation_revisions: int
+    max_continuation_failed_heads: int
+    max_failed_heads_per_revision: int
+    max_scope_paths: int
+    max_scope_commands: int
     enabled: bool
     last_polled_at: Optional[datetime] = None
     created_at: datetime
@@ -2252,6 +2330,24 @@ class TeamGithubScopeResponse(BaseModel):
 
 class TeamGithubScopeListResponse(BaseModel):
     scopes: List[TeamGithubScopeResponse] = Field(default_factory=list)
+
+
+class TeamGithubContinuationPolicyUpdate(BaseModel):
+    continuation_enabled: bool
+    max_continuation_revisions: int = Field(ge=1)
+    max_continuation_failed_heads: int = Field(ge=1)
+    max_failed_heads_per_revision: int = Field(ge=1)
+    max_scope_paths: int = Field(ge=1)
+    max_scope_commands: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_failed_head_caps(self):
+        if self.max_failed_heads_per_revision > self.max_continuation_failed_heads:
+            raise ValueError(
+                "max_failed_heads_per_revision cannot exceed "
+                "max_continuation_failed_heads"
+            )
+        return self
 
 
 class GithubWorkItemRetryRequest(BaseModel):
@@ -2354,6 +2450,21 @@ class GithubWorkItemResponse(BaseModel):
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None
+    active_scope_revision: int
+    active_scope_summary: Optional[str] = None
+    active_scope_status: Optional[str] = None
+    pending_approval_request_id: Optional[int] = None
+    pending_approval_kind: Optional[str] = None
+    attempt_phase: str
+    diagnostic_retry_count: int
+    diagnostic_last_verified_sha: Optional[str] = None
+    revision_failed_head_count: Optional[int] = None
+    revision_failed_head_budget: Optional[int] = None
+    continuation_block_code: Optional[str] = None
+    retry_allowed: bool
+    retry_block_code: Optional[str] = None
+    continuation_nudged_at: Optional[datetime] = None
+    continuation_activated_at: Optional[datetime] = None
     workspace_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -2372,6 +2483,8 @@ class GithubWorkItemContinuationResponse(BaseModel):
     repo_owner: str
     repo_name: str
     dispatch_status: str
+    attempt_phase: str
+    active_scope_revision: int
     approval_round_count: int
     dispatch_nonce: Optional[str] = None
     dispatch_head_ref: Optional[str] = None
@@ -2379,6 +2492,11 @@ class GithubWorkItemContinuationResponse(BaseModel):
     lease_token: Optional[str] = None
     leader_member_id: Optional[int] = None
     status_note: Optional[str] = None
+    active_revision: Optional[GithubScopeRevisionResponse] = None
+    pending_approval: Optional[GithubApprovalRequestResponse] = None
+    pending_revision: Optional[GithubScopeRevisionResponse] = None
+    continuation_block_code: Optional[str] = None
+    continuation_budget: Dict[str, int] = Field(default_factory=dict)
 
 
 class AgentTeamLaunchPlanItem(BaseModel):
@@ -2429,6 +2547,11 @@ class DispatchStatusReport(BaseModel):
     note: Optional[str] = None
     reporting_slot_id: Optional[int] = None
     lease_token: Optional[str] = None
+    revision: Optional[int] = None
+    dispatch_nonce: Optional[str] = None
+    current_head_sha: Optional[str] = None
+    summary: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):

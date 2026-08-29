@@ -970,8 +970,20 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                         "id": 17,
                         "issue_number": 817,
                         "dispatch_status": "escalated",
-                        "escalation_reason": "plan_blocked",
-                        "status_note": "Blocked by #816",
+                            "escalation_reason": "plan_blocked",
+                            "status_note": "Blocked by #816",
+                            "active_scope_summary": "Fix one bounded path",
+                            "active_scope_status": "active",
+                            "pending_approval_request_id": 73,
+                            "pending_approval_kind": "continuation",
+                            "revision_failed_head_count": 1,
+                            "revision_failed_head_budget": 2,
+                            "continuation_block_code": "approval_pending",
+                            "retry_allowed": False,
+                            "retry_block_code": "approval_pending",
+                            "expected_lease_token_hash": "never-project",
+                            "lease_token": "never-project",
+                            "allowed_commands": ["never-project"],
                     },
                     {
                         "id": 16,
@@ -1000,6 +1012,21 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                 "ack_approval_round": None,
                 "ack_enforcement_epoch": None,
                 "dispatch_head_ref": None,
+                "pr_number": None,
+                    "attempt_phase": None,
+                    "active_scope_revision": None,
+                    "active_scope_summary": "Fix one bounded path",
+                    "active_scope_status": "active",
+                    "pending_approval_request_id": 73,
+                    "pending_approval_kind": "continuation",
+                    "diagnostic_retry_count": None,
+                    "revision_failed_head_count": 1,
+                    "revision_failed_head_budget": 2,
+                    "continuation_block_code": "approval_pending",
+                    "retry_allowed": False,
+                    "retry_block_code": "approval_pending",
+                    "continuation_nudged_at": None,
+                "continuation_activated_at": None,
             }
         ],
     }
@@ -1010,6 +1037,10 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
             {"params": {"limit": 25}},
         )
     ]
+    projected = result["items"][0]
+    assert "expected_lease_token_hash" not in projected
+    assert "lease_token" not in projected
+    assert "allowed_commands" not in projected
 
 
 _OWNER_ONLY_STATUSES = [
@@ -1431,7 +1462,7 @@ async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_d
 
 def test_every_accepted_status_has_an_authorization_rule():
     accepted = _statuses_the_route_accepts()
-    assert len(accepted) == 10, f"branch count changed: {sorted(accepted)}"
+    assert len(accepted) == 11, f"branch count changed: {sorted(accepted)}"
     missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
     assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
 

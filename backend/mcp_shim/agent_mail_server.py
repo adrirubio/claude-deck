@@ -426,6 +426,127 @@ def deck_approve_work_item(
 
 
 @mcp.tool()
+def deck_request_continuation(
+    work_item_id: int,
+    dispatch_nonce: str,
+    phase: str,
+    execution_target: str,
+    summary: str,
+    allowed_paths: list[str],
+    allowed_actions: list[str],
+    allowed_commands: list[str],
+    prohibited_actions: list[str],
+    max_failed_heads: int,
+    tool_fallbacks: dict[str, Any],
+    lease_token: str,
+) -> dict:
+    """Request one bounded continuation revision from the designated Leader."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/continuation-requests",
+        json={
+            "dispatch_nonce": dispatch_nonce,
+            "phase": phase,
+            "execution_target": execution_target,
+            "summary": summary,
+            "allowed_paths": allowed_paths,
+            "allowed_actions": allowed_actions,
+            "allowed_commands": allowed_commands,
+            "prohibited_actions": prohibited_actions,
+            "max_failed_heads": max_failed_heads,
+            "tool_fallbacks": tool_fallbacks,
+            "lease_token": lease_token,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"], **_counts()}
+
+
+@mcp.tool()
+def deck_decide_continuation(
+    approval_request_id: int,
+    work_item_id: int,
+    dispatch_nonce: str,
+    decision: str,
+    reason: str,
+) -> dict:
+    """Approve or reject one explicit continuation authority request."""
+    if decision not in {"approved", "rejected"}:
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_decision",
+                "message": "decision must be approved or rejected",
+            },
+        }
+    err = _guard()
+    if err:
+        return err
+    result = _request(
+        "POST",
+        "/continuation-decisions",
+        json={
+            "approval_request_id": approval_request_id,
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "decision": decision,
+            "reason": reason,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {
+        "ok": True,
+        "message_id": result["data"]["id"],
+        "decision": result["data"].get("decision"),
+        **_counts(),
+    }
+
+
+@mcp.tool()
+def deck_ack_continuation(
+    work_item_id: int,
+    revision: int,
+    dispatch_nonce: str,
+    lease_token: str,
+) -> dict:
+    """Acknowledge and activate one delivered continuation revision."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/scope-revisions/{revision}/ack",
+        json={
+            "dispatch_nonce": dispatch_nonce,
+            "lease_token": lease_token,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "work_item": result["data"]}
+
+
+@mcp.tool()
+def deck_list_scope_revisions(work_item_id: int) -> dict:
+    """List safe continuation authority history for one work item."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "GET",
+        f"/github-work-items/{work_item_id}/scope-revisions",
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "revisions": result["data"]}
+
+
+@mcp.tool()
 def deck_ack_message(message_id: int) -> dict:
     """Acknowledge a message. Acking an answer to your context request closes it; acking
     a handoff addressed to you accepts and closes the handoff."""
@@ -715,13 +836,20 @@ def deck_report_dispatch_status(
     reassign_to_slot_id: Optional[int] = None,
     note: Optional[str] = None,
     lease_token: Optional[str] = None,
+    revision: Optional[int] = None,
+    dispatch_nonce: Optional[str] = None,
+    current_head_sha: Optional[str] = None,
+    summary: Optional[str] = None,
+    evidence: Optional[dict[str, Any]] = None,
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
     status is one of: triaging, ack_received, in_progress, pr_ready (with
     head_ref), pr_opened (with pr_number), handoff_initiated (with
-    reassign_to_slot_id), handoff_accepted, blocked, workspace_released. Never
-    send both head_ref and pr_number. Report ack_received only after the designated
+    reassign_to_slot_id), handoff_accepted, blocked, continuation_completed,
+    workspace_released. continuation_completed requires revision, dispatch_nonce,
+    current_head_sha, summary, evidence, and lease_token. Never send both head_ref
+    and pr_number. Report ack_received only after the designated
     leader records an explicit approved decision with deck_approve_work_item;
     prose replies are not approval. Called by the owner slot the brain dispatched
     the issue to. Include work_item_id and lease_token from your bootstrap prompt.
@@ -737,6 +865,11 @@ def deck_report_dispatch_status(
         "reassign_to_slot_id": reassign_to_slot_id,
         "note": note,
         "lease_token": lease_token,
+        "revision": revision,
+        "dispatch_nonce": dispatch_nonce,
+        "current_head_sha": current_head_sha,
+        "summary": summary,
+        "evidence": evidence,
     }
     return _dispatch_request("POST", "/dispatch-status", json=payload)
 
@@ -802,6 +935,27 @@ def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
                 "ack_approval_round": item.get("ack_approval_round"),
                 "ack_enforcement_epoch": item.get("ack_enforcement_epoch"),
                 "dispatch_head_ref": item.get("dispatch_head_ref"),
+                "pr_number": item.get("pr_number"),
+                "attempt_phase": item.get("attempt_phase"),
+                "active_scope_revision": item.get("active_scope_revision"),
+                "active_scope_summary": item.get("active_scope_summary"),
+                "active_scope_status": item.get("active_scope_status"),
+                "pending_approval_request_id": item.get(
+                    "pending_approval_request_id"
+                ),
+                "pending_approval_kind": item.get("pending_approval_kind"),
+                "diagnostic_retry_count": item.get("diagnostic_retry_count"),
+                "revision_failed_head_count": item.get(
+                    "revision_failed_head_count"
+                ),
+                "revision_failed_head_budget": item.get(
+                    "revision_failed_head_budget"
+                ),
+                "continuation_block_code": item.get("continuation_block_code"),
+                "retry_allowed": item.get("retry_allowed"),
+                "retry_block_code": item.get("retry_block_code"),
+                "continuation_nudged_at": item.get("continuation_nudged_at"),
+                "continuation_activated_at": item.get("continuation_activated_at"),
             }
             for item in items
         ],
