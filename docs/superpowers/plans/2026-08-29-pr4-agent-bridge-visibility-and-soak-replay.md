@@ -20,6 +20,8 @@ Revision 7, especially §§8.3, 9.3, 10, 13.5–13.7, 14 PR4, 15, and 16.
 
 **Dependency:** Merged PR3 diagnostic recovery. Record its integration merge SHA.
 
+**Merged PR3:** `b4d444c7b469dafb52de0e2a2bb895a7fa43a851`.
+
 **Target:** One PR into `feature/autonomous-github-dispatch`, never `master`.
 
 ## PR Boundary
