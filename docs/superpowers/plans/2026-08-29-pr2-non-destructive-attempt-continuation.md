@@ -22,6 +22,12 @@ the PR description.
 
 **Target:** One PR into `feature/autonomous-github-dispatch`, never `master`.
 
+**Post-PR1 drift corrections (2026-08-29):** Merged PR1 commit `88f06be` made decision
+targeting explicit, removed caller-controlled operator cancellation, and serialized
+approval mutations against database-current work-item state. The Task 3, Task 4, and Task 6
+requirements below supersede any older implementation inference that conflicts with those
+contracts.
+
 ## PR Boundary
 
 PR2 implements **implementation-phase continuation only**.
@@ -186,6 +192,11 @@ venv/bin/pytest tests/agent_teams/test_github_client.py -q -p no:warnings
   `hmac.compare_digest`; never store or return plaintext.
 - [ ] Allocate `COALESCE(MAX(revision), 0) + 1` inside the transaction and rely on the unique
   constraint under races.
+- [ ] Before inserting revision or approval authority, serialize on a conditional
+  `GithubWorkItem` update that requires database-current `dispatch_status == "escalated"`,
+  nonce, approval round, owner slot, PR, and originating escalation. Do not reuse PR1's
+  initial-plan `dispatch_status != "escalated"` predicate. A concurrent transition out of
+  escalation fails closed without creating either row.
 - [ ] Resolve the circular links without partial commits: insert/flush the revision, insert/
   flush the approval pointing to it, set `revision.approval_request_id`, then commit once.
 - [ ] On conflict, roll back and return the identical winner or
@@ -194,7 +205,8 @@ venv/bin/pytest tests/agent_teams/test_github_client.py -q -p no:warnings
   canonical request, and one pending normalized approval.
 
 **Mutation checks:** baseline from body; wildcard path accepted; revision cap checked after
-insert; owner slot without member; hash omitted; race allocates two revisions.
+insert; owner slot without member; hash omitted; race allocates two revisions; proposal
+guard accepts a database-current non-escalated item.
 
 **Verify:**
 
@@ -220,15 +232,29 @@ venv/bin/pytest tests/agent_teams/test_github_workspace_api.py -q -p no:warnings
   mail root by stable delivery key.
 - [ ] Add Leader-authenticated `POST /agent-mail/continuation-decisions` taking approval id,
   decision, and reason—not a thread id.
+- [ ] Require an explicit `approval_request_id` and resolve only
+  `request_kind == "continuation"`. Parameterize PR1's resolver with an expected kind or add
+  a dedicated continuation resolver; never route continuation decisions through the
+  initial-plan-only resolver and never infer whichever request is pending.
 - [ ] Validate distinct current Leader, request owner, nonce, round, revision, pending status,
   and expiry.
+- [ ] Serialize the decision mutation on a conditional `GithubWorkItem` update requiring
+  database-current `dispatch_status == "escalated"`, nonce, approval round, owner slot, PR,
+  and originating escalation. A concurrent transition out of escalation leaves the
+  approval and revision pending and returns a stable conflict.
 - [ ] Commit decision authority before decision mail; link decision evidence idempotently.
 - [ ] On approval, leave the item escalated and revision approved.
 - [ ] On rejection, mark request/revision terminal and leave the item escalated.
-- [ ] Add owner/operator cancellation route using PR1's synchronized service transition.
+- [ ] Add cancellation with two authenticated pathways and no caller-controlled privilege
+  flag: an authenticated requester session calls
+  `github_approval_service.cancel(..., requester_member_id=session.member_id)`; an operator
+  route protected by `require_operator` calls the neutral private authorized transition.
+  Neither pathway may manufacture a `MailAgentSession` or member id.
 - [ ] Add audited revision-list route; never return lease hash or secrets.
 
-**Mutation checks:** choose mail thread; approval changes item status; operator approves;
+**Mutation checks:** choose mail thread; omit or change `approval_request_id`; resolve an
+`initial_plan` request as continuation; approval changes item status; decision guard accepts
+a database-current non-escalated item; operator approves; unprotected operator cancellation;
 cancel updates one row; decision replay reverses terminal decision.
 
 **Verify:**
@@ -295,7 +321,9 @@ venv/bin/pytest tests/agent_teams/test_github_dispatch_service.py \
   context; list/audit endpoints omit it.
 - [ ] Add MCP tools:
   - `deck_request_continuation`;
-  - `deck_decide_continuation`;
+  - `deck_decide_continuation(approval_request_id: int, work_item_id: int,
+    dispatch_nonce: str, decision: str, reason: str)` with every argument required and no
+    pending-request fallback;
   - `deck_ack_continuation`;
   - `deck_list_scope_revisions`.
 - [ ] Extend `deck_list_work_items` with safe continuation fields.
