@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.config import settings
 from app.models.database import (
     AgentTeamSlot,
     GithubApprovalRequest,
@@ -358,17 +359,11 @@ class GithubApprovalService:
         if max_failed_heads > scope.max_failed_heads_per_revision:
             raise GithubApprovalError("continuation_failed_head_limit_exceeded")
 
-        revision_count, failed_head_count = (
-            await db.execute(
-                select(
-                    func.count(GithubAttemptScopeRevision.id),
-                    func.coalesce(func.sum(GithubAttemptScopeRevision.failed_head_count), 0),
-                ).where(
-                    GithubAttemptScopeRevision.work_item_id == item.id,
-                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
-                )
-            )
-        ).one()
+        revision_count, failed_head_count = await self.continuation_budget_usage(
+            db,
+            item.id,
+            dispatch_nonce,
+        )
         if revision_count >= scope.max_continuation_revisions:
             raise GithubApprovalError("continuation_budget_exhausted")
         remaining_failed_heads = (
@@ -477,7 +472,10 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision,
                 terminal.scope_revision_id,
             )
-            if terminal_revision is not None:
+            if (
+                terminal_revision is not None
+                and terminal_revision.status in {"approved", "rejected"}
+            ):
                 return terminal_revision, terminal, False
 
         next_revision = (
@@ -537,6 +535,12 @@ class GithubApprovalService:
             expected_workspace_id=workspace.id,
             expected_lease_token_hash=self.lease_token_hash(lease_token),
             max_failed_heads=max_failed_heads,
+            expires_at=(
+                datetime.utcnow()
+                + timedelta(
+                    seconds=settings.github_continuation_proposal_expiry_seconds
+                )
+            ),
         )
         db.add(revision)
         await db.flush()
@@ -816,6 +820,68 @@ class GithubApprovalService:
             raise GithubApprovalError("approval_request_link_mismatch")
         return linked, link_result.rowcount == 1
 
+    async def continuation_budget_usage(
+        self,
+        db: AsyncSession,
+        work_item_id: int,
+        dispatch_nonce: str,
+    ) -> tuple[int, int]:
+        revision_count, failed_head_count = (
+            await db.execute(
+                select(
+                    func.count(GithubAttemptScopeRevision.id),
+                    func.coalesce(
+                        func.sum(GithubAttemptScopeRevision.failed_head_count),
+                        0,
+                    ),
+                ).where(
+                    GithubAttemptScopeRevision.work_item_id == work_item_id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                )
+            )
+        ).one()
+        return int(revision_count), int(failed_head_count)
+
+    async def expire_continuation_if_needed(
+        self,
+        db: AsyncSession,
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+        *,
+        now: datetime | None = None,
+    ) -> str | None:
+        current = now or datetime.utcnow()
+        if revision.expires_at is None or revision.expires_at > current:
+            return None
+        if request.status == "pending" and revision.status == "proposed":
+            request.status = "expired"
+            revision.status = "expired"
+            root = None
+            if request.request_message_id is not None:
+                root = await db.get(MailMessage, request.request_message_id)
+            if root is None:
+                root = (
+                    await db.execute(
+                        select(MailMessage).where(
+                            MailMessage.delivery_key
+                            == f"github-approval:{request.id}:request"
+                        )
+                    )
+                ).scalar_one_or_none()
+            if root is not None:
+                root.request_status = "superseded"
+            await db.commit()
+            return "expired_pending"
+        if (
+            request.status == "approved"
+            and revision.status == "approved"
+            and revision.acknowledged_at is None
+        ):
+            revision.status = "expired"
+            await db.commit()
+            return "expired_approved"
+        return None
+
     async def ensure_continuation_decision_message(
         self,
         db: AsyncSession,
@@ -1021,7 +1087,8 @@ class GithubApprovalService:
         request: GithubApprovalRequest,
         revision: GithubAttemptScopeRevision,
         *,
-        nudge_cooldown: timedelta,
+        leader_nudge_cooldown: timedelta,
+        owner_ack_nudge_cooldown: timedelta,
     ) -> str:
         async with self.continuation_transport_lock(request.id):
             return await self._repair_continuation_transport(
@@ -1029,7 +1096,8 @@ class GithubApprovalService:
                 item,
                 request,
                 revision,
-                nudge_cooldown=nudge_cooldown,
+                leader_nudge_cooldown=leader_nudge_cooldown,
+                owner_ack_nudge_cooldown=owner_ack_nudge_cooldown,
             )
 
     async def _repair_continuation_transport(
@@ -1039,11 +1107,20 @@ class GithubApprovalService:
         request: GithubApprovalRequest,
         revision: GithubAttemptScopeRevision,
         *,
-        nudge_cooldown: timedelta,
+        leader_nudge_cooldown: timedelta,
+        owner_ack_nudge_cooldown: timedelta,
     ) -> str:
         await db.refresh(item)
         await db.refresh(request)
         await db.refresh(revision)
+        if request.status == "pending":
+            expired = await self.expire_continuation_if_needed(
+                db,
+                request,
+                revision,
+            )
+            if expired == "expired_pending":
+                return expired
         try:
             await self.ensure_continuation_request_message(
                 db,
@@ -1061,7 +1138,7 @@ class GithubApprovalService:
                 db,
                 request,
                 revision,
-                cooldown=nudge_cooldown,
+                cooldown=leader_nudge_cooldown,
             ):
                 return "nudge_leader"
             return "await_leader"
@@ -1080,6 +1157,13 @@ class GithubApprovalService:
             raise
         if request.status == "rejected":
             return "rejection_delivered"
+        expired = await self.expire_continuation_if_needed(
+            db,
+            request,
+            revision,
+        )
+        if expired == "expired_approved":
+            return expired
         try:
             _revision, delivered = await self.deliver_approved_continuation(
                 db,
@@ -1100,7 +1184,7 @@ class GithubApprovalService:
         if await self.nudge_approved_continuation_owner(
             db,
             revision,
-            cooldown=nudge_cooldown,
+            cooldown=owner_ack_nudge_cooldown,
         ):
             return "nudge_owner_ack"
         return "await_owner_ack"
@@ -1120,6 +1204,8 @@ class GithubApprovalService:
             raise GithubApprovalError("approval_revision_link_mismatch")
         if revision.approval_request_id != request.id or revision.status != "approved":
             raise GithubApprovalError("continuation_not_approved")
+        if revision.expires_at is not None and revision.expires_at <= datetime.utcnow():
+            raise GithubApprovalError("continuation_request_expired")
         owner, _leader = await self._current_participants(db, item)
         if (
             item.dispatch_nonce != revision.dispatch_nonce

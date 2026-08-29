@@ -350,6 +350,11 @@ async def test_continuation_proposal_persists_canonical_server_authority(
     assert revision.summary == "Apply one bounded correction"
     assert revision.baseline_head_sha == "a" * 40
     assert revision.baseline_tree_sha == "b" * 40
+    assert revision.expires_at is not None
+    assert revision.expires_at > datetime.utcnow()
+    assert revision.expires_at <= datetime.utcnow() + timedelta(
+        seconds=settings.github_continuation_proposal_expiry_seconds
+    )
     assert revision.expected_workspace_id == workspace.id
     assert revision.expected_lease_token_hash != workspace.lease_token
     assert github_approval_service.lease_token_matches(
@@ -364,6 +369,49 @@ async def test_continuation_proposal_persists_canonical_server_authority(
     assert (
         await db.scalar(select(func.count()).select_from(GithubApprovalRequest))
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_approved_revision_allows_identical_fresh_proposal(
+    db,
+    tmp_path,
+    monkeypatch,
+):
+    scope, item, _workspace, owner_slot, owner = (
+        await _continuation_proposal_context(db, tmp_path)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposal = _continuation_proposal_kwargs(item, owner_slot, owner)
+    first_revision, first_approval, created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **proposal,
+        )
+    )
+    first_approval.status = "approved"
+    first_approval.reason = "Approved but never acknowledged"
+    first_approval.decided_at = datetime.utcnow()
+    first_revision.status = "expired"
+    first_revision.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+
+    second_revision, second_approval, second_created = (
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **proposal,
+        )
+    )
+
+    assert created is True
+    assert second_created is True
+    assert second_revision.id != first_revision.id
+    assert second_revision.revision == 2
+    assert second_approval.id != first_approval.id
+    assert second_approval.status == "pending"
 
 
 @pytest.mark.asyncio

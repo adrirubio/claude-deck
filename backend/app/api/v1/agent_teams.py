@@ -1270,6 +1270,12 @@ async def request_github_work_item_continuation(
             )
         )
         async with github_approval_service.continuation_transport_lock(approval.id):
+            if await github_approval_service.expire_continuation_if_needed(
+                db,
+                approval,
+                revision,
+            ):
+                raise GithubApprovalError("continuation_request_expired")
             _root, linked = (
                 await github_approval_service.ensure_continuation_request_message(
                     db,
@@ -1286,7 +1292,9 @@ async def request_github_work_item_continuation(
                     approval,
                     revision,
                     cooldown=timedelta(
-                        seconds=settings.github_nudge_grace_seconds
+                        seconds=(
+                            settings.github_continuation_leader_nudge_cooldown_seconds
+                        )
                     ),
                 )
         return GithubContinuationRequestResponse(

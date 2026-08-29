@@ -380,12 +380,17 @@ async def decide_work_item_continuation(
                 for_member_id=None,
             )
             if approval.status == "approved":
-                await github_approval_service.deliver_approved_continuation(
+                if not await github_approval_service.expire_continuation_if_needed(
                     db,
-                    item,
                     approval,
                     revision,
-                )
+                ):
+                    await github_approval_service.deliver_approved_continuation(
+                        db,
+                        item,
+                        approval,
+                        revision,
+                    )
             elif decision_linked:
                 await agent_mail_service.auto_nudge_members(
                     db,

@@ -275,13 +275,17 @@ class GithubDispatchService:
             and item.dispatch_status == "dispatched"
         ):
             return False
+        now = datetime.utcnow()
+        if (
+            revision.status == "expired"
+            or revision.expires_at is not None
+            and revision.expires_at <= now
+        ):
+            raise ValueError("continuation_request_expired")
         if revision.status != "approved":
             raise ValueError("continuation_not_approved")
         if revision.delivery_message_id is None or revision.delivered_at is None:
             raise ValueError("continuation_delivery_pending")
-        now = datetime.utcnow()
-        if revision.expires_at is not None and revision.expires_at <= now:
-            raise ValueError("continuation_request_expired")
         if item.dispatch_status != "escalated":
             raise ValueError("continuation_not_escalated")
         if item.escalation_reason != revision.originating_escalation_reason:
@@ -2245,7 +2249,15 @@ class GithubDispatchService:
             )
         ).scalars().all()
         now = datetime.utcnow()
-        cooldown = timedelta(seconds=settings.github_nudge_grace_seconds)
+        recovery_nudge_cooldown = timedelta(
+            seconds=settings.github_recovery_nudge_cooldown_seconds
+        )
+        leader_nudge_cooldown = timedelta(
+            seconds=settings.github_continuation_leader_nudge_cooldown_seconds
+        )
+        owner_ack_nudge_cooldown = timedelta(
+            seconds=settings.github_continuation_owner_ack_nudge_cooldown_seconds
+        )
 
         for item in items:
             if item.escalation_reason not in CONTINUABLE_ESCALATIONS:
@@ -2275,12 +2287,18 @@ class GithubDispatchService:
                         GithubApprovalRequest.work_item_id == item.id,
                         GithubApprovalRequest.request_kind == "continuation",
                         or_(
-                            GithubApprovalRequest.status.in_(
-                                ("pending", "approved")
+                            (
+                                (GithubApprovalRequest.status == "pending")
+                                & (GithubAttemptScopeRevision.status == "proposed")
+                            ),
+                            (
+                                (GithubApprovalRequest.status == "approved")
+                                & (GithubAttemptScopeRevision.status == "approved")
                             ),
                             (
                                 (GithubApprovalRequest.status == "rejected")
                                 & GithubApprovalRequest.decision_message_id.is_(None)
+                                & (GithubAttemptScopeRevision.status == "rejected")
                             ),
                         ),
                     )
@@ -2297,7 +2315,8 @@ class GithubDispatchService:
                             item,
                             request,
                             revision,
-                            nudge_cooldown=cooldown,
+                            leader_nudge_cooldown=leader_nudge_cooldown,
+                            owner_ack_nudge_cooldown=owner_ack_nudge_cooldown,
                         )
                     )
                 except GithubApprovalError:
@@ -2307,6 +2326,42 @@ class GithubDispatchService:
                         item.id,
                     )
                     continue
+                continue
+            revision_count, failed_head_count = (
+                await github_approval_service.continuation_budget_usage(
+                    db,
+                    item.id,
+                    item.dispatch_nonce,
+                )
+            )
+            if (
+                revision_count >= scope.max_continuation_revisions
+                or failed_head_count >= scope.max_continuation_failed_heads
+            ):
+                note = (
+                    "Automatic continuation stopped because the attempt-wide "
+                    "revision or failed-head budget was exhausted."
+                )
+                self._apply_escalation(
+                    item,
+                    "continuation_budget_exhausted",
+                    note,
+                    preserve_existing_reason=False,
+                )
+                await db.commit()
+                try:
+                    await self._send_escalation_broadcast(
+                        db,
+                        item,
+                        "continuation_budget_exhausted",
+                        note,
+                        owner_may_be_active=False,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to send continuation budget escalation for item %s",
+                        item.id,
+                    )
                 continue
             sessions = await agent_mail_service.nudgeable_sessions_for_slot(
                 db,
@@ -2322,7 +2377,7 @@ class GithubDispatchService:
                 continue
             if (
                 item.continuation_nudged_at is not None
-                and now - item.continuation_nudged_at < cooldown
+                and now - item.continuation_nudged_at < recovery_nudge_cooldown
             ):
                 continue
             try:

@@ -421,6 +421,55 @@ async def test_continuation_decision_refuses_initial_plan_authority(
 
 
 @pytest.mark.asyncio
+async def test_continuation_decision_cannot_approve_expired_revision(
+    client,
+    db,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, _members, tokens, _workspace = (
+        await _continuation_approval_fixture(db)
+    )
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    approval = await db.get(
+        GithubApprovalRequest,
+        proposed.json()["approval"]["id"],
+    )
+    revision = await db.get(
+        GithubAttemptScopeRevision,
+        proposed.json()["revision"]["id"],
+    )
+    revision.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+
+    refused = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={
+            "approval_request_id": approval.id,
+            "work_item_id": item.id,
+            "dispatch_nonce": item.dispatch_nonce,
+            "decision": "approved",
+            "reason": "Too late",
+        },
+    )
+
+    await db.refresh(approval)
+    await db.refresh(revision)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "continuation_request_expired"
+    assert approval.status == "pending"
+    assert approval.decision_message_id is None
+    assert revision.status == "proposed"
+    assert revision.delivery_message_id is None
+
+
+@pytest.mark.asyncio
 async def test_continuation_requester_cancels_without_operator_impersonation(
     client, db, monkeypatch
 ):
