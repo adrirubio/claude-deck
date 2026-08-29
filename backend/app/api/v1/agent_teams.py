@@ -1222,7 +1222,10 @@ async def request_github_work_item_continuation(
                 allowed_commands=request.allowed_commands,
                 prohibited_actions=request.prohibited_actions,
                 max_failed_heads=request.max_failed_heads,
-                tool_fallbacks=request.tool_fallbacks,
+                tool_fallbacks={
+                    name: fallback.model_dump()
+                    for name, fallback in request.tool_fallbacks.items()
+                },
                 lease_token=request.lease_token,
             )
         )

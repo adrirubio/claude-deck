@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import re
 from datetime import datetime
 from pathlib import PurePosixPath
 
@@ -50,6 +51,14 @@ _CONTINUATION_ACTIONS = frozenset(
 )
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
 _LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00"
+_HOSTED_ONLY_LOCAL_BUILD = re.compile(
+    r"(?:^|[;&|]\s*)(?:sudo\s+)?(?:env\s+(?:[^\s=]+=[^\s]+\s+)*)?"
+    r"(?:\./configure|cmake|make|ninja|meson|gcc|g\+\+|clang|clang\+\+|"
+    r"cargo\s+(?:build|test)|go\s+(?:build|test))(?:\s|$)"
+)
+_TOOL_FALLBACK_KEYS = frozenset(
+    {"target", "if_missing", "package", "revert_required"}
+)
 
 
 class GithubApprovalError(ValueError):
@@ -135,6 +144,40 @@ class GithubApprovalService:
         return paths
 
     @classmethod
+    def _canonical_tool_fallbacks(
+        cls,
+        tool_fallbacks: dict,
+        *,
+        execution_target: str,
+    ) -> dict:
+        if not isinstance(tool_fallbacks, dict):
+            raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+        normalized: dict[str, dict] = {}
+        for tool, fallback in sorted(tool_fallbacks.items()):
+            if not isinstance(tool, str) or not tool.strip() or tool != tool.strip():
+                raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+            if not isinstance(fallback, dict) or set(fallback) != _TOOL_FALLBACK_KEYS:
+                raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+            package = fallback.get("package")
+            if (
+                fallback.get("target") != "hosted_ci"
+                or fallback.get("if_missing") != "install_temporarily"
+                or not isinstance(package, str)
+                or not package.strip()
+                or fallback.get("revert_required") is not True
+            ):
+                raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
+            if execution_target not in {"hosted_ci", "workspace_and_hosted_ci"}:
+                raise GithubApprovalError("hosted_tool_target_required", status_code=400)
+            normalized[tool] = {
+                "target": "hosted_ci",
+                "if_missing": "install_temporarily",
+                "package": package.strip(),
+                "revert_required": True,
+            }
+        return normalized
+
+    @classmethod
     def canonical_continuation_payload(
         cls,
         *,
@@ -214,9 +257,7 @@ class GithubApprovalService:
             raise GithubApprovalError("continuation_pr_required")
         if item.dispatch_nonce != dispatch_nonce:
             raise GithubApprovalError("stale_nonce")
-        if phase == "diagnostic":
-            raise GithubApprovalError("diagnostic_continuation_not_available")
-        if phase != "implementation":
+        if phase not in {"implementation", "diagnostic"}:
             raise GithubApprovalError("continuation_phase_invalid", status_code=400)
         if execution_target not in {
             "workspace",
@@ -226,8 +267,6 @@ class GithubApprovalService:
             raise GithubApprovalError("execution_target_invalid", status_code=400)
         if not summary.strip():
             raise GithubApprovalError("continuation_summary_required", status_code=400)
-        if not isinstance(tool_fallbacks, dict):
-            raise GithubApprovalError("tool_fallbacks_invalid", status_code=400)
 
         owner, leader = await self._current_participants(db, item)
         if owner.id != authenticated_owner_member_id:
@@ -269,6 +308,33 @@ class GithubApprovalService:
             prohibited_actions,
             label="prohibited_actions",
         )
+        canonical_fallbacks = self._canonical_tool_fallbacks(
+            tool_fallbacks,
+            execution_target=execution_target,
+        )
+        if phase == "diagnostic":
+            if "revert_diagnostic_changes" not in canonical_actions:
+                raise GithubApprovalError("diagnostic_revert_required", status_code=400)
+            if execution_target == "hosted_ci" and any(
+                _HOSTED_ONLY_LOCAL_BUILD.search(command)
+                for command in canonical_commands
+            ):
+                raise GithubApprovalError(
+                    "hosted_diagnostic_local_build_forbidden",
+                    status_code=400,
+                )
+            installs_hosted_tool = "install_hosted_ci_tool" in canonical_actions
+            if installs_hosted_tool != bool(canonical_fallbacks):
+                raise GithubApprovalError(
+                    "hosted_tool_fallback_required",
+                    status_code=400,
+                )
+        elif "install_hosted_ci_tool" in canonical_actions:
+            if not canonical_fallbacks:
+                raise GithubApprovalError(
+                    "hosted_tool_fallback_required",
+                    status_code=400,
+                )
         if len(canonical_paths) > scope.max_scope_paths:
             raise GithubApprovalError("continuation_path_limit_exceeded")
         if len(canonical_commands) > scope.max_scope_commands:
@@ -328,7 +394,7 @@ class GithubApprovalService:
             allowed_commands=canonical_commands,
             prohibited_actions=canonical_prohibitions,
             max_failed_heads=max_failed_heads,
-            tool_fallbacks=tool_fallbacks,
+            tool_fallbacks=canonical_fallbacks,
             baseline_head_sha=snapshot.sha,
             baseline_tree_sha=snapshot.tree_sha,
             expected_workspace_id=workspace.id,
@@ -448,7 +514,7 @@ class GithubApprovalService:
             allowed_actions=canonical_actions,
             allowed_commands=canonical_commands,
             prohibited_actions=canonical_prohibitions,
-            tool_fallbacks=tool_fallbacks,
+            tool_fallbacks=canonical_fallbacks,
             baseline_head_sha=snapshot.sha,
             baseline_tree_sha=snapshot.tree_sha,
             originating_escalation_reason=item.escalation_reason,

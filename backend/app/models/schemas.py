@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ConfigFile(BaseModel):
@@ -1890,6 +1890,15 @@ class MailApprovalRequestCreate(BaseModel):
     plan_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class GithubDiagnosticToolFallback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: Literal["hosted_ci"]
+    if_missing: Literal["install_temporarily"]
+    package: str = Field(min_length=1, max_length=200)
+    revert_required: Literal[True]
+
+
 class GithubContinuationProposalCreate(BaseModel):
     dispatch_nonce: str = Field(min_length=1)
     phase: Literal["implementation", "diagnostic"]
@@ -1900,7 +1909,7 @@ class GithubContinuationProposalCreate(BaseModel):
     allowed_commands: List[str]
     prohibited_actions: List[str]
     max_failed_heads: int = Field(ge=1)
-    tool_fallbacks: Dict[str, Any]
+    tool_fallbacks: Dict[str, GithubDiagnosticToolFallback]
     lease_token: str = Field(min_length=1)
 
 

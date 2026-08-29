@@ -370,7 +370,6 @@ async def test_continuation_proposal_persists_canonical_server_authority(
 @pytest.mark.parametrize(
     ("override", "detail"),
     [
-        ({"phase": "diagnostic"}, "diagnostic_continuation_not_available"),
         ({"allowed_paths": ["src/**"]}, "allowed_paths_invalid"),
         ({"allowed_actions": ["run_anything"]}, "allowed_actions_invalid"),
         ({"lease_token": "wrong"}, "lease_token_mismatch"),
@@ -398,6 +397,148 @@ async def test_continuation_proposal_rejects_unbounded_or_stale_authority(
     assert (
         await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
     ) == 0
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_proposal_persists_closed_hosted_policy(
+    db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(
+        phase="diagnostic",
+        execution_target="hosted_ci",
+        summary="Collect a gdb backtrace from hosted playback CI",
+        allowed_paths=[".github/workflows/playback.yml", "tests/playback_smoke.py.in"],
+        allowed_actions=[
+            "collect_hosted_logs",
+            "edit_ci_workflow",
+            "install_hosted_ci_tool",
+            "push_pr_head",
+            "revert_diagnostic_changes",
+        ],
+        allowed_commands=["git diff --check"],
+        tool_fallbacks={
+            "gdb": {
+                "target": "hosted_ci",
+                "if_missing": "install_temporarily",
+                "package": "gdb",
+                "revert_required": True,
+            }
+        },
+    )
+
+    revision, approval, created = await github_approval_service.create_continuation_request(
+        db,
+        item,
+        scope,
+        **payload,
+    )
+
+    assert created is True
+    assert revision.phase == "diagnostic"
+    assert revision.execution_target == "hosted_ci"
+    assert revision.summary == "Collect a gdb backtrace from hosted playback CI"
+    assert revision.tool_fallbacks == payload["tool_fallbacks"]
+    assert approval.scope_revision_id == revision.id
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("override", "detail"),
+    [
+        ({"allowed_actions": ["collect_hosted_logs"]}, "diagnostic_revert_required"),
+        (
+            {"allowed_commands": ["cmake -S . -B build"]},
+            "hosted_diagnostic_local_build_forbidden",
+        ),
+        (
+            {"tool_fallbacks": {}},
+            "hosted_tool_fallback_required",
+        ),
+        (
+            {
+                "tool_fallbacks": {
+                    "gdb": {
+                        "target": "hosted_ci",
+                        "if_missing": "install_temporarily",
+                        "package": "gdb",
+                        "revert_required": False,
+                    }
+                }
+            },
+            "tool_fallbacks_invalid",
+        ),
+    ],
+)
+async def test_diagnostic_proposal_rejects_unsafe_policy(
+    db, tmp_path, monkeypatch, override, detail
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(
+        phase="diagnostic",
+        execution_target="hosted_ci",
+        allowed_actions=[
+            "collect_hosted_logs",
+            "install_hosted_ci_tool",
+            "revert_diagnostic_changes",
+        ],
+        tool_fallbacks={
+            "gdb": {
+                "target": "hosted_ci",
+                "if_missing": "install_temporarily",
+                "package": "gdb",
+                "revert_required": True,
+            }
+        },
+    )
+    payload.update(override)
+
+    with pytest.raises(GithubApprovalError, match=detail) as exc_info:
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **payload,
+        )
+
+    assert exc_info.value.detail == detail
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_proposal_requires_scope_rollout_gate(
+    db, tmp_path, monkeypatch
+):
+    scope, item, _workspace, owner_slot, owner = await _continuation_proposal_context(
+        db, tmp_path
+    )
+    scope.continuation_enabled = False
+    await db.commit()
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload.update(
+        phase="diagnostic",
+        allowed_actions=["revert_diagnostic_changes"],
+    )
+
+    with pytest.raises(GithubApprovalError, match="continuation_disabled"):
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **payload,
+        )
 
 
 @pytest.mark.asyncio
