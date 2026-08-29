@@ -1,5 +1,6 @@
 """Dispatch routing + concurrency tests."""
 import asyncio
+import logging
 import os
 from datetime import datetime, timedelta
 from io import StringIO
@@ -4619,6 +4620,51 @@ async def test_recovery_monitor_repairs_pending_request_transport_once(
     assert revision.delivery_attempt_count == 1
     assert revision.last_delivery_attempt_at is not None
     assert nudges == [{leader.id}]
+
+
+@pytest.mark.asyncio
+async def test_recovery_monitor_logs_structured_redacted_transport_action(
+    db,
+    monkeypatch,
+    caplog,
+):
+    _preset, slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    _request, revision, leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+    )
+
+    async def record_nudge(_db, member_ids, **_kwargs):
+        assert set(member_ids) == {leader.id}
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
+
+    with caplog.at_level(
+        logging.DEBUG,
+        logger="app.services.github_dispatch_service",
+    ):
+        await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "monitor_name", None) == "monitor_recovery"
+    )
+    assert record.work_item_id == item.id
+    assert record.scope_revision == revision.revision
+    assert record.revision_phase == "implementation"
+    assert record.revision_status == "proposed"
+    assert record.monitor_action == "nudge_leader"
+    assert record.block_code is None
+    assert record.grace_anchor is not None
+    serialized = str(record.__dict__)
+    assert workspace.lease_token not in serialized
+    assert revision.summary not in serialized
+    assert revision.allowed_commands[0] not in serialized
 
 
 @pytest.mark.asyncio

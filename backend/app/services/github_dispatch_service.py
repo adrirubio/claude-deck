@@ -2082,6 +2082,38 @@ class GithubDispatchService:
             },
         )
 
+    @staticmethod
+    def _log_recovery_monitor(
+        item: GithubWorkItem,
+        *,
+        revision: GithubAttemptScopeRevision | None,
+        anchor: datetime | None,
+        now: datetime,
+        action: str,
+        block_code: str | None = None,
+    ) -> None:
+        logger.debug(
+            "github recovery monitor",
+            extra={
+                "monitor_name": "monitor_recovery",
+                "work_item_id": item.id,
+                "active_scope_revision": item.active_scope_revision,
+                "attempt_phase": item.attempt_phase,
+                "dispatch_status": item.dispatch_status,
+                "scope_revision": revision.revision if revision is not None else None,
+                "revision_phase": revision.phase if revision is not None else None,
+                "revision_status": revision.status if revision is not None else None,
+                "grace_anchor": anchor.isoformat() if anchor is not None else None,
+                "elapsed_grace_seconds": (
+                    max((now - anchor).total_seconds(), 0)
+                    if anchor is not None
+                    else None
+                ),
+                "monitor_action": action,
+                "block_code": block_code,
+            },
+        )
+
     async def monitor_continuation(
         self,
         db: AsyncSession,
@@ -2261,6 +2293,14 @@ class GithubDispatchService:
 
         for item in items:
             if item.escalation_reason not in CONTINUABLE_ESCALATIONS:
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="continuation_reason_not_allowed",
+                )
                 continue
             if (
                 item.pr_number is None
@@ -2268,12 +2308,36 @@ class GithubDispatchService:
                 or item.owner_slot_id not in enabled_slot_ids
                 or not item.dispatch_nonce
             ):
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="attempt_identity_incomplete",
+                )
                 continue
             workspace = await github_workspace_service.get_leased_workspace(db, item.id)
             if workspace is None or workspace.lease_token is None:
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="workspace_lease_required",
+                )
                 continue
             owner = await self._owner_member(db, item)
             if owner is None or owner.team_slot_id != item.owner_slot_id:
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="owner_member_unavailable",
+                )
                 continue
             transport = (
                 await db.execute(
@@ -2309,7 +2373,7 @@ class GithubDispatchService:
             if transport is not None:
                 request, revision = transport
                 try:
-                    _repair_action = (
+                    repair_action = (
                         await github_approval_service.repair_continuation_transport(
                             db,
                             item,
@@ -2319,13 +2383,32 @@ class GithubDispatchService:
                             owner_ack_nudge_cooldown=owner_ack_nudge_cooldown,
                         )
                     )
-                except GithubApprovalError:
+                except GithubApprovalError as exc:
                     logger.exception(
                         "Recovery monitor could not repair continuation transport "
                         "for work item %s",
                         item.id,
                     )
+                    self._log_recovery_monitor(
+                        item,
+                        revision=revision,
+                        anchor=None,
+                        now=now,
+                        action="skip",
+                        block_code=exc.detail,
+                    )
                     continue
+                self._log_recovery_monitor(
+                    item,
+                    revision=revision,
+                    anchor=(
+                        revision.last_ack_nudge_at
+                        if request.status == "approved"
+                        else revision.last_delivery_attempt_at
+                    ),
+                    now=now,
+                    action=repair_action,
+                )
                 continue
             revision_count, failed_head_count = (
                 await github_approval_service.continuation_budget_usage(
@@ -2362,6 +2445,14 @@ class GithubDispatchService:
                         "Failed to send continuation budget escalation for item %s",
                         item.id,
                     )
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="escalate_budget",
+                    block_code="continuation_budget_exhausted",
+                )
                 continue
             sessions = await agent_mail_service.nudgeable_sessions_for_slot(
                 db,
@@ -2374,11 +2465,27 @@ class GithubDispatchService:
                 and session.capability_token_hash is not None
             ]
             if not authenticated_sessions:
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="owner_session_unavailable",
+                )
                 continue
             if (
                 item.continuation_nudged_at is not None
                 and now - item.continuation_nudged_at < recovery_nudge_cooldown
             ):
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=item.continuation_nudged_at,
+                    now=now,
+                    action="skip",
+                    block_code="recovery_nudge_cooldown",
+                )
                 continue
             try:
                 token = await github_approval_service.github_read_token(scope)
@@ -2393,8 +2500,24 @@ class GithubDispatchService:
                     "Recovery monitor could not validate PR for work item %s",
                     item.id,
                 )
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="github_pr_lookup_failed",
+                )
                 continue
             if pull.get("state") != "open" or pull.get("merged_at") is not None:
+                self._log_recovery_monitor(
+                    item,
+                    revision=None,
+                    anchor=None,
+                    now=now,
+                    action="skip",
+                    block_code="continuation_pr_not_open",
+                )
                 continue
             evidence = {
                 "escalation_reason": item.escalation_reason,
@@ -2435,6 +2558,13 @@ class GithubDispatchService:
             item.continuation_nudged_at = now
             item.updated_at = now
             await db.commit()
+            self._log_recovery_monitor(
+                item,
+                revision=None,
+                anchor=now,
+                now=now,
+                action="nudge_owner_proposal",
+            )
 
     async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
         """Return whether this attempt's brief reached its owner."""

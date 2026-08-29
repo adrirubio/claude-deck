@@ -144,6 +144,8 @@ class GithubDispatchScheduler:
                 issue_labels_by_number=issue_labels_by_number,
                 issue_details_by_number=issues_by_number,
             )
+            await db.commit()
+            scope, slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.monitor_dispatched(db, scope, slots)
             await db.commit()
             scope, slots = await self._reload_scope_context(db, scope.id)
@@ -151,6 +153,9 @@ class GithubDispatchScheduler:
             await db.commit()
             scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.verification.process_scope(db, scope, client=client)
+            await db.commit()
+            scope, slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.monitor_recovery(db, scope, slots)
             await db.commit()
             scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.remind_held_leases(db, scope)
