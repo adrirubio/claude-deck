@@ -4026,6 +4026,74 @@ async def test_pending_retry_changes_release_reminder_wording(db):
 
 
 @pytest.mark.asyncio
+async def test_recoverable_escalation_does_not_receive_release_reminder(db):
+    preset, slots, scope = await _team(db)
+    preset.autonomy_enabled = True
+    scope.continuation_enabled = True
+    await _create_registered_slot_member(db, slots[1])
+    item, workspace = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=928,
+        dispatch_status="escalated",
+        owner_slot_id=slots[1].id,
+    )
+    item.escalation_reason = "retry_count_exhausted"
+    item.pr_number = 928
+    item.dispatch_nonce = "preserved-attempt"
+    await db.commit()
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+
+    await db.refresh(workspace)
+    assert workspace.lease_release_reminded_at is None
+    assert (await db.execute(select(MailMessage))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "pr_number", "dispatch_nonce"),
+    [
+        ("dispatch_label_removed", 929, "attempt"),
+        ("retry_count_exhausted", None, "attempt"),
+        ("retry_count_exhausted", 929, None),
+    ],
+)
+async def test_non_recoverable_escalation_still_receives_release_reminder(
+    db,
+    reason,
+    pr_number,
+    dispatch_nonce,
+):
+    preset, slots, scope = await _team(db)
+    preset.autonomy_enabled = True
+    scope.continuation_enabled = True
+    await _create_registered_slot_member(db, slots[1])
+    item, workspace = await _leased_item_for_reminder(
+        db,
+        scope,
+        issue_number=929,
+        dispatch_status="escalated",
+        owner_slot_id=slots[1].id,
+    )
+    item.escalation_reason = reason
+    item.pr_number = pr_number
+    item.dispatch_nonce = dispatch_nonce
+    await db.commit()
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 1
+
+    await db.refresh(workspace)
+    assert workspace.lease_release_reminded_at is not None
+    release_messages = (
+        await db.execute(
+            select(MailMessage).where(MailMessage.subject.like("Release needed:%"))
+        )
+    ).scalars().all()
+    assert len(release_messages) == 1
+
+
+@pytest.mark.asyncio
 async def test_non_terminal_item_holding_a_lease_is_not_reminded(db):
     _, slots, scope = await _team(db)
     await _leased_item_for_reminder(
@@ -4284,7 +4352,7 @@ async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
     db.add(item)
     await db.flush()
     workspace = await _lease_for(db, scope, item)
-    session = MailAgentSession(
+    observed_session = MailAgentSession(
         member_id=owner.id,
         provider=slots[1].provider,
         source="observed",
@@ -4295,13 +4363,24 @@ async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
         team_slot_id=slots[1].id,
         mailbox_status="observed",
         last_seen_at=datetime.utcnow(),
+    )
+    authenticated_session = MailAgentSession(
+        member_id=owner.id,
+        provider=slots[1].provider,
+        source="mcp",
+        session_key="mcp:recovery-owner",
+        cwd=slots[1].repo_path,
+        team_preset_id=preset.id,
+        team_slot_id=slots[1].id,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
         capability_token_hash=agent_mail_service.hash_capability_token(
             "recovery-owner-token"
         ),
     )
-    db.add(session)
+    db.add_all([observed_session, authenticated_session])
     await db.commit()
-    return preset, slots, scope, item, workspace, owner, session
+    return preset, slots, scope, item, workspace, owner, observed_session
 
 
 async def _continuation_transport_authority(
@@ -4426,6 +4505,121 @@ async def _create_replacement_slot_member(db, slot):
     db.add(member)
     await db.commit()
     return member
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_session_evidence",
+    [
+        "missing_mcp",
+        "unauthenticated_mcp",
+        "offline_mcp",
+        "stale_mcp",
+        "hook_only",
+        "duplicate_observed",
+    ],
+)
+async def test_recovery_monitor_requires_one_pane_and_fresh_authenticated_mcp(
+    db,
+    monkeypatch,
+    invalid_session_evidence,
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    _preset, slots, scope, item, _workspace, owner, observed_session = (
+        await _recoverable_escalated_item(db)
+    )
+    authenticated_session = (
+        await db.execute(
+            select(MailAgentSession).where(
+                MailAgentSession.member_id == owner.id,
+                MailAgentSession.source == "mcp",
+            )
+        )
+    ).scalar_one()
+    if invalid_session_evidence == "missing_mcp":
+        await db.delete(authenticated_session)
+    elif invalid_session_evidence == "unauthenticated_mcp":
+        authenticated_session.capability_token_hash = None
+    elif invalid_session_evidence == "offline_mcp":
+        authenticated_session.mailbox_status = "offline"
+    elif invalid_session_evidence == "stale_mcp":
+        authenticated_session.last_seen_at = datetime.utcnow() - timedelta(hours=2)
+    elif invalid_session_evidence == "hook_only":
+        authenticated_session.source = "hook"
+        authenticated_session.session_key = "hook:recovery-owner"
+    else:
+        db.add(
+            MailAgentSession(
+                member_id=owner.id,
+                provider=slots[1].provider,
+                source="observed",
+                session_key="tmux:recovery-owner-duplicate",
+                cwd=slots[1].repo_path,
+                tmux_target="recovery:1.1",
+                team_preset_id=scope.preset_id,
+                team_slot_id=slots[1].id,
+                mailbox_status="observed",
+                last_seen_at=datetime.utcnow(),
+            )
+        )
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "merged_at": None}
+
+    monkeypatch.setattr(
+        "app.services.github_dispatch_service.github_client.get_pull",
+        get_pull,
+    )
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    await db.refresh(observed_session)
+    assert item.continuation_nudged_at is None
+    assert (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.subject.like("Recovery proposal requested:%")
+            )
+        )
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authority_status", ["pending", "approved", "active"])
+async def test_continuation_authority_suppresses_release_reminder(
+    db,
+    authority_status,
+):
+    _preset, slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    request_status = (
+        "approved" if authority_status in {"approved", "active"} else "pending"
+    )
+    _request, revision, _leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status=request_status,
+    )
+    if authority_status == "active":
+        revision.status = "active"
+        item.dispatch_status = "dispatched"
+        await db.commit()
+
+    assert await github_dispatch_service.remind_held_leases(db, scope) == 0
+
+    await db.refresh(workspace)
+    assert workspace.lease_release_reminded_at is None
+    release_messages = (
+        await db.execute(
+            select(MailMessage).where(MailMessage.subject.like("Release needed:%"))
+        )
+    ).scalars().all()
+    assert release_messages == []
 
 
 @pytest.mark.asyncio
