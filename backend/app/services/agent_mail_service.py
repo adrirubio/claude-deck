@@ -1520,6 +1520,31 @@ class AgentMailService:
         ).scalars().all()
         return [session for session in sessions if self._session_can_nudge(session, now)]
 
+    async def has_fresh_authenticated_mcp_session(
+        self,
+        db: AsyncSession,
+        *,
+        member_id: int,
+        preset_id: int,
+        slot_id: int,
+    ) -> bool:
+        """Return whether a slot member has recent authenticated MCP presence."""
+        cutoff = datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+        session_id = await db.scalar(
+            select(MailAgentSession.id)
+            .where(
+                MailAgentSession.member_id == member_id,
+                MailAgentSession.team_preset_id == preset_id,
+                MailAgentSession.team_slot_id == slot_id,
+                MailAgentSession.source == "mcp",
+                MailAgentSession.mailbox_status == "connected",
+                MailAgentSession.capability_token_hash.is_not(None),
+                MailAgentSession.last_seen_at >= cutoff,
+            )
+            .limit(1)
+        )
+        return session_id is not None
+
     def _send_tmux_inbox_check(
         self,
         session: MailAgentSession,

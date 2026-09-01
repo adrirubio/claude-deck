@@ -2470,13 +2470,16 @@ class GithubDispatchService:
                 db,
                 item.owner_slot_id,
             )
-            authenticated_sessions = [
-                session
-                for session in sessions
-                if session.member_id == owner.id
-                and session.capability_token_hash is not None
-            ]
-            if not authenticated_sessions:
+            owner_pane_ready = len(sessions) == 1 and sessions[0].member_id == owner.id
+            owner_authenticated = (
+                await agent_mail_service.has_fresh_authenticated_mcp_session(
+                    db,
+                    member_id=owner.id,
+                    preset_id=scope.preset_id,
+                    slot_id=item.owner_slot_id,
+                )
+            )
+            if not owner_pane_ready or not owner_authenticated:
                 self._log_recovery_monitor(
                     item,
                     revision=None,
@@ -2625,6 +2628,16 @@ class GithubDispatchService:
         ).all()
         reminded = 0
         for workspace, item in held:
+            if (
+                scope.continuation_enabled
+                and item.dispatch_status == "escalated"
+                and item.escalation_reason in CONTINUABLE_ESCALATIONS
+                and item.pr_number is not None
+                and item.owner_slot_id is not None
+                and item.dispatch_nonce is not None
+                and item.retry_requested_at is None
+            ):
+                continue
             if (
                 workspace.lease_release_reminded_at is not None
                 and now - workspace.lease_release_reminded_at < grace
