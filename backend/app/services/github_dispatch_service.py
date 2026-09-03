@@ -2569,7 +2569,22 @@ class GithubDispatchService:
                     f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal"
                 ),
             )
-            await agent_mail_service.auto_nudge_members(db, {owner.id})
+            await agent_mail_service.auto_nudge_members(
+                db,
+                {owner.id},
+                bypass_cooldown=True,
+                nudge_prompt=(
+                    "Claude Deck autonomous recovery: call "
+                    "`deck_check_inbox(unread_only=False)` now, find the "
+                    f"`Recovery proposal requested: issue #{item.issue_number}` "
+                    f"message for work item {item.id}, and execute that instruction "
+                    "now. Perform read-only diagnosis and call "
+                    "`deck_request_continuation` with the smallest bounded proposal. "
+                    "Do not edit, build, push, release, retry, or report status or "
+                    "completion before Leader approval. Stop after submitting the "
+                    "proposal."
+                ),
+            )
             item.continuation_nudged_at = now
             item.updated_at = now
             await db.commit()

@@ -4636,6 +4636,12 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     _preset, slots, scope, item, workspace, owner, _session = (
         await _recoverable_escalated_item(db)
     )
+    nudges = []
+
+    async def record_nudge(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
 
     async def get_pull(*_args, **_kwargs):
         return {"state": "open", "merged_at": None}
@@ -4665,6 +4671,19 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     assert await github_approval_service.current_pending(db, item.id) is None
     assert "Perform read-only diagnosis first" in messages[0].body_markdown
     assert "deck_request_continuation" in messages[0].body_markdown
+    assert len(nudges) == 1
+    member_ids, nudge_options = nudges[0]
+    assert member_ids == {owner.id}
+    assert nudge_options["bypass_cooldown"] is True
+    nudge_prompt = nudge_options["nudge_prompt"]
+    assert "deck_check_inbox(unread_only=False)" in nudge_prompt
+    assert f"work item {item.id}" in nudge_prompt
+    assert f"issue #{item.issue_number}" in nudge_prompt
+    assert "Recovery proposal requested" in nudge_prompt
+    assert "read-only diagnosis" in nudge_prompt
+    assert "deck_request_continuation" in nudge_prompt
+    for prohibited_action in ("edit", "build", "push", "release", "retry"):
+        assert prohibited_action in nudge_prompt.lower()
     assert messages[0].payload["failure_evidence"] == {
         "escalation_reason": "retry_count_exhausted",
         "status_note": "Hosted playback check failed",
@@ -4674,6 +4693,62 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
         "diagnostic_last_verified_sha": None,
     }
     assert "t1" not in str(messages[0].payload)
+
+
+@pytest.mark.asyncio
+async def test_recovery_monitor_replays_actionable_wake_after_post_mail_crash(
+    db, monkeypatch
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    _preset, slots, scope, item, _workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "merged_at": None}
+
+    monkeypatch.setattr(
+        "app.services.github_dispatch_service.github_client.get_pull",
+        get_pull,
+    )
+    nudges = []
+
+    async def crash_then_record(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
+        if len(nudges) == 1:
+            raise RuntimeError("crash after durable recovery mail")
+
+    monkeypatch.setattr(
+        agent_mail_service,
+        "auto_nudge_members",
+        crash_then_record,
+    )
+
+    with pytest.raises(RuntimeError, match="crash after durable recovery mail"):
+        await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    assert item.continuation_nudged_at is None
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.recipient_member_id == owner.id,
+                MailMessage.subject.like("Recovery proposal requested:%"),
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+    assert item.continuation_nudged_at is not None
+    assert len(nudges) == 2
+    assert nudges[0] == nudges[1]
+    member_ids, nudge_options = nudges[1]
+    assert member_ids == {owner.id}
+    assert nudge_options["bypass_cooldown"] is True
+    assert "deck_request_continuation" in nudge_options["nudge_prompt"]
 
 
 @pytest.mark.asyncio
