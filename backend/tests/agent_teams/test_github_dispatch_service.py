@@ -4489,6 +4489,28 @@ async def _send_continuation_decision(db, request, revision):
     )
 
 
+def _assert_actionable_owner_ack_nudge(
+    nudges,
+    *,
+    owner,
+    item,
+    revision,
+    workspace,
+):
+    assert len(nudges) == 1
+    member_ids, kwargs = nudges[0]
+    assert member_ids == {owner.id}
+    assert kwargs["bypass_cooldown"] is True
+    prompt = kwargs["nudge_prompt"]
+    assert f"work item {item.id}" in prompt
+    assert f"revision {revision.revision}" in prompt
+    assert f"message {revision.delivery_message_id}" in prompt
+    assert "`deck_check_inbox(unread_only=False)`" in prompt
+    assert "`deck_ack_continuation`" in prompt
+    assert "Do not execute" in prompt
+    assert workspace.lease_token not in prompt
+
+
 async def _create_replacement_slot_member(db, slot):
     member = MailTeamMember(
         identity_key=f"slot:replacement:{slot.id}",
@@ -5302,6 +5324,53 @@ async def test_recovery_monitor_repairs_rejected_decision_without_owner_delivery
 
 
 @pytest.mark.asyncio
+async def test_approved_continuation_delivery_wake_is_actionable_and_secret_free(
+    db,
+    monkeypatch,
+):
+    _preset, _slots, _scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    request, revision, _leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status="approved",
+    )
+    root = await _send_continuation_request_root(db, item, request, revision)
+    request.request_message_id = root.id
+    decision = await _send_continuation_decision(db, request, revision)
+    request.decision_message_id = decision.id
+    await db.commit()
+    nudges = []
+
+    async def record_nudge(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
+
+    delivered_revision, delivered = (
+        await github_approval_service.deliver_approved_continuation(
+            db,
+            item,
+            request,
+            revision,
+        )
+    )
+
+    assert delivered is True
+    assert delivered_revision.delivery_message_id is not None
+    _assert_actionable_owner_ack_nudge(
+        nudges,
+        owner=owner,
+        item=item,
+        revision=delivered_revision,
+        workspace=workspace,
+    )
+
+
+@pytest.mark.asyncio
 async def test_recovery_monitor_nudges_only_current_owner_after_delivery_cooldown(
     db,
     monkeypatch,
@@ -5332,15 +5401,107 @@ async def test_recovery_monitor_nudges_only_current_owner_after_delivery_cooldow
     await db.commit()
     nudges = []
 
-    async def record_nudge(_db, member_ids, **_kwargs):
-        nudges.append(set(member_ids))
+    async def record_nudge(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
 
     monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
 
     await github_dispatch_service.monitor_recovery(db, scope, slots)
     await github_dispatch_service.monitor_recovery(db, scope, slots)
 
-    assert nudges == [{owner.id}]
+    _assert_actionable_owner_ack_nudge(
+        nudges,
+        owner=owner,
+        item=item,
+        revision=revision,
+        workspace=workspace,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approved_delivery_wake_failure_repairs_without_duplicate_mail(
+    db,
+    monkeypatch,
+):
+    _preset, _slots, _scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    request, revision, _leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status="approved",
+    )
+    root = await _send_continuation_request_root(db, item, request, revision)
+    request.request_message_id = root.id
+    decision = await _send_continuation_decision(db, request, revision)
+    request.decision_message_id = decision.id
+    await db.commit()
+    failed_nudges = []
+
+    async def fail_after_delivery(_db, member_ids, **kwargs):
+        failed_nudges.append((set(member_ids), kwargs))
+        raise RuntimeError("simulated wake failure")
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", fail_after_delivery)
+
+    with pytest.raises(RuntimeError, match="simulated wake failure"):
+        await github_approval_service.deliver_approved_continuation(
+            db,
+            item,
+            request,
+            revision,
+        )
+
+    await db.refresh(revision)
+    durable_delivery_id = revision.delivery_message_id
+    assert durable_delivery_id is not None
+    _assert_actionable_owner_ack_nudge(
+        failed_nudges,
+        owner=owner,
+        item=item,
+        revision=revision,
+        workspace=workspace,
+    )
+    revision.last_ack_nudge_at = datetime.utcnow() - timedelta(minutes=10)
+    await db.commit()
+    repaired_nudges = []
+
+    async def record_repair_nudge(_db, member_ids, **kwargs):
+        repaired_nudges.append((set(member_ids), kwargs))
+
+    monkeypatch.setattr(
+        agent_mail_service,
+        "auto_nudge_members",
+        record_repair_nudge,
+    )
+
+    action = await github_approval_service.repair_continuation_transport(
+        db,
+        item,
+        request,
+        revision,
+        leader_nudge_cooldown=timedelta(hours=1),
+        owner_ack_nudge_cooldown=timedelta(minutes=3),
+    )
+
+    deliveries = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-scope:{revision.id}:delivery"
+            )
+        )
+    ).scalars().all()
+    assert action == "nudge_owner_ack"
+    assert [message.id for message in deliveries] == [durable_delivery_id]
+    _assert_actionable_owner_ack_nudge(
+        repaired_nudges,
+        owner=owner,
+        item=item,
+        revision=revision,
+        workspace=workspace,
+    )
 
 
 @pytest.mark.asyncio
