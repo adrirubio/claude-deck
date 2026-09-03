@@ -720,6 +720,21 @@ class GithubApprovalService:
             "work_item_id": revision.work_item_id,
         }
 
+    @staticmethod
+    def continuation_owner_ack_nudge_prompt(
+        revision: GithubAttemptScopeRevision,
+    ) -> str:
+        return (
+            "Claude Deck approved continuation: call "
+            "`deck_check_inbox(unread_only=False)` now, find delivery message "
+            f"{revision.delivery_message_id} for work item {revision.work_item_id} "
+            f"revision {revision.revision}, and call `deck_ack_continuation` now "
+            "using the dispatch nonce from that delivery and the current workspace "
+            "lease token held by this owner session. Do not execute any approved "
+            "action until acknowledgement succeeds. After acknowledgement, continue "
+            "only within the exact delivered approved scope."
+        )
+
     @classmethod
     def matches_linked_continuation_delivery_message(
         cls,
@@ -1049,6 +1064,8 @@ class GithubApprovalService:
         await agent_mail_service.auto_nudge_members(
             db,
             {revision.owner_member_id},
+            bypass_cooldown=True,
+            nudge_prompt=self.continuation_owner_ack_nudge_prompt(revision),
         )
         return True
 
@@ -1273,7 +1290,12 @@ class GithubApprovalService:
         if link_result.rowcount != 1 and revision.delivery_message_id != message.id:
             raise GithubApprovalError("continuation_delivery_link_mismatch")
         if link_result.rowcount == 1:
-            await agent_mail_service.auto_nudge_members(db, {revision.owner_member_id})
+            await agent_mail_service.auto_nudge_members(
+                db,
+                {revision.owner_member_id},
+                bypass_cooldown=True,
+                nudge_prompt=self.continuation_owner_ack_nudge_prompt(revision),
+            )
         return revision, link_result.rowcount == 1
 
     async def current_pending(
