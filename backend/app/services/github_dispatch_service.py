@@ -2628,7 +2628,8 @@ class GithubDispatchService:
                 },
                 auto_nudge=False,
                 delivery_key=(
-                    f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal"
+                    f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal:"
+                    f"{revision_count + 1}"
                 ),
             )
             await agent_mail_service.auto_nudge_members(

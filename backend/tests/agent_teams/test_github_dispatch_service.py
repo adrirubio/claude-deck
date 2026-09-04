@@ -4728,6 +4728,88 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
 
 
 @pytest.mark.asyncio
+async def test_recovery_monitor_uses_a_new_delivery_key_for_each_proposal_cycle(
+    db, monkeypatch
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    monkeypatch.setattr(settings, "github_nudge_grace_seconds", 0)
+    monkeypatch.setattr(
+        settings,
+        "github_recovery_nudge_cooldown_seconds",
+        3600,
+    )
+    _preset, slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    nudges = []
+
+    async def record_nudge(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "merged_at": None}
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
+    monkeypatch.setattr(
+        "app.services.github_dispatch_service.github_client.get_pull",
+        get_pull,
+    )
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+    request, revision, _leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status="rejected",
+    )
+    request.status = "expired"
+    revision.status = "superseded"
+    item.status_note = "The prior continuation was cancelled safely"
+    item.continuation_nudged_at = None
+    await db.commit()
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+    await db.refresh(item)
+    item.continuation_nudged_at = None
+    await db.commit()
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    messages = (
+        await db.execute(
+            select(MailMessage)
+            .where(
+                MailMessage.recipient_member_id == owner.id,
+                MailMessage.subject.like("Recovery proposal requested:%"),
+            )
+            .order_by(MailMessage.id)
+        )
+    ).scalars().all()
+    assert [message.delivery_key for message in messages] == [
+        f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal:1",
+        f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal:2",
+    ]
+    assert messages[0].payload["failure_evidence"]["status_note"] == (
+        "Hosted playback check failed"
+    )
+    assert messages[1].payload["failure_evidence"]["status_note"] == (
+        "The prior continuation was cancelled safely"
+    )
+    assert len(nudges) == 3
+    assert all(member_ids == {owner.id} for member_ids, _options in nudges)
+    await db.refresh(item)
+    await db.refresh(workspace)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.pr_number == 950
+    assert item.retry_count == 3
+    assert item.diagnostic_retry_count == 0
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "t1"
+    assert revision.status == "superseded"
+
+
+@pytest.mark.asyncio
 async def test_recovery_monitor_replays_actionable_wake_after_post_mail_crash(
     db, monkeypatch
 ):
