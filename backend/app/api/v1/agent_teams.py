@@ -51,6 +51,7 @@ from app.models.schemas import (
     AgentTeamSlotReorderRequest,
     AgentTeamSlotUpdate,
     DispatchStatusReport,
+    GithubActiveContinuationCancelRequest,
     GithubApprovalRequestResponse,
     GithubContinuationProposalCreate,
     GithubContinuationAckRequest,
@@ -453,6 +454,8 @@ def _scope_revision_response(
         submitted_head_sha=revision.submitted_head_sha,
         submitted_at=revision.submitted_at,
         completed_at=revision.completed_at,
+        cancelled_at=revision.cancelled_at,
+        cancellation_reason=revision.cancellation_reason,
         expires_at=revision.expires_at,
         created_at=revision.created_at,
         approval_request=(
@@ -1426,6 +1429,35 @@ async def cancel_github_work_item_continuation_request(
         return _approval_authority_response(cancelled)
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post(
+    "/github-work-items/{item_id}/scope-revisions/{revision_number}/cancel",
+    response_model=GithubWorkItemResponse,
+)
+async def cancel_active_github_work_item_scope_revision(
+    item_id: int,
+    revision_number: int,
+    request: GithubActiveContinuationCancelRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    try:
+        await github_approval_service.cancel_active_continuation(
+            db,
+            item,
+            revision_number=revision_number,
+            dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason,
+        )
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except MailDeliveryIntegrityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return await _reload_work_item_response(db, item.id)
 
 
 @router.post(

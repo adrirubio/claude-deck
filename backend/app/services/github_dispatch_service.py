@@ -2351,6 +2351,64 @@ class GithubDispatchService:
                     block_code="owner_member_unavailable",
                 )
                 continue
+            cancelled_revision = (
+                await db.execute(
+                    select(GithubAttemptScopeRevision)
+                    .where(
+                        GithubAttemptScopeRevision.work_item_id == item.id,
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == item.dispatch_nonce,
+                        GithubAttemptScopeRevision.status == "superseded",
+                        GithubAttemptScopeRevision.cancelled_at.is_not(None),
+                    )
+                    .order_by(
+                        GithubAttemptScopeRevision.cancelled_at.desc(),
+                        GithubAttemptScopeRevision.id.desc(),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if cancelled_revision is not None:
+                cancellation_notice = (
+                    await db.execute(
+                        select(MailMessage.id).where(
+                            MailMessage.delivery_key
+                            == github_approval_service.active_cancellation_delivery_key(
+                                cancelled_revision
+                            )
+                        )
+                    )
+                ).scalar_one_or_none()
+                if cancellation_notice is None:
+                    try:
+                        await github_approval_service.ensure_active_cancellation_notice(
+                            db,
+                            item,
+                            cancelled_revision,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Recovery monitor could not repair active continuation "
+                            "cancellation notice for work item %s",
+                            item.id,
+                        )
+                        self._log_recovery_monitor(
+                            item,
+                            revision=cancelled_revision,
+                            anchor=cancelled_revision.cancelled_at,
+                            now=now,
+                            action="skip",
+                            block_code="cancellation_notice_failed",
+                        )
+                        continue
+                    self._log_recovery_monitor(
+                        item,
+                        revision=cancelled_revision,
+                        anchor=cancelled_revision.cancelled_at,
+                        now=now,
+                        action="repair_cancellation_notice",
+                    )
+                    continue
             transport = (
                 await db.execute(
                     select(GithubApprovalRequest, GithubAttemptScopeRevision)

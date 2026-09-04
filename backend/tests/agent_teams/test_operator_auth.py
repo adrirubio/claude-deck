@@ -134,7 +134,7 @@ async def _external_actor_token(client: httpx.AsyncClient) -> str:
     return response.json()["token"]
 
 
-def _routes(scope_id: int, workspace_id: int):
+def _routes(scope_id: int, workspace_id: int, item_id: int):
     listing = (
         "listing",
         "get",
@@ -148,7 +148,17 @@ def _routes(scope_id: int, workspace_id: int):
         f"{workspace_id}/force-release",
         {"force": True, "reason": "owner is unavailable"},
     )
-    return [listing, force_release]
+    cancel_active_continuation = (
+        "cancel-active-continuation",
+        "post",
+        f"/api/v1/agent-teams/github-work-items/{item_id}/scope-revisions/1/cancel",
+        {
+            "cancel": True,
+            "dispatch_nonce": "operator-auth-test",
+            "reason": "operator auth boundary test",
+        },
+    )
+    return [listing, force_release, cancel_active_continuation]
 
 
 async def _call(client, method, url, body, headers):
@@ -164,10 +174,10 @@ async def test_unconfigured_install_refuses_with_503_whatever_the_header(
 ):
     """An empty configured secret refuses even absent and empty headers."""
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
     headers = {} if header is None else {"X-Deck-Operator-Token": header}
 
-    for label, method, url, body in _routes(scope_id, workspace_id):
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(client, method, url, body, headers)
         assert response.status_code == 503, f"{label}: {response.status_code} {response.text}"
         assert response.json()["detail"] == "operator_token_unconfigured", label
@@ -179,9 +189,9 @@ async def test_no_header_is_required_and_a_wrong_one_is_invalid(
 ):
     """The two 401 outcomes remain distinguishable."""
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
 
-    for label, method, url, body in _routes(scope_id, workspace_id):
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         absent = await _call(client, method, url, body, {})
         assert absent.status_code == 401, label
         assert absent.json()["detail"] == "operator_token_required", label
@@ -205,9 +215,9 @@ async def test_near_miss_tokens_are_invalid(
 ):
     """Reject the values a prefix, containment, or truncating check would accept."""
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
 
-    for label, method, url, body in _routes(scope_id, workspace_id):
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(
             client, method, url, body, {"X-Deck-Operator-Token": token}
         )
@@ -221,10 +231,10 @@ async def test_a_non_ascii_header_is_refused_rather_than_crashing(
 ):
     """Compare bytes so a non-ASCII header produces 401 rather than TypeError."""
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
     headers = {"X-Deck-Operator-Token": "café-not-a-token".encode("latin-1")}
 
-    for label, method, url, body in _routes(scope_id, workspace_id):
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(client, method, url, body, headers)
         assert response.status_code == 401, f"{label}: {response.status_code}"
         assert response.json()["detail"] == "operator_token_invalid", label
@@ -234,28 +244,28 @@ async def test_a_non_ascii_header_is_refused_rather_than_crashing(
 async def test_an_agent_session_token_does_not_admit_an_operator_route(
     client_and_db, tmp_path, operator_token_configured
 ):
-    """A real agent credential must not open either operator route."""
+    """A real agent credential must not open any operator route."""
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
     session_token = await _agent_session_token(maker)
     headers = {"X-Deck-Session-Token": session_token}
 
-    for label, method, url, body in _routes(scope_id, workspace_id):
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         response = await _call(client, method, url, body, headers)
         assert response.status_code == 401, label
         assert response.json()["detail"] == "operator_token_required", label
 
 
 @pytest.mark.asyncio
-async def test_a_self_minted_external_actor_token_does_not_admit_either_route(
+async def test_a_self_minted_external_actor_token_does_not_admit_an_operator_route(
     client_and_db, tmp_path, operator_token_configured
 ):
     """The cheapest local actor credential must not act as an operator token."""
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
     actor_token = await _external_actor_token(client)
 
-    for label, method, url, body in _routes(scope_id, workspace_id):
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id):
         as_bearer = await _call(
             client, method, url, body, {"Authorization": f"Bearer {actor_token}"}
         )
@@ -281,7 +291,7 @@ async def test_the_configured_operator_token_is_accepted(
     from app.services import github_workspace_service as ws_module
 
     client, maker = client_and_db
-    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
     headers = {"X-Deck-Operator-Token": operator_token_configured}
 
     async def _fake_runner(args):
@@ -302,6 +312,17 @@ async def test_the_configured_operator_token_is_accepted(
         headers=headers,
     )
     assert forced.status_code not in (401, 503), forced.text
+
+    cancelled = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item_id}/scope-revisions/1/cancel",
+        json={
+            "cancel": True,
+            "dispatch_nonce": "operator-auth-test",
+            "reason": "operator auth boundary test",
+        },
+        headers=headers,
+    )
+    assert cancelled.status_code not in (401, 503), cancelled.text
 
 
 @pytest.mark.asyncio
