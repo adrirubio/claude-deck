@@ -1870,6 +1870,314 @@ class GithubApprovalService:
             raise GithubApprovalError("not_approval_requester", status_code=403)
         return await self._cancel_authorized(db, request)
 
+    @staticmethod
+    def active_cancellation_delivery_key(
+        revision: GithubAttemptScopeRevision,
+    ) -> str:
+        return f"github-scope:{revision.id}:cancelled"
+
+    async def ensure_active_cancellation_notice(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+    ) -> None:
+        if (
+            revision.status != "superseded"
+            or revision.cancelled_at is None
+            or revision.cancellation_reason is None
+            or revision.work_item_id != item.id
+            or item.dispatch_nonce != revision.dispatch_nonce
+        ):
+            raise GithubApprovalError("active_continuation_cancel_conflict")
+        await agent_mail_service.send_direct_message(
+            db,
+            recipient_member_id=revision.owner_member_id,
+            subject=(
+                f"Continuation revision {revision.revision} cancelled for work item "
+                f"{item.id}"
+            ),
+            body_markdown=(
+                f"Continuation revision {revision.revision} was superseded by the "
+                "operator. Stop using that revision. The preserved attempt returned "
+                "to its originating escalation and requires a fresh bounded proposal.\n\n"
+                f"Reason: {revision.cancellation_reason}"
+            ),
+            payload={
+                "kind": "github_continuation_cancelled",
+                "work_item_id": item.id,
+                "issue_number": item.issue_number,
+                "pr_number": item.pr_number,
+                "scope_revision_id": revision.id,
+                "revision": revision.revision,
+                "dispatch_nonce": revision.dispatch_nonce,
+                "reason": revision.cancellation_reason,
+            },
+            auto_nudge=False,
+            delivery_key=self.active_cancellation_delivery_key(revision),
+        )
+
+    async def _active_cancellation_resting_state_matches(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        *,
+        reason: str,
+    ) -> bool:
+        if (
+            revision.work_item_id != item.id
+            or revision.status != "superseded"
+            or revision.cancelled_at is None
+            or revision.cancellation_reason != reason
+            or item.dispatch_nonce != revision.dispatch_nonce
+            or item.dispatch_status != "escalated"
+            or item.escalation_reason != revision.originating_escalation_reason
+            or item.active_scope_revision != 0
+            or item.attempt_phase != "implementation"
+            or item.continuation_nudged_at is not None
+            or item.continuation_activated_at is not None
+            or item.owner_slot_id != revision.owner_slot_id
+            or item.pr_number is None
+        ):
+            return False
+        approval = (
+            await db.get(GithubApprovalRequest, revision.approval_request_id)
+            if revision.approval_request_id is not None
+            else None
+        )
+        if (
+            approval is None
+            or approval.status != "approved"
+            or approval.scope_revision_id != revision.id
+        ):
+            return False
+        workspace = (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.id == revision.expected_workspace_id,
+                    GithubWorkspace.scope_id == item.scope_id,
+                    GithubWorkspace.leased_item_id == item.id,
+                    GithubWorkspace.lease_token.is_not(None),
+                )
+            )
+        ).scalar_one_or_none()
+        return (
+            workspace is not None
+            and workspace.lease_token is not None
+            and self.lease_token_hash(workspace.lease_token)
+            == revision.expected_lease_token_hash
+        )
+
+    async def cancel_active_continuation(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        *,
+        revision_number: int,
+        dispatch_nonce: str,
+        reason: str,
+    ) -> tuple[GithubWorkItem, GithubAttemptScopeRevision, bool]:
+        canonical_reason = reason.strip()
+        if not canonical_reason:
+            raise GithubApprovalError(
+                "cancellation_reason_required",
+                status_code=400,
+            )
+        await db.refresh(item)
+        if item.dispatch_nonce != dispatch_nonce:
+            raise GithubApprovalError("stale_nonce")
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == revision_number,
+                )
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise GithubApprovalError("scope_revision_not_found", status_code=404)
+        await db.refresh(revision)
+        item_id = item.id
+        revision_id = revision.id
+
+        if revision.status == "superseded" and revision.cancelled_at is not None:
+            if not await self._active_cancellation_resting_state_matches(
+                db,
+                item,
+                revision,
+                reason=canonical_reason,
+            ):
+                raise GithubApprovalError("active_continuation_cancel_conflict")
+            await self.ensure_active_cancellation_notice(db, item, revision)
+            return item, revision, False
+
+        approval = (
+            await db.get(GithubApprovalRequest, revision.approval_request_id)
+            if revision.approval_request_id is not None
+            else None
+        )
+        if (
+            revision.status != "active"
+            or item.dispatch_status != "dispatched"
+            or item.active_scope_revision != revision.revision
+            or item.owner_slot_id != revision.owner_slot_id
+            or item.handoff_state is not None
+            or item.pr_number is None
+            or approval is None
+            or approval.status != "approved"
+            or approval.scope_revision_id != revision.id
+        ):
+            raise GithubApprovalError("active_continuation_not_cancellable")
+        workspace = (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.id == revision.expected_workspace_id,
+                    GithubWorkspace.scope_id == item.scope_id,
+                    GithubWorkspace.leased_item_id == item.id,
+                    GithubWorkspace.lease_token.is_not(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            workspace is None
+            or workspace.lease_token is None
+            or self.lease_token_hash(workspace.lease_token)
+            != revision.expected_lease_token_hash
+        ):
+            raise GithubApprovalError("workspace_lease_changed")
+        workspace_id = workspace.id
+        workspace_lease_token = workspace.lease_token
+
+        now = datetime.utcnow()
+        revision_result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.revision == revision_number,
+                GithubAttemptScopeRevision.owner_slot_id == item.owner_slot_id,
+                GithubAttemptScopeRevision.status == "active",
+                GithubAttemptScopeRevision.cancelled_at.is_(None),
+                exists(
+                    select(GithubApprovalRequest.id).where(
+                        GithubApprovalRequest.id == approval.id,
+                        GithubApprovalRequest.scope_revision_id == revision.id,
+                        GithubApprovalRequest.status == "approved",
+                    )
+                ),
+                exists(
+                    select(GithubWorkItem.id).where(
+                        GithubWorkItem.id == item.id,
+                        GithubWorkItem.dispatch_status == "dispatched",
+                        GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                        GithubWorkItem.active_scope_revision == revision_number,
+                        GithubWorkItem.owner_slot_id == revision.owner_slot_id,
+                        GithubWorkItem.handoff_state.is_(None),
+                        GithubWorkItem.pr_number.is_not(None),
+                    )
+                ),
+                exists(
+                    select(GithubWorkspace.id).where(
+                        GithubWorkspace.id == workspace_id,
+                        GithubWorkspace.scope_id == item.scope_id,
+                        GithubWorkspace.leased_item_id == item.id,
+                        GithubWorkspace.lease_token == workspace_lease_token,
+                    )
+                ),
+            )
+            .values(
+                status="superseded",
+                cancelled_at=now,
+                cancellation_reason=canonical_reason,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        item_result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "dispatched",
+                GithubWorkItem.dispatch_nonce == dispatch_nonce,
+                GithubWorkItem.active_scope_revision == revision_number,
+                GithubWorkItem.owner_slot_id == revision.owner_slot_id,
+                GithubWorkItem.handoff_state.is_(None),
+                GithubWorkItem.pr_number.is_not(None),
+                exists(
+                    select(GithubAttemptScopeRevision.id).where(
+                        GithubAttemptScopeRevision.id == revision.id,
+                        GithubAttemptScopeRevision.status == "superseded",
+                        GithubAttemptScopeRevision.cancelled_at == now,
+                        GithubAttemptScopeRevision.cancellation_reason
+                        == canonical_reason,
+                    )
+                ),
+                exists(
+                    select(GithubWorkspace.id).where(
+                        GithubWorkspace.id == workspace_id,
+                        GithubWorkspace.scope_id == item.scope_id,
+                        GithubWorkspace.leased_item_id == item.id,
+                        GithubWorkspace.lease_token == workspace_lease_token,
+                    )
+                ),
+            )
+            .values(
+                dispatch_status="escalated",
+                escalation_reason=revision.originating_escalation_reason,
+                status_note=(
+                    f"Continuation revision {revision.revision} was cancelled by "
+                    "the operator. The preserved attempt requires a fresh bounded "
+                    f"proposal. Reason: {canonical_reason}"
+                ),
+                active_scope_revision=0,
+                attempt_phase="implementation",
+                continuation_nudged_at=None,
+                continuation_activated_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if revision_result.rowcount != 1 or item_result.rowcount != 1:
+            await db.rollback()
+            fresh_item = (
+                await db.execute(
+                    select(GithubWorkItem)
+                    .where(GithubWorkItem.id == item_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            fresh_revision = (
+                await db.execute(
+                    select(GithubAttemptScopeRevision)
+                    .where(GithubAttemptScopeRevision.id == revision_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one_or_none()
+            if (
+                fresh_item is not None
+                and fresh_revision is not None
+                and await self._active_cancellation_resting_state_matches(
+                    db,
+                    fresh_item,
+                    fresh_revision,
+                    reason=canonical_reason,
+                )
+            ):
+                await self.ensure_active_cancellation_notice(
+                    db,
+                    fresh_item,
+                    fresh_revision,
+                )
+                return fresh_item, fresh_revision, False
+            raise GithubApprovalError("active_continuation_cancel_conflict")
+        await db.commit()
+        await db.refresh(item)
+        await db.refresh(revision)
+        await self.ensure_active_cancellation_notice(db, item, revision)
+        return item, revision, True
+
     async def _cancel_authorized(
         self,
         db: AsyncSession,

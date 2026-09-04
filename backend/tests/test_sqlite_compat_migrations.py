@@ -299,6 +299,12 @@ async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
             assert "submitted_at" in await _sqlite_columns(
                 conn, "github_attempt_scope_revisions"
             )
+            assert "cancelled_at" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert "cancellation_reason" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
     finally:
         await engine.dispose()
 

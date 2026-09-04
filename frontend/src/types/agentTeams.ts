@@ -287,6 +287,8 @@ export interface GithubScopeRevision {
   submitted_head_sha?: string | null
   submitted_at?: string | null
   completed_at?: string | null
+  cancelled_at?: string | null
+  cancellation_reason?: string | null
   expires_at?: string | null
   created_at: string
   approval_request?: GithubApprovalRequest | null

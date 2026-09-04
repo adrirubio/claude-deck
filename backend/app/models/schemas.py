@@ -1949,6 +1949,8 @@ class GithubScopeRevisionResponse(BaseModel):
     submitted_head_sha: Optional[str] = None
     submitted_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancellation_reason: Optional[str] = None
     expires_at: Optional[datetime] = None
     created_at: datetime
     approval_request: Optional["GithubApprovalRequestResponse"] = None
@@ -1970,6 +1972,12 @@ class MailContinuationDecisionRequest(BaseModel):
 class GithubContinuationAckRequest(BaseModel):
     dispatch_nonce: str = Field(min_length=1)
     lease_token: str = Field(min_length=1)
+
+
+class GithubActiveContinuationCancelRequest(BaseModel):
+    cancel: Literal[True]
+    dispatch_nonce: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class GithubApprovalRequestResponse(BaseModel):

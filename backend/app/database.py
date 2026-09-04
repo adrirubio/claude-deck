@@ -950,6 +950,20 @@ async def _run_sqlite_compat_migrations(conn) -> None:
                 "ADD COLUMN submitted_at DATETIME"
             )
         )
+    if revision_columns and "cancelled_at" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN cancelled_at DATETIME"
+            )
+        )
+    if revision_columns and "cancellation_reason" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN cancellation_reason TEXT"
+            )
+        )
     await _sqlite_ensure_unique_partial_index(
         conn,
         table_name="github_approval_requests",
