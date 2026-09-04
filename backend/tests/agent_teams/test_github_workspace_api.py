@@ -281,6 +281,7 @@ def _continuation_proposal_kwargs(item, owner_slot, owner):
         "summary": " Apply one bounded correction ",
         "allowed_paths": ["src/z.py", "src/a.py", "src/z.py"],
         "allowed_actions": [
+            "push_pr_head",
             "request_verification",
             "edit_production",
             "edit_production",
@@ -345,7 +346,11 @@ async def test_continuation_proposal_persists_canonical_server_authority(
     assert replay_approval.id == approval.id
     assert revision.revision == 1
     assert revision.allowed_paths == ["src/a.py", "src/z.py"]
-    assert revision.allowed_actions == ["edit_production", "request_verification"]
+    assert revision.allowed_actions == [
+        "edit_production",
+        "push_pr_head",
+        "request_verification",
+    ]
     assert revision.allowed_commands == ["git diff --check", "pytest -q"]
     assert revision.summary == "Apply one bounded correction"
     assert revision.baseline_head_sha == "a" * 40
@@ -369,6 +374,48 @@ async def test_continuation_proposal_persists_canonical_server_authority(
     assert (
         await db.scalar(select(func.count()).select_from(GithubApprovalRequest))
     ) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "allowed_actions",
+    [
+        ["edit_production", "request_verification"],
+        ["edit_production", "push_pr_head"],
+    ],
+)
+async def test_implementation_proposal_requires_completion_actions_before_authority(
+    db,
+    tmp_path,
+    monkeypatch,
+    allowed_actions,
+):
+    scope, item, _workspace, owner_slot, owner = (
+        await _continuation_proposal_context(db, tmp_path)
+    )
+    _stub_continuation_github(monkeypatch)
+    payload = _continuation_proposal_kwargs(item, owner_slot, owner)
+    payload["allowed_actions"] = allowed_actions
+
+    with pytest.raises(
+        GithubApprovalError,
+        match="implementation_completion_actions_required",
+    ) as exc_info:
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            **payload,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubAttemptScopeRevision))
+    ) == 0
+    assert (
+        await db.scalar(select(func.count()).select_from(GithubApprovalRequest))
+    ) == 0
+    assert await db.scalar(select(func.count()).select_from(MailMessage)) == 0
 
 
 @pytest.mark.asyncio

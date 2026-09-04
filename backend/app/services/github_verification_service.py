@@ -22,7 +22,10 @@ from app.models.database import (
 )
 from app.services.github_app_auth_service import github_app_auth_service
 from app.services.agent_mail_service import agent_mail_service
-from app.services.github_approval_service import github_approval_service
+from app.services.github_approval_service import (
+    IMPLEMENTATION_COMPLETION_ACTIONS,
+    github_approval_service,
+)
 from app.services.github_client import (
     GithubClient,
     GithubClientResponseError,
@@ -139,8 +142,9 @@ class GithubVerificationService:
             raise ContinuationCompletionError("stale_scope_revision")
         if revision.status not in {"active", "submitted"}:
             raise ContinuationCompletionError("scope_revision_not_active")
-        required_actions = {"push_pr_head", "request_verification"}
-        if not required_actions.issubset(set(revision.allowed_actions)):
+        if not IMPLEMENTATION_COMPLETION_ACTIONS.issubset(
+            set(revision.allowed_actions)
+        ):
             raise ContinuationCompletionError("continuation_actions_missing")
         workspace = await github_workspace_service.get_leased_workspace(db, item.id)
         if (

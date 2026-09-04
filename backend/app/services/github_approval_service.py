@@ -54,6 +54,9 @@ _CONTINUATION_ACTIONS = frozenset(
         "request_verification",
     }
 )
+IMPLEMENTATION_COMPLETION_ACTIONS = frozenset(
+    {"push_pr_head", "request_verification"}
+)
 _PATH_GLOB_CHARACTERS = frozenset("*?[]{}")
 _LEASE_HASH_DOMAIN = b"claude-deck:github-workspace-lease:v1\x00"
 _HOSTED_ONLY_LOCAL_BUILD = re.compile(
@@ -317,6 +320,13 @@ class GithubApprovalService:
         unknown_actions = set(canonical_actions) - _CONTINUATION_ACTIONS
         if unknown_actions:
             raise GithubApprovalError("allowed_actions_invalid", status_code=400)
+        if phase == "implementation" and not (
+            IMPLEMENTATION_COMPLETION_ACTIONS <= set(canonical_actions)
+        ):
+            raise GithubApprovalError(
+                "implementation_completion_actions_required",
+                status_code=400,
+            )
         canonical_commands = self._canonical_strings(
             allowed_commands,
             label="allowed_commands",
@@ -735,6 +745,25 @@ class GithubApprovalService:
             "only within the exact delivered approved scope."
         )
 
+    @staticmethod
+    def continuation_leader_decision_nudge_prompt(
+        request: GithubApprovalRequest,
+        revision: GithubAttemptScopeRevision,
+    ) -> str:
+        return (
+            "Claude Deck continuation approval: call "
+            "`deck_check_inbox(unread_only=False)` now, find request message "
+            f"{request.request_message_id} for work item {request.work_item_id} "
+            f"revision {revision.revision}, and review its persisted phase and "
+            "allowed actions before calling `deck_decide_continuation`. Evidence "
+            "collection, temporary hosted instrumentation, hosted log collection, "
+            "or restoration work must use phase `diagnostic` and include "
+            "`revert_diagnostic_changes`. Phase `implementation` is only for a "
+            "bounded fix and must include `push_pr_head` plus "
+            "`request_verification`. Approve or reject only through the "
+            "authenticated decision tool; an ordinary reply is not authority."
+        )
+
     @classmethod
     def matches_linked_continuation_delivery_message(
         cls,
@@ -1031,6 +1060,11 @@ class GithubApprovalService:
         await agent_mail_service.auto_nudge_members(
             db,
             {request.leader_member_id},
+            bypass_cooldown=True,
+            nudge_prompt=self.continuation_leader_decision_nudge_prompt(
+                request,
+                revision,
+            ),
         )
         return True
 
