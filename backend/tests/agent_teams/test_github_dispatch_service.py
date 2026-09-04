@@ -4704,6 +4704,16 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     assert "Recovery proposal requested" in nudge_prompt
     assert "read-only diagnosis" in nudge_prompt
     assert "deck_request_continuation" in nudge_prompt
+    assert "diagnostic" in nudge_prompt
+    assert "revert_diagnostic_changes" in nudge_prompt
+    assert "implementation" in nudge_prompt
+    assert "push_pr_head" in nudge_prompt
+    assert "request_verification" in nudge_prompt
+    assert "diagnostic" in messages[0].body_markdown
+    assert "revert_diagnostic_changes" in messages[0].body_markdown
+    assert "implementation" in messages[0].body_markdown
+    assert "push_pr_head" in messages[0].body_markdown
+    assert "request_verification" in messages[0].body_markdown
     for prohibited_action in ("edit", "build", "push", "release", "retry"):
         assert prohibited_action in nudge_prompt.lower()
     assert messages[0].payload["failure_evidence"] == {
@@ -4876,8 +4886,8 @@ async def test_recovery_monitor_repairs_pending_request_transport_once(
         )
     nudges = []
 
-    async def record_nudge(_db, member_ids, **_kwargs):
-        nudges.append(set(member_ids))
+    async def record_nudge(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
 
     monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
 
@@ -4910,7 +4920,21 @@ async def test_recovery_monitor_repairs_pending_request_transport_once(
     ]
     assert revision.delivery_attempt_count == 1
     assert revision.last_delivery_attempt_at is not None
-    assert nudges == [{leader.id}]
+    assert len(nudges) == 1
+    member_ids, nudge_options = nudges[0]
+    assert member_ids == {leader.id}
+    assert nudge_options["bypass_cooldown"] is True
+    leader_prompt = nudge_options["nudge_prompt"]
+    assert "deck_check_inbox(unread_only=False)" in leader_prompt
+    assert "deck_decide_continuation" in leader_prompt
+    assert f"work item {item.id}" in leader_prompt
+    assert f"revision {revision.revision}" in leader_prompt
+    assert "diagnostic" in leader_prompt
+    assert "revert_diagnostic_changes" in leader_prompt
+    assert "implementation" in leader_prompt
+    assert "push_pr_head" in leader_prompt
+    assert "request_verification" in leader_prompt
+    assert workspace.lease_token not in leader_prompt
 
 
 @pytest.mark.asyncio

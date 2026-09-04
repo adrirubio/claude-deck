@@ -2553,8 +2553,12 @@ class GithubDispatchService:
                     "Do not edit, build, push, or report completion yet. Then call "
                     "`deck_request_continuation` with the smallest exact paths, actions, "
                     "commands, execution target, failed-head budget, and tool fallbacks "
-                    "needed for the next step. Wait for Leader approval and acknowledge "
-                    "the delivered revision before acting."
+                    "needed for the next step. Use phase `diagnostic` for evidence "
+                    "collection, temporary hosted instrumentation, hosted log collection, "
+                    "or restoration work, and include `revert_diagnostic_changes`. Use "
+                    "phase `implementation` only for a bounded fix, with both "
+                    "`push_pr_head` and `request_verification`. Wait for Leader approval "
+                    "and acknowledge the delivered revision before acting."
                 ),
                 payload={
                     "kind": "github_dispatch_recovery_proposal_requested",
@@ -2580,6 +2584,10 @@ class GithubDispatchService:
                     f"message for work item {item.id}, and execute that instruction "
                     "now. Perform read-only diagnosis and call "
                     "`deck_request_continuation` with the smallest bounded proposal. "
+                    "Use `diagnostic` with `revert_diagnostic_changes` for evidence, "
+                    "temporary instrumentation, hosted logs, or restoration. Use "
+                    "`implementation` only for a bounded fix and include "
+                    "`push_pr_head` plus `request_verification`. "
                     "Do not edit, build, push, release, retry, or report status or "
                     "completion before Leader approval. Stop after submitting the "
                     "proposal."
