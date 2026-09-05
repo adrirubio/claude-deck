@@ -2105,6 +2105,157 @@ async def test_diagnostic_completion_requires_exact_restored_tree_and_preserves_
 
 
 @pytest.mark.asyncio
+async def test_exhausted_diagnostic_can_complete_mandatory_exact_restoration(
+    client, db, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    preserved = (
+        item.pr_number,
+        item.owner_slot_id,
+        item.dispatch_nonce,
+        item.dispatch_head_ref,
+        item.retry_count,
+        workspace.id,
+        workspace.leased_item_id,
+        workspace.lease_token,
+    )
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "continuation_budget_exhausted"
+    item.attempt_phase = "diagnostic"
+    item.diagnostic_retry_count = 1
+    item.diagnostic_last_verified_sha = "d" * 40
+    revision.phase = "diagnostic"
+    revision.status = "exhausted"
+    revision.failed_head_count = 1
+    revision.last_failed_head_sha = "d" * 40
+    revision.originating_escalation_reason = "retry_count_exhausted"
+    revision.evidence = {
+        "version": 1,
+        "diagnostic_observations": {
+            "d" * 40: {"state": "red", "head_sha": "d" * 40}
+        },
+    }
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    completed = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+    replay = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert completed.status_code == 200, completed.text
+    assert replay.status_code == 200, replay.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.attempt_phase == "implementation"
+    assert item.active_scope_revision == 0
+    assert item.retry_count == preserved[4]
+    assert item.diagnostic_retry_count == 1
+    assert revision.status == "completed"
+    assert revision.failed_head_count == 1
+    assert revision.result_summary == (
+        "Captured the hosted crash evidence and restored the tree"
+    )
+    assert revision.evidence["diagnostic_completion"] == {
+        "run_url": "https://example.test/runs/42"
+    }
+    assert (
+        item.pr_number,
+        item.owner_slot_id,
+        item.dispatch_nonce,
+        item.dispatch_head_ref,
+        item.retry_count,
+        workspace.id,
+        workspace.leased_item_id,
+        workspace.lease_token,
+    ) == preserved
+    notices = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == f"github-diagnostic:{revision.id}:completed"
+            )
+        )
+    ).scalars().all()
+    assert len(notices) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_state",
+    ["wrong_reason", "not_current", "wrong_item_status"],
+)
+async def test_exhausted_diagnostic_completion_rejects_non_budget_contexts(
+    client, db, tmp_path, monkeypatch, invalid_state
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    _scope, item, workspace, revision, session = await _active_completion_context(
+        db, tmp_path
+    )
+    item.dispatch_status = "escalated"
+    item.escalation_reason = "continuation_budget_exhausted"
+    item.attempt_phase = "diagnostic"
+    revision.phase = "diagnostic"
+    revision.status = "exhausted"
+    if invalid_state == "wrong_reason":
+        item.escalation_reason = "retry_count_exhausted"
+    elif invalid_state == "not_current":
+        item.active_scope_revision = 2
+    else:
+        item.dispatch_status = "ready_for_review"
+    await db.commit()
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "d" * 40}}
+
+    async def get_commit_snapshot(*_args, **_kwargs):
+        return GithubCommitSnapshot(sha="d" * 40, tree_sha="b" * 40)
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
+    monkeypatch.setattr(github_client, "get_commit_snapshot", get_commit_snapshot)
+
+    async def authenticated_session():
+        return session
+
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json=_diagnostic_completion_report(item),
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "stale_continuation_context"
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert revision.status == "exhausted"
+    assert revision.completed_at is None
+    assert workspace.leased_item_id == item.id
+    assert workspace.lease_token == "lease-secret"
+
+
+@pytest.mark.asyncio
 async def test_diagnostic_completion_rejects_tree_mismatch_and_missing_evidence(
     client, db, tmp_path, monkeypatch
 ):

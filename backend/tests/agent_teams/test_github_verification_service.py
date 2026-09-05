@@ -23,6 +23,7 @@ from app.models.database import (
     MailTeamMember,
     TeamGithubScope,
 )
+from app.services.agent_mail_service import agent_mail_service
 from app.services.github_verification_service import github_verification_service
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_app_auth_service import (
@@ -1676,6 +1677,57 @@ async def test_diagnostic_failure_counts_each_head_once_and_uses_only_diagnostic
 
 
 @pytest.mark.asyncio
+async def test_exhausted_diagnostic_instructs_owner_to_restore_and_complete(db):
+    scope = await _scope(db, max_continuation_failed_heads=8)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+    )
+    revision, _workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=1,
+    )
+    client = _Client(
+        check_runs=[
+            {"name": "diagnostic", "status": "completed", "conclusion": "failure"}
+        ]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert item.active_scope_revision == revision.revision
+    assert item.attempt_phase == "diagnostic"
+    assert revision.status == "exhausted"
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key
+                == f"github-diagnostic:{revision.id}:restoration-required"
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+    assert "Stop further diagnostic iteration" in messages[0].body_markdown
+    assert "restore the exact baseline" in messages[0].body_markdown
+    assert "diagnostic_completed" in messages[0].body_markdown
+
+
+@pytest.mark.asyncio
 async def test_diagnostic_failure_replay_repairs_mail_without_recounting(
     db,
     monkeypatch,
@@ -1744,6 +1796,102 @@ async def test_diagnostic_failure_replay_repairs_mail_without_recounting(
     assert item.diagnostic_retry_count == 1
     assert revision.failed_head_count == 1
     assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_exhausted_diagnostic_failure_replay_repairs_restoration_mail(
+    db,
+    monkeypatch,
+):
+    scope = await _scope(db, max_continuation_failed_heads=1)
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="dispatched",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-diagnostic",
+        active_scope_revision=1,
+        attempt_phase="diagnostic",
+    )
+    revision, _workspace = await _diagnostic_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=1,
+    )
+    client = _Client(
+        check_runs=[
+            {"name": "diagnostic", "status": "completed", "conclusion": "failure"}
+        ]
+    )
+    original_notify = github_dispatch_service.notify_owner
+
+    async def crash_before_mail(*_args, **_kwargs):
+        raise RuntimeError("crash before exhausted diagnostic mail")
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        crash_before_mail,
+    )
+    with pytest.raises(RuntimeError, match="crash before exhausted diagnostic mail"):
+        await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert revision.status == "exhausted"
+    assert item.diagnostic_retry_count == 1
+    assert revision.failed_head_count == 1
+    delivery_key = f"github-diagnostic:{revision.id}:restoration-required"
+    assert (
+        await db.execute(
+            select(MailMessage).where(MailMessage.delivery_key == delivery_key)
+        )
+    ).scalar_one_or_none() is None
+    legacy_delivery_key = f"github-diagnostic:{revision.id}:check-failure:sha"
+    await agent_mail_service.send_direct_message(
+        db,
+        recipient_member_id=member.id,
+        subject="Diagnostic checks produced evidence",
+        body_markdown="Diagnostic checks failed before restoration was required.",
+        payload={"kind": "github_dispatch_diagnostic_check_failed"},
+        delivery_key=legacy_delivery_key,
+    )
+
+    monkeypatch.setattr(
+        github_dispatch_service,
+        "notify_owner",
+        original_notify,
+    )
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    messages = (
+        await db.execute(
+            select(MailMessage).where(MailMessage.delivery_key == delivery_key)
+        )
+    ).scalars().all()
+    assert item.diagnostic_retry_count == 1
+    assert revision.failed_head_count == 1
+    assert len(messages) == 1
+    assert (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key == legacy_delivery_key
+            )
+        )
+    ).scalar_one_or_none() is not None
+    assert "Stop further diagnostic iteration" in messages[0].body_markdown
+    assert "restore the exact baseline" in messages[0].body_markdown
+    assert "diagnostic_completed" in messages[0].body_markdown
 
 
 @pytest.mark.asyncio
