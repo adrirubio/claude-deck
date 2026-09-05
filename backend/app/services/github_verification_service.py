@@ -371,33 +371,53 @@ class GithubVerificationService:
             and revision.evidence == envelope
         ):
             return False
-        if (
-            revision.status != "active"
-            or item.dispatch_status != "dispatched"
-            or item.attempt_phase != "diagnostic"
-            or item.active_scope_revision != revision.revision
+        completion_from_active = (
+            revision.status == "active"
+            and item.dispatch_status == "dispatched"
+        )
+        completion_from_exhaustion = (
+            revision.status == "exhausted"
+            and item.dispatch_status == "escalated"
+            and item.escalation_reason == "continuation_budget_exhausted"
+        )
+        if not (
+            (completion_from_active or completion_from_exhaustion)
+            and item.attempt_phase == "diagnostic"
+            and item.active_scope_revision == revision.revision
         ):
             raise ContinuationCompletionError("stale_continuation_context")
 
         now = datetime.utcnow()
+        expected_item_status = (
+            "escalated" if completion_from_exhaustion else "dispatched"
+        )
+        expected_revision_status = (
+            "exhausted" if completion_from_exhaustion else "active"
+        )
+        item_conditions = [
+            GithubWorkItem.id == item.id,
+            GithubWorkItem.dispatch_status == expected_item_status,
+            GithubWorkItem.dispatch_nonce == dispatch_nonce,
+            GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
+            GithubWorkItem.active_scope_revision == revision.revision,
+            GithubWorkItem.attempt_phase == "diagnostic",
+            GithubWorkItem.pr_number.is_not(None),
+            exists(
+                select(GithubWorkspace.id).where(
+                    GithubWorkspace.id == workspace.id,
+                    GithubWorkspace.leased_item_id == item.id,
+                    GithubWorkspace.lease_token == lease_token,
+                )
+            ),
+        ]
+        if completion_from_exhaustion:
+            item_conditions.append(
+                GithubWorkItem.escalation_reason
+                == "continuation_budget_exhausted"
+            )
         item_result = await db.execute(
             update(GithubWorkItem)
-            .where(
-                GithubWorkItem.id == item.id,
-                GithubWorkItem.dispatch_status == "dispatched",
-                GithubWorkItem.dispatch_nonce == dispatch_nonce,
-                GithubWorkItem.owner_slot_id == authenticated_owner_slot_id,
-                GithubWorkItem.active_scope_revision == revision.revision,
-                GithubWorkItem.attempt_phase == "diagnostic",
-                GithubWorkItem.pr_number.is_not(None),
-                exists(
-                    select(GithubWorkspace.id).where(
-                        GithubWorkspace.id == workspace.id,
-                        GithubWorkspace.leased_item_id == item.id,
-                        GithubWorkspace.lease_token == lease_token,
-                    )
-                ),
-            )
+            .where(*item_conditions)
             .values(
                 dispatch_status="escalated",
                 escalation_reason=revision.originating_escalation_reason,
@@ -417,7 +437,7 @@ class GithubVerificationService:
             update(GithubAttemptScopeRevision)
             .where(
                 GithubAttemptScopeRevision.id == revision.id,
-                GithubAttemptScopeRevision.status == "active",
+                GithubAttemptScopeRevision.status == expected_revision_status,
                 GithubAttemptScopeRevision.phase == "diagnostic",
                 GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
                 GithubAttemptScopeRevision.owner_slot_id
@@ -912,6 +932,7 @@ class GithubVerificationService:
         client: GithubClient | None = None,
     ) -> None:
         client = client or github_client
+        await self._repair_exhausted_diagnostic_notifications(db, scope)
         items = (
             await db.execute(
                 select(GithubWorkItem).where(
@@ -1265,19 +1286,94 @@ class GithubVerificationService:
                     db,
                     item,
                     "continuation_budget_exhausted",
-                    "Diagnostic failed-head budget was exhausted.",
+                    (
+                        "Diagnostic failed-head budget was exhausted. Stop further "
+                        "diagnostic iteration, restore the exact baseline, and report "
+                        "`diagnostic_completed`."
+                    ),
                 )
             await db.commit()
+        await self._notify_diagnostic_failure(db, item, revision, head_sha)
+
+    async def _repair_exhausted_diagnostic_notifications(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+    ) -> None:
+        rows = (
+            await db.execute(
+                select(GithubWorkItem, GithubAttemptScopeRevision)
+                .join(
+                    GithubAttemptScopeRevision,
+                    (GithubAttemptScopeRevision.work_item_id == GithubWorkItem.id)
+                    & (
+                        GithubAttemptScopeRevision.dispatch_nonce
+                        == GithubWorkItem.dispatch_nonce
+                    )
+                    & (
+                        GithubAttemptScopeRevision.revision
+                        == GithubWorkItem.active_scope_revision
+                    ),
+                )
+                .where(
+                    GithubWorkItem.scope_id == scope.id,
+                    GithubWorkItem.dispatch_status == "escalated",
+                    GithubWorkItem.escalation_reason
+                    == "continuation_budget_exhausted",
+                    GithubWorkItem.attempt_phase == "diagnostic",
+                    GithubAttemptScopeRevision.phase == "diagnostic",
+                    GithubAttemptScopeRevision.status == "exhausted",
+                    GithubAttemptScopeRevision.last_failed_head_sha.is_not(None),
+                )
+            )
+        ).all()
+        for item, revision in rows:
+            await self._notify_diagnostic_failure(
+                db,
+                item,
+                revision,
+                str(revision.last_failed_head_sha),
+            )
+
+    async def _notify_diagnostic_failure(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        head_sha: str,
+    ) -> None:
+        restoration_required = (
+            revision.status == "exhausted"
+            and item.dispatch_status == "escalated"
+            and item.escalation_reason == "continuation_budget_exhausted"
+        )
         await github_dispatch_service.notify_owner(
             db,
             item,
-            subject="Diagnostic checks produced evidence",
+            subject=(
+                "Diagnostic budget exhausted; restore baseline"
+                if restoration_required
+                else "Diagnostic checks produced evidence"
+            ),
             body_markdown=(
-                f"Diagnostic checks failed for issue #{item.issue_number} / "
-                f"PR #{item.pr_number} at head {head_sha}."
+                (
+                    "Stop further diagnostic iteration. The failed-head budget "
+                    "is exhausted. Revert any temporary diagnostic changes, "
+                    "restore the exact baseline, and report `diagnostic_completed` "
+                    "with the authenticated owner session."
+                )
+                if restoration_required
+                else (
+                    f"Diagnostic checks failed for issue #{item.issue_number} / "
+                    f"PR #{item.pr_number} at head {head_sha}."
+                )
             ),
             payload={
-                "kind": "github_dispatch_diagnostic_check_failed",
+                "kind": (
+                    "github_dispatch_diagnostic_restoration_required"
+                    if restoration_required
+                    else "github_dispatch_diagnostic_check_failed"
+                ),
                 "work_item_id": item.id,
                 "pr_number": item.pr_number,
                 "head_sha": head_sha,
@@ -1286,7 +1382,9 @@ class GithubVerificationService:
                 "revision_failed_head_count": revision.failed_head_count,
             },
             delivery_key=(
-                f"github-diagnostic:{revision.id}:check-failure:{head_sha}"
+                f"github-diagnostic:{revision.id}:restoration-required"
+                if restoration_required
+                else f"github-diagnostic:{revision.id}:check-failure:{head_sha}"
             ),
         )
 
