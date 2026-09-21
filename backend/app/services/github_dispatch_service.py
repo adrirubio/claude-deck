@@ -84,6 +84,7 @@ ESCALATION_REASONS = frozenset(
         "leader_ack_timeout",
         "owner_idle_timeout",
         "retry_count_exhausted",
+        "continuation_revision_exhausted",
         "continuation_budget_exhausted",
         "continuation_invalid_state",
         "continuation_pr_identity_invalid",
@@ -2304,6 +2305,12 @@ class GithubDispatchService:
         )
 
         for item in items:
+            await self._reconcile_revision_exhaustion(
+                db,
+                scope,
+                item,
+                now=now,
+            )
             if item.escalation_reason not in CONTINUABLE_ESCALATIONS:
                 self._log_recovery_monitor(
                     item,
@@ -2662,6 +2669,68 @@ class GithubDispatchService:
                 now=now,
                 action="nudge_owner_proposal",
             )
+
+    async def _reconcile_revision_exhaustion(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Reclassify legacy local exhaustion only when the attempt can continue."""
+        if (
+            item.escalation_reason != "continuation_budget_exhausted"
+            or item.attempt_phase != "implementation"
+            or item.active_scope_revision <= 0
+            or not item.dispatch_nonce
+        ):
+            return False
+        revision_count, failed_head_count = (
+            await github_approval_service.continuation_budget_usage(
+                db,
+                item.id,
+                item.dispatch_nonce,
+            )
+        )
+        if (
+            revision_count >= scope.max_continuation_revisions
+            or failed_head_count >= scope.max_continuation_failed_heads
+        ):
+            return False
+        exhausted_implementation_revision = exists(
+            select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == item.dispatch_nonce,
+                GithubAttemptScopeRevision.revision == item.active_scope_revision,
+                GithubAttemptScopeRevision.phase == "implementation",
+                GithubAttemptScopeRevision.status == "exhausted",
+                GithubAttemptScopeRevision.failed_head_count
+                >= GithubAttemptScopeRevision.max_failed_heads,
+            )
+        )
+        result = await db.execute(
+            update(GithubWorkItem)
+            .where(
+                GithubWorkItem.id == item.id,
+                GithubWorkItem.dispatch_status == "escalated",
+                GithubWorkItem.escalation_reason == "continuation_budget_exhausted",
+                GithubWorkItem.attempt_phase == "implementation",
+                GithubWorkItem.active_scope_revision == item.active_scope_revision,
+                exhausted_implementation_revision,
+            )
+            .values(
+                escalation_reason="continuation_revision_exhausted",
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            return False
+        item.escalation_reason = "continuation_revision_exhausted"
+        item.updated_at = now
+        await db.commit()
+        return True
 
     async def _brief_delivered(self, db: AsyncSession, item: GithubWorkItem) -> bool:
         """Return whether this attempt's brief reached its owner."""

@@ -49,6 +49,7 @@ EXPECTED_ESCALATION_REASONS = frozenset(
         "leader_ack_timeout",
         "owner_idle_timeout",
         "retry_count_exhausted",
+        "continuation_revision_exhausted",
         "continuation_budget_exhausted",
         "continuation_invalid_state",
         "continuation_pr_identity_invalid",
@@ -492,7 +493,11 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
         (
             "services/github_dispatch_service.py",
             "approval_rounds_exhausted",
-        )
+        ),
+        (
+            "services/github_dispatch_service.py",
+            "continuation_revision_exhausted",
+        ),
     ]
     assert _escalation_call_reasons() | {
         write.value for write in conditional_escalation_writes
