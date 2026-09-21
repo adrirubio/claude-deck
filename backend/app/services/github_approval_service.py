@@ -40,6 +40,7 @@ CONTINUABLE_ESCALATIONS = frozenset(
         "owner_offline",
         "leader_offline",
         "leader_ack_timeout",
+        "continuation_revision_exhausted",
     }
 )
 _CONTINUATION_ACTIONS = frozenset(

@@ -4026,7 +4026,11 @@ async def test_pending_retry_changes_release_reminder_wording(db):
 
 
 @pytest.mark.asyncio
-async def test_recoverable_escalation_does_not_receive_release_reminder(db):
+@pytest.mark.parametrize(
+    "reason",
+    ["retry_count_exhausted", "continuation_revision_exhausted"],
+)
+async def test_recoverable_escalation_does_not_receive_release_reminder(db, reason):
     preset, slots, scope = await _team(db)
     preset.autonomy_enabled = True
     scope.continuation_enabled = True
@@ -4038,7 +4042,7 @@ async def test_recoverable_escalation_does_not_receive_release_reminder(db):
         dispatch_status="escalated",
         owner_slot_id=slots[1].id,
     )
-    item.escalation_reason = "retry_count_exhausted"
+    item.escalation_reason = reason
     item.pr_number = 928
     item.dispatch_nonce = "preserved-attempt"
     await db.commit()
@@ -4645,8 +4649,12 @@ async def test_continuation_authority_suppresses_release_reminder(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason",
+    ["retry_count_exhausted", "continuation_revision_exhausted"],
+)
 async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
-    db, monkeypatch
+    db, monkeypatch, reason
 ):
     _isolate_agent_mail_nudges(monkeypatch)
     monkeypatch.setattr(settings, "github_nudge_grace_seconds", 0)
@@ -4658,6 +4666,8 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     _preset, slots, scope, item, workspace, owner, _session = (
         await _recoverable_escalated_item(db)
     )
+    item.escalation_reason = reason
+    await db.commit()
     nudges = []
 
     async def record_nudge(_db, member_ids, **kwargs):
@@ -4687,7 +4697,7 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     assert len(messages) == 1
     assert item.continuation_nudged_at == first_nudge
     assert item.dispatch_status == "escalated"
-    assert item.escalation_reason == "retry_count_exhausted"
+    assert item.escalation_reason == reason
     assert workspace.leased_item_id == item.id
     assert workspace.lease_token == "t1"
     assert await github_approval_service.current_pending(db, item.id) is None
@@ -4717,7 +4727,7 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
     for prohibited_action in ("edit", "build", "push", "release", "retry"):
         assert prohibited_action in nudge_prompt.lower()
     assert messages[0].payload["failure_evidence"] == {
-        "escalation_reason": "retry_count_exhausted",
+        "escalation_reason": reason,
         "status_note": "Hosted playback check failed",
         "retry_count": 3,
         "diagnostic_retry_count": 0,
@@ -4725,6 +4735,113 @@ async def test_recovery_monitor_sends_one_idempotent_owner_proposal_instruction(
         "diagnostic_last_verified_sha": None,
     }
     assert "t1" not in str(messages[0].payload)
+
+
+@pytest.mark.asyncio
+async def test_recovery_monitor_reproposes_after_revision_budget_exhaustion(
+    db,
+    monkeypatch,
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    monkeypatch.setattr(settings, "github_nudge_grace_seconds", 0)
+    _preset, slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    request, revision, _leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status="rejected",
+    )
+    request.status = "expired"
+    revision.status = "exhausted"
+    revision.failed_head_count = 1
+    revision.last_failed_head_sha = "failed-revision-head"
+    item.active_scope_revision = revision.revision
+    item.escalation_reason = "continuation_budget_exhausted"
+    await db.commit()
+
+    nudges = []
+
+    async def record_nudge(_db, member_ids, **kwargs):
+        nudges.append((set(member_ids), kwargs))
+
+    async def get_pull(*_args, **_kwargs):
+        return {"state": "open", "merged_at": None}
+
+    monkeypatch.setattr(agent_mail_service, "auto_nudge_members", record_nudge)
+    monkeypatch.setattr(
+        "app.services.github_dispatch_service.github_client.get_pull",
+        get_pull,
+    )
+
+    await github_dispatch_service.monitor_recovery(db, scope, slots)
+
+    await db.refresh(item)
+    await db.refresh(workspace)
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.delivery_key
+                == f"github-recovery:{item.id}:{item.dispatch_nonce}:proposal:2"
+            )
+        )
+    ).scalars().all()
+    assert len(messages) == 1
+    assert item.dispatch_status == "escalated"
+    assert item.active_scope_revision == revision.revision
+    assert item.escalation_reason == "continuation_revision_exhausted"
+    assert workspace.leased_item_id == item.id
+    assert len(nudges) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase", "revision_limit"),
+    [
+        ("diagnostic", 2),
+        ("implementation", 1),
+    ],
+)
+async def test_recovery_monitor_does_not_reclassify_true_or_diagnostic_budget_exhaustion(
+    db,
+    phase,
+    revision_limit,
+):
+    _preset, _slots, scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    request, revision, _leader = await _continuation_transport_authority(
+        db,
+        item,
+        workspace,
+        owner,
+        status="rejected",
+    )
+    request.status = "expired"
+    revision.phase = phase
+    revision.status = "exhausted"
+    revision.failed_head_count = revision.max_failed_heads
+    item.active_scope_revision = revision.revision
+    item.attempt_phase = phase
+    item.escalation_reason = "continuation_budget_exhausted"
+    scope.max_continuation_revisions = revision_limit
+    await db.commit()
+
+    await github_dispatch_service.monitor_recovery(db, scope, _slots)
+
+    await db.refresh(item)
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    messages = (
+        await db.execute(
+            select(MailMessage).where(
+                MailMessage.recipient_member_id == owner.id,
+                MailMessage.subject.like("Recovery proposal requested:%"),
+            )
+        )
+    ).scalars().all()
+    assert messages == []
 
 
 @pytest.mark.asyncio

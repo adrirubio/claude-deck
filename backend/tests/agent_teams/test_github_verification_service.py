@@ -2240,7 +2240,7 @@ async def test_exhausted_continuation_state_precedes_failure_notification(
     await db.refresh(item)
     await db.refresh(revision)
     assert item.dispatch_status == "escalated"
-    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert item.escalation_reason == "continuation_revision_exhausted"
     assert revision.status == "exhausted"
     assert revision.failed_head_count == 1
     await github_verification_service.process_scope(db, scope, client=client)
@@ -2248,6 +2248,53 @@ async def test_exhausted_continuation_state_precedes_failure_notification(
     await db.refresh(revision)
     assert item.dispatch_status == "escalated"
     assert revision.status == "exhausted"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_continuation_same_head_replay_does_not_recount(db):
+    scope = await _scope(
+        db,
+        max_continuation_revisions=6,
+        max_continuation_failed_heads=8,
+    )
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+        retry_count=4,
+        last_verified_sha="sha",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=1,
+        failed_head_count=1,
+        last_failed_head_sha="sha",
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_revision_exhausted"
+    assert item.retry_count == 4
+    assert item.last_verified_sha == "sha"
+    assert revision.status == "exhausted"
+    assert revision.failed_head_count == 1
+    assert revision.last_failed_head_sha == "sha"
 
 
 @pytest.mark.asyncio
@@ -2322,7 +2369,7 @@ async def test_continuation_failures_use_revision_budget_and_count_each_head_onc
     await db.refresh(revision)
     await db.refresh(workspace)
     assert item.dispatch_status == "escalated"
-    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert item.escalation_reason == "continuation_revision_exhausted"
     assert item.retry_count == 9
     assert item.last_verified_sha == "sha-2"
     assert item.pr_number == 5
@@ -2366,6 +2413,86 @@ async def test_continuation_attempt_budget_can_exhaust_before_revision_budget(db
     assert item.dispatch_status == "escalated"
     assert item.escalation_reason == "continuation_budget_exhausted"
     assert revision.status == "exhausted"
+    assert revision.failed_head_count == 1
+
+
+@pytest.mark.asyncio
+async def test_continuation_revision_limit_is_attempt_budget_exhaustion(db):
+    scope = await _scope(
+        db,
+        max_continuation_revisions=1,
+        max_continuation_failed_heads=8,
+    )
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=1,
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "escalated"
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert revision.status == "exhausted"
+    assert revision.failed_head_count == 1
+
+
+@pytest.mark.asyncio
+async def test_last_continuation_revision_uses_its_remaining_failed_head_budget(db):
+    scope = await _scope(
+        db,
+        max_continuation_revisions=1,
+        max_continuation_failed_heads=8,
+    )
+    slot, member = await _owner(db, scope)
+    item = await _item(
+        db,
+        scope,
+        dispatch_status="verifying",
+        pr_number=5,
+        owner_slot_id=slot.id,
+        dispatch_nonce="attempt-1",
+        active_scope_revision=1,
+        attempt_phase="implementation",
+    )
+    revision, _workspace = await _implementation_revision(
+        db,
+        scope,
+        item,
+        slot,
+        member,
+        max_failed_heads=2,
+    )
+    client = _Client(
+        check_runs=[{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    )
+
+    await github_verification_service.process_scope(db, scope, client=client)
+
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.escalation_reason is None
+    assert revision.status == "active"
     assert revision.failed_head_count == 1
 
 

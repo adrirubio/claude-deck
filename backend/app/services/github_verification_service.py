@@ -2043,6 +2043,31 @@ class GithubVerificationService:
         item.status_note = note
         return note
 
+    async def _escalate_implementation_exhaustion(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        revision: GithubAttemptScopeRevision,
+        note: str,
+        *,
+        attempt_exhausted: bool,
+    ) -> None:
+        revision.status = "exhausted"
+        if attempt_exhausted:
+            await github_dispatch_service.escalate(
+                db,
+                item,
+                "continuation_budget_exhausted",
+                note,
+            )
+            return
+        await github_dispatch_service.escalate(
+            db,
+            item,
+            "continuation_revision_exhausted",
+            note,
+        )
+
     async def _record_product_verification_failure(
         self,
         db: AsyncSession,
@@ -2086,34 +2111,31 @@ class GithubVerificationService:
             revision.failed_head_count > 0
             and revision.last_failed_head_sha == head_sha
         )
-        total_failed_heads = int(
-            (
-                await db.execute(
-                    select(
-                        func.coalesce(
-                            func.sum(GithubAttemptScopeRevision.failed_head_count),
-                            0,
-                        )
-                    ).where(
-                        GithubAttemptScopeRevision.work_item_id == item.id,
-                        GithubAttemptScopeRevision.dispatch_nonce
-                        == item.dispatch_nonce,
-                    )
-                )
-            ).scalar_one()
+        revision_count, total_failed_heads = (
+            await github_approval_service.continuation_budget_usage(
+                db,
+                item.id,
+                item.dispatch_nonce,
+            )
         )
         if same_head:
-            exhausted = (
+            revision_exhausted = (
                 revision.failed_head_count >= revision.max_failed_heads
-                or total_failed_heads >= scope.max_continuation_failed_heads
             )
-            if exhausted:
-                revision.status = "exhausted"
-                await github_dispatch_service.escalate(
+            attempt_exhausted = (
+                total_failed_heads >= scope.max_continuation_failed_heads
+                or (
+                    revision_exhausted
+                    and revision_count >= scope.max_continuation_revisions
+                )
+            )
+            if revision_exhausted or attempt_exhausted:
+                await self._escalate_implementation_exhaustion(
                     db,
                     item,
-                    "continuation_budget_exhausted",
+                    revision,
                     note,
+                    attempt_exhausted=attempt_exhausted,
                 )
                 await db.commit()
             elif item.dispatch_status != retry_status or revision.status != "active":
@@ -2150,17 +2172,21 @@ class GithubVerificationService:
         item.retry_count += 1
         item.last_verified_sha = head_sha
         self._set_failure_note(item, note)
-        exhausted = (
-            revision.failed_head_count >= revision.max_failed_heads
-            or total_failed_heads + 1 >= scope.max_continuation_failed_heads
+        revision_exhausted = revision.failed_head_count >= revision.max_failed_heads
+        attempt_exhausted = (
+            total_failed_heads + 1 >= scope.max_continuation_failed_heads
+            or (
+                revision_exhausted
+                and revision_count >= scope.max_continuation_revisions
+            )
         )
-        if exhausted:
-            revision.status = "exhausted"
-            await github_dispatch_service.escalate(
+        if revision_exhausted or attempt_exhausted:
+            await self._escalate_implementation_exhaustion(
                 db,
                 item,
-                "continuation_budget_exhausted",
+                revision,
                 note,
+                attempt_exhausted=attempt_exhausted,
             )
         else:
             now = datetime.utcnow()
