@@ -44,6 +44,7 @@ from app.services.github_workspace_service import (
 )
 from app.services.github_app_auth_service import github_app_auth_service
 from app.services.github_approval_service import github_approval_service
+from app.utils.peer_process import read_proc_stat
 
 
 @pytest_asyncio.fixture
@@ -2735,7 +2736,7 @@ async def test_ambiguous_slot_blocks_and_leases_nothing(db, monkeypatch):
             _pane(pane_id="%2", target="w:0.2", cwd=owner.repo_path),
         ],
     )
-    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 2
+    assert len(await agent_mail_service.observed_sessions_for_slot(db, owner.id)) == 2
     item = GithubWorkItem(
         scope_id=scope.id,
         issue_number=950,
@@ -2788,7 +2789,7 @@ async def test_ambiguous_check_resyncs_before_counting(db, monkeypatch):
         )
     )
     await db.commit()
-    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 1
+    assert len(await agent_mail_service.observed_sessions_for_slot(db, owner.id)) == 1
     monkeypatch.setattr(
         "app.services.agent_mail_service.discover_agent_sessions",
         lambda: [
@@ -2817,7 +2818,7 @@ async def test_ambiguous_check_resyncs_before_counting(db, monkeypatch):
 
     await db.refresh(item)
     assert item.pending_reason == "queued_ambiguous_sessions"
-    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 2
+    assert len(await agent_mail_service.observed_sessions_for_slot(db, owner.id)) == 2
 
 
 @pytest.mark.asyncio
@@ -2889,7 +2890,7 @@ async def test_ambiguity_gate_is_stable_when_discovery_blips(db, monkeypatch):
     first = await github_dispatch_service._session_ambiguity_note(db, slot.id)
     second = await github_dispatch_service._session_ambiguity_note(db, slot.id)
 
-    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, slot.id)) == 1
+    assert len(await agent_mail_service.observed_sessions_for_slot(db, slot.id)) == 1
     assert first is None
     assert second == first
 
@@ -2929,7 +2930,7 @@ async def test_ambiguous_check_holds_when_discovery_raises(db, monkeypatch):
 
     await db.refresh(item)
     assert item.pending_reason == "queued_ambiguous_sessions"
-    assert len(await agent_mail_service.nudgeable_sessions_for_slot(db, owner.id)) == 1
+    assert len(await agent_mail_service.observed_sessions_for_slot(db, owner.id)) == 1
 
 
 @pytest.mark.asyncio
@@ -4356,6 +4357,8 @@ async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
     db.add(item)
     await db.flush()
     workspace = await _lease_for(db, scope, item)
+    pane_pid = os.getpid()
+    pane_proc_start = read_proc_stat(pane_pid)[1]
     observed_session = MailAgentSession(
         member_id=owner.id,
         provider=slots[1].provider,
@@ -4363,6 +4366,8 @@ async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
         session_key="tmux:recovery-owner",
         cwd=slots[1].repo_path,
         tmux_target="recovery:1.0",
+        pane_id="%91",
+        pid=pane_pid,
         team_preset_id=preset.id,
         team_slot_id=slots[1].id,
         mailbox_status="observed",
@@ -4378,6 +4383,8 @@ async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
         team_slot_id=slots[1].id,
         mailbox_status="connected",
         last_seen_at=datetime.utcnow(),
+        bound_pane_pid=pane_pid,
+        bound_pane_proc_start=pane_proc_start,
         capability_token_hash=agent_mail_service.hash_capability_token(
             "recovery-owner-token"
         ),

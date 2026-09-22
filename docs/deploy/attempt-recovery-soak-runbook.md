@@ -43,6 +43,8 @@ and hashes only; never record credentials or lease material.
 
 1. Record the reviewed PR4 integration merge SHA and deployed backend commit.
 2. Confirm Deck health and migration completion.
+   Confirm the `mail_wake_attempts` table exists after deploying the reviewed
+   Agent Mail wake-safety change. Keep autonomy and continuation disabled.
 3. Confirm autonomy is off and continuation is off.
 4. Confirm human merge policy.
 5. Confirm issue #821 and draft PR #875 remain open.
@@ -68,6 +70,11 @@ With autonomy and continuation still off:
 3. Verify exactly one observed tmux pane and at least one fresh authenticated MCP registration
    for the distinct Leader slot. Ignore the auxiliary hook row when counting physical agents.
 4. Verify no duplicate Tizonia sessions are registered to either slot.
+   Confirm each observed pane PID matches its slot's fresh authenticated MCP
+   session binding and process start time. An observed-only pane is not a wake
+   target. Inspect redacted wake attempts through the operator-only
+   `GET /api/v1/agent-mail/wake-attempts` endpoint; do not force a test wake
+   of an empty inbox merely to prove the route works.
 5. Verify finite continuation caps are the reviewed values.
 6. Verify PR #875's current head and baseline restoration target are recorded.
 

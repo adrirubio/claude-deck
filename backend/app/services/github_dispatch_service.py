@@ -1431,7 +1431,7 @@ class GithubDispatchService:
         if member is None:
             return None
         known_before = len(
-            await agent_mail_service.nudgeable_sessions_for_slot(db, owner_slot_id)
+            await agent_mail_service.observed_sessions_for_slot(db, owner_slot_id)
         )
         try:
             await agent_mail_service.sync_observed_sessions(db, strict=True)
@@ -1444,14 +1444,14 @@ class GithubDispatchService:
                 "Session discovery failed, so the owning pane could not be "
                 "confirmed. Holding rather than briefing an unknown session."
             )
-        candidates = await agent_mail_service.nudgeable_sessions_for_slot(
+        candidates = await agent_mail_service.observed_sessions_for_slot(
             db, owner_slot_id
         )
         if len(candidates) > 1:
             targets = ", ".join(sorted(str(session.tmux_target) for session in candidates))
             return (
-                f"{len(candidates)} nudgeable sessions on this slot ({targets}). "
-                "The dispatch brief would reach an arbitrary one. Converge the "
+                f"{len(candidates)} observed sessions on this slot ({targets}). "
+                "Dispatch cannot safely choose an owner pane. Converge the "
                 "slot to a single session, then this item dispatches itself."
             )
         if not candidates and known_before:
@@ -2531,11 +2531,20 @@ class GithubDispatchService:
                     block_code="continuation_budget_exhausted",
                 )
                 continue
+            observed_sessions = await agent_mail_service.observed_sessions_for_slot(
+                db,
+                item.owner_slot_id,
+            )
             sessions = await agent_mail_service.nudgeable_sessions_for_slot(
                 db,
                 item.owner_slot_id,
             )
-            owner_pane_ready = len(sessions) == 1 and sessions[0].member_id == owner.id
+            owner_pane_ready = (
+                len(observed_sessions) == 1
+                and len(sessions) == 1
+                and sessions[0].id == observed_sessions[0].id
+                and sessions[0].member_id == owner.id
+            )
             owner_authenticated = (
                 await agent_mail_service.has_fresh_authenticated_mcp_session(
                     db,

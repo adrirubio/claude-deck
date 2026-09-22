@@ -6,10 +6,16 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
-from sqlalchemy import update
+from pydantic import BaseModel, Field
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.deps import require_mail_session, resolve_request_pane
+from app.api.v1.deps import (
+    mail_session,
+    require_mail_session,
+    require_operator,
+    resolve_request_pane,
+)
 from app.config import settings
 from app.database import get_db
 from app.models.database import (
@@ -18,6 +24,7 @@ from app.models.database import (
     MailAgentSession,
     MailMessage,
     MailTeamMember,
+    MailWakeAttempt,
     TeamGithubScope,
 )
 from app.models.schemas import (
@@ -41,6 +48,7 @@ from app.services import agent_mail_install_service
 from app.services.agent_mail_service import (
     MailAuthorityError,
     MailDeliveryIntegrityError,
+    MailWakeError,
     agent_mail_service,
 )
 from app.services.github_dispatch_service import github_dispatch_service
@@ -461,13 +469,95 @@ async def ack_message(
     return {"ok": True}
 
 
+class MailWakeRequest(BaseModel):
+    force: bool = False
+    reason: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{2,63}$")
+
+
 @router.post("/members/{member_id}/queue-inbox-check")
-async def queue_inbox_check(member_id: int, db: AsyncSession = Depends(get_db)):
+async def queue_inbox_check(
+    member_id: int,
+    body: MailWakeRequest = Body(default_factory=MailWakeRequest),
+    x_deck_session_token: str | None = Header(default=None),
+    x_deck_operator_token: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    actor_type = "anonymous"
+    actor_session_id = None
     try:
-        result = await agent_mail_service.queue_inbox_check(db, member_id)
+        if x_deck_session_token and x_deck_operator_token:
+            raise HTTPException(status_code=400, detail="wake_principal_ambiguous")
+        if x_deck_session_token:
+            session = await mail_session(x_deck_session_token, db)
+            if session is None:
+                raise HTTPException(status_code=401, detail="session_token_required")
+            actor_type = "session"
+            actor_session_id = session.id
+            if session.member_id != member_id:
+                raise HTTPException(status_code=403, detail="wake_member_forbidden")
+            if body.force:
+                raise HTTPException(status_code=403, detail="wake_force_operator_only")
+        elif x_deck_operator_token:
+            actor_type = "operator"
+            await require_operator(x_deck_operator_token)
+        else:
+            raise HTTPException(status_code=401, detail="wake_auth_required")
+        if body.force and not body.reason:
+            raise HTTPException(status_code=400, detail="wake_force_reason_required")
+        result = await agent_mail_service.queue_inbox_check(
+            db, member_id,
+            actor_type=actor_type,
+            actor_session_id=actor_session_id,
+            force=body.force,
+            reason_code=body.reason or "manual_inbox_check",
+        )
         return {"ok": True, **result}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException as exc:
+        await agent_mail_service.record_wake_denial(
+            db, member_id,
+            actor_type=actor_type,
+            actor_session_id=actor_session_id,
+            source="manual",
+            reason_code=body.reason,
+            failure_code=str(exc.detail),
+        )
+        raise
+    except MailWakeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+
+@router.get("/wake-attempts")
+async def list_wake_attempts(
+    member_id: int | None = None,
+    limit: int = 50,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=422, detail="wake_audit_limit_invalid")
+    query = select(MailWakeAttempt).order_by(MailWakeAttempt.id.desc()).limit(limit)
+    if member_id is not None:
+        query = query.where(MailWakeAttempt.member_id == member_id)
+    attempts = (await db.execute(query)).scalars().all()
+    return {"attempts": [
+        {
+            "id": entry.id,
+            "member_id": entry.member_id,
+            "actor_type": entry.actor_type,
+            "actor_session_id": entry.actor_session_id,
+            "source": entry.source,
+            "reason_code": entry.reason_code,
+            "correlation_id": entry.correlation_id,
+            "target_session_id": entry.target_session_id,
+            "target_pane_id": entry.target_pane_id,
+            "unread_count": entry.unread_count,
+            "pending_count": entry.pending_count,
+            "result": entry.result,
+            "failure_code": entry.failure_code,
+            "created_at": entry.created_at,
+        }
+        for entry in attempts
+    ]}
 
 
 @router.post("/agent/register", response_model=MailAgentRegisterResponse)

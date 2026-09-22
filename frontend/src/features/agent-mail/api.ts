@@ -1,4 +1,5 @@
 import { apiClient, buildEndpoint } from '@/lib/api'
+import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { actorFetch } from './actorAuth'
 import type {
   AgentMailInstallStatus,
@@ -99,9 +100,11 @@ export function markAgentMailRead(messageId: number, memberId: number): Promise<
 export function queueAgentMailInboxCheck(
   memberId: number
 ): Promise<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }> {
+  const operatorToken = getOperatorToken()
+  if (!operatorToken) return Promise.reject(new Error('Set an operator token in Agent Teams before requesting a wake.'))
   return apiClient<{ ok: boolean; method?: string; target: string; prompt: string; turn_id?: string }>(
     `agent-mail/members/${memberId}/queue-inbox-check`,
-    { method: 'POST' }
+    { method: 'POST', headers: { 'X-Deck-Operator-Token': operatorToken } }
   )
 }
 

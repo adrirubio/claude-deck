@@ -23,11 +23,14 @@ from app.models.database import (
     MailMessage,
     MailReceipt,
     MailTeamMember,
+    MailWakeAttempt,
     TeamGithubScope,
 )
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import (
+    INBOX_CHECK_PROMPT,
     MailDeliveryIntegrityError,
+    MailWakeError,
     agent_mail_service,
 )
 from app.services.github_approval_service import (
@@ -86,6 +89,195 @@ async def _session_headers(db, member, key):
     )
     await db.commit()
     return {"X-Deck-Session-Token": token}
+
+
+@pytest.mark.asyncio
+async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypatch):
+    member = await _member(db, "wake-one", "wake-one")
+    other = await _member(db, "wake-two", "wake-two")
+    headers = await _session_headers(db, member, "wake-one")
+    monkeypatch.setattr(settings, "operator_token", "operator-wake-test")
+    endpoint = f"/api/v1/agent-mail/members/{member.id}/queue-inbox-check"
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: []
+    )
+
+    anonymous = await client.post(endpoint)
+    cross_member = await client.post(
+        f"/api/v1/agent-mail/members/{other.id}/queue-inbox-check", headers=headers
+    )
+    empty = await client.post(endpoint, headers=headers)
+    force_without_reason = await client.post(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "operator-wake-test"},
+        json={"force": True},
+    )
+    agent_force = await client.post(endpoint, headers=headers, json={"force": True, "reason": "maintenance"})
+
+    assert (anonymous.status_code, anonymous.json()["detail"]) == (401, "wake_auth_required")
+    assert (cross_member.status_code, cross_member.json()["detail"]) == (403, "wake_member_forbidden")
+    assert (empty.status_code, empty.json()["detail"]) == (409, "inbox_empty")
+    assert (force_without_reason.status_code, force_without_reason.json()["detail"]) == (400, "wake_force_reason_required")
+    assert (agent_force.status_code, agent_force.json()["detail"]) == (403, "wake_force_operator_only")
+    attempts = (await db.execute(select(MailWakeAttempt))).scalars().all()
+    assert len(attempts) == 5
+    assert {attempt.failure_code for attempt in attempts} == {
+        "wake_auth_required", "wake_member_forbidden", "inbox_empty",
+        "wake_force_reason_required", "wake_force_operator_only",
+    }
+    assert all(attempt.target_pane_id is None for attempt in attempts)
+
+
+@pytest.mark.asyncio
+async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, monkeypatch):
+    preset = AgentTeamPreset(name="Wake team", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    slot = AgentTeamSlot(
+        preset_id=preset.id, position=0, display_name="Owner",
+        provider="codex-cli", repo_id="wake-bound", repo_path="/tmp/wake-bound",
+        repo_name="wake-bound", launch_mode="plain", launch_options={}, enabled=True,
+    )
+    db.add(slot)
+    await db.flush()
+    member = MailTeamMember(
+        identity_key=f"slot:wake-bound:{slot.id}",
+        repo_id="wake-bound", repo_path="/tmp/wake-bound",
+        repo_name="wake-bound", display_name="Owner", participant_kind="team_slot",
+        team_preset_id=preset.id, team_slot_id=slot.id,
+    )
+    db.add(member)
+    await db.flush()
+    token = "bound-session-token"
+    db.add(MailAgentSession(
+        member_id=member.id, provider="codex-cli", source="mcp",
+        session_key="mcp:bound-owner", cwd="/tmp/wake-bound",
+        team_preset_id=preset.id, team_slot_id=slot.id,
+        mailbox_status="connected", last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token(token),
+        bound_pane_pid=4242, bound_pane_proc_start="bound-start",
+    ))
+    db.add(MailAgentSession(
+        member_id=member.id, provider="codex-cli", source="observed",
+        session_key="tmux:%7", cwd="/tmp/wake-bound", pane_id="%7",
+        pid=4242, tmux_target="wake:0.0", team_preset_id=preset.id,
+        team_slot_id=slot.id, mailbox_status="observed", last_seen_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions",
+        lambda: [{
+            "provider": "codex-cli", "tmux_target": "wake:0.0", "pane_id": "%7",
+            "cwd": "/tmp/wake-bound", "pid": "4242",
+            "team_preset_id": preset.id, "team_slot_id": slot.id,
+        }],
+    )
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(
+            stdout="%7|4242" if command[1] == "display-message" else "",
+            stderr="", returncode=0,
+        )
+
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _delay: None)
+    monkeypatch.setattr(settings, "operator_token", "operator-wake-test")
+    endpoint = f"/api/v1/agent-mail/members/{member.id}/queue-inbox-check"
+
+    empty = await client.post(endpoint, headers={"X-Deck-Session-Token": token})
+    assert empty.status_code == 409
+    message = MailMessage(
+        recipient_member_id=member.id,
+        body_markdown="Unread work for this owner",
+    )
+    db.add(message)
+    await db.flush()
+    db.add(MailReceipt(message_id=message.id, member_id=member.id))
+    db.add(MailAgentSession(
+        member_id=member.id, provider="codex-cli", source="mcp",
+        session_key="mcp:wrong-pane", cwd="/tmp/wake-bound",
+        team_preset_id=preset.id, team_slot_id=slot.id,
+        mailbox_status="connected", last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token("wrong-pane-token"),
+        bound_pane_pid=9999, bound_pane_proc_start="wrong-start",
+    ))
+    await db.commit()
+    wrong_pane = await client.post(
+        endpoint, headers={"X-Deck-Session-Token": "wrong-pane-token"}
+    )
+    assert (wrong_pane.status_code, wrong_pane.json()["detail"]) == (
+        403, "wake_session_mismatch"
+    )
+    own_session = await client.post(endpoint, headers={"X-Deck-Session-Token": token})
+    assert own_session.status_code == 200
+    operator_force = await client.post(
+        endpoint, headers={"X-Deck-Operator-Token": "operator-wake-test"},
+        json={"force": True, "reason": "operator_maintenance"},
+    )
+    assert operator_force.status_code == 200
+    tmux_commands = [command for command in commands if command[0] == "tmux"]
+    assert [command[:5] for command in tmux_commands if command[1] == "display-message"] == [
+        ["tmux", "display-message", "-p", "-t", "%7"]
+    ] * 2
+    assert [command for command in tmux_commands if command[1] == "send-keys"] == [
+        ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT],
+        ["tmux", "send-keys", "-t", "%7", "Enter"],
+    ] * 2
+
+    unauthenticated_audit = await client.get("/api/v1/agent-mail/wake-attempts")
+    assert unauthenticated_audit.status_code == 401
+    audit = await client.get(
+        "/api/v1/agent-mail/wake-attempts",
+        headers={"X-Deck-Operator-Token": "operator-wake-test"},
+    )
+    assert audit.status_code == 200
+    assert audit.json()["attempts"][0]["target_pane_id"] == "%7"
+    assert {attempt["actor_type"] for attempt in audit.json()["attempts"]} == {
+        "session", "operator"
+    }
+    assert token not in audit.text
+    assert "operator-wake-test" not in audit.text
+    assert "Unread work for this owner" not in audit.text
+
+
+@pytest.mark.asyncio
+async def test_wake_binding_refuses_two_matching_panes(db, monkeypatch):
+    member = await _member(db, "wake-ambiguous", "wake-ambiguous")
+    preset = AgentTeamPreset(name="Ambiguous", description="", created_by="test")
+    db.add(preset)
+    await db.flush()
+    slot = AgentTeamSlot(
+        preset_id=preset.id, position=0, display_name="Owner",
+        provider="codex-cli", repo_id=member.repo_id, repo_path=member.repo_path,
+        repo_name=member.repo_name, launch_mode="plain", launch_options={}, enabled=True,
+    )
+    db.add(slot)
+    await db.flush()
+    member.team_preset_id = preset.id
+    member.team_slot_id = slot.id
+    for pane_id, pane_pid in (("%7", 4242), ("%8", 4243)):
+        db.add(MailAgentSession(
+            member_id=member.id, provider="codex-cli", source="observed",
+            session_key=f"tmux:{pane_id}", pane_id=pane_id,
+            tmux_target=f"wake:{pane_id}", pid=pane_pid,
+            team_preset_id=preset.id, team_slot_id=slot.id,
+            mailbox_status="observed", last_seen_at=datetime.utcnow(),
+        ))
+        db.add(MailAgentSession(
+            member_id=member.id, provider="codex-cli", source="mcp",
+            session_key=f"mcp:{pane_id}", team_preset_id=preset.id,
+            team_slot_id=slot.id, mailbox_status="connected",
+            capability_token_hash=agent_mail_service.hash_capability_token(pane_id),
+            bound_pane_pid=pane_pid, bound_pane_proc_start=f"start-{pane_pid}",
+            last_seen_at=datetime.utcnow(),
+        ))
+    await db.commit()
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)
+    with pytest.raises(MailWakeError, match="wake_target_ambiguous"):
+        await agent_mail_service._nudge_session_for_member(db, member.id, datetime.utcnow())
 
 
 async def _dispatch_approval_fixture(db):

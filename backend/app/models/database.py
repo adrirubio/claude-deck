@@ -480,6 +480,27 @@ class MailAgentSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class MailWakeAttempt(Base):
+    """Redacted record of an attempted Agent Mail terminal wake."""
+
+    __tablename__ = "mail_wake_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    member_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    actor_type: Mapped[str] = mapped_column(String, nullable=False)
+    actor_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String, nullable=False)
+    target_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_pane_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pending_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    result: Mapped[str] = mapped_column(String, nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class MailExternalActor(Base):
     """Durable identity for a local external Agent Mail orchestrator."""
 
