@@ -3031,6 +3031,7 @@ class GithubDispatchService:
         self,
         db: AsyncSession,
         *,
+        item: GithubWorkItem,
         subject: str,
         body_markdown: str,
         payload: dict | None = None,
@@ -3039,6 +3040,8 @@ class GithubDispatchService:
 
         await agent_mail_service.send_broadcast(
             db,
+            audience_type="work_item",
+            audience_id=str(item.id),
             subject=subject,
             body_markdown=body_markdown,
             payload=payload,
@@ -3077,6 +3080,7 @@ class GithubDispatchService:
             lines.extend(["", note])
         await self.notify_team(
             db,
+            item=item,
             subject=f"Autonomy escalation: {reason}",
             body_markdown="\n".join(lines),
             payload={

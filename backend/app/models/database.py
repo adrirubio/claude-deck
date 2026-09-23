@@ -534,6 +534,8 @@ class MailMessage(Base):
     )
     approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision: Mapped[str | None] = mapped_column(String, nullable=True)
+    audience_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    audience_id: Mapped[str | None] = mapped_column(String, nullable=True)
     recipient_member_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=True
     )

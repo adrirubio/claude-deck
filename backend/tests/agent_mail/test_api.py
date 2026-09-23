@@ -92,6 +92,107 @@ async def _session_headers(db, member, key):
 
 
 @pytest.mark.asyncio
+async def test_session_message_route_rejects_audience_spoofing(client, db):
+    member = await _member(db, "audience-owner", "audience-owner")
+    headers = await _session_headers(db, member, "audience-owner")
+
+    global_broadcast = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=headers,
+        json={
+            "kind": "broadcast",
+            "audience_type": "operator_global",
+            "body_markdown": "Must not be global.",
+        },
+    )
+    implicit_broadcast = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=headers,
+        json={"body_markdown": "Must not fan out implicitly."},
+    )
+    spoofed_repository = await client.post(
+        "/api/v1/agent-mail/messages",
+        headers=headers,
+        json={
+            "audience_type": "repository",
+            "audience_id": "unrelated-repository",
+            "recipient_member_id": member.id,
+            "body_markdown": "Must not target another audience.",
+        },
+    )
+
+    assert (global_broadcast.status_code, global_broadcast.json()["detail"]) == (
+        403,
+        "broadcast_not_authorized",
+    )
+    assert (implicit_broadcast.status_code, implicit_broadcast.json()["detail"]) == (
+        403,
+        "broadcast_not_authorized",
+    )
+    assert (spoofed_repository.status_code, spoofed_repository.json()["detail"]) == (
+        403,
+        "audience_not_authorized",
+    )
+    assert (await db.execute(select(MailMessage))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_global_broadcast_route_is_operator_only(client, db, monkeypatch):
+    first = await _member(db, "global-first", "global-first")
+    second = await _member(db, "global-second", "global-second")
+    monkeypatch.setattr(settings, "operator_token", "operator-broadcast-test")
+    endpoint = "/api/v1/agent-mail/broadcasts"
+    payload = {
+        "audience_type": "operator_global",
+        "audience_id": "global",
+        "subject": "Global notice",
+        "body_markdown": "For everyone.",
+    }
+
+    anonymous = await client.post(endpoint, json=payload)
+    actor = await client.post(
+        "/api/v1/external/agent-mail/actors",
+        json={"actor_key": "broadcast-actor", "display_name": "Broadcast actor"},
+    )
+    actor_token = actor.json()["token"]
+    actor_attempt = await client.post(
+        endpoint,
+        headers={"Authorization": f"Bearer {actor_token}"},
+        json=payload,
+    )
+    invalid_operator = await client.post(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "invalid"},
+        json=payload,
+    )
+    missing_intent = await client.post(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "operator-broadcast-test"},
+        json={"subject": "Global notice", "body_markdown": "For everyone."},
+    )
+    sent = await client.post(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "operator-broadcast-test"},
+        json=payload,
+    )
+
+    assert anonymous.status_code == 401
+    assert actor.status_code == 200
+    assert actor_attempt.status_code == 401
+    assert invalid_operator.status_code == 401
+    assert (missing_intent.status_code, missing_intent.json()["detail"]) == (
+        400,
+        "operator_global_audience_required",
+    )
+    assert sent.status_code == 200
+    assert sent.json()["audience_type"] == "operator_global"
+    receipts = await agent_mail_service.recipient_ids_for_message(
+        db, sent.json()["id"]
+    )
+    assert receipts == {first.id, second.id}
+
+
+@pytest.mark.asyncio
 async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypatch):
     member = await _member(db, "wake-one", "wake-one")
     other = await _member(db, "wake-two", "wake-two")

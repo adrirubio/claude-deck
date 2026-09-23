@@ -157,6 +157,13 @@ async def send_message(
     db: AsyncSession = Depends(get_db),
 ):
     if (
+        request.kind == "broadcast"
+        or (request.recipient_member_id is None and request.thread_root_id is None)
+    ):
+        raise HTTPException(status_code=403, detail="broadcast_not_authorized")
+    if request.audience_type is not None or request.audience_id is not None:
+        raise HTTPException(status_code=403, detail="audience_not_authorized")
+    if (
         request.sender_member_id is not None
         and request.sender_member_id != session.member_id
     ):
@@ -167,6 +174,41 @@ async def send_message(
             db,
             request,
             authenticated_sender_member_id=session.member_id,
+        )
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/broadcasts", response_model=MailMessageResponse)
+async def send_operator_global_broadcast(
+    request: MailMessageCreate,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    if (
+        request.audience_type != "operator_global"
+        or request.audience_id != "global"
+        or request.sender_member_id is not None
+        or request.recipient_member_id is not None
+        or request.thread_root_id is not None
+        or request.decision is not None
+    ):
+        raise HTTPException(status_code=400, detail="operator_global_audience_required")
+    operator_request = MailMessageCreate(
+        kind="broadcast",
+        subject=request.subject,
+        body_markdown=request.body_markdown,
+        payload=request.payload,
+        audience_type="operator_global",
+        audience_id="global",
+    )
+    try:
+        return await agent_mail_service.send_message(
+            db,
+            operator_request,
+            operator_authorized=True,
         )
     except MailAuthorityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

@@ -2,6 +2,8 @@
 
 Agent Mail lets local Claude Code, Codex CLI, and GitHub Copilot CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
 
+Broadcasts require an explicit audience: an Agent Team preset, repository, or GitHub work item. Deck stores that audience with the message and creates receipts only for members in it. Direct messages and replies retain their addressed recipients. An all-member maintenance broadcast requires the operator credential and explicit global intent; a missing audience never means “everyone.” Historical messages keep their original receipts.
+
 ## What It Is For
 
 - Ask the agent that knows one repository to explain a local API, component, convention, or failure mode to another agent.

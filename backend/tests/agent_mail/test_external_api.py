@@ -88,6 +88,59 @@ async def test_external_actor_registration_and_auth(client, db):
 
 
 @pytest.mark.asyncio
+async def test_external_broadcast_requires_scoped_audience(client, db):
+    scoped_member = await _member(db, "broadcast-repo", "broadcast-repo")
+    other_member = await _member(db, "other-repo", "other-repo")
+    token, _ = await _actor_token(client)
+    endpoint = "/api/v1/external/agent-mail/broadcasts"
+    base = {"subject": "Scoped notice", "body_markdown": "For one repository."}
+
+    anonymous = await client.post(endpoint, json={
+        **base,
+        "audience_type": "repository",
+        "audience_id": "broadcast-repo",
+    })
+    implicit_global = await client.post(
+        endpoint,
+        headers=_auth(token),
+        json=base,
+    )
+    operator_global = await client.post(
+        endpoint,
+        headers=_auth(token),
+        json={**base, "audience_type": "operator_global"},
+    )
+    sent = await client.post(
+        endpoint,
+        headers=_auth(token),
+        json={
+            **base,
+            "audience_type": "repository",
+            "audience_id": "broadcast-repo",
+        },
+    )
+
+    assert anonymous.status_code == 401
+    assert (implicit_global.status_code, implicit_global.json()["detail"]) == (
+        400,
+        "broadcast_audience_required",
+    )
+    assert (operator_global.status_code, operator_global.json()["detail"]) == (
+        403,
+        "operator_global_forbidden",
+    )
+    assert sent.status_code == 200
+    assert sent.json()["message"]["audience_type"] == "repository"
+    assert sent.json()["message"]["audience_id"] == "broadcast-repo"
+    assert {recipient["member_id"] for recipient in sent.json()["recipients"]} == {
+        scoped_member.id
+    }
+    assert other_member.id not in {
+        recipient["member_id"] for recipient in sent.json()["recipients"]
+    }
+
+
+@pytest.mark.asyncio
 async def test_external_context_request_preserves_sender_attribution(client, db):
     recipient = await _member(db, "repo-beta", "beta")
     token, _ = await _actor_token(client)

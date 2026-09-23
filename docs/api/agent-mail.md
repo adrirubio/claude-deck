@@ -39,7 +39,25 @@ POST /api/v1/agent-mail/messages
 }
 ```
 
-Supported kinds include `message`, `context_request`, `handoff`, and `answer`. Direct messages create receipts for the recipient; broadcasts omit `recipient_member_id`.
+This route requires the caller's Agent Mail session token. Supported kinds are `message`, `context_request`, `handoff`, and `answer`. Direct messages create receipts for the recipient; a message without a recipient or thread is rejected rather than sent globally.
+
+### Send An Operator-Global Broadcast
+
+```http
+POST /api/v1/agent-mail/broadcasts
+X-Deck-Operator-Token: <operator token>
+```
+
+```json
+{
+  "audience_type": "operator_global",
+  "audience_id": "global",
+  "subject": "Maintenance notice",
+  "body_markdown": "This notice is intentionally for every member."
+}
+```
+
+Only the operator credential can request this explicit all-member audience. Agent session and external-actor tokens cannot use it.
 
 ### List Root Messages
 
@@ -78,7 +96,7 @@ Acknowledging an answer or handoff closes the relevant request lifecycle state.
 POST /api/v1/agent-mail/members/{member_id}/queue-inbox-check
 ```
 
-Attempts the visible wake path for a member. Today that means tmux-observed sessions through Agent Bridge. Non-tmux sessions can still receive stored mail and read it through MCP.
+Requires either that member's authenticated Agent Mail session or an operator token. Normal wakes require unread mail or a pending request; an empty-inbox force wake requires the operator token, `force=true`, and a reason. Delivery targets one currently bound tmux pane or fails closed. Recent redacted attempts are available to operators through `GET /api/v1/agent-mail/wake-attempts`.
 
 ## Agent-Facing Endpoints
 
@@ -130,3 +148,16 @@ POST /api/v1/external/agent-mail/requests/{message_id}/ack
 ```
 
 Actor creation is loopback-only. External endpoints require a bearer token and are intended for Claude Deck's local trust boundary, not internet-facing automation.
+
+External broadcasts require `audience_type` and `audience_id`. Supported scoped audiences are `team_preset` (preset ID), `repository` (the `repo_id` from the members response), and `work_item` (GitHub work-item ID). For example:
+
+```json
+{
+  "audience_type": "repository",
+  "audience_id": "repo-id-from-members-response",
+  "subject": "Repository notice",
+  "body_markdown": "For this repository only."
+}
+```
+
+Receipt recipients are snapshotted when the message is stored. A keyed replay uses those receipts, not current membership. Existing messages retain their historical receipts and have no inferred audience.

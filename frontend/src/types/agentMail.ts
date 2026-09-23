@@ -61,6 +61,8 @@ export interface MailMessageCreate {
   kind?: MailMessageKind
   sender_member_id?: number | null
   recipient_member_id?: number | null
+  audience_type?: 'repository' | 'team_preset' | null
+  audience_id?: string | null
   thread_root_id?: number | null
   subject?: string | null
   body_markdown: string
@@ -77,6 +79,8 @@ export interface MailMessageResponse {
   sender_actor_kind?: string | null
   sender_name: string
   recipient_member_id?: number | null
+  audience_type?: 'repository' | 'team_preset' | string | null
+  audience_id?: string | null
   subject?: string | null
   body_markdown: string
   payload?: Record<string, unknown> | null

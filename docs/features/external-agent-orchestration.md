@@ -111,17 +111,21 @@ curl -s "$DECK_API/external/agent-mail/handoffs" \
   }'
 ```
 
-Broadcast to all Agent Mail members:
+Broadcast to one repository's members by its `repo_id` from the members response:
 
 ```bash
 curl -s "$DECK_API/external/agent-mail/broadcasts" \
   -H "Authorization: Bearer $DECK_EXTERNAL_AGENT_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
+    "audience_type": "repository",
+    "audience_id": "repo-id-from-members-response",
     "subject": "Validation run started",
     "body_markdown": "OpenClaw has started a local validation pass."
   }'
 ```
+
+The broadcast endpoint also accepts `team_preset` or `work_item` with the corresponding ID. It does not accept `operator_global`; all-member maintenance notices require operator authorization. Requests without an explicit audience are rejected.
 
 ## Agent Teams Integration
 

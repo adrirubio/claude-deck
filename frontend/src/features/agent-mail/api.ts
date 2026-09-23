@@ -43,7 +43,14 @@ export async function sendAgentMailMessage(
   }
   const routes: Record<string, { path: string; body: Record<string, unknown> }> = {
     message: { path: 'external/agent-mail/messages', body: base },
-    broadcast: { path: 'external/agent-mail/broadcasts', body: base },
+    broadcast: {
+      path: 'external/agent-mail/broadcasts',
+      body: {
+        ...base,
+        audience_type: message.audience_type ?? undefined,
+        audience_id: message.audience_id ?? undefined,
+      },
+    },
     context_request: {
       path: 'external/agent-mail/context-requests',
       body: {
