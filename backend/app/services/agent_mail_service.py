@@ -1680,6 +1680,10 @@ class AgentMailService:
                     GithubAttemptScopeRevision.status == "approved",
                     GithubAttemptScopeRevision.acknowledged_at.is_(None),
                     or_(
+                        GithubAttemptScopeRevision.recovery_checkpoint_stage.is_(None),
+                        GithubAttemptScopeRevision.recovery_checkpoint_stage == "ack_open",
+                    ),
+                    or_(
                         GithubAttemptScopeRevision.expires_at.is_(None),
                         GithubAttemptScopeRevision.expires_at > now,
                     ),

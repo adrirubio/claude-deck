@@ -686,6 +686,7 @@ class GithubAttemptScopeRevision(Base):
     failed_head_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_failed_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="proposed", nullable=False)
+    recovery_checkpoint_stage: Mapped[str | None] = mapped_column(String, nullable=True)
     approval_request_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("github_approval_requests.id", ondelete="SET NULL"),

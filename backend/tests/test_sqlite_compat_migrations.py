@@ -359,6 +359,12 @@ async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
                     "VALUES (1, 42, 7, '0123456789abcdef', 'preserve me')"
                 )
             )
+            await conn.execute(
+                text(
+                    "INSERT INTO github_attempt_scope_revisions "
+                    "(id, work_item_id) VALUES (1, 1)"
+                )
+            )
             await conn.commit()
 
             for _ in range(2):
@@ -411,6 +417,17 @@ async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
             assert "cancellation_reason" in await _sqlite_columns(
                 conn, "github_attempt_scope_revisions"
             )
+            assert "recovery_checkpoint_stage" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT recovery_checkpoint_stage "
+                        "FROM github_attempt_scope_revisions WHERE id = 1"
+                    )
+                )
+            ).scalar_one() is None
     finally:
         await engine.dispose()
 

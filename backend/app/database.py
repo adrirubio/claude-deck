@@ -978,6 +978,13 @@ async def _run_sqlite_compat_migrations(conn) -> None:
                 "ADD COLUMN cancellation_reason TEXT"
             )
         )
+    if revision_columns and "recovery_checkpoint_stage" not in revision_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE github_attempt_scope_revisions "
+                "ADD COLUMN recovery_checkpoint_stage VARCHAR"
+            )
+        )
     await _sqlite_ensure_unique_partial_index(
         conn,
         table_name="github_approval_requests",

@@ -8,6 +8,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.sql.dml import Update
 
 from app.database import get_db
 from app.main import app, spa_not_found_exception_handler
@@ -766,6 +767,329 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
         )
     ).scalar_one()
     assert receipt.acked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_recovery_checkpoint_requires_operator_release_before_decision_and_ack(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", "checkpoint-operator-token")
+    item, scope, members, tokens, _workspace = await _continuation_approval_fixture(db)
+    monkeypatch.setattr(settings, "github_recovery_only_attempt", (
+        f"{scope.id}:{item.id}:{item.pr_number}:"
+        f"{item.dispatch_nonce}:{item.dispatch_head_ref}"
+    ))
+    _stub_continuation_github(monkeypatch)
+    proposal = _continuation_request_body(item)
+    proposal.update(
+        phase="diagnostic",
+        allowed_actions=["edit_tests", "revert_diagnostic_changes"],
+        allowed_paths=["tests/playback_smoke.py.in"],
+        allowed_commands=["git diff --check"],
+    )
+    proposal_path = (
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests"
+    )
+    prohibited = await client.post(
+        proposal_path,
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=proposal,
+    )
+    assert prohibited.status_code == 409
+    assert prohibited.json()["detail"] == "recovery_diagnostic_hosted_only"
+
+    proposal["execution_target"] = "hosted_ci"
+    proposed = await client.post(
+        proposal_path,
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=proposal,
+    )
+    assert proposed.status_code == 200
+    approval_id = proposed.json()["approval"]["id"]
+    revision_id = proposed.json()["revision"]["id"]
+    revision_number = proposed.json()["revision"]["revision"]
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    approval = await db.get(GithubApprovalRequest, approval_id)
+    assert revision.recovery_checkpoint_stage == "decision_hold"
+    assert revision.expires_at is None
+    assert revision.delivery_attempt_count == 0
+    assert approval.status == "pending"
+    assert not await github_approval_service.nudge_pending_continuation_leader(
+        db, approval, revision, cooldown=timedelta(seconds=0)
+    )
+    await db.refresh(revision)
+    assert revision.delivery_attempt_count == 0
+
+    decision = {
+        "approval_request_id": approval_id,
+        "work_item_id": item.id,
+        "dispatch_nonce": item.dispatch_nonce,
+        "decision": "approved",
+        "reason": "Hosted diagnostic only",
+    }
+    decision_path = "/api/v1/agent-mail/continuation-decisions"
+    premature_decision = await client.post(
+        decision_path,
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=decision,
+    )
+    assert premature_decision.status_code == 409
+    assert premature_decision.json()["detail"] == "recovery_checkpoint_paused"
+    await db.refresh(approval)
+    assert approval.status == "pending"
+
+    release_path = (
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision_number}/checkpoint-release"
+    )
+    release = {
+        "release": True,
+        "dispatch_nonce": item.dispatch_nonce,
+        "approval_request_id": approval_id,
+        "stage": "decision",
+    }
+    assert (await client.post(release_path, json=release)).status_code == 401
+    assert (
+        await client.post(
+            release_path,
+            headers={"X-Deck-Operator-Token": tokens[1]},
+            json=release,
+        )
+    ).status_code == 401
+    wrong_stage = await client.post(
+        release_path,
+        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        json={**release, "stage": "ack"},
+    )
+    assert wrong_stage.status_code == 409
+    opened_decision = await client.post(
+        release_path,
+        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        json=release,
+    )
+    assert opened_decision.status_code == 200
+    assert opened_decision.json()["recovery_checkpoint_stage"] == "decision_open"
+    assert opened_decision.json()["expires_at"] is not None
+
+    decided = await client.post(
+        decision_path,
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=decision,
+    )
+    assert decided.status_code == 200
+    await db.refresh(revision)
+    assert revision.status == "approved"
+    assert revision.recovery_checkpoint_stage == "ack_hold"
+    assert revision.expires_at is None
+    assert revision.delivery_message_id is not None
+    delivery_nudge_anchor = revision.last_ack_nudge_at
+    assert not await github_approval_service.nudge_approved_continuation_owner(
+        db, revision, cooldown=timedelta(seconds=0)
+    )
+    await db.refresh(revision)
+    assert revision.last_ack_nudge_at == delivery_nudge_anchor
+    assert not await agent_mail_service._has_pending_continuation_ack(
+        db, members[1].id, datetime.utcnow()
+    )
+    decision_replay = await client.post(
+        decision_path,
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json=decision,
+    )
+    assert decision_replay.status_code == 200
+    assert decision_replay.json()["id"] == decided.json()["id"]
+
+    ack_path = (
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
+        f"{revision_number}/ack"
+    )
+    ack = {"dispatch_nonce": item.dispatch_nonce, "lease_token": "lease-secret"}
+    premature_ack = await client.post(
+        ack_path,
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=ack,
+    )
+    assert premature_ack.status_code == 409
+    assert premature_ack.json()["detail"] == "recovery_checkpoint_paused"
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+
+    opened_ack = await client.post(
+        release_path,
+        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        json={**release, "stage": "ack"},
+    )
+    assert opened_ack.status_code == 200
+    assert opened_ack.json()["recovery_checkpoint_stage"] == "ack_open"
+    assert opened_ack.json()["expires_at"] is not None
+    assert await agent_mail_service._has_pending_continuation_ack(
+        db, members[1].id, datetime.utcnow()
+    )
+    activated = await client.post(
+        ack_path,
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=ack,
+    )
+    assert activated.status_code == 200
+    assert activated.json()["dispatch_status"] == "dispatched"
+    assert "lease-secret" not in opened_ack.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    ["head", "pr", "owner", "round", "reason", "lease", "policy", "autonomy", "selector"],
+)
+async def test_recovery_checkpoint_release_refuses_stale_authority(
+    client, db, monkeypatch, changed
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", "checkpoint-operator-token")
+    item, scope, _members, tokens, workspace = await _continuation_approval_fixture(db)
+    monkeypatch.setattr(settings, "github_recovery_only_attempt", (
+        f"{scope.id}:{item.id}:{item.pr_number}:"
+        f"{item.dispatch_nonce}:{item.dispatch_head_ref}"
+    ))
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    assert proposed.status_code == 200
+    revision_id = proposed.json()["revision"]["id"]
+    approval_id = proposed.json()["approval"]["id"]
+    if changed == "head":
+        item.dispatch_head_ref = "deck/changed-head"
+    elif changed == "pr":
+        item.pr_number = 53
+    elif changed == "owner":
+        item.owner_slot_id = None
+    elif changed == "round":
+        item.approval_round_count += 1
+    elif changed == "reason":
+        item.escalation_reason = "owner_offline"
+    elif changed == "lease":
+        workspace.lease_token = "replaced-lease"
+    elif changed == "policy":
+        scope.merge_policy = "auto"
+    elif changed == "autonomy":
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        preset.autonomy_enabled = True
+    else:
+        monkeypatch.setattr(settings, "github_recovery_only_attempt", "")
+    await db.commit()
+
+    refused = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/1/"
+        "checkpoint-release",
+        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        json={
+            "release": True,
+            "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval_id,
+            "stage": "decision",
+        },
+    )
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    await db.refresh(revision)
+    assert refused.status_code == 409
+    assert revision.recovery_checkpoint_stage == "decision_hold"
+    assert revision.expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_recovery_checkpoint_release_rechecks_lease_at_conditional_write(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr(settings, "operator_token", "checkpoint-operator-token")
+    item, scope, _members, tokens, workspace = await _continuation_approval_fixture(db)
+    monkeypatch.setattr(settings, "github_recovery_only_attempt", (
+        f"{scope.id}:{item.id}:{item.pr_number}:"
+        f"{item.dispatch_nonce}:{item.dispatch_head_ref}"
+    ))
+    _stub_continuation_github(monkeypatch)
+    proposed = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    assert proposed.status_code == 200
+    revision_id = proposed.json()["revision"]["id"]
+    approval_id = proposed.json()["approval"]["id"]
+
+    original_execute = db.execute
+    replaced = False
+
+    async def execute_after_lease_replacement(statement, *args, **kwargs):
+        nonlocal replaced
+        if (
+            isinstance(statement, Update)
+            and statement.table.name == "github_attempt_scope_revisions"
+            and not replaced
+        ):
+            replaced = True
+            await original_execute(
+                update(GithubWorkspace)
+                .where(GithubWorkspace.id == workspace.id)
+                .values(lease_token="replacement-lease")
+            )
+            await db.commit()
+        return await original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", execute_after_lease_replacement)
+    refused = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/1/"
+        "checkpoint-release",
+        headers={"X-Deck-Operator-Token": "checkpoint-operator-token"},
+        json={
+            "release": True,
+            "dispatch_nonce": item.dispatch_nonce,
+            "approval_request_id": approval_id,
+            "stage": "decision",
+        },
+    )
+    monkeypatch.setattr(db, "execute", original_execute)
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert replaced
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "recovery_checkpoint_context_changed"
+    assert revision.recovery_checkpoint_stage == "decision_hold"
+    assert revision.expires_at is None
+    assert workspace.lease_token == "replacement-lease"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selector_field", ["scope", "item"])
+async def test_recovery_only_attempt_refuses_other_item_proposals(
+    client, db, monkeypatch, selector_field
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, scope, _members, tokens, _workspace = await _continuation_approval_fixture(db)
+    selector_scope_id = scope.id + 1 if selector_field == "scope" else scope.id
+    selector_item_id = item.id + 1 if selector_field == "item" else item.id
+    monkeypatch.setattr(settings, "github_recovery_only_attempt", (
+        f"{selector_scope_id}:{selector_item_id}:{item.pr_number}:"
+        f"{item.dispatch_nonce}:{item.dispatch_head_ref}"
+    ))
+    refused = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=_continuation_request_body(item),
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "recovery_only_attempt_mismatch"
+    assert (
+        await db.execute(
+            select(GithubAttemptScopeRevision).where(
+                GithubAttemptScopeRevision.work_item_id == item.id
+            )
+        )
+    ).scalars().all() == []
 
 
 @pytest.mark.asyncio

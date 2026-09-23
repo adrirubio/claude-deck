@@ -20,7 +20,10 @@ from app.services.agent_mail_service import agent_mail_service
 from app.services.github_approval_service import github_approval_service
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
-from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
+from app.services.github_recovery_gate import (
+    GithubRecoveryOnlyAttempt,
+    configured_recovery_only_attempt,
+)
 from app.services.github_verification_service import github_verification_service
 from app.services.github_watcher_service import github_watcher_service
 
@@ -44,9 +47,7 @@ class GithubDispatchScheduler:
         self.watcher = watcher
         self.dispatch = dispatch
         self.verification = verification
-        self.recovery_only_attempt = GithubRecoveryOnlyAttempt.parse(
-            settings.github_recovery_only_attempt
-        )
+        self.recovery_only_attempt = configured_recovery_only_attempt()
 
     def _ensure_scheduler(self):
         if self.scheduler is None:

@@ -243,6 +243,8 @@ class GithubDispatchService:
     ) -> bool:
         await db.refresh(item)
         await db.refresh(revision)
+        if revision.recovery_checkpoint_stage not in (None, "ack_open"):
+            raise ValueError("recovery_checkpoint_paused")
         if item.scope_id != scope.id or revision.work_item_id != item.id:
             raise ValueError("scope_revision_not_found")
         if item.dispatch_nonce != dispatch_nonce or revision.dispatch_nonce != dispatch_nonce:
@@ -367,6 +369,10 @@ class GithubDispatchService:
                 GithubAttemptScopeRevision.owner_member_id
                 == authenticated_owner_member_id,
                 GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+                GithubAttemptScopeRevision.recovery_checkpoint_stage.is_(None)
+                if revision.recovery_checkpoint_stage is None
+                else GithubAttemptScopeRevision.recovery_checkpoint_stage
+                == "ack_open",
             )
             .values(status="active", acknowledged_at=now)
             .execution_options(synchronize_session=False)
