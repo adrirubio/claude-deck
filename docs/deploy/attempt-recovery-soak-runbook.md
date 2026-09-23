@@ -103,13 +103,27 @@ Stop and report before enabling autonomy.
 
 ## Checkpoint 3 — Autonomous Owner Proposal
 
-1. Enable autonomy for `tizonia-v1`.
-2. Observe the recovery monitor nudge only the current Specialist owner.
-3. Confirm the owner performs read-only diagnosis and submits one explicit bounded
+1. Before enabling autonomy, deploy the reviewed recovery-only scheduler gate. Set
+   `GITHUB_RECOVERY_ONLY_ATTEMPT=1:23:875:4173e3b8851fccc8:deck/slot-6/issue-821-4173e3b8851fccc8`
+   in the backend-only `.env` and restart Deck. Verify this exact selector is active,
+   `identity_matches=true` through the operator-only
+   `GET /api/v1/agent-teams/github-recovery-gate`, the scope still uses human
+   merge, the lease and PR are unchanged, and both exact team panes are wakeable.
+   A missing or mismatched selector blocks this checkpoint. After enabling autonomy,
+   the same read must show `scheduler_running=true` and `job_scheduled=true`.
+   This gate runs only continuation monitoring, verification, and recovery for the
+   selected attempt. It skips the broad watcher, new dispatch, PR-less monitoring,
+   release reminders, and dependency-unblock broadcasts; item 26 and unrelated
+   `agent-ready` issues stay untouched.
+   The gate does not restrict agent-initiated MCP writes; do not manually wake
+   unrelated panes or direct agents to act on other work items during the soak.
+2. Enable autonomy for `tizonia-v1`.
+3. Observe the recovery monitor nudge only the current Specialist owner.
+4. Confirm the owner performs read-only diagnosis and submits one explicit bounded
    continuation proposal.
-4. Confirm normalized approval and revision rows commit before request mail.
-5. Confirm the proposal preserves PR #875, owner, workspace, nonce, branch, and retry history.
-6. Confirm Deck/coordinator did not fabricate the proposal.
+5. Confirm normalized approval and revision rows commit before request mail.
+6. Confirm the proposal preserves PR #875, owner, workspace, nonce, branch, and retry history.
+7. Confirm Deck/coordinator did not fabricate the proposal.
 
 Stop with revision id, request id, mail id, phase, scope summary, and counters.
 
@@ -165,12 +179,16 @@ Stop with revision ids, PR head, changed paths, check runs, and counters.
 1. Confirm Deck marks item 23 ready for review under human merge policy.
 2. Confirm no auto-merge attempt occurred.
 3. A human reviews and merges PR #875.
-4. Observe the watcher mark item 23 merged.
+4. Observe the recovery-only verification stage mark item 23 merged.
 5. Disable autonomy.
-6. Decide explicitly whether continuation remains enabled or is disabled.
-7. Confirm the workspace lease is released only through the normal terminal owner flow.
-8. Confirm no pending approval/revision/mail repair remains.
-9. Commit the completed soak log to the integration branch.
+6. With autonomy still off, remove `GITHUB_RECOVERY_ONLY_ATTEMPT` from the
+   backend-only `.env`, restart Deck, and verify the operator recovery-gate
+   endpoint reports `active=false`. Do not re-enable broad dispatch as part of
+   this cleanup.
+7. Decide explicitly whether continuation remains enabled or is disabled.
+8. Confirm the workspace lease is released only through the normal terminal owner flow.
+9. Confirm no pending approval/revision/mail repair remains.
+10. Commit the completed soak log to the integration branch.
 
 Stop. An independent reviewer must approve the evidence log before the integration branch is
 proposed for merge to `master`.
