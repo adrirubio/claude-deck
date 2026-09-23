@@ -33,6 +33,7 @@ preset=$(get_json "$deck_base_url/api/v1/agent-teams/presets/$preset_id")
 scopes=$(get_json "$deck_base_url/api/v1/agent-teams/presets/$preset_id/github-scopes")
 items=$(get_json "$deck_base_url/api/v1/agent-teams/presets/$preset_id/github-work-items?limit=200")
 team=$(get_json "$deck_base_url/api/v1/agent-mail/team?sync=false")
+bridge_sessions=$(get_json "$deck_base_url/api/v1/agent-bridge/sessions")
 
 scope=$(jq -ce --argjson id "$scope_id" '.scopes[] | select(.id == $id)' <<<"$scopes") || {
   echo "scope $scope_id is not attached to preset $preset_id" >&2
@@ -62,6 +63,7 @@ leader_slots=$(jq -c '[.slots[] | select(.enabled == true and (((.role // "") | 
 leader_slot_count=$(jq 'length' <<<"$leader_slots")
 [[ $leader_slot_count -eq 1 ]] || { echo "expected exactly one enabled Leader slot" >&2; exit 1; }
 leader_slot_id=$(jq -r '.[0].id' <<<"$leader_slots")
+[[ $owner_slot_id != "$leader_slot_id" ]] || { echo "owner and Leader slots must be distinct" >&2; exit 1; }
 
 fresh_mcp_session_count() {
   local slot_id=$1
@@ -111,6 +113,65 @@ observed_pane_count() {
   ' <<<"$team"
 }
 
+observed_pane_target() {
+  local slot_id=$1
+  jq -er --argjson preset "$preset_id" --argjson slot "$slot_id" '
+    [.members[].sessions[]?
+      | select(
+          .team_preset_id == $preset
+          and .team_slot_id == $slot
+          and .source == "observed"
+          and .mailbox_status == "observed"
+          and (.tmux_target // "") != ""
+        )
+      | .tmux_target]
+    | unique
+    | if length == 1 then .[0] else empty end
+  ' <<<"$team"
+}
+
+verify_bridge_wake_target() {
+  local slot_id=$1
+  local target=$2
+  local label=$3
+  local matching_rows
+  local matching_count
+  local target_count
+
+  matching_rows=$(jq -c \
+    --argjson preset "$preset_id" \
+    --argjson slot "$slot_id" \
+    --arg target "$target" '
+    [.sessions[]?
+      | select(
+          .team_preset_id == $preset
+          and .team_slot_id == $slot
+          and .tmux_target == $target
+        )]
+  ' <<<"$bridge_sessions")
+  matching_count=$(jq 'length' <<<"$matching_rows")
+  target_count=$(jq --arg target "$target" '[.sessions[]? | select(.tmux_target == $target)] | length' <<<"$bridge_sessions")
+  [[ $matching_count -eq 1 && $target_count -eq 1 ]] || {
+    echo "$label slot must have exactly one matching Agent Bridge pane" >&2
+    exit 1
+  }
+
+  jq -e \
+    --argjson preset "$preset_id" \
+    --argjson slot "$slot_id" \
+    --arg target "$target" '
+    length == 1
+    and .[0].team_preset_id == $preset
+    and .[0].team_slot_id == $slot
+    and .[0].mail_wake_state == "wakeable"
+    and .[0].mail_wake_enabled == true
+    and .[0].mail_wake_target == $target
+  ' <<<"$matching_rows" >/dev/null || {
+    echo "$label slot Agent Bridge pane is not exactly wakeable" >&2
+    exit 1
+  }
+}
+
 owner_mcp_sessions=$(fresh_mcp_session_count "$owner_slot_id")
 leader_mcp_sessions=$(fresh_mcp_session_count "$leader_slot_id")
 owner_observed_panes=$(observed_pane_count "$owner_slot_id")
@@ -119,6 +180,11 @@ leader_observed_panes=$(observed_pane_count "$leader_slot_id")
 [[ $leader_mcp_sessions -ge 1 ]] || { echo "Leader slot has no fresh authenticated MCP session" >&2; exit 1; }
 [[ $owner_observed_panes -eq 1 ]] || { echo "owner slot must have exactly one observed tmux pane" >&2; exit 1; }
 [[ $leader_observed_panes -eq 1 ]] || { echo "Leader slot must have exactly one observed tmux pane" >&2; exit 1; }
+owner_wake_target=$(observed_pane_target "$owner_slot_id") || { echo "owner slot has no unique observed tmux target" >&2; exit 1; }
+leader_wake_target=$(observed_pane_target "$leader_slot_id") || { echo "Leader slot has no unique observed tmux target" >&2; exit 1; }
+[[ $owner_wake_target != "$leader_wake_target" ]] || { echo "owner and Leader panes must be distinct" >&2; exit 1; }
+verify_bridge_wake_target "$owner_slot_id" "$owner_wake_target" owner
+verify_bridge_wake_target "$leader_slot_id" "$leader_wake_target" Leader
 
 jq -n \
   --arg deck_status "$(jq -r '.status' <<<"$health")" \
@@ -137,6 +203,8 @@ jq -n \
   --argjson leader_mcp_sessions "$leader_mcp_sessions" \
   --argjson owner_observed_panes "$owner_observed_panes" \
   --argjson leader_observed_panes "$leader_observed_panes" \
+  --arg owner_wake_target "$owner_wake_target" \
+  --arg leader_wake_target "$leader_wake_target" \
   --arg pending_approval "$(jq -r '.pending_approval_request_id // "none"' <<<"$item")" \
   --arg continuation_block "$(jq -r '.continuation_block_code // "none"' <<<"$item")" \
   --arg retry_block "$(jq -r '.retry_block_code // "none"' <<<"$item")" \
@@ -176,12 +244,16 @@ jq -n \
       owner: {
         slot_id: $owner_slot_id,
         authenticated_mcp: $owner_mcp_sessions,
-        observed_panes: $owner_observed_panes
+        observed_panes: $owner_observed_panes,
+        wake_state: "wakeable",
+        wake_target: $owner_wake_target
       },
       leader: {
         slot_id: $leader_slot_id,
         authenticated_mcp: $leader_mcp_sessions,
-        observed_panes: $leader_observed_panes
+        observed_panes: $leader_observed_panes,
+        wake_state: "wakeable",
+        wake_target: $leader_wake_target
       }
     }
   }'

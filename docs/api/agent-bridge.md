@@ -32,7 +32,15 @@ GET /api/v1/agent-bridge/sessions?provider={provider_id}
       "team_slot_position": 2,
       "team_slot_role": "planner-reviewer",
       "team_slot_charter": "Review the plan and implementation against release goals.",
-      "team_slot_color": "purple"
+      "team_slot_color": "purple",
+      "mail_member_id": 42,
+      "mail_member_name": "Reviewer",
+      "mail_repo_id": "repo-123",
+      "mail_mcp_session_id": 81,
+      "mail_wake_enabled": true,
+      "mail_wake_state": "wakeable",
+      "mail_wake_reason": null,
+      "mail_wake_target": "repo-1234:0.0"
     }
   ],
   "count": 1
@@ -40,6 +48,8 @@ GET /api/v1/agent-bridge/sessions?provider={provider_id}
 ```
 
 Team fields are present only for sessions launched from Agent Teams. Manual tmux sessions fall back to provider, repo, and tmux metadata with no team slot color.
+
+The `mail_*` values are a redacted, per-pane projection. A member is included only when the discovered pane matches an observed Agent Mail session. `mail_mcp_session_id` is set only for one fresh authenticated MCP session bound to that pane's PID and process start, provider, and member. Wake states are `wakeable`, `opted_out`, `stale`, `ambiguous`, or `unbound`; `mail_wake_reason` gives the corresponding reason code when the pane cannot be woken. `mail_wake_target` is present only when the Agent Mail service confirms that exact pane is currently wakeable. Session listing is read-only: it does not synchronize or update observed sessions. These fields never expose capability tokens or their hashes.
 
 ### Get Preview
 

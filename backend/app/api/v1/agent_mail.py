@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -123,7 +123,30 @@ async def get_team(sync: bool = True, db: AsyncSession = Depends(get_db)):
     """Team roster with sessions and inbox counts."""
     if sync:
         await agent_mail_service.sync_observed_sessions(db)
-    return TeamListResponse(members=await agent_mail_service.list_team(db))
+    members = await agent_mail_service.list_team(db)
+    sessions = (await db.execute(select(MailAgentSession))).scalars().all()
+    wake_enabled_by_session = {
+        session.id: session.wake_enabled for session in sessions
+    }
+    return TeamListResponse(
+        members=[
+            member.model_copy(
+                update={
+                    "sessions": [
+                        session.model_copy(
+                            update={
+                                "wake_enabled": wake_enabled_by_session.get(
+                                    session.id, False
+                                )
+                            }
+                        )
+                        for session in member.sessions
+                    ]
+                }
+            )
+            for member in members
+        ]
+    )
 
 
 @router.patch("/members/{member_id}", response_model=MailMemberResponse)
@@ -514,6 +537,36 @@ async def ack_message(
 class MailWakeRequest(BaseModel):
     force: bool = False
     reason: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{2,63}$")
+
+
+class MailWakeParticipationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    wake_enabled: bool
+    reason: str = Field(pattern=r"^[a-z][a-z0-9_]{2,63}$")
+
+
+@router.patch("/sessions/{session_id}/wake-participation")
+async def set_session_wake_participation(
+    session_id: int,
+    body: MailWakeParticipationRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await db.get(MailAgentSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    try:
+        updated = await agent_mail_service.set_wake_enabled(
+            db,
+            session_id,
+            body.wake_enabled,
+            actor_type="operator",
+            reason_code=body.reason,
+        )
+    except MailWakeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    return {"session_id": updated.id, "wake_enabled": updated.wake_enabled}
 
 
 @router.post("/members/{member_id}/queue-inbox-check")

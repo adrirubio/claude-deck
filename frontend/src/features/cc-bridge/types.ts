@@ -18,6 +18,29 @@ export interface AgentSession {
   team_slot_role?: string | null
   team_slot_charter?: string | null
   team_slot_color?: string | null
+  mail_member_id?: number | null
+  mail_member_name?: string | null
+  mail_repo_id?: string | null
+  mail_mcp_session_id?: number | string | null
+  mail_wake_enabled?: boolean | null
+  mail_wake_state?: string | null
+  mail_wake_reason?: string | null
+  mail_wake_target?: string | null
+}
+
+export interface MailWakeAttempt {
+  id: number
+  member_id: number
+  source: string
+  reason_code: string
+  correlation_id: string
+  result: string
+  failure_code?: string | null
+  created_at: string
+}
+
+export interface MailWakeAttemptsResponse {
+  attempts: MailWakeAttempt[]
 }
 
 export type CCSession = AgentSession
