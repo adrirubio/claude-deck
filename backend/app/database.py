@@ -920,6 +920,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN decision VARCHAR"))
     if message_columns and "delivery_key" not in message_columns:
         await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN delivery_key VARCHAR"))
+    if message_columns and "audience_type" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN audience_type VARCHAR"))
+    if message_columns and "audience_id" not in message_columns:
+        await conn.execute(text("ALTER TABLE mail_messages ADD COLUMN audience_id VARCHAR"))
     if message_columns:
         await _sqlite_ensure_unique_partial_index(
             conn,

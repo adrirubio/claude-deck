@@ -936,6 +936,7 @@ class AgentMailService:
         sender_actor_id: Optional[int] = None,
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
+        operator_authorized: bool = False,
         commit: bool = True,
     ) -> MailMessageResponse:
         if request.decision is not None:
@@ -949,6 +950,7 @@ class AgentMailService:
             sender_actor_id=sender_actor_id,
             authenticated_sender_member_id=authenticated_sender_member_id,
             delivery_key=delivery_key,
+            operator_authorized=operator_authorized,
             commit=commit,
         )
 
@@ -989,8 +991,27 @@ class AgentMailService:
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
         authoritative_approval_round: int | None = None,
+        operator_authorized: bool = False,
         commit: bool = True,
     ) -> MailMessageResponse:
+        if delivery_key is not None and request.kind == "broadcast":
+            existing = (
+                await db.execute(
+                    select(MailMessage).where(MailMessage.delivery_key == delivery_key)
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                if not await self._same_delivery(
+                    db,
+                    existing,
+                    request,
+                    sender_actor_id=sender_actor_id,
+                    operator_authorized=operator_authorized,
+                ):
+                    raise MailDeliveryIntegrityError(
+                        f"delivery key {delivery_key!r} conflicts with different mail"
+                    )
+                return await self._message_response(db, existing, for_member_id=None)
         created = True
         if delivery_key is None:
             message, recipients = await self._create_message_row(
@@ -999,6 +1020,7 @@ class AgentMailService:
                 sender_actor_id=sender_actor_id,
                 authenticated_sender_member_id=authenticated_sender_member_id,
                 authoritative_approval_round=authoritative_approval_round,
+                operator_authorized=operator_authorized,
             )
         else:
             try:
@@ -1010,6 +1032,7 @@ class AgentMailService:
                         authenticated_sender_member_id=authenticated_sender_member_id,
                         delivery_key=delivery_key,
                         authoritative_approval_round=authoritative_approval_round,
+                        operator_authorized=operator_authorized,
                     )
             except IntegrityError:
                 created = False
@@ -1020,10 +1043,12 @@ class AgentMailService:
                         )
                     )
                 ).scalar_one_or_none()
-                if message is None or not self._same_delivery(
+                if message is None or not await self._same_delivery(
+                    db,
                     message,
                     request,
                     sender_actor_id=sender_actor_id,
+                    operator_authorized=operator_authorized,
                 ):
                     raise MailDeliveryIntegrityError(
                         f"delivery key {delivery_key!r} conflicts with different mail"
@@ -1051,13 +1076,27 @@ class AgentMailService:
             ensure_ascii=False,
         ).encode("utf-8")
 
-    def _same_delivery(
+    async def _same_delivery(
         self,
+        db: AsyncSession,
         message: MailMessage,
         request: MailMessageCreate,
         *,
         sender_actor_id: int | None,
+        operator_authorized: bool,
     ) -> bool:
+        if request.recipient_member_id is not None or request.thread_root_id is not None:
+            audience_type, audience_id = await self._message_audience(db, request)
+        else:
+            audience_type = getattr(request, "audience_type", None)
+            audience_id = getattr(request, "audience_id", None)
+            if audience_type is None or audience_id is None:
+                return False
+            audience_id = str(audience_id)
+            if audience_type == "operator_global" and (
+                audience_id != "global" or not operator_authorized
+            ):
+                return False
         expected = {
             "body_markdown": request.body_markdown,
             "decision": request.decision,
@@ -1068,6 +1107,8 @@ class AgentMailService:
             "sender_member_id": request.sender_member_id,
             "subject": request.subject,
             "thread_root_id": request.thread_root_id,
+            "audience_type": audience_type,
+            "audience_id": audience_id,
         }
         actual = {
             "body_markdown": message.body_markdown,
@@ -1079,10 +1120,148 @@ class AgentMailService:
             "sender_member_id": message.sender_member_id,
             "subject": message.subject,
             "thread_root_id": message.thread_root_id,
+            "audience_type": message.audience_type,
+            "audience_id": message.audience_id,
         }
+        if (
+            message.audience_type is None
+            and message.audience_id is None
+            and (message.recipient_member_id is not None or message.thread_root_id is not None)
+        ):
+            actual["audience_type"] = audience_type
+            actual["audience_id"] = audience_id
         return self._canonical_delivery_bytes(actual) == self._canonical_delivery_bytes(
             expected
         )
+
+    async def _message_audience(
+        self,
+        db: AsyncSession,
+        request: MailMessageCreate,
+        *,
+        operator_authorized: bool = False,
+    ) -> tuple[str, str]:
+        audience_type = getattr(request, "audience_type", None)
+        audience_id = getattr(request, "audience_id", None)
+        if request.recipient_member_id is not None or request.thread_root_id is not None:
+            if audience_type is not None or audience_id is not None:
+                if audience_type != "member" or audience_id is None:
+                    raise ValueError("direct and threaded messages use member audience")
+            if request.recipient_member_id is not None:
+                member_id = request.recipient_member_id
+                resolved_audience_id = str(member_id)
+                if await db.get(MailTeamMember, member_id) is None:
+                    raise ValueError("recipient_member_id must reference an existing member")
+            else:
+                root = await db.get(MailMessage, request.thread_root_id)
+                if root is None:
+                    raise ValueError("thread_root_id must reference an existing message")
+                participants = {
+                    member_id
+                    for member_id in (root.sender_member_id, root.recipient_member_id)
+                    if member_id is not None and member_id != request.sender_member_id
+                }
+                resolved_audience_id = (
+                    str(next(iter(participants)))
+                    if len(participants) == 1
+                    else f"thread:{root.id}"
+                )
+            if audience_type == "member" and audience_id != resolved_audience_id:
+                raise ValueError("member audience_id must match the direct recipient or thread")
+            return "member", resolved_audience_id
+
+        if audience_type is None or audience_id is None or not str(audience_id).strip():
+            raise ValueError("messages without a recipient or thread require an explicit audience")
+        audience_id = str(audience_id)
+        if audience_type == "member":
+            raise ValueError("member audience requires a direct recipient or thread")
+        elif audience_type == "team_preset":
+            preset_id = self._positive_audience_integer(audience_id)
+            if await db.get(AgentTeamPreset, preset_id) is None:
+                raise ValueError("team_preset audience does not exist")
+        elif audience_type == "repository":
+            if not (await db.execute(
+                select(MailTeamMember.id).where(MailTeamMember.repo_id == audience_id).limit(1)
+            )).scalar_one_or_none():
+                raise ValueError("repository audience does not exist")
+        elif audience_type == "work_item":
+            item_id = self._positive_audience_integer(audience_id)
+            if await db.get(GithubWorkItem, item_id) is None:
+                raise ValueError("work_item audience does not exist")
+        elif audience_type == "operator_global":
+            if audience_id != "global":
+                raise ValueError("operator_global audience_id must be 'global'")
+            if not operator_authorized:
+                raise MailAuthorityError("operator_authorization_required")
+        else:
+            raise ValueError("invalid audience_type")
+        return audience_type, audience_id
+
+    @staticmethod
+    def _positive_audience_integer(value: str) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("audience_id must be a positive integer") from None
+        if number <= 0 or str(number) != value:
+            raise ValueError("audience_id must be a positive integer")
+        return number
+
+    async def _broadcast_recipient_ids(
+        self,
+        db: AsyncSession,
+        audience_type: str,
+        audience_id: str,
+        sender_member_id: int | None,
+    ) -> set[int]:
+        if audience_type == "member":
+            recipients = {int(audience_id)}
+        elif audience_type == "team_preset":
+            result = await db.execute(
+                select(MailTeamMember.id).where(
+                    MailTeamMember.team_preset_id == int(audience_id)
+                )
+            )
+            recipients = set(result.scalars().all())
+        elif audience_type == "repository":
+            result = await db.execute(
+                select(MailTeamMember.id).where(MailTeamMember.repo_id == audience_id)
+            )
+            recipients = set(result.scalars().all())
+        elif audience_type == "work_item":
+            item = await db.get(GithubWorkItem, int(audience_id))
+            scope = await db.get(TeamGithubScope, item.scope_id) if item else None
+            if scope is None:
+                raise ValueError("work_item audience has no valid GitHub scope")
+            configured_repo_ids = set(
+                (
+                    await db.execute(
+                        select(AgentTeamSlot.repo_id).where(
+                            AgentTeamSlot.preset_id == scope.preset_id,
+                            AgentTeamSlot.repo_path == scope.repo_path,
+                        )
+                    )
+                ).scalars().all()
+            )
+            if not configured_repo_ids:
+                return set()
+            if len(configured_repo_ids) != 1:
+                raise ValueError("work_item audience has no unambiguous configured repository")
+            result = await db.execute(
+                select(MailTeamMember.id).where(
+                    MailTeamMember.team_preset_id == scope.preset_id,
+                    MailTeamMember.repo_id == configured_repo_ids.pop(),
+                )
+            )
+            recipients = set(result.scalars().all())
+        else:
+            recipients = {
+                member.id
+                for member in (await db.execute(select(MailTeamMember))).scalars().all()
+            }
+        if sender_member_id is not None:
+            recipients.discard(sender_member_id)
+        return recipients
 
     async def _create_message_row(
         self,
@@ -1093,11 +1272,27 @@ class AgentMailService:
         authenticated_sender_member_id: Optional[int] = None,
         delivery_key: Optional[str] = None,
         authoritative_approval_round: int | None = None,
+        operator_authorized: bool = False,
     ) -> tuple[MailMessage, set[int]]:
         if request.kind not in MAIL_MESSAGE_KINDS:
             raise ValueError(f"Invalid message kind: {request.kind}")
         if request.sender_member_id is not None and sender_actor_id is not None:
             raise ValueError("messages cannot have both sender_member_id and sender_actor_id")
+        audience_type, audience_id = await self._message_audience(
+            db, request, operator_authorized=operator_authorized
+        )
+        is_broadcast = request.recipient_member_id is None and request.thread_root_id is None
+        if request.kind == "broadcast" and not is_broadcast:
+            raise ValueError("broadcast messages cannot have a recipient or thread")
+        if is_broadcast and request.kind != "broadcast":
+            raise ValueError("messages without a recipient or thread must be broadcasts")
+        recipients = (
+            await self._broadcast_recipient_ids(
+                db, audience_type, audience_id, request.sender_member_id
+            )
+            if is_broadcast
+            else set()
+        )
         if request.kind == "answer" and request.thread_root_id is None:
             raise ValueError("answer messages require thread_root_id")
         if request.kind == "answer":
@@ -1153,11 +1348,12 @@ class AgentMailService:
             ),
             decision=request.decision,
             delivery_key=delivery_key,
+            audience_type=audience_type,
+            audience_id=audience_id,
         )
         db.add(message)
         await db.flush()
 
-        recipients: set[int] = set()
         if request.recipient_member_id is not None:
             recipients.add(request.recipient_member_id)
         elif request.thread_root_id is not None:
@@ -1166,9 +1362,6 @@ class AgentMailService:
                 for member_id in (root.sender_member_id, root.recipient_member_id):
                     if member_id is not None and member_id != request.sender_member_id:
                         recipients.add(member_id)
-        else:
-            members = (await db.execute(select(MailTeamMember))).scalars().all()
-            recipients = {member.id for member in members if member.id != request.sender_member_id}
 
         for member_id in recipients:
             db.add(MailReceipt(message_id=message.id, member_id=member_id))
@@ -1282,10 +1475,13 @@ class AgentMailService:
         *,
         subject: str | None,
         body_markdown: str,
+        audience_type: str,
+        audience_id: str,
         payload: dict | None = None,
         auto_nudge: bool = True,
         sender_actor_id: int | None = None,
         delivery_key: str | None = None,
+        operator_authorized: bool = False,
     ) -> MailMessageResponse:
         return await self.send_message(
             db,
@@ -1294,10 +1490,13 @@ class AgentMailService:
                 subject=subject,
                 body_markdown=body_markdown,
                 payload=payload,
+                audience_type=audience_type,
+                audience_id=audience_id,
             ),
             auto_nudge=auto_nudge,
             sender_actor_id=sender_actor_id,
             delivery_key=delivery_key,
+            operator_authorized=operator_authorized,
         )
 
     async def send_direct_message(
@@ -1380,6 +1579,8 @@ class AgentMailService:
             sender_actor_kind=sender_actor_kind,
             approval_round=message.approval_round,
             decision=message.decision,
+            audience_type=message.audience_type,
+            audience_id=message.audience_id,
             sender_name=sender_name,
             recipient_member_id=message.recipient_member_id,
             subject=message.subject,

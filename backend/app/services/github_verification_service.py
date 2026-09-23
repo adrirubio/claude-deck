@@ -908,6 +908,7 @@ class GithubVerificationService:
             item.status_note = f"Design PR #{pr_number} is ready for human review."
             await github_dispatch_service.notify_team(
                 db,
+                item=item,
                 subject="Design PR ready for review",
                 body_markdown=(
                     f"Design PR #{pr_number} is ready for human review for "
@@ -2027,6 +2028,7 @@ class GithubVerificationService:
             payload["fallback_note"] = fallback_note
         await github_dispatch_service.notify_team(
             db,
+            item=item,
             subject="Code PR ready for review",
             body_markdown=body,
             payload=payload,

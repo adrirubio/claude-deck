@@ -1873,6 +1873,8 @@ class MailMessageCreate(BaseModel):
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
     decision: Optional[Literal["approved", "rejected"]] = None
+    audience_type: Optional[Literal["member", "team_preset", "repository", "work_item", "operator_global"]] = None
+    audience_id: Optional[str] = None
 
 
 class MailDecisionRequest(BaseModel):
@@ -2008,6 +2010,8 @@ class MailMessageResponse(BaseModel):
     sender_actor_kind: Optional[str] = None
     approval_round: Optional[int] = None
     decision: Optional[str] = None
+    audience_type: Optional[Literal["member", "team_preset", "repository", "work_item", "operator_global"]] = None
+    audience_id: Optional[str] = None
     sender_name: str
     recipient_member_id: Optional[int] = None
     subject: Optional[str] = None
@@ -2059,6 +2063,8 @@ class ExternalAgentMailMessageRequest(BaseModel):
     subject: Optional[str] = None
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
+    audience_type: Optional[Literal["member", "team_preset", "repository", "work_item", "operator_global"]] = None
+    audience_id: Optional[str] = None
 
 
 class ExternalAgentMailContextRequest(BaseModel):

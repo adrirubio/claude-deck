@@ -3320,19 +3320,28 @@ async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
         team_preset_id=preset.id,
         team_slot_id=slots[1].id,
     )
+    architect = MailTeamMember(
+        identity_key="slot:1",
+        repo_id="r",
+        repo_path="/tmp/r",
+        repo_name="r",
+        display_name="Architect",
+        participant_kind="team_slot",
+        team_preset_id=preset.id,
+        team_slot_id=slots[0].id,
+    )
+    unrelated = MailTeamMember(
+        identity_key="repo:unrelated-escalation",
+        repo_id="unrelated",
+        repo_path="/tmp/unrelated",
+        repo_name="unrelated",
+        display_name="Unrelated",
+    )
     db.add_all(
         [
             owner,
-            MailTeamMember(
-            identity_key="slot:1",
-            repo_id="r",
-            repo_path="/tmp/r",
-            repo_name="r",
-            display_name="Architect",
-            participant_kind="team_slot",
-            team_preset_id=preset.id,
-            team_slot_id=slots[0].id,
-            ),
+            architect,
+            unrelated,
         ]
     )
     await db.flush()
@@ -3361,8 +3370,16 @@ async def test_escalation_creates_agent_mail_broadcast(db, monkeypatch):
     )
 
     messages = (await db.execute(select(MailMessage))).scalars().all()
-    assert any(message.kind == "broadcast" for message in messages)
-    assert any("approval_rounds_exhausted" in (message.subject or "") for message in messages)
+    broadcast = next(message for message in messages if message.kind == "broadcast")
+    assert "approval_rounds_exhausted" in (broadcast.subject or "")
+    assert broadcast.audience_type == "work_item"
+    assert broadcast.audience_id == str(item.id)
+    recipients = (
+        await db.execute(
+            select(MailReceipt.member_id).where(MailReceipt.message_id == broadcast.id)
+        )
+    ).scalars().all()
+    assert set(recipients) == {owner.id, architect.id}
 
 
 @pytest.mark.asyncio

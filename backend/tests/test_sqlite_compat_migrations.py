@@ -214,6 +214,68 @@ async def test_compat_migrations_add_pr1_approval_columns_idempotently():
 
 
 @pytest.mark.asyncio
+async def test_compat_migration_adds_mail_audience_columns_without_changing_history():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "CREATE TABLE mail_messages ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "kind VARCHAR NOT NULL, body_markdown VARCHAR NOT NULL, "
+                    "created_at DATETIME NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE mail_receipts ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "message_id INTEGER NOT NULL, member_id INTEGER NOT NULL, "
+                    "read_at DATETIME, acked_at DATETIME)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_messages "
+                    "(id, kind, body_markdown, created_at) "
+                    "VALUES (7, 'message', 'historical body', '2024-01-02 03:04:05')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_receipts "
+                    "(id, message_id, member_id, read_at, acked_at) "
+                    "VALUES (11, 7, 13, '2024-02-03 04:05:06', NULL)"
+                )
+            )
+            await conn.commit()
+
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+
+            columns = await _sqlite_columns(conn, "mail_messages")
+            assert {"audience_type", "audience_id"} <= columns
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT id, kind, body_markdown, audience_type, audience_id "
+                        "FROM mail_messages WHERE id = 7"
+                    )
+                )
+            ).one() == (7, "message", "historical body", None, None)
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT id, message_id, member_id, read_at, acked_at "
+                        "FROM mail_receipts WHERE id = 11"
+                    )
+                )
+            ).one() == (11, 7, 13, "2024-02-03 04:05:06", None)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
