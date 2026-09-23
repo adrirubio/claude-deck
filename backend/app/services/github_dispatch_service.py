@@ -40,6 +40,7 @@ from app.services.github_approval_service import (
     github_approval_service,
 )
 from app.services.github_client import github_client
+from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceConfigError,
@@ -2132,6 +2133,7 @@ class GithubDispatchService:
         db: AsyncSession,
         scope: TeamGithubScope,
         preset_slots: list[AgentTeamSlot],
+        recovery_only_attempt: GithubRecoveryOnlyAttempt | None = None,
     ) -> None:
         enabled_slot_ids = {slot.id for slot in preset_slots if slot.enabled}
         items = (
@@ -2141,6 +2143,7 @@ class GithubDispatchService:
                     GithubWorkItem.dispatch_status == "dispatched",
                     GithubWorkItem.pr_number.is_not(None),
                     GithubWorkItem.active_scope_revision > 0,
+                    *(recovery_only_attempt.item_filters() if recovery_only_attempt else ()),
                 )
             )
         ).scalars().all()
@@ -2275,6 +2278,7 @@ class GithubDispatchService:
         db: AsyncSession,
         scope: TeamGithubScope,
         preset_slots: list[AgentTeamSlot],
+        recovery_only_attempt: GithubRecoveryOnlyAttempt | None = None,
     ) -> None:
         preset = await db.get(AgentTeamPreset, scope.preset_id)
         if (
@@ -2290,6 +2294,7 @@ class GithubDispatchService:
                 select(GithubWorkItem).where(
                     GithubWorkItem.scope_id == scope.id,
                     GithubWorkItem.dispatch_status == "escalated",
+                    *(recovery_only_attempt.item_filters() if recovery_only_attempt else ()),
                 )
             )
         ).scalars().all()

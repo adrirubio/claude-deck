@@ -1919,6 +1919,41 @@ async def update_github_scope_continuation_policy(
     return _scope_response(scope)
 
 
+@router.get("/github-recovery-gate")
+async def get_github_recovery_gate(
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    attempt = github_dispatch_scheduler.recovery_only_attempt
+    if attempt is None:
+        return {"active": False}
+    scope = await db.get(TeamGithubScope, attempt.scope_id)
+    scheduler = github_dispatch_scheduler.scheduler
+    scheduled_jobs = (
+        {job.id for job in scheduler.get_jobs()}
+        if scheduler is not None
+        else set()
+    )
+    job_id = (
+        github_dispatch_scheduler._job_id(scope.repo_owner, scope.repo_name)
+        if scope is not None
+        else None
+    )
+    return {
+        "active": True,
+        "scope_id": attempt.scope_id,
+        "work_item_id": attempt.work_item_id,
+        "pr_number": attempt.pr_number,
+        "dispatch_nonce": attempt.dispatch_nonce,
+        "head_ref": attempt.head_ref,
+        "identity_matches": await github_dispatch_scheduler._recovery_only_target_current(
+            db, attempt, require_autonomy=False
+        ),
+        "scheduler_running": bool(scheduler is not None and scheduler.running),
+        "job_scheduled": job_id in scheduled_jobs,
+    }
+
+
 @router.delete("/github-scopes/{scope_id}", status_code=204)
 async def delete_github_scope(scope_id: int, db: AsyncSession = Depends(get_db)):
     scope = await db.get(TeamGithubScope, scope_id)

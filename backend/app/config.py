@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     github_continuation_leader_nudge_cooldown_seconds: int = 180
     github_continuation_owner_ack_nudge_cooldown_seconds: int = 180
     github_recovery_nudge_cooldown_seconds: int = 180
+    github_recovery_only_attempt: str = ""
 
     # Agent Mail identity settings
     mail_capability_tokens_required: bool = False

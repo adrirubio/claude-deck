@@ -33,6 +33,7 @@ from app.services.github_client import (
     github_client,
 )
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_workspace_service import github_workspace_service
 
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
@@ -931,9 +932,12 @@ class GithubVerificationService:
         db: AsyncSession,
         scope: TeamGithubScope,
         client: GithubClient | None = None,
+        recovery_only_attempt: GithubRecoveryOnlyAttempt | None = None,
     ) -> None:
         client = client or github_client
-        await self._repair_exhausted_diagnostic_notifications(db, scope)
+        await self._repair_exhausted_diagnostic_notifications(
+            db, scope, recovery_only_attempt=recovery_only_attempt
+        )
         items = (
             await db.execute(
                 select(GithubWorkItem).where(
@@ -947,6 +951,7 @@ class GithubVerificationService:
                             "awaiting_human_review",
                         )
                     ),
+                    *(recovery_only_attempt.item_filters() if recovery_only_attempt else ()),
                 )
             )
         ).scalars().all()
@@ -1300,6 +1305,7 @@ class GithubVerificationService:
         self,
         db: AsyncSession,
         scope: TeamGithubScope,
+        recovery_only_attempt: GithubRecoveryOnlyAttempt | None = None,
     ) -> None:
         rows = (
             await db.execute(
@@ -1325,6 +1331,7 @@ class GithubVerificationService:
                     GithubAttemptScopeRevision.phase == "diagnostic",
                     GithubAttemptScopeRevision.status == "exhausted",
                     GithubAttemptScopeRevision.last_failed_head_sha.is_not(None),
+                    *(recovery_only_attempt.item_filters() if recovery_only_attempt else ()),
                 )
             )
         ).all()
@@ -1406,6 +1413,8 @@ class GithubVerificationService:
         scope: TeamGithubScope,
         item: GithubWorkItem,
     ) -> None:
+        if settings.github_recovery_only_attempt:
+            return
         try:
             slots = await self._preset_slots(db, scope)
             await github_dispatch_service.notify_blocker_merged(
