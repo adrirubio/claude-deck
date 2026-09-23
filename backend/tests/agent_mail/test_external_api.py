@@ -1,4 +1,5 @@
 """External Agent Mail orchestration API behavior."""
+from datetime import datetime
 from types import SimpleNamespace
 
 import httpx
@@ -7,9 +8,11 @@ import pytest_asyncio
 
 from app.database import get_db
 from app.main import app
-from app.models.database import MailAgentSession, MailTeamMember
+from app.models.database import AgentTeamPreset, AgentTeamSlot, MailAgentSession, MailTeamMember
 from app.services.agent_mail_service import agent_mail_service
 from app.services.external_agent_mail_service import external_agent_mail_service
+from app.utils import peer_process
+from app.utils.repo_utils import derive_repo_identity
 
 
 @pytest_asyncio.fixture
@@ -232,11 +235,38 @@ async def test_external_delivery_reports_tmux_wake_success(
             "status": "active",
         }
     ]
+    preset = AgentTeamPreset(name="External wake team")
+    db.add(preset)
+    await db.flush()
+    identity = derive_repo_identity(str(cwd))
+    slot = AgentTeamSlot(
+        preset_id=preset.id, position=0, display_name="Recipient",
+        provider=provider, repo_id=identity["repo_id"],
+        repo_path=identity["repo_root"], repo_name=identity["repo_name"],
+    )
+    db.add(slot)
+    await db.flush()
+    fake[0]["team_preset_id"] = preset.id
+    fake[0]["team_slot_id"] = slot.id
+    recipient = await agent_mail_service.get_or_create_slot_member(db, slot)
+    db.add(MailAgentSession(
+        member_id=recipient.id, provider=provider, source="mcp",
+        session_key=f"mcp:external:{provider}", cwd=str(cwd),
+        team_preset_id=preset.id, team_slot_id=slot.id,
+        mailbox_status="connected", last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token("external-bound-token"),
+        bound_pane_pid=4242, bound_pane_proc_start="external-start",
+    ))
+    await db.commit()
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)
     calls = []
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
-        return SimpleNamespace(stdout="", stderr="", returncode=0)
+        return SimpleNamespace(
+            stdout="%7|4242" if command[1] == "display-message" else "",
+            stderr="", returncode=0,
+        )
 
     monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: fake)
     monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
@@ -262,7 +292,8 @@ async def test_external_delivery_reports_tmux_wake_success(
     assert body["recipients"][0]["status"] == "wake_succeeded"
     assert body["recipients"][0]["wake_method"] == "tmux"
     tmux_calls = [call for call in calls if call[0][0] == "tmux"]
-    assert len(tmux_calls) == 2
+    assert len(tmux_calls) == 3
+    assert tmux_calls[1][0][3] == "%7"
 
 
 @pytest.mark.asyncio
