@@ -39,29 +39,36 @@ These identifiers are hints, not authority. Stop if live API and database state 
 Use `docs/deploy/attempt-recovery-soak-log-template.md` throughout. Record public identifiers
 and hashes only; never record credentials or lease material.
 
-## Checkpoint 0 — Deployment Healthy, Recovery Off
+## Checkpoint 0 — Deployment Healthy, Autonomy Off
 
-1. Record the reviewed PR4 integration merge SHA and deployed backend commit.
+1. Deploy the independently reviewed checkpoint barrier to the integration
+   backend with autonomy off. Record the PR4 integration merge SHA, the barrier
+   merge SHA, and the deployed backend commit. Do not deploy to `master`.
 2. Confirm Deck health and migration completion.
    Confirm the `mail_wake_attempts` table exists after deploying the reviewed
-   Agent Mail wake-safety change. Keep autonomy and continuation disabled.
-3. Confirm autonomy is off and continuation is off.
+   Agent Mail wake-safety change and the revision checkpoint-stage column exists.
+3. Confirm autonomy is off. Continuation must be off for a fresh rollout; on
+   re-entry after revision 5 cancellation, it may remain on. Do not toggle it
+   merely to satisfy the fresh-rollout preflight.
 4. Confirm human merge policy.
 5. Confirm issue #821 and draft PR #875 remain open.
 6. Confirm no integration-to-`master` merge occurred.
-7. Run:
+7. For a fresh rollout with continuation off, run:
 
    ```bash
    scripts/attempt-recovery-preflight.sh http://127.0.0.1:8000 2 1 23
    ```
 
+   On re-entry with continuation already on, this script intentionally refuses
+   the policy state. Repeat its identity, session, scope, item, and Bridge reads
+   without writes and record that substitution in the soak log.
 8. Confirm issue #329 is resolved or replay sessions are isolated from unrelated projects.
 
 Stop and report the preflight output with secrets excluded.
 
 ## Checkpoint 1 — Exact Team, Scope, and Sessions
 
-With autonomy and continuation still off:
+With autonomy still off (and continuation off only for a fresh rollout):
 
 1. Verify preset, scope, issue, work item, PR, owner slot, Leader slot, nonce, branch, and
    workspace acquisition from fresh API/DB reads.
@@ -81,8 +88,21 @@ With autonomy and continuation still off:
    target. Inspect redacted wake attempts through the operator-only
    `GET /api/v1/agent-mail/wake-attempts` endpoint; do not force a test wake
    of an empty inbox merely to prove the route works.
-6. Verify finite continuation caps are the reviewed values.
-7. Verify PR #875's current head and baseline restoration target are recorded.
+6. Verify finite continuation caps are the reviewed values. Five revisions already
+   exist for this attempt, including cancelled revision 5, and the live cap is 6.
+   The diagnostic-then-implementation path below requires at least two further
+   revisions. Before Checkpoint 3, set `max_continuation_revisions=7` only after
+   the reviewed barrier is deployed and the user-approved finite cap increase
+   is recorded. Leave `max_continuation_failed_heads=8` unchanged. If another
+   revision becomes necessary, stop for a separate budget decision rather than
+   increasing the cap automatically. An implementation-only path requires a
+   separately approved runbook change because it skips the hosted diagnostic
+   checkpoint.
+7. Verify no pending legacy continuation request for the selected attempt has
+   `recovery_checkpoint_stage=NULL`. Legacy requests retain their old decision
+   behavior; cancel or resolve any such request under an explicit operator
+   decision before using these checkpoint steps. The current attempt has none.
+8. Verify PR #875's current head and baseline restoration target are recorded.
 
 The preflight is read-only: its Bridge-session verification does not enable participation,
 send a wake, or assign a team role or slot. Preserve the reported exact targets in the
@@ -93,9 +113,13 @@ Stop and report the complete identity matrix before changing policy.
 ## Checkpoint 2 — Continuation On, Autonomy Off
 
 1. Use Agent Bridge's dedicated recovery-policy editor with the per-tab operator token.
-2. Enable continuation with reviewed finite caps.
+2. For a fresh rollout, enable continuation with reviewed finite caps. On
+   re-entry after revision 5, leave continuation enabled and set only
+   `max_continuation_revisions=7` after the reviewed barrier is deployed;
+   preserve the failed-head cap and all other policy fields.
 3. Do not enable autonomy.
-4. Re-read the scope through the API and confirm all six values changed atomically.
+4. Re-read the scope through the API and confirm all six policy values. Only
+   the intended fields may change atomically.
 5. Confirm no proposal, mail, revision, nudge, or work-item transition occurred while
    autonomy remained off.
 
@@ -103,9 +127,10 @@ Stop and report before enabling autonomy.
 
 ## Checkpoint 3 — Autonomous Owner Proposal
 
-1. Before enabling autonomy, deploy the reviewed recovery-only scheduler gate. Set
+1. Before enabling autonomy, confirm the reviewed recovery-only scheduler gate
+   and checkpoint barrier are deployed, with
    `GITHUB_RECOVERY_ONLY_ATTEMPT=1:23:875:4173e3b8851fccc8:deck/slot-6/issue-821-4173e3b8851fccc8`
-   in the backend-only `.env` and restart Deck. Verify this exact selector is active,
+   in the backend-only `.env`. Verify this exact selector is active,
    `identity_matches=true` through the operator-only
    `GET /api/v1/agent-teams/github-recovery-gate`, the scope still uses human
    merge, the lease and PR are unchanged, and both exact team panes are wakeable.
@@ -120,43 +145,70 @@ Stop and report before enabling autonomy.
 2. Enable autonomy for `tizonia-v1`.
 3. Observe the recovery monitor nudge only the current Specialist owner.
 4. Confirm the owner performs read-only diagnosis and submits one explicit bounded
-   continuation proposal.
+   continuation proposal. The selected attempt's new revision must be held at
+   `recovery_checkpoint_stage=decision_hold` before the request mail is sent.
+   A diagnostic proposal must use `execution_target=hosted_ci`; Deck refuses a
+   workspace diagnostic while this recovery-only selector is active.
 5. Confirm normalized approval and revision rows commit before request mail.
 6. Confirm the proposal preserves PR #875, owner, workspace, nonce, branch, and retry history.
 7. Confirm Deck/coordinator did not fabricate the proposal.
+8. Disable autonomy as soon as the held proposal is observed. Do not release
+   the decision hold or ask the Leader to decide yet. The hold is durable and
+   remains effective even if the Leader calls its MCP decision tool. The
+   recovery monitor does not issue a decision nudge while held; other Agent Mail
+   traffic can still wake the Leader, so a premature tool call must return 409.
 
-Stop with revision id, request id, mail id, phase, scope summary, and counters.
+Stop with revision id, request id, mail id, phase, scope summary, hold stage,
+and counters. Revision 5 was cancelled after an out-of-runbook local-build
+proposal. It still counts toward the cap. Never consume the last configured
+revision slot speculatively.
 
 ## Checkpoint 4 — Leader Decision, Delivery, and Ack
 
-1. Observe the designated distinct Leader receive the normalized request.
-2. The Leader approves or rejects using its authenticated session; an operator must not
-   approve.
-3. For approval, verify decision authority commits before decision mail, and decision mail
-   before owner delivery.
-4. Verify stable delivery keys produce exactly one request, decision, and delivery message
-   across repeated scheduler polls.
-5. Observe the current owner acknowledge the exact revision with its own session and lease.
-6. Confirm activation preserves the original attempt identity and refreshes only the
-   continuation liveness anchors.
+1. After explicit clearance of Checkpoint 3, use the operator-only
+   `POST /api/v1/agent-teams/github-work-items/23/scope-revisions/{revision}/checkpoint-release`
+   with `release=true`, the exact nonce and approval-request id, and
+   `stage=decision`. This opens only the Leader decision, not owner acknowledgement.
+   The proposal expiry clock starts at release (default 3600 seconds; verify
+   the deployed setting). If the Leader cannot act within that bound, leave
+   the hold in place rather than releasing it early.
+2. Observe the designated distinct Leader decide using its authenticated session;
+   the operator must not approve. A successful approval moves the revision to
+   `recovery_checkpoint_stage=ack_hold` in the same authority transaction.
+   With autonomy off, explicitly ask the Leader to check its inbox after the
+   decision hold is released; do not decide on its behalf.
+3. Verify decision authority commits before decision mail, and decision mail
+   before owner delivery. The owner's early MCP acknowledgement must be refused
+   with `recovery_checkpoint_paused` and must leave the item escalated.
+4. Verify stable delivery keys produce exactly one request, decision, and delivery
+   message across repeated scheduler polls. Keep autonomy off while inspecting.
 
-Stop with the authority/mail linkage and actor identities.
+Stop with the authority/mail linkage, actor identities, and `ack_hold` evidence.
+Do not release owner acknowledgement until this checkpoint is confirmed.
 
 ## Checkpoint 5 — Hosted Diagnostic and Exact Restoration
 
 This checkpoint applies when the approved revision is diagnostic.
 
-1. Confirm all diagnostic actions, commands, paths, evidence objectives, failed-head budget,
+1. After explicit clearance of Checkpoint 4, use the same operator-only release
+   route with `stage=ack`. Confirm it moves exactly the approved revision to
+   `ack_open`, then observe the current owner acknowledge it with its own
+   authenticated session and lease. Confirm activation preserves the original
+   attempt identity and refreshes only continuation liveness anchors. With
+   autonomy off, explicitly ask the owner to check its inbox after the hold is
+   released; do not acknowledge on its behalf. The acknowledgement expiry clock
+   starts at this release; do not release before the owner can act.
+2. Confirm all diagnostic actions, commands, paths, evidence objectives, failed-head budget,
    hosted target, tool fallback, and mandatory revert match the approved revision.
-2. Observe hosted CI install a named diagnostic tool only through the approved temporary
+3. Observe hosted CI install a named diagnostic tool only through the approved temporary
    fallback when required.
-3. Confirm diagnostic red/green results update diagnostic counters only and never promote,
+4. Confirm diagnostic red/green results update diagnostic counters only and never promote,
    merge, or consume product retry history.
-4. Observe the owner revert all diagnostic changes and report `diagnostic_completed`.
-5. Confirm Deck re-fetches the current PR head and proves its Git tree equals the persisted
+5. Observe the owner revert all diagnostic changes and report `diagnostic_completed`.
+6. Confirm Deck re-fetches the current PR head and proves its Git tree equals the persisted
    baseline tree.
-6. Confirm a mismatched or moved head is refused and no product verification starts.
-7. Confirm successful restoration returns the attempt to the originating escalation and
+7. Confirm a mismatched or moved head is refused and no product verification starts.
+8. Confirm successful restoration returns the attempt to the originating escalation and
    requests a new bounded implementation proposal.
 
 Stop with hosted CI run ids, head/tree SHAs, diagnostic counters, and restoration result.
@@ -164,7 +216,9 @@ Stop with hosted CI run ids, head/tree SHAs, diagnostic counters, and restoratio
 ## Checkpoint 6 — Implementation Continuation and Product CI
 
 1. Observe the owner submit the smallest implementation proposal informed by diagnosis.
-2. Repeat the distinct Leader decision, delivery, and owner acknowledgement checks.
+2. Repeat the decision-hold and acknowledgement-hold releases and distinct
+   Leader/owner identity checks. Do not treat the diagnostic revision's earlier
+   releases as authority for a later revision.
 3. Confirm edits stay inside exact allowed paths/actions/commands.
 4. Observe `continuation_completed` validate the Git diff and current PR head.
 5. Confirm product verification starts only after submission.

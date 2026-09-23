@@ -53,6 +53,7 @@ from app.models.schemas import (
     DispatchStatusReport,
     GithubActiveContinuationCancelRequest,
     GithubApprovalRequestResponse,
+    GithubRecoveryCheckpointReleaseRequest,
     GithubContinuationProposalCreate,
     GithubContinuationAckRequest,
     GithubContinuationRequestResponse,
@@ -441,6 +442,7 @@ def _scope_revision_response(
         failed_head_count=revision.failed_head_count,
         last_failed_head_sha=revision.last_failed_head_sha,
         status=revision.status,
+        recovery_checkpoint_stage=revision.recovery_checkpoint_stage,
         approval_request_id=revision.approval_request_id,
         delivery_message_id=revision.delivery_message_id,
         approved_at=revision.approved_at,
@@ -1429,6 +1431,34 @@ async def cancel_github_work_item_continuation_request(
         return _approval_authority_response(cancelled)
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post(
+    "/github-work-items/{item_id}/scope-revisions/{revision_number}/checkpoint-release",
+    response_model=GithubScopeRevisionResponse,
+)
+async def release_github_recovery_checkpoint(
+    item_id: int,
+    revision_number: int,
+    request: GithubRecoveryCheckpointReleaseRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    try:
+        revision = await github_approval_service.release_recovery_checkpoint(
+            db,
+            item,
+            revision_number=revision_number,
+            dispatch_nonce=request.dispatch_nonce,
+            approval_request_id=request.approval_request_id,
+            stage=request.stage,
+        )
+    except GithubApprovalError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return _scope_revision_response(revision)
 
 
 @router.post(

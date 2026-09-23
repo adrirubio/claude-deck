@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.config import settings
 from app.models.database import GithubWorkItem
 
 
@@ -42,3 +43,16 @@ class GithubRecoveryOnlyAttempt:
             GithubWorkItem.dispatch_nonce == self.dispatch_nonce,
             GithubWorkItem.dispatch_head_ref == self.head_ref,
         )
+
+    def matches_item(self, item: GithubWorkItem) -> bool:
+        return (
+            item.scope_id == self.scope_id
+            and item.id == self.work_item_id
+            and item.pr_number == self.pr_number
+            and item.dispatch_nonce == self.dispatch_nonce
+            and item.dispatch_head_ref == self.head_ref
+        )
+
+
+def configured_recovery_only_attempt() -> GithubRecoveryOnlyAttempt | None:
+    return GithubRecoveryOnlyAttempt.parse(settings.github_recovery_only_attempt)

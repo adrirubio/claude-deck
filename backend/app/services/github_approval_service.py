@@ -16,6 +16,7 @@ from sqlalchemy.orm import aliased
 
 from app.config import settings
 from app.models.database import (
+    AgentTeamPreset,
     AgentTeamSlot,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
@@ -30,6 +31,7 @@ from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_app_auth_service import github_app_auth_service
 from app.services.github_client import github_client
+from app.services.github_recovery_gate import configured_recovery_only_attempt
 
 
 CONTINUABLE_ESCALATIONS = frozenset(
@@ -270,6 +272,14 @@ class GithubApprovalService:
             raise GithubApprovalError("continuation_disabled")
         if item.scope_id != scope.id:
             raise GithubApprovalError("scope_mismatch")
+        recovery_attempt = configured_recovery_only_attempt()
+        checkpoint_stage = None
+        if recovery_attempt is not None:
+            if not recovery_attempt.matches_item(item):
+                raise GithubApprovalError("recovery_only_attempt_mismatch")
+            if phase == "diagnostic" and execution_target != "hosted_ci":
+                raise GithubApprovalError("recovery_diagnostic_hosted_only")
+            checkpoint_stage = "decision_hold"
         if item.dispatch_status != "escalated":
             raise GithubApprovalError("continuation_not_escalated")
         if item.escalation_reason not in CONTINUABLE_ESCALATIONS:
@@ -546,12 +556,13 @@ class GithubApprovalService:
             expected_workspace_id=workspace.id,
             expected_lease_token_hash=self.lease_token_hash(lease_token),
             max_failed_heads=max_failed_heads,
+            recovery_checkpoint_stage=checkpoint_stage,
             expires_at=(
                 datetime.utcnow()
                 + timedelta(
                     seconds=settings.github_continuation_proposal_expiry_seconds
                 )
-            ),
+            ) if checkpoint_stage is None else None,
         )
         db.add(revision)
         await db.flush()
@@ -1011,6 +1022,8 @@ class GithubApprovalService:
         *,
         cooldown: timedelta,
     ) -> bool:
+        if revision.recovery_checkpoint_stage not in (None, "decision_open"):
+            return False
         if request.request_message_id is None:
             raise GithubApprovalError("approval_request_delivery_pending")
         receipt = (
@@ -1032,6 +1045,10 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision.id == revision.id,
                 GithubAttemptScopeRevision.status == "proposed",
                 GithubAttemptScopeRevision.approval_request_id == request.id,
+                or_(
+                    GithubAttemptScopeRevision.recovery_checkpoint_stage.is_(None),
+                    GithubAttemptScopeRevision.recovery_checkpoint_stage == "decision_open",
+                ),
                 or_(
                     GithubAttemptScopeRevision.last_delivery_attempt_at.is_(None),
                     GithubAttemptScopeRevision.last_delivery_attempt_at
@@ -1076,6 +1093,8 @@ class GithubApprovalService:
         *,
         cooldown: timedelta,
     ) -> bool:
+        if revision.recovery_checkpoint_stage not in (None, "ack_open"):
+            return False
         now = datetime.utcnow()
         claim = await db.execute(
             update(GithubAttemptScopeRevision)
@@ -1084,6 +1103,10 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision.status == "approved",
                 GithubAttemptScopeRevision.delivery_message_id.is_not(None),
                 GithubAttemptScopeRevision.acknowledged_at.is_(None),
+                or_(
+                    GithubAttemptScopeRevision.recovery_checkpoint_stage.is_(None),
+                    GithubAttemptScopeRevision.recovery_checkpoint_stage == "ack_open",
+                ),
                 or_(
                     GithubAttemptScopeRevision.last_ack_nudge_at.is_(None),
                     GithubAttemptScopeRevision.last_ack_nudge_at <= now - cooldown,
@@ -1720,6 +1743,11 @@ class GithubApprovalService:
             raise GithubApprovalError("approval_revision_link_mismatch")
         if request.request_message_id is None:
             raise GithubApprovalError("approval_request_delivery_pending")
+        if (
+            request.status == "pending"
+            and revision.recovery_checkpoint_stage not in (None, "decision_open")
+        ):
+            raise GithubApprovalError("recovery_checkpoint_paused")
         if request.status != "pending":
             if request.status not in {"approved", "rejected"}:
                 raise GithubApprovalError("request_not_pending")
@@ -1836,10 +1864,26 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision.owner_member_id == owner.id,
                 GithubAttemptScopeRevision.originating_escalation_reason
                 == item.escalation_reason,
+                GithubAttemptScopeRevision.recovery_checkpoint_stage.is_(None)
+                if revision.recovery_checkpoint_stage is None
+                else GithubAttemptScopeRevision.recovery_checkpoint_stage
+                == "decision_open",
             )
             .values(
                 status="approved" if decision == "approved" else "rejected",
                 approved_at=now if decision == "approved" else None,
+                recovery_checkpoint_stage=(
+                    "ack_hold"
+                    if decision == "approved"
+                    and revision.recovery_checkpoint_stage == "decision_open"
+                    else revision.recovery_checkpoint_stage
+                ),
+                expires_at=(
+                    None
+                    if decision == "approved"
+                    and revision.recovery_checkpoint_stage == "decision_open"
+                    else revision.expires_at
+                ),
             )
             .execution_options(synchronize_session=False)
         )
@@ -1859,6 +1903,164 @@ class GithubApprovalService:
         await db.refresh(request)
         await db.refresh(revision)
         return request, revision, True
+
+    async def release_recovery_checkpoint(
+        self,
+        db: AsyncSession,
+        item: GithubWorkItem,
+        *,
+        revision_number: int,
+        dispatch_nonce: str,
+        approval_request_id: int,
+        stage: str,
+    ) -> GithubAttemptScopeRevision:
+        recovery_attempt = configured_recovery_only_attempt()
+        await db.refresh(item)
+        if recovery_attempt is None or not recovery_attempt.matches_item(item):
+            raise GithubApprovalError("recovery_only_attempt_mismatch")
+        if item.dispatch_nonce != dispatch_nonce:
+            raise GithubApprovalError("stale_nonce")
+        if stage not in {"decision", "ack"}:
+            raise GithubApprovalError("recovery_checkpoint_stage_invalid", status_code=400)
+
+        revision = (
+            await db.execute(
+                select(GithubAttemptScopeRevision).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                    GithubAttemptScopeRevision.revision == revision_number,
+                )
+            )
+        ).scalar_one_or_none()
+        if revision is None:
+            raise GithubApprovalError("scope_revision_not_found", status_code=404)
+        approval = await db.get(GithubApprovalRequest, approval_request_id)
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        preset = await db.get(AgentTeamPreset, scope.preset_id) if scope else None
+        expected_hold = "decision_hold" if stage == "decision" else "ack_hold"
+        expected_status = "proposed" if stage == "decision" else "approved"
+        expected_approval_status = "pending" if stage == "decision" else "approved"
+        next_stage = "decision_open" if stage == "decision" else "ack_open"
+        if (
+            scope is None
+            or preset is None
+            or preset.autonomy_enabled
+            or not scope.enabled
+            or not scope.continuation_enabled
+            or scope.merge_policy != "human"
+            or item.dispatch_status != "escalated"
+            or item.owner_slot_id != revision.owner_slot_id
+            or item.escalation_reason != revision.originating_escalation_reason
+            or revision.recovery_checkpoint_stage != expected_hold
+            or revision.status != expected_status
+            or revision.approval_request_id != approval_request_id
+            or approval is None
+            or approval.work_item_id != item.id
+            or approval.scope_revision_id != revision.id
+            or approval.dispatch_nonce != dispatch_nonce
+            or approval.approval_round != item.approval_round_count
+            or approval.owner_member_id != revision.owner_member_id
+            or approval.status != expected_approval_status
+            or approval.request_kind != "continuation"
+            or (stage == "ack" and (
+                revision.delivery_message_id is None
+                or revision.delivered_at is None
+            ))
+        ):
+            raise GithubApprovalError("recovery_checkpoint_context_changed")
+        workspace = (
+            await db.execute(
+                select(GithubWorkspace).where(
+                    GithubWorkspace.id == revision.expected_workspace_id,
+                    GithubWorkspace.scope_id == item.scope_id,
+                    GithubWorkspace.leased_item_id == item.id,
+                    GithubWorkspace.lease_token.is_not(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if (
+            workspace is None
+            or workspace.lease_token is None
+            or not self.lease_token_matches(
+                workspace.lease_token, revision.expected_lease_token_hash
+            )
+        ):
+            raise GithubApprovalError("workspace_lease_changed")
+
+        item_still_current = exists(
+            select(GithubWorkItem.id).where(
+                *recovery_attempt.item_filters(),
+                GithubWorkItem.dispatch_status == "escalated",
+                GithubWorkItem.owner_slot_id == revision.owner_slot_id,
+                GithubWorkItem.escalation_reason
+                == revision.originating_escalation_reason,
+                GithubWorkItem.approval_round_count == approval.approval_round,
+            )
+        )
+        scope_still_safe = exists(
+            select(TeamGithubScope.id)
+            .join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id)
+            .where(
+                TeamGithubScope.id == item.scope_id,
+                TeamGithubScope.enabled.is_(True),
+                TeamGithubScope.continuation_enabled.is_(True),
+                TeamGithubScope.merge_policy == "human",
+                AgentTeamPreset.autonomy_enabled.is_(False),
+            )
+        )
+        lease_still_current = exists(
+            select(GithubWorkspace.id).where(
+                GithubWorkspace.id == workspace.id,
+                GithubWorkspace.scope_id == item.scope_id,
+                GithubWorkspace.leased_item_id == item.id,
+                GithubWorkspace.lease_token == workspace.lease_token,
+            )
+        )
+        approval_still_current = exists(
+            select(GithubApprovalRequest.id).where(
+                GithubApprovalRequest.id == approval.id,
+                GithubApprovalRequest.work_item_id == item.id,
+                GithubApprovalRequest.scope_revision_id == revision.id,
+                GithubApprovalRequest.request_kind == "continuation",
+                GithubApprovalRequest.status == expected_approval_status,
+                GithubApprovalRequest.dispatch_nonce == dispatch_nonce,
+                GithubApprovalRequest.approval_round == item.approval_round_count,
+                GithubApprovalRequest.owner_member_id == revision.owner_member_id,
+            )
+        )
+        result = await db.execute(
+            update(GithubAttemptScopeRevision)
+            .where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
+                GithubAttemptScopeRevision.revision == revision_number,
+                GithubAttemptScopeRevision.status == expected_status,
+                GithubAttemptScopeRevision.recovery_checkpoint_stage == expected_hold,
+                GithubAttemptScopeRevision.approval_request_id == approval.id,
+                GithubAttemptScopeRevision.owner_slot_id == item.owner_slot_id,
+                GithubAttemptScopeRevision.expected_workspace_id == workspace.id,
+                GithubAttemptScopeRevision.expected_lease_token_hash
+                == self.lease_token_hash(workspace.lease_token),
+                item_still_current,
+                scope_still_safe,
+                lease_still_current,
+                approval_still_current,
+            )
+            .values(
+                recovery_checkpoint_stage=next_stage,
+                expires_at=datetime.utcnow() + timedelta(
+                    seconds=settings.github_continuation_proposal_expiry_seconds
+                ),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            raise GithubApprovalError("recovery_checkpoint_context_changed")
+        await db.commit()
+        await db.refresh(revision)
+        return revision
 
     async def cancel(
         self,

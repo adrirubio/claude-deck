@@ -1939,6 +1939,7 @@ class GithubScopeRevisionResponse(BaseModel):
     failed_head_count: int
     last_failed_head_sha: Optional[str] = None
     status: str
+    recovery_checkpoint_stage: Optional[str] = None
     approval_request_id: Optional[int] = None
     delivery_message_id: Optional[int] = None
     approved_at: Optional[datetime] = None
@@ -1981,6 +1982,13 @@ class GithubActiveContinuationCancelRequest(BaseModel):
     cancel: Literal[True]
     dispatch_nonce: str = Field(min_length=1)
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class GithubRecoveryCheckpointReleaseRequest(BaseModel):
+    release: Literal[True]
+    dispatch_nonce: str = Field(min_length=1)
+    approval_request_id: int = Field(gt=0)
+    stage: Literal["decision", "ack"]
 
 
 class GithubApprovalRequestResponse(BaseModel):

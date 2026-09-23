@@ -33,7 +33,10 @@ from app.services.github_client import (
     github_client,
 )
 from app.services.github_dispatch_service import github_dispatch_service
-from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
+from app.services.github_recovery_gate import (
+    GithubRecoveryOnlyAttempt,
+    configured_recovery_only_attempt,
+)
 from app.services.github_workspace_service import github_workspace_service
 
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
@@ -1413,7 +1416,7 @@ class GithubVerificationService:
         scope: TeamGithubScope,
         item: GithubWorkItem,
     ) -> None:
-        if settings.github_recovery_only_attempt:
+        if configured_recovery_only_attempt() is not None:
             return
         try:
             slots = await self._preset_slots(db, scope)
