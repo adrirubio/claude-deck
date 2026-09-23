@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from datetime import datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -13,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.database import AgentTeamPreset, AgentTeamSlot
+from app.models.database import AgentTeamPreset, AgentTeamSlot, MailAgentSession, MailTeamMember
 from app.models.schemas import (
     BridgeAttachmentDeleteResponse,
     BridgeAttachmentListResponse,
@@ -28,6 +29,13 @@ from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
 from app.services.agent_bridge.spawn import kill_session, spawn_session
 from app.services.providers import get_provider
 from app.services.providers.base import SpawnCommandOptions
+from app.services.agent_mail_service import (
+    MCP_HEARTBEAT_TTL_SECONDS,
+    OBSERVED_TTL_SECONDS,
+    MailWakeError,
+    agent_mail_service,
+)
+from app.utils import peer_process
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +122,152 @@ async def _enrich_team_sessions(
     return enriched
 
 
+async def _project_mail_wake_state(
+    sessions: list[dict[str, Any]],
+    db: AsyncSession,
+) -> list[dict[str, Any]]:
+    now = datetime.utcnow()
+    projected: list[dict[str, Any]] = []
+    for discovered in sessions:
+        pane = dict(discovered)
+        pane.update(
+            mail_member_id=None,
+            mail_member_name=None,
+            mail_repo_id=None,
+            mail_mcp_session_id=None,
+            mail_wake_enabled=None,
+            mail_wake_state="unbound",
+            mail_wake_reason="wake_target_unbound",
+            mail_wake_target=None,
+        )
+        try:
+            pane_pid = int(discovered.get("pid") or 0) or None
+        except (TypeError, ValueError):
+            pane_pid = None
+        if not discovered.get("pane_id") or pane_pid is None:
+            projected.append(pane)
+            continue
+
+        observed_rows = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.source == "observed",
+                    MailAgentSession.pane_id == discovered["pane_id"],
+                    MailAgentSession.provider == discovered.get("provider"),
+                    MailAgentSession.pid == pane_pid,
+                    MailAgentSession.tmux_target == discovered.get("tmux_target"),
+                )
+            )
+        ).scalars().all()
+        if len(observed_rows) != 1:
+            pane["mail_wake_state"] = "ambiguous" if observed_rows else "unbound"
+            pane["mail_wake_reason"] = (
+                "wake_target_ambiguous" if observed_rows else "wake_target_unbound"
+            )
+            projected.append(pane)
+            continue
+
+        observed = observed_rows[0]
+        member = await db.get(MailTeamMember, observed.member_id)
+        if member is None:
+            projected.append(pane)
+            continue
+        pane.update(
+            mail_member_id=member.id,
+            mail_member_name=member.display_name,
+            mail_repo_id=member.repo_id,
+        )
+        if (
+            observed.mailbox_status != "observed"
+            or observed.last_seen_at < now - timedelta(seconds=OBSERVED_TTL_SECONDS)
+        ):
+            pane["mail_wake_state"] = "stale"
+            pane["mail_wake_reason"] = "wake_target_stale"
+            projected.append(pane)
+            continue
+        bound_rows = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.member_id == member.id,
+                    MailAgentSession.provider == observed.provider,
+                    MailAgentSession.source == "mcp",
+                    MailAgentSession.capability_token_hash.is_not(None),
+                    MailAgentSession.bound_pane_pid == pane_pid,
+                    MailAgentSession.bound_pane_proc_start.is_not(None),
+                )
+            )
+        ).scalars().all()
+        bindings = [
+            binding
+            for binding in bound_rows
+            if binding.mailbox_status == "connected"
+            and binding.last_seen_at >= now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+            and (
+                (
+                    member.participant_kind == "team_slot"
+                    and binding.team_slot_id is not None
+                    and binding.team_slot_id == observed.team_slot_id
+                    and binding.team_preset_id == observed.team_preset_id
+                )
+                or (
+                    member.participant_kind == "repo"
+                    and binding.team_slot_id is None
+                    and binding.team_preset_id is None
+                    and observed.team_slot_id is None
+                    and observed.team_preset_id is None
+                    and agent_mail_service._same_repo(
+                        binding.cwd, observed.cwd, member.repo_id
+                    )
+                )
+            )
+        ]
+        live_bindings = [
+            binding
+            for binding in bindings
+            if peer_process.pane_is_alive(
+                binding.bound_pane_pid, binding.bound_pane_proc_start
+            ) is True
+        ]
+        if len(live_bindings) != 1:
+            pane["mail_wake_state"] = (
+                "ambiguous" if len(live_bindings) > 1
+                else "stale" if bound_rows
+                else "unbound"
+            )
+            pane["mail_wake_reason"] = (
+                "wake_target_ambiguous" if len(live_bindings) > 1
+                else "wake_target_stale" if bound_rows
+                else "wake_target_unbound"
+            )
+            projected.append(pane)
+            continue
+
+        binding = live_bindings[0]
+        pane["mail_mcp_session_id"] = binding.id
+        pane["mail_wake_enabled"] = bool(binding.wake_enabled)
+        try:
+            target = await agent_mail_service._nudge_session_for_member(
+                db, member.id, now
+            )
+        except MailWakeError as exc:
+            pane["mail_wake_state"] = {
+                "wake_target_ambiguous": "ambiguous",
+                "wake_target_stale": "stale",
+                "wake_opted_out": "opted_out",
+            }.get(exc.code, "unbound")
+            pane["mail_wake_reason"] = exc.code
+        else:
+            if target.id == observed.id and target.pid == pane_pid:
+                pane["mail_wake_state"] = "wakeable"
+                pane["mail_wake_reason"] = None
+                pane["mail_wake_target"] = target.tmux_target
+            else:
+                pane["mail_wake_state"] = "stale"
+                pane["mail_wake_reason"] = "wake_target_stale"
+        projected.append(pane)
+    return projected
+
+
 @router.get("/sessions")
 async def list_sessions(
     provider: str | None = Query(default=None),
@@ -124,6 +278,7 @@ async def list_sessions(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     sessions = await _enrich_team_sessions(sessions, db)
+    sessions = await _project_mail_wake_state(sessions, db)
     return {"sessions": sessions, "count": len(sessions)}
 
 

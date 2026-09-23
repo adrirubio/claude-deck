@@ -82,8 +82,17 @@ scripts/attempt-recovery-preflight.sh \
 
 The command must report autonomy and continuation off, the expected item/PR identity, a
 preserved workspace, finite caps, at least one fresh authenticated MCP registration for the
-owner and Leader, and exactly one observed tmux pane for each slot. Codex reports one physical
-session through separate MCP and hook rows; those rows must not be counted as separate agents.
+owner and Leader, and exactly one observed tmux pane for each slot. Its sixth read-only GET,
+`/api/v1/agent-bridge/sessions`, must resolve each observed pane to exactly one Bridge session
+with the expected preset and slot, `mail_wake_state = wakeable`, `mail_wake_enabled = true`,
+and `mail_wake_target` exactly equal to that pane's tmux target. Duplicate Bridge rows, a
+shared owner/Leader pane, or any missing, stale, ambiguous, unbound, or opted-out wake target
+fails closed. The output retains its existing fields and reports each validated wake state and
+exact target under `sessions.owner` and `sessions.leader`. Codex reports one physical session
+through separate MCP and hook rows; those rows must not be counted as separate agents.
+
+The preflight performs GET requests only. It does not alter wake participation, issue a nudge,
+or assign roles or slots.
 
 ## Rollback
 

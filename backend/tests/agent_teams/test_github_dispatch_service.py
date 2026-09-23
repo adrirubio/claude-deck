@@ -4403,6 +4403,7 @@ async def _recoverable_escalated_item(db, *, autonomy=True, continuation=True):
         last_seen_at=datetime.utcnow(),
         bound_pane_pid=pane_pid,
         bound_pane_proc_start=pane_proc_start,
+        wake_enabled=True,
         capability_token_hash=agent_mail_service.hash_capability_token(
             "recovery-owner-token"
         ),

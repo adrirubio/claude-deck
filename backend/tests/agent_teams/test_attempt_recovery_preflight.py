@@ -4,6 +4,8 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PREFLIGHT = REPO_ROOT / "scripts" / "attempt-recovery-preflight.sh"
@@ -28,6 +30,27 @@ def _session(
         "mailbox_status": status,
         "tmux_target": tmux_target,
         "last_seen_at": last_seen_at,
+    }
+
+
+def _bridge_session(slot_id: int, target: str) -> dict[str, object]:
+    return {
+        "pane_id": f"%{slot_id}",
+        "tmux_target": target,
+        "team_preset_id": 2,
+        "team_slot_id": slot_id,
+        "mail_wake_state": "wakeable",
+        "mail_wake_enabled": True,
+        "mail_wake_target": target,
+    }
+
+
+def _bridge_sessions() -> dict[str, object]:
+    return {
+        "sessions": [
+            _bridge_session(4, "leader:0.0"),
+            _bridge_session(6, "specialist:0.0"),
+        ]
     }
 
 
@@ -147,6 +170,7 @@ def _fixtures(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             ]
         },
         "team.json": team,
+        "bridge-sessions.json": _bridge_sessions(),
     }
     fixture_dir = tmp_path / "fixtures"
     fixture_dir.mkdir(parents=True)
@@ -155,9 +179,15 @@ def _fixtures(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     return fixture_dir, team
 
 
-def _run_preflight(tmp_path: Path, team: dict[str, object]) -> subprocess.CompletedProcess[str]:
+def _run_preflight(
+    tmp_path: Path,
+    team: dict[str, object],
+    bridge_sessions: dict[str, object] | None = None,
+) -> subprocess.CompletedProcess[str]:
     fixture_dir, _ = _fixtures(tmp_path)
     (fixture_dir / "team.json").write_text(json.dumps(team))
+    if bridge_sessions is not None:
+        (fixture_dir / "bridge-sessions.json").write_text(json.dumps(bridge_sessions))
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(parents=True)
     curl = fake_bin / "curl"
@@ -167,6 +197,7 @@ set -euo pipefail
 url=${!#}
 case "$url" in
   */agent-mail/team*) file=team.json ;;
+  */agent-bridge/sessions*) file=bridge-sessions.json ;;
   */github-work-items*) file=items.json ;;
   */github-scopes*) file=scopes.json ;;
   */presets/2) file=preset.json ;;
@@ -198,9 +229,77 @@ def test_preflight_counts_one_physical_agent_not_mcp_and_hook_rows(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["sessions"] == {
-        "owner": {"slot_id": 6, "authenticated_mcp": 1, "observed_panes": 1},
-        "leader": {"slot_id": 4, "authenticated_mcp": 1, "observed_panes": 1},
+        "owner": {
+            "slot_id": 6,
+            "authenticated_mcp": 1,
+            "observed_panes": 1,
+            "wake_state": "wakeable",
+            "wake_target": "specialist:0.0",
+        },
+        "leader": {
+            "slot_id": 4,
+            "authenticated_mcp": 1,
+            "observed_panes": 1,
+            "wake_state": "wakeable",
+            "wake_target": "leader:0.0",
+        },
     }
+
+
+@pytest.mark.parametrize("wake_state", ["opted_out", "unbound", "ambiguous"])
+def test_preflight_refuses_non_wakeable_owner_pane(tmp_path: Path, wake_state: str) -> None:
+    _, team = _fixtures(tmp_path / "source")
+    bridge_sessions = _bridge_sessions()
+    bridge_sessions["sessions"][1]["mail_wake_state"] = wake_state
+
+    result = _run_preflight(tmp_path / "run", team, bridge_sessions)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "owner slot Agent Bridge pane is not exactly wakeable"
+
+
+def test_preflight_refuses_disabled_wake_participation(tmp_path: Path) -> None:
+    _, team = _fixtures(tmp_path / "source")
+    bridge_sessions = _bridge_sessions()
+    bridge_sessions["sessions"][1]["mail_wake_enabled"] = False
+
+    result = _run_preflight(tmp_path / "run", team, bridge_sessions)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "owner slot Agent Bridge pane is not exactly wakeable"
+
+
+def test_preflight_refuses_inexact_wake_target(tmp_path: Path) -> None:
+    _, team = _fixtures(tmp_path / "source")
+    bridge_sessions = _bridge_sessions()
+    bridge_sessions["sessions"][1]["mail_wake_target"] = "specialist:1.0"
+
+    result = _run_preflight(tmp_path / "run", team, bridge_sessions)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "owner slot Agent Bridge pane is not exactly wakeable"
+
+
+def test_preflight_refuses_duplicate_bridge_pane_rows(tmp_path: Path) -> None:
+    _, team = _fixtures(tmp_path / "source")
+    bridge_sessions = _bridge_sessions()
+    bridge_sessions["sessions"].append(dict(bridge_sessions["sessions"][1]))
+
+    result = _run_preflight(tmp_path / "run", team, bridge_sessions)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "owner slot must have exactly one matching Agent Bridge pane"
+
+
+def test_preflight_refuses_bridge_pane_from_another_slot(tmp_path: Path) -> None:
+    _, team = _fixtures(tmp_path / "source")
+    bridge_sessions = _bridge_sessions()
+    bridge_sessions["sessions"][1]["team_slot_id"] = 4
+
+    result = _run_preflight(tmp_path / "run", team, bridge_sessions)
+
+    assert result.returncode == 1
+    assert result.stderr.strip() == "owner slot must have exactly one matching Agent Bridge pane"
 
 
 def test_preflight_refuses_duplicate_observed_owner_panes(tmp_path: Path) -> None:

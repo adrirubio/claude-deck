@@ -247,6 +247,73 @@ async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_wake_participation_is_operator_only_and_rejects_extra_fields(
+    client, db, monkeypatch
+):
+    member = await _member(db, "participation", "participation")
+    session = MailAgentSession(
+        member_id=member.id,
+        provider="codex-cli",
+        source="observed",
+        session_key="tmux:participation",
+    )
+    db.add(session)
+    await db.commit()
+    await db.refresh(session)
+    monkeypatch.setattr(settings, "operator_token", "operator-participation")
+    changed = []
+
+    async def set_wake_enabled(_db, session_id, enabled, *, actor_type, reason_code):
+        changed.append((session_id, enabled, actor_type, reason_code))
+        session.wake_enabled = enabled
+        return session
+
+    monkeypatch.setattr(
+        agent_mail_service, "set_wake_enabled", set_wake_enabled, raising=False
+    )
+    endpoint = f"/api/v1/agent-mail/sessions/{session.id}/wake-participation"
+    payload = {"wake_enabled": True, "reason": "operator_choice"}
+
+    anonymous = await client.patch(endpoint, json=payload)
+    session_token = await client.patch(
+        endpoint,
+        headers={"X-Deck-Session-Token": "agent-session-token"},
+        json=payload,
+    )
+    invalid_operator = await client.patch(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "invalid"},
+        json=payload,
+    )
+    privilege_field = await client.patch(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "operator-participation"},
+        json={
+            **payload,
+            "member_id": 999,
+            "team_slot_id": 999,
+            "team_preset_id": 999,
+            "force": True,
+            "approval_status": "approved",
+        },
+    )
+    response = await client.patch(
+        endpoint,
+        headers={"X-Deck-Operator-Token": "operator-participation"},
+        json=payload,
+    )
+
+    assert anonymous.status_code == 401
+    assert session_token.status_code == 401
+    assert invalid_operator.status_code == 401
+    assert privilege_field.status_code == 422
+    assert response.status_code == 200
+    assert response.json() == {"session_id": session.id, "wake_enabled": True}
+    assert changed == [(session.id, True, "operator", "operator_choice")]
+    assert "session_key" not in response.json()
+
+
+@pytest.mark.asyncio
 async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, monkeypatch):
     preset = AgentTeamPreset(name="Wake team", description="", created_by="test")
     db.add(preset)
@@ -274,6 +341,7 @@ async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, 
         mailbox_status="connected", last_seen_at=datetime.utcnow(),
         capability_token_hash=agent_mail_service.hash_capability_token(token),
         bound_pane_pid=4242, bound_pane_proc_start="bound-start",
+        wake_enabled=True,
     ))
     db.add(MailAgentSession(
         member_id=member.id, provider="codex-cli", source="observed",
@@ -376,6 +444,7 @@ async def test_wake_binding_refuses_two_matching_panes(db, monkeypatch):
     await db.flush()
     member.team_preset_id = preset.id
     member.team_slot_id = slot.id
+    member.participant_kind = "team_slot"
     for pane_id, pane_pid in (("%7", 4242), ("%8", 4243)):
         db.add(MailAgentSession(
             member_id=member.id, provider="codex-cli", source="observed",
@@ -390,6 +459,7 @@ async def test_wake_binding_refuses_two_matching_panes(db, monkeypatch):
             team_slot_id=slot.id, mailbox_status="connected",
             capability_token_hash=agent_mail_service.hash_capability_token(pane_id),
             bound_pane_pid=pane_pid, bound_pane_proc_start=f"start-{pane_pid}",
+            wake_enabled=True,
             last_seen_at=datetime.utcnow(),
         ))
     await db.commit()

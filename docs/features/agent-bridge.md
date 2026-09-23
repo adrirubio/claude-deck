@@ -14,6 +14,8 @@ Session cards include:
 - Live preview
 - Attach, fullscreen, and kill controls
 
+Agent Bridge also projects redacted Agent Mail state for each discovered pane: its matched member and repository, whether wake participation is enabled, and a wake state/reason. The state distinguishes wakeable, opted-out, stale, ambiguous, and unbound panes. A wake target is shown only after Agent Mail confirms that the pane has one fresh authenticated MCP binding and is actually wakeable. This projection is read-only; listing sessions does not synchronize observations or trigger a wake. Manual sessions are opted out by default, and only an operator can change participation through the Agent Mail API.
+
 The terminal grid is shared across providers. Read-only and interactive modes work the same way whether the pane is Claude Code, Codex, or Copilot.
 
 Provider filters are explicit:

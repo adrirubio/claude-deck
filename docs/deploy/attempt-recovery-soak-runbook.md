@@ -69,14 +69,24 @@ With autonomy and continuation still off:
    for the Specialist owner slot.
 3. Verify exactly one observed tmux pane and at least one fresh authenticated MCP registration
    for the distinct Leader slot. Ignore the auxiliary hook row when counting physical agents.
-4. Verify no duplicate Tizonia sessions are registered to either slot.
+4. Confirm the preflight's sixth GET, `/api/v1/agent-bridge/sessions`, maps each exact observed
+   owner and Leader pane to one Bridge session with the expected preset and slot,
+   `mail_wake_state = wakeable`, `mail_wake_enabled = true`, and an exact
+   `mail_wake_target` match to that pane's tmux target. The owner and Leader targets must be
+   distinct; duplicate Bridge rows or any stale, ambiguous, unbound, or opted-out state blocks
+   the soak.
+5. Verify no duplicate Tizonia sessions are registered to either slot.
    Confirm each observed pane PID matches its slot's fresh authenticated MCP
    session binding and process start time. An observed-only pane is not a wake
    target. Inspect redacted wake attempts through the operator-only
    `GET /api/v1/agent-mail/wake-attempts` endpoint; do not force a test wake
    of an empty inbox merely to prove the route works.
-5. Verify finite continuation caps are the reviewed values.
-6. Verify PR #875's current head and baseline restoration target are recorded.
+6. Verify finite continuation caps are the reviewed values.
+7. Verify PR #875's current head and baseline restoration target are recorded.
+
+The preflight is read-only: its Bridge-session verification does not enable participation,
+send a wake, or assign a team role or slot. Preserve the reported exact targets in the
+checkpoint evidence.
 
 Stop and report the complete identity matrix before changing policy.
 

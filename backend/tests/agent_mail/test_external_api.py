@@ -309,6 +309,7 @@ async def test_external_delivery_reports_tmux_wake_success(
         mailbox_status="connected", last_seen_at=datetime.utcnow(),
         capability_token_hash=agent_mail_service.hash_capability_token("external-bound-token"),
         bound_pane_pid=4242, bound_pane_proc_start="external-start",
+        wake_enabled=True,
     ))
     await db.commit()
     monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)

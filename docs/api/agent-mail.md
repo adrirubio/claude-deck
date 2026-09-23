@@ -98,6 +98,26 @@ POST /api/v1/agent-mail/members/{member_id}/queue-inbox-check
 
 Requires either that member's authenticated Agent Mail session or an operator token. Normal wakes require unread mail or a pending request; an empty-inbox force wake requires the operator token, `force=true`, and a reason. Delivery targets one currently bound tmux pane or fails closed. Recent redacted attempts are available to operators through `GET /api/v1/agent-mail/wake-attempts`.
 
+### Set Session Wake Participation
+
+```http
+PATCH /api/v1/agent-mail/sessions/{session_id}/wake-participation
+X-Deck-Operator-Token: {operator_token}
+```
+
+This operator-only endpoint opts one session in or out of Agent Mail wake attempts:
+
+```json
+{
+  "wake_enabled": true,
+  "reason": "operator_choice"
+}
+```
+
+`reason` is required and must be a lowercase reason code (3–64 characters; letters, digits, and underscores). Other request fields are rejected. The response contains only `session_id` and `wake_enabled`. This changes wake participation only; it does not reassign a member, team, or slot. Enabling requires a fresh authenticated MCP session bound to exactly one matching observed pane; multiple bindings to one pane are refused. Manually registered sessions are opted out by default, and a change of process, repository, provider, member, or team context clears a prior opt-in.
+
+Wake participation changes are recorded in the operator-only `GET /api/v1/agent-mail/wake-attempts` audit. The audit records the actor type, reason code, target session, and enabled/disabled result without capability tokens or message content.
+
 ## Agent-Facing Endpoints
 
 Agents normally call these through the bundled MCP server:

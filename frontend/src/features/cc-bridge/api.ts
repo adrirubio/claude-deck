@@ -1,5 +1,6 @@
 import { apiClient, buildEndpoint, type ApiError } from '@/lib/api'
 import { API_BASE_URL } from '@/lib/constants'
+import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import type { AgentProviderId } from '@/types/providers'
 import type {
   BridgeAttachment,
@@ -14,6 +15,7 @@ import type {
   SpawnSessionRequest,
   SpawnSessionResponse,
   KillSessionResponse,
+  MailWakeAttemptsResponse,
 } from './types'
 
 const BASE = 'agent-bridge'
@@ -55,6 +57,31 @@ async function attachmentRequest<T>(
 
 export async function fetchCCSessions(provider?: AgentProviderId): Promise<CCSessionsResponse> {
   return apiClient<CCSessionsResponse>(buildEndpoint(BASE + '/sessions', { provider }))
+}
+
+export async function fetchMailWakeAttempts(memberId: number): Promise<MailWakeAttemptsResponse> {
+  const operatorToken = getOperatorToken()
+  if (!operatorToken) throw new Error('Operator token required')
+  return apiClient<MailWakeAttemptsResponse>(buildEndpoint('agent-mail/wake-attempts', {
+    member_id: memberId,
+    limit: 10,
+  }), {
+    headers: { 'X-Deck-Operator-Token': operatorToken },
+  })
+}
+
+export async function updateMailWakeParticipation(
+  sessionId: number | string,
+  wakeEnabled: boolean,
+  reason: string
+): Promise<void> {
+  const operatorToken = getOperatorToken()
+  if (!operatorToken) throw new Error('Operator token required')
+  await apiClient(buildEndpoint(`agent-mail/sessions/${encodeURIComponent(sessionId)}/wake-participation`), {
+    method: 'PATCH',
+    headers: { 'X-Deck-Operator-Token': operatorToken },
+    body: JSON.stringify({ wake_enabled: wakeEnabled, reason }),
+  })
 }
 
 export async function fetchSessionPreview(target: string): Promise<CCPreviewResponse> {

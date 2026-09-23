@@ -156,6 +156,50 @@ async def test_compat_migrations_add_capability_columns_idempotently():
 
 
 @pytest.mark.asyncio
+async def test_compat_migration_backfills_wake_participation_once_without_changing_ids():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text(
+                "CREATE TABLE mail_agent_sessions ("
+                "id INTEGER NOT NULL PRIMARY KEY, member_id INTEGER NOT NULL, "
+                "provider VARCHAR NOT NULL, source VARCHAR NOT NULL, "
+                "session_key VARCHAR NOT NULL, team_preset_id INTEGER, "
+                "team_slot_id INTEGER, mailbox_status VARCHAR NOT NULL, "
+                "last_seen_at DATETIME NOT NULL, created_at DATETIME NOT NULL)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO mail_agent_sessions "
+                "(id, member_id, provider, source, session_key, team_preset_id, "
+                "team_slot_id, mailbox_status, last_seen_at, created_at) VALUES "
+                "(11, 1, 'codex-cli', 'mcp', 'mcp:slot', 2, 3, 'connected', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(12, 1, 'codex-cli', 'mcp', 'mcp:repo', NULL, NULL, 'connected', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(13, 1, 'codex-cli', 'hook', 'hook:slot', 2, 3, 'connected', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(14, 1, 'codex-cli', 'observed', 'tmux:%1', 2, 3, 'observed', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.commit()
+
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+
+            rows = (await conn.execute(text(
+                "SELECT id, session_key, wake_enabled FROM mail_agent_sessions ORDER BY id"
+            ))).all()
+            assert [tuple(row) for row in rows] == [
+                (11, "mcp:slot", 1),
+                (12, "mcp:repo", 0),
+                (13, "hook:slot", 0),
+                (14, "tmux:%1", 0),
+            ]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_compat_migrations_add_pr1_approval_columns_idempotently():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

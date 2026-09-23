@@ -472,6 +472,7 @@ class MailAgentSession(Base):
     capability_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     bound_pane_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bound_pane_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
+    wake_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
     activity: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(

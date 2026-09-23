@@ -207,6 +207,13 @@ class AgentMailService:
             select(MailAgentSession).where(MailAgentSession.session_key == request.session_key)
         )
         session = result.scalar_one_or_none()
+        is_new_session = session is None
+        old_member_id = session.member_id if session is not None else None
+        old_provider = session.provider if session is not None else None
+        old_cwd = session.cwd if session is not None else None
+        old_pid = session.pid if session is not None else None
+        old_team_preset_id = session.team_preset_id if session is not None else None
+        old_team_slot_id = session.team_slot_id if session is not None else None
         if not has_team_context and session is not None and session.team_slot_id is not None:
             existing_member = await db.get(MailTeamMember, session.member_id)
             if existing_member is not None and await self._session_team_context_matches_registration(
@@ -241,6 +248,29 @@ class AgentMailService:
         session.pid = request.pid
         session.team_preset_id = team_preset_id
         session.team_slot_id = team_slot_id
+        try:
+            old_repo_id = derive_repo_identity(old_cwd or "")["repo_id"]
+            new_repo_id = derive_repo_identity(request.cwd)["repo_id"]
+        except Exception:
+            old_repo_id = os.path.realpath(old_cwd or "")
+            new_repo_id = os.path.realpath(request.cwd)
+        registration_rebound = (
+            old_member_id != member.id
+            or old_provider != request.provider
+            or old_repo_id != new_repo_id
+            or old_pid != request.pid
+            or old_team_preset_id != team_preset_id
+            or old_team_slot_id != team_slot_id
+        )
+        if is_new_session:
+            session.wake_enabled = (
+                request.source == "mcp" and team_slot_id is not None
+            )
+        elif request.source != "mcp" or registration_rebound:
+            session.wake_enabled = False
+        if registration_rebound:
+            session.bound_pane_pid = None
+            session.bound_pane_proc_start = None
         session.mailbox_status = "connected"
         session.last_seen_at = datetime.utcnow()
         await db.commit()
@@ -399,6 +429,18 @@ class AgentMailService:
         except Exception:
             return False
 
+    @staticmethod
+    def _same_repo(left_cwd: str | None, right_cwd: str | None, repo_id: str) -> bool:
+        if not left_cwd or not right_cwd:
+            return False
+        try:
+            return (
+                derive_repo_identity(left_cwd)["repo_id"] == repo_id
+                and derive_repo_identity(right_cwd)["repo_id"] == repo_id
+            )
+        except Exception:
+            return os.path.realpath(left_cwd) == os.path.realpath(right_cwd)
+
     async def heartbeat_session(
         self, db: AsyncSession, session_key: str, activity: Optional[str] = None
     ) -> Optional[MailAgentSession]:
@@ -491,6 +533,7 @@ class AgentMailService:
                 session.pid = None
             session.team_preset_id = member.team_preset_id
             session.team_slot_id = member.team_slot_id
+            session.wake_enabled = False
             session.mailbox_status = "observed"
             session.last_seen_at = datetime.utcnow()
         await self._remove_stale_observed_sessions(db, active_observed_keys)
@@ -1759,31 +1802,149 @@ class AgentMailService:
                 )
             )
         ).scalars().all()
-        candidates = [
-            session
-            for session in observed
-            if session.team_slot_id is not None
-            and session.team_preset_id is not None
-            and session.mailbox_status == "observed"
-            and session.pid is not None
-            and session.pane_id
-            and session.last_seen_at >= now - timedelta(seconds=OBSERVED_TTL_SECONDS)
-            and any(
-                bound.team_slot_id == session.team_slot_id
-                and bound.team_preset_id == session.team_preset_id
-                and bound.provider == session.provider
-                and bound.bound_pane_pid == session.pid
-                and peer_process.pane_is_alive(
-                    bound.bound_pane_pid, bound.bound_pane_proc_start
-                ) is True
-                for bound in registered
-            )
-        ]
+        member = await db.get(MailTeamMember, member_id)
+        if member is None:
+            raise MailWakeError("wake_target_unbound")
+
+        def matching_bindings(pane: MailAgentSession) -> list[MailAgentSession]:
+            if (
+                pane.mailbox_status != "observed"
+                or pane.pid is None
+                or not pane.pane_id
+                or pane.last_seen_at < now - timedelta(seconds=OBSERVED_TTL_SECONDS)
+            ):
+                return []
+            matches = []
+            for binding in registered:
+                if binding.provider != pane.provider:
+                    continue
+                is_team_binding = (
+                    binding.team_slot_id is not None
+                    and binding.team_preset_id is not None
+                    and member.participant_kind == "team_slot"
+                    and member.team_slot_id == binding.team_slot_id
+                    and member.team_preset_id == binding.team_preset_id
+                    and pane.team_slot_id == binding.team_slot_id
+                    and pane.team_preset_id == binding.team_preset_id
+                )
+                is_repo_binding = (
+                    binding.team_slot_id is None
+                    and binding.team_preset_id is None
+                    and member.participant_kind == "repo"
+                    and pane.team_slot_id is None
+                    and pane.team_preset_id is None
+                    and pane.member_id == member_id
+                    and self._same_repo(binding.cwd, pane.cwd, member.repo_id)
+                )
+                if not (is_team_binding or is_repo_binding):
+                    continue
+                if binding.bound_pane_pid != pane.pid:
+                    continue
+                if peer_process.pane_is_alive(
+                    binding.bound_pane_pid, binding.bound_pane_proc_start
+                ) is True:
+                    matches.append(binding)
+            return matches
+
+        matched = [(pane, matching_bindings(pane)) for pane in observed]
+        if any(len(bindings) > 1 for _, bindings in matched):
+            raise MailWakeError("wake_target_ambiguous")
+        candidates = [pane for pane, bindings in matched if bindings and bindings[0].wake_enabled]
         if len(candidates) != 1:
+            if not candidates and any(bindings for _, bindings in matched):
+                raise MailWakeError("wake_opted_out")
             raise MailWakeError(
                 "wake_target_ambiguous" if candidates else "wake_target_unbound"
             )
         return candidates[0]
+
+    async def set_wake_enabled(
+        self,
+        db: AsyncSession,
+        session_id: int,
+        enabled: bool,
+        *,
+        actor_type: str,
+        reason_code: str,
+    ) -> MailAgentSession:
+        session = await db.get(MailAgentSession, session_id)
+        if session is None:
+            raise MailWakeError("wake_target_unbound")
+        if enabled:
+            now = datetime.utcnow()
+            if (
+                session.source != "mcp"
+                or session.mailbox_status != "connected"
+                or session.capability_token_hash is None
+                or session.bound_pane_pid is None
+                or not session.bound_pane_proc_start
+                or session.last_seen_at < now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+                or peer_process.pane_is_alive(
+                    session.bound_pane_pid, session.bound_pane_proc_start
+                ) is not True
+            ):
+                raise MailWakeError("wake_target_unbound")
+            observations = (
+                await db.execute(
+                    select(MailAgentSession).where(
+                        MailAgentSession.source == "observed",
+                        MailAgentSession.provider == session.provider,
+                        MailAgentSession.pid == session.bound_pane_pid,
+                        MailAgentSession.mailbox_status == "observed",
+                        MailAgentSession.last_seen_at
+                        >= now - timedelta(seconds=OBSERVED_TTL_SECONDS),
+                    )
+                )
+            ).scalars().all()
+            member = await db.get(MailTeamMember, session.member_id)
+            if member is None:
+                raise MailWakeError("wake_target_unbound")
+            exact = [
+                pane for pane in observations
+                if pane.pane_id and pane.tmux_target and (
+                    (session.team_slot_id is not None
+                     and member.participant_kind == "team_slot"
+                     and member.team_slot_id == session.team_slot_id
+                     and member.team_preset_id == session.team_preset_id
+                     and pane.member_id == session.member_id
+                     and pane.team_slot_id == session.team_slot_id
+                     and pane.team_preset_id == session.team_preset_id)
+                    or (session.team_slot_id is None
+                        and session.team_preset_id is None
+                        and pane.team_slot_id is None
+                        and pane.team_preset_id is None
+                        and pane.member_id == session.member_id
+                        and member.participant_kind == "repo"
+                        and self._same_repo(session.cwd, pane.cwd, member.repo_id))
+                )
+            ]
+            if len(exact) != 1:
+                raise MailWakeError(
+                    "wake_target_ambiguous" if exact else "wake_target_unbound"
+                )
+        previous_enabled = session.wake_enabled
+        session.wake_enabled = enabled
+        if enabled:
+            try:
+                target = await self._nudge_session_for_member(db, session.member_id, now)
+                if target.id != exact[0].id:
+                    raise MailWakeError("wake_target_ambiguous")
+            except MailWakeError:
+                session.wake_enabled = previous_enabled
+                raise
+        db.add(MailWakeAttempt(
+            member_id=session.member_id,
+            actor_type=actor_type,
+            actor_session_id=None,
+            source="participation_change",
+            reason_code=reason_code,
+            correlation_id=uuid4().hex,
+            target_session_id=session.id,
+            result="enabled" if enabled else "disabled",
+        ))
+        await db.commit()
+        await db.refresh(session)
+        return session
 
     async def nudgeable_sessions_for_slot(
         self, db: AsyncSession, slot_id: int

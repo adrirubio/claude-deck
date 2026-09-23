@@ -31,6 +31,8 @@ Claude Deck uses one visible wake path:
 
 - tmux-observed sessions can be nudged through Agent Bridge by sending text and `Enter` to the pane.
 
+Wake participation is controlled per session. Manually registered sessions start opted out, so they are not woken unless an operator explicitly enables participation. The operator-only Agent Mail API requires a reason for each change and accepts only the wake-enabled flag and reason; it cannot change member, team, or slot assignment. Enabling is accepted only when a fresh authenticated MCP session is bound to exactly one matching observed pane. Participation changes appear in the operator-only wake audit, which records the reason and result without storing credentials or message content.
+
 Non-tmux Claude Code, Codex, and Copilot sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a provider hook boundary. Agents should call `deck_check_inbox` before major work and after finishing a task.
 
 ## External Local Callers

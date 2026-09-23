@@ -90,6 +90,7 @@ async def _bound_wake_slot(db, svc, cwd, observed, monkeypatch):
         capability_token_hash=svc.hash_capability_token("wake-test-token"),
         bound_pane_pid=int(observed[0]["pid"]),
         bound_pane_proc_start="test-start",
+        wake_enabled=True,
         mailbox_status="connected",
         last_seen_at=datetime.utcnow(),
     ))
@@ -225,6 +226,8 @@ async def test_mcp_registration_infers_slot_from_related_hook_process(
     assert mcp_session.member_id == slot_member.id
     assert mcp_session.team_preset_id == preset.id
     assert mcp_session.team_slot_id == slot.id
+    assert mcp_session.wake_enabled is True
+    assert hook_session.wake_enabled is False
     assert hook_session.team_slot_id == slot.id
 
 
@@ -274,6 +277,7 @@ async def test_observed_tmux_session_infers_slot_from_related_hook_process(
     assert observed.team_preset_id == preset.id
     assert observed.team_slot_id == slot.id
     assert observed.tmux_target == "planner:0.0"
+    assert observed.wake_enabled is False
 
 
 @pytest.mark.asyncio
@@ -325,6 +329,40 @@ async def test_reused_session_key_clears_stale_team_slot_context(db, svc, tmp_pa
     assert moved_session.member_id == moved_member.id
     assert moved_session.team_preset_id is None
     assert moved_session.team_slot_id is None
+    assert moved_session.wake_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_reused_manual_mcp_key_keeps_opt_in_only_for_same_registration_identity(
+    db, svc, tmp_path
+):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    request = MailAgentRegisterRequest(
+        source="mcp", provider="codex-cli", cwd=str(repo_a),
+        session_key="mcp:manual-reused", pid=5101,
+    )
+    _member, session = await svc.register_session(db, request)
+    session.wake_enabled = True
+    session.capability_token_hash = svc.hash_capability_token("manual-token")
+    session.bound_pane_pid = 5101
+    session.bound_pane_proc_start = "process-start-a"
+    await db.commit()
+
+    _same_member, refreshed = await svc.register_session(db, request)
+    assert refreshed.wake_enabled is True
+    assert refreshed.bound_pane_pid == 5101
+    assert refreshed.bound_pane_proc_start == "process-start-a"
+
+    _new_member, rebound = await svc.register_session(
+        db,
+        request.model_copy(update={"cwd": str(repo_b), "pid": 5102}),
+    )
+    assert rebound.wake_enabled is False
+    assert rebound.bound_pane_pid is None
+    assert rebound.bound_pane_proc_start is None
 
 
 @pytest.mark.asyncio
@@ -1044,6 +1082,199 @@ async def test_wake_refuses_dead_binding_and_changed_tmux_pane(
 
     monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", changed_pane)
     with pytest.raises(MailWakeError, match="wake_target_stale"):
+        await svc.queue_inbox_check(
+            db, member.id, actor_type="operator", force=True,
+            reason_code="operator_maintenance",
+        )
+    assert not any(command[:2] == ["tmux", "send-keys"] for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_observed_discovery_alone_does_not_make_repo_session_wakeable(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{
+        "provider": "codex-cli", "tmux_target": "w:0.1", "pane_id": "%21",
+        "cwd": str(cwd), "pid": "4210", "status": "active",
+    }]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    await svc.sync_observed_sessions(db)
+    member = await svc.get_or_create_repo_member(db, str(cwd))
+    with pytest.raises(MailWakeError, match="wake_target_unbound"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+
+
+@pytest.mark.asyncio
+async def test_manual_repo_mcp_can_opt_in_to_exact_observed_pane(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{
+        "provider": "codex-cli", "tmux_target": "w:0.1", "pane_id": "%22",
+        "cwd": str(cwd), "pid": "4220", "status": "active",
+    }]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.peer_process.pane_is_alive",
+        lambda _pid, _start: True,
+    )
+    member, registered = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp", provider="codex-cli", cwd=str(cwd),
+            session_key="mcp:manual-repo", pid=4220,
+        ),
+    )
+    assert registered.wake_enabled is False
+    await svc.sync_observed_sessions(db)
+    registered.bound_pane_pid = 4220
+    registered.bound_pane_proc_start = "test-start"
+    registered.capability_token_hash = svc.hash_capability_token("manual-token")
+    await db.commit()
+
+    observed_row = (await db.execute(
+        select(MailAgentSession).where(MailAgentSession.source == "observed")
+    )).scalar_one()
+    other_cwd = tmp_path / "other-repo"
+    other_cwd.mkdir()
+    other_member = await svc.get_or_create_repo_member(db, str(other_cwd))
+    observed_row.member_id = other_member.id
+    await db.commit()
+    with pytest.raises(MailWakeError, match="wake_target_unbound"):
+        await svc.set_wake_enabled(
+            db, registered.id, True, actor_type="operator", reason_code="manual_opt_in"
+        )
+    observed_row.member_id = member.id
+    await db.commit()
+
+    await svc.set_wake_enabled(
+        db, registered.id, True, actor_type="operator", reason_code="manual_opt_in"
+    )
+    target = await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+    audit = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert target.pane_id == "%22"
+    assert member.participant_kind == "repo"
+    assert member.team_slot_id is None
+    assert member.role is None
+    assert audit.source == "participation_change"
+    assert audit.result == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_opted_in_repo_binding_refuses_multiple_matching_panes(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [
+        {"provider": "codex-cli", "tmux_target": f"w:0.{index}",
+         "pane_id": f"%{index + 30}", "cwd": str(cwd), "pid": "4230",
+         "status": "active"}
+        for index in range(2)
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.peer_process.pane_is_alive",
+        lambda _pid, _start: True,
+    )
+    member, registered = await svc.register_session(
+        db,
+        MailAgentRegisterRequest(
+            source="mcp", provider="codex-cli", cwd=str(cwd),
+            session_key="mcp:ambiguous-repo", pid=4230,
+        ),
+    )
+    await svc.sync_observed_sessions(db)
+    registered.bound_pane_pid = 4230
+    registered.bound_pane_proc_start = "test-start"
+    registered.capability_token_hash = svc.hash_capability_token("manual-token")
+    registered.wake_enabled = True
+    await db.commit()
+    with pytest.raises(MailWakeError, match="wake_target_ambiguous"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+
+
+@pytest.mark.asyncio
+async def test_duplicate_mcp_bindings_for_one_pane_refuse_wake_and_opt_in(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{
+        "provider": "codex-cli", "tmux_target": "w:0.1", "pane_id": "%41",
+        "cwd": str(cwd), "pid": "4241", "status": "active",
+    }]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    original = (await db.execute(
+        select(MailAgentSession).where(MailAgentSession.source == "mcp")
+    )).scalar_one()
+    duplicate = MailAgentSession(
+        member_id=member.id,
+        source="mcp",
+        provider=original.provider,
+        session_key="mcp:duplicate-binding",
+        cwd=original.cwd,
+        team_preset_id=original.team_preset_id,
+        team_slot_id=original.team_slot_id,
+        capability_token_hash=svc.hash_capability_token("duplicate-token"),
+        bound_pane_pid=original.bound_pane_pid,
+        bound_pane_proc_start=original.bound_pane_proc_start,
+        wake_enabled=False,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
+    )
+    db.add(duplicate)
+    await db.commit()
+
+    with pytest.raises(MailWakeError, match="wake_target_ambiguous"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+    with pytest.raises(MailWakeError, match="wake_target_ambiguous"):
+        await svc.set_wake_enabled(
+            db, duplicate.id, True, actor_type="operator", reason_code="manual_opt_in"
+        )
+    assert duplicate.wake_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_opt_out_suppresses_manual_and_automatic_team_wakes(
+    db, svc, tmp_path, monkeypatch
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{
+        "provider": "codex-cli", "tmux_target": "w:0.1", "pane_id": "%7",
+        "cwd": str(cwd), "pid": "4242", "status": "active",
+    }]
+    commands = []
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.subprocess.run",
+        lambda command, **_kwargs: commands.append(command)
+        or SimpleNamespace(stdout="%7|4242", stderr="", returncode=0),
+    )
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    binding = (await db.execute(
+        select(MailAgentSession).where(MailAgentSession.source == "mcp")
+    )).scalar_one()
+    await svc.set_wake_enabled(
+        db, binding.id, False, actor_type="operator", reason_code="manual_opt_out"
+    )
+    assert await svc.auto_nudge_members(db, {member.id}, bypass_cooldown=True) == []
+    with pytest.raises(MailWakeError, match="wake_opted_out"):
         await svc.queue_inbox_check(
             db, member.id, actor_type="operator", force=True,
             reason_code="operator_maintenance",

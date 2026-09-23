@@ -1815,6 +1815,7 @@ class MailSessionResponse(BaseModel):
     provider: str
     source: str
     session_key: str
+    wake_enabled: bool = False
     cwd: Optional[str] = None
     tmux_target: Optional[str] = None
     team_preset_id: Optional[int] = None
