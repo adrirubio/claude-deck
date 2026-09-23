@@ -26,6 +26,7 @@ from app.models.database import (
     MailMessage,
     MailReceipt,
     MailTeamMember,
+    MailWakeAttempt,
     TeamGithubScope,
 )
 from app.models.schemas import MailMessageCreate
@@ -5646,6 +5647,76 @@ async def test_recovery_monitor_nudges_only_current_owner_after_delivery_cooldow
         revision=revision,
         workspace=workspace,
     )
+
+
+@pytest.mark.asyncio
+async def test_read_continuation_delivery_remains_wakeable_until_owner_ack(
+    db, monkeypatch
+):
+    _isolate_agent_mail_nudges(monkeypatch)
+    _preset, slots, _scope, item, workspace, owner, _session = (
+        await _recoverable_escalated_item(db)
+    )
+    request, revision, _leader = await _continuation_transport_authority(
+        db, item, workspace, owner, status="approved"
+    )
+    root = await _send_continuation_request_root(db, item, request, revision)
+    request.request_message_id = root.id
+    await db.commit()
+    decision = await _send_continuation_decision(db, request, revision)
+    request.decision_message_id = decision.id
+    await db.commit()
+    await github_approval_service.deliver_approved_continuation(
+        db, item, request, revision
+    )
+    assert revision.delivery_message_id is not None
+    await db.execute(
+        update(MailReceipt)
+        .where(MailReceipt.member_id == owner.id)
+        .values(read_at=datetime.utcnow())
+    )
+    revision.last_ack_nudge_at = datetime.utcnow() - timedelta(minutes=10)
+    await db.commit()
+    assert await agent_mail_service.counts_for_member(db, owner.id) == (0, 0)
+
+    delivered = []
+
+    def record_delivery(session, prompt):
+        delivered.append((session.id, prompt))
+        return {"target": session.tmux_target, "prompt": prompt}
+
+    monkeypatch.setattr(agent_mail_service, "_send_tmux_inbox_check", record_delivery)
+    assert await github_approval_service.nudge_approved_continuation_owner(
+        db, revision, cooldown=timedelta(minutes=3)
+    ) is True
+    assert len(delivered) == 1
+    assert "`deck_ack_continuation`" in delivered[0][1]
+    attempts = (
+        await db.execute(
+            select(MailWakeAttempt).where(
+                MailWakeAttempt.member_id == owner.id,
+                MailWakeAttempt.reason_code == "continuation_owner_ack",
+            )
+        )
+    ).scalars().all()
+    assert len(attempts) == 1
+    assert (attempts[0].unread_count, attempts[0].pending_count) == (0, 0)
+    assert attempts[0].result == "delivered"
+
+    revision.acknowledged_at = datetime.utcnow()
+    await db.commit()
+    assert await agent_mail_service.auto_nudge_members(
+        db, {owner.id}, bypass_cooldown=True
+    ) == []
+    assert len(delivered) == 1
+
+    revision.acknowledged_at = None
+    item.owner_slot_id = slots[0].id
+    await db.commit()
+    assert await agent_mail_service.auto_nudge_members(
+        db, {owner.id}, bypass_cooldown=True
+    ) == []
+    assert len(delivered) == 1
 
 
 @pytest.mark.asyncio

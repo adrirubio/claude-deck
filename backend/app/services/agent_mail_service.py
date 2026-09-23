@@ -19,6 +19,8 @@ from app.models.database import (
     AgentPaneBinding,
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
+    GithubAttemptScopeRevision,
     GithubWorkItem,
     MailAgentSession,
     MailExternalActor,
@@ -1411,6 +1413,45 @@ class AgentMailService:
         ).scalar_one()
         return unread, pending
 
+    async def _has_pending_continuation_ack(
+        self, db: AsyncSession, member_id: int, now: datetime
+    ) -> bool:
+        revision_id = (
+            await db.execute(
+                select(GithubAttemptScopeRevision.id)
+                .join(
+                    GithubWorkItem,
+                    GithubWorkItem.id == GithubAttemptScopeRevision.work_item_id,
+                )
+                .join(
+                    GithubApprovalRequest,
+                    GithubApprovalRequest.id == GithubAttemptScopeRevision.approval_request_id,
+                )
+                .join(
+                    MailMessage,
+                    MailMessage.id == GithubAttemptScopeRevision.delivery_message_id,
+                )
+                .where(
+                    GithubAttemptScopeRevision.owner_member_id == member_id,
+                    GithubAttemptScopeRevision.status == "approved",
+                    GithubAttemptScopeRevision.acknowledged_at.is_(None),
+                    or_(
+                        GithubAttemptScopeRevision.expires_at.is_(None),
+                        GithubAttemptScopeRevision.expires_at > now,
+                    ),
+                    GithubApprovalRequest.status == "approved",
+                    GithubApprovalRequest.request_kind == "continuation",
+                    GithubApprovalRequest.scope_revision_id == GithubAttemptScopeRevision.id,
+                    GithubWorkItem.owner_slot_id == GithubAttemptScopeRevision.owner_slot_id,
+                    GithubWorkItem.dispatch_nonce == GithubAttemptScopeRevision.dispatch_nonce,
+                    GithubWorkItem.dispatch_status == "escalated",
+                    MailMessage.recipient_member_id == member_id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return revision_id is not None
+
     async def delivery_counts_for_member(
         self,
         db: AsyncSession,
@@ -1691,7 +1732,10 @@ class AgentMailService:
         )
         try:
             if not force and not (unread or pending):
-                raise MailWakeError("inbox_empty")
+                if await self._has_pending_continuation_ack(db, member_id, now):
+                    audit.reason_code = "continuation_owner_ack"
+                else:
+                    raise MailWakeError("inbox_empty")
             session = await self._nudge_session_for_member(db, member_id, now)
             if actor_type == "session":
                 caller = await db.get(MailAgentSession, actor_session_id)

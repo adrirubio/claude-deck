@@ -103,6 +103,12 @@ async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypat
     )
 
     anonymous = await client.post(endpoint)
+    invalid_session = await client.post(
+        endpoint, headers={"X-Deck-Session-Token": "invalid-session"}
+    )
+    invalid_operator = await client.post(
+        endpoint, headers={"X-Deck-Operator-Token": "invalid-operator"}
+    )
     cross_member = await client.post(
         f"/api/v1/agent-mail/members/{other.id}/queue-inbox-check", headers=headers
     )
@@ -115,15 +121,26 @@ async def test_wake_route_requires_identity_and_inbox_work(client, db, monkeypat
     agent_force = await client.post(endpoint, headers=headers, json={"force": True, "reason": "maintenance"})
 
     assert (anonymous.status_code, anonymous.json()["detail"]) == (401, "wake_auth_required")
+    assert invalid_session.status_code == 401
+    assert invalid_operator.status_code == 401
     assert (cross_member.status_code, cross_member.json()["detail"]) == (403, "wake_member_forbidden")
     assert (empty.status_code, empty.json()["detail"]) == (409, "inbox_empty")
     assert (force_without_reason.status_code, force_without_reason.json()["detail"]) == (400, "wake_force_reason_required")
     assert (agent_force.status_code, agent_force.json()["detail"]) == (403, "wake_force_operator_only")
     attempts = (await db.execute(select(MailWakeAttempt))).scalars().all()
-    assert len(attempts) == 5
+    assert len(attempts) == 7
     assert {attempt.failure_code for attempt in attempts} == {
-        "wake_auth_required", "wake_member_forbidden", "inbox_empty",
-        "wake_force_reason_required", "wake_force_operator_only",
+        "wake_auth_required", "session_token_invalid", "operator_token_invalid",
+        "wake_member_forbidden", "inbox_empty", "wake_force_reason_required",
+        "wake_force_operator_only",
+    }
+    assert {
+        (attempt.actor_type, attempt.source)
+        for attempt in attempts
+        if attempt.failure_code in {"session_token_invalid", "operator_token_invalid"}
+    } == {
+        ("session_unverified", "manual_session"),
+        ("operator_unverified", "manual_operator"),
     }
     assert all(attempt.target_pane_id is None for attempt in attempts)
 

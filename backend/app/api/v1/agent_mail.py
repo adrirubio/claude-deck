@@ -484,10 +484,15 @@ async def queue_inbox_check(
 ):
     actor_type = "anonymous"
     actor_session_id = None
+    source = "manual_anonymous"
     try:
         if x_deck_session_token and x_deck_operator_token:
+            actor_type = "ambiguous"
+            source = "manual_ambiguous"
             raise HTTPException(status_code=400, detail="wake_principal_ambiguous")
         if x_deck_session_token:
+            actor_type = "session_unverified"
+            source = "manual_session"
             session = await mail_session(x_deck_session_token, db)
             if session is None:
                 raise HTTPException(status_code=401, detail="session_token_required")
@@ -498,8 +503,10 @@ async def queue_inbox_check(
             if body.force:
                 raise HTTPException(status_code=403, detail="wake_force_operator_only")
         elif x_deck_operator_token:
-            actor_type = "operator"
+            actor_type = "operator_unverified"
+            source = "manual_operator"
             await require_operator(x_deck_operator_token)
+            actor_type = "operator"
         else:
             raise HTTPException(status_code=401, detail="wake_auth_required")
         if body.force and not body.reason:
@@ -517,7 +524,7 @@ async def queue_inbox_check(
             db, member_id,
             actor_type=actor_type,
             actor_session_id=actor_session_id,
-            source="manual",
+            source=source,
             reason_code=body.reason,
             failure_code=str(exc.detail),
         )
