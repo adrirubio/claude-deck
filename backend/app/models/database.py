@@ -472,6 +472,7 @@ class MailAgentSession(Base):
     capability_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     bound_pane_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bound_pane_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     wake_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
     activity: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -479,6 +480,14 @@ class MailAgentSession(Base):
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MailPaneLifecycle(Base):
+    __tablename__ = "mail_pane_lifecycles"
+
+    pane_pid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pane_proc_start: Mapped[str] = mapped_column(String, primary_key=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class MailWakeAttempt(Base):

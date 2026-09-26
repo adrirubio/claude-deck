@@ -95,7 +95,7 @@ type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
 type LaunchOptionsByProvider = Partial<Record<AgentProviderId, ProviderLaunchOptionsResponse>>
 
-const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli']
+const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli', 'pi-cli']
 const DEFAULT_SLOT_COLOR_VALUE = 'default'
 
 const emptySlot: AgentTeamSlotInput = {
@@ -464,10 +464,10 @@ function SlotDialog({
             <Label>Provider</Label>
             <Select
               value={form.provider}
-              onValueChange={(provider) => update({
-                provider,
-                launch_mode: normalizeModeForProvider(provider, form.launch_mode, launchOptionsByProvider),
-              })}
+              onValueChange={(provider) => {
+                update({ provider, launch_mode: normalizeModeForProvider(provider, form.launch_mode, launchOptionsByProvider) })
+                if (provider === 'pi-cli') updateLaunchOptions({ platform: 'openrouter' })
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -477,6 +477,7 @@ function SlotDialog({
                 <SelectItem value="claude-code">Claude Code</SelectItem>
                 <SelectItem value="copilot-cli">GitHub Copilot CLI</SelectItem>
                 <SelectItem value="opencode-cli">OpenCode CLI</SelectItem>
+                <SelectItem value="pi-cli">Pi (OpenRouter)</SelectItem>
               </SelectContent>
             </Select>
           </div>

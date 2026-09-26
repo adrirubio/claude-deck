@@ -219,6 +219,18 @@ export function InstallTab({
 
   return (
     <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Pi Agent Mail</CardTitle>
+          <CardDescription>Explicit Deck launches only; no global Pi configuration is changed.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Badge variant={status.pi_mail_ready ? 'secondary' : 'destructive'}>
+            {status.pi_mail_ready ? 'Extension ready' : 'Extension unavailable'}
+          </Badge>
+          {!status.pi_mail_ready && <p className="mt-2 text-sm text-muted-foreground">{status.pi_mail_reason || 'Prepare the Deck Pi integration package before launching.'}</p>}
+        </CardContent>
+      </Card>
       <div className="flex justify-end">
         <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
           <RefreshCw className="mr-2 h-4 w-4" />

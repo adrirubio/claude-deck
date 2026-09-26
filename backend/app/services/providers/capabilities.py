@@ -39,6 +39,11 @@ def capability(state: str, label: str, reason: str | None = None) -> dict[str, s
 
 
 PROVIDER_CAPABILITY_MATRIX: dict[str, dict[str, dict[str, str]]] = {
+    "pi-cli": {
+        "spawn": capability("write_capable", "Spawn Sessions", "Deck can launch Pi with its opt-in mail extension."),
+        "resume": capability("write_capable", "Resume Sessions", "Exact project-local Pi sessions can be resumed."),
+        "sessions": capability("read_only", "Agent Bridge Sessions", "Discover running Pi panes; transcript inventory is not exposed."),
+    },
     "claude-code": {
         "config": capability("write_capable", "Configuration", "Claude Code JSON settings can be viewed and edited."),
         "sessions": capability("read_only", "Session History", "Claude Code transcript history is available."),

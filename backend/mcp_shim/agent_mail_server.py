@@ -1,4 +1,5 @@
 """Claude Deck Agent Mail MCP server over stdio."""
+import asyncio
 import os
 import threading
 import time
@@ -20,6 +21,9 @@ HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0
 
 mcp = FastMCP("claude-deck-mail")
 _register_lock = threading.Lock()
+_heartbeat_stop = threading.Event()
+_heartbeat_thread: threading.Thread | None = None
+_request_budget = threading.local()
 
 _state: dict[str, Any] = {
     "member_id": None,
@@ -27,6 +31,8 @@ _state: dict[str, Any] = {
     "session_key": f"mcp:{uuid.uuid4().hex[:12]}",
     "offline_until": 0.0,
     "last_error": None,
+    "closing": False,
+    "closed": False,
 }
 
 
@@ -81,7 +87,33 @@ def _http_error_result(exc: httpx.HTTPStatusError) -> dict:
     }
 
 
+async def _bounded_http_request(method: str, url: str, budget: float, timeout, kwargs) -> httpx.Response:
+    async with asyncio.timeout(budget):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.request(method, url, **kwargs)
+
+
+def _run_bounded_http_request(method: str, url: str, budget: float, timeout, kwargs) -> httpx.Response:
+    results = []
+    failures = []
+    def run():
+        try:
+            results.append(asyncio.run(_bounded_http_request(method, url, budget, timeout, kwargs)))
+        except Exception as exc:
+            failures.append(exc)
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=budget)
+    if worker.is_alive():
+        raise TimeoutError("Deck request total deadline expired")
+    if failures:
+        raise failures[0]
+    return results[0]
+
+
 def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
+    if _state.get("closing") and path != "/agent/close":
+        return {"ok": False, "error": {"code": "mail_generation_closing"}}
     now = time.monotonic()
     if now < _state.get("offline_until", 0.0):
         return _unreachable_result(_state.get("last_error") or "Claude Deck is unavailable.")
@@ -92,8 +124,19 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["X-Deck-Session-Token"] = session_token
         kwargs["headers"] = headers
+    budget = kwargs.pop("total_timeout", None)
+    deadline = getattr(_request_budget, "deadline", None)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        budget = min(budget, remaining) if budget is not None else remaining
+    if budget is not None and budget <= 0:
+        return {"ok": False, "error": {"code": "mail_startup_expired"}}
     try:
-        response = httpx.request(method, url, timeout=DECK_HTTP_TIMEOUT, **kwargs)
+        timeout = kwargs.pop("timeout", DECK_HTTP_TIMEOUT)
+        response = (
+            _run_bounded_http_request(method, url, budget, timeout, kwargs)
+            if budget is not None else httpx.request(method, url, timeout=timeout, **kwargs)
+        )
         response.raise_for_status()
         _state["offline_until"] = 0.0
         _state["last_error"] = None
@@ -102,10 +145,14 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
         _state["offline_until"] = 0.0
         _state["last_error"] = None
         return _http_error_result(exc)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, TimeoutError) as exc:
         _state["offline_until"] = time.monotonic() + OFFLINE_BACKOFF_SECONDS
         _state["last_error"] = str(exc)
-        return _unreachable_result(str(exc))
+        result = _unreachable_result(str(exc))
+        if method.upper() not in {"GET", "HEAD"}:
+            result["outcome"] = "unknown"
+            result["suggestion"] = "Do not repeat this mutation blindly; reconcile its outcome first."
+        return result
 
 
 def _request(method: str, path: str, **kwargs) -> dict:
@@ -148,6 +195,8 @@ def _bridge_session_path(target: str) -> str:
 
 def _ensure_registered() -> dict:
     with _register_lock:
+        if _state.get("closing"):
+            return {"ok": False, "error": {"code": "mail_generation_closing"}}
         payload = {
             "source": "mcp",
             "provider": PROVIDER,
@@ -161,16 +210,36 @@ def _ensure_registered() -> dict:
             payload["team_preset_id"] = team_preset_id
         if team_slot_id is not None:
             payload["team_slot_id"] = team_slot_id
-        result = _request(
-            "POST",
-            "/agent/register",
-            json=payload,
-        )
+        deadline = time.monotonic() + 15.0
+        outer_deadline = getattr(_request_budget, "deadline", None)
+        if outer_deadline is not None:
+            deadline = min(deadline, outer_deadline)
+        delay = 0.25
+        while True:
+            remaining = deadline - time.monotonic()
+            if PROVIDER == "pi-cli" and (remaining <= 0 or _heartbeat_stop.is_set()):
+                return {"ok": False, "error": {"code": "mail_startup_expired"}}
+            result = _request("POST", "/agent/register", json=payload, **(
+                {"total_timeout": remaining} if PROVIDER == "pi-cli" else {}
+            ))
+            if (
+                PROVIDER != "pi-cli"
+                or result.get("ok")
+                or result.get("error", {}).get("code") != "bind_pending"
+                or time.monotonic() >= deadline
+                or _heartbeat_stop.is_set()
+            ):
+                break
+            if _heartbeat_stop.wait(min(delay, max(0.0, deadline - time.monotonic()))):
+                break
+            delay = min(delay * 2, 1.0)
         if result["ok"]:
             _state["member_id"] = result["data"]["member"]["id"]
             minted = result["data"].get("capability_token")
             if minted:
                 _state["capability_token"] = minted
+            if PROVIDER == "pi-cli" and _heartbeat_thread is None and not _heartbeat_stop.is_set():
+                _start_heartbeat_thread()
         return result
 
 
@@ -182,18 +251,46 @@ def _heartbeat_once() -> float:
 
 
 def _heartbeat_loop() -> None:
-    while True:
-        time.sleep(_heartbeat_once())
+    while not _heartbeat_stop.is_set():
+        if _heartbeat_stop.wait(_heartbeat_once()):
+            break
 
 
 def _start_heartbeat_thread() -> threading.Thread:
+    global _heartbeat_thread
     thread = threading.Thread(
         target=_heartbeat_loop,
         name="claude-deck-agent-mail-heartbeat",
         daemon=True,
     )
     thread.start()
+    _heartbeat_thread = thread
     return thread
+
+
+def __deck_mail_close_generation() -> dict:
+    """Private lifecycle control; not a model tool."""
+    if _state.get("closed"):
+        return {"ok": True, "closed": True}
+    _state["closing"] = True
+    _heartbeat_stop.set()
+    if not _register_lock.acquire(timeout=2.0):
+        return {"ok": False, "error": {"code": "close_unconfirmed"}}
+    try:
+        if not _state.get("capability_token"):
+            return {"ok": False, "error": {"code": "close_unconfirmed"}}
+        result = _request("POST", "/agent/close", timeout=httpx.Timeout(3.0), total_timeout=3.0)
+        if result.get("ok") and result.get("data", {}).get("closed") is True:
+            _state["closed"] = True
+            return {"ok": True, "closed": True}
+        return {"ok": False, "error": {"code": "close_unconfirmed"}}
+    finally:
+        _register_lock.release()
+
+
+if PROVIDER == "pi-cli":
+    mcp.tool()(__deck_mail_close_generation)
+    mcp._tool_manager.get_tool("__deck_mail_close_generation").parameters["additionalProperties"] = False
 
 
 def _counts() -> dict:
@@ -221,6 +318,16 @@ def deck_whoami() -> dict:
     """Register with Claude Deck Agent Mail and return your participant identity, role,
     charter, repo, live status, and unread/pending inbox counts. Call this once when
     starting coordinated work."""
+    if PROVIDER != "pi-cli":
+        return _whoami()
+    _request_budget.deadline = time.monotonic() + 15.0
+    try:
+        return _whoami()
+    finally:
+        del _request_budget.deadline
+
+
+def _whoami() -> dict:
     err = _guard()
     if err:
         return err
@@ -980,5 +1087,6 @@ def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
 
 
 if __name__ == "__main__":
-    _start_heartbeat_thread()
+    if PROVIDER != "pi-cli":
+        _start_heartbeat_thread()
     mcp.run()

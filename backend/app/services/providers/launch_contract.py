@@ -10,12 +10,14 @@ from app.services.providers.platform_env import (
 
 PROVIDER_COPILOT_CLI = "copilot-cli"
 PROVIDER_OPENCODE_CLI = "opencode-cli"
+PROVIDER_PI_CLI = "pi-cli"
 
 CODEX_REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 COPILOT_REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 COPILOT_CONTEXT_TIERS = ("default", "long_context")
 
 PROVIDER_LAUNCH_MODES: dict[str, tuple[str, ...]] = {
+    PROVIDER_PI_CLI: ("plain", "resume"),
     PROVIDER_CLAUDE_CODE: ("plain", "worktree", "resume"),
     PROVIDER_CODEX_CLI: ("plain", "resume", "fork"),
     PROVIDER_COPILOT_CLI: ("plain", "resume"),
@@ -23,6 +25,7 @@ PROVIDER_LAUNCH_MODES: dict[str, tuple[str, ...]] = {
 }
 
 PROVIDER_REASONING_EFFORTS: dict[str, tuple[str, ...]] = {
+    PROVIDER_PI_CLI: ("off", "minimal", "low", "medium", "high", "xhigh", "max"),
     PROVIDER_CODEX_CLI: CODEX_REASONING_EFFORTS,
     PROVIDER_COPILOT_CLI: COPILOT_REASONING_EFFORTS,
 }
@@ -35,6 +38,7 @@ PROVIDER_BEDROCK_SUPPORT: dict[str, bool] = {
 }
 
 PROVIDER_OPTION_KEYS: dict[str, tuple[str, ...]] = {
+    PROVIDER_PI_CLI: ("model", "platform", "reasoning_effort", "prompt", "use_last", "session_id"),
     PROVIDER_CLAUDE_CODE: (
         "skip_permissions",
         "platform",
@@ -93,6 +97,7 @@ PROVIDER_OPTION_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 MODEL_EXAMPLES: dict[str, tuple[dict[str, str], ...]] = {
+    PROVIDER_PI_CLI: ({"value": "moonshotai/kimi-k3", "label": "Kimi K3 (OpenRouter)", "source": "example"},),
     PROVIDER_CLAUDE_CODE: (
         {
             "value": "arn:aws:bedrock:REGION:ACCOUNT:inference-profile/PROFILE_ID",

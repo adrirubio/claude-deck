@@ -149,7 +149,7 @@ def _normalized_credential_repo(path: str) -> str:
 def _bad_request(exc: ValueError) -> HTTPException:
     if isinstance(exc, ProviderLaunchError):
         return HTTPException(
-            status_code=400,
+            status_code=422 if exc.block_code == "pi_platform_null" else 400,
             detail={"message": str(exc), "block_code": exc.block_code},
         )
     return HTTPException(status_code=400, detail=str(exc))

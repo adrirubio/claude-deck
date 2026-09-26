@@ -104,6 +104,9 @@ export interface MailInboxResponse {
 }
 
 export interface AgentMailInstallStatus {
+  pi_cli_available?: boolean
+  pi_mail_ready?: boolean
+  pi_mail_reason?: string | null
   claude_code_hooks: string[]
   claude_code_hooks_missing: string[]
   claude_code_mcp_installed: boolean

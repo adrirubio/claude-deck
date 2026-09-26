@@ -8,9 +8,11 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import (
+    close_mail_session,
     mail_session,
     require_mail_session,
     require_operator,
@@ -18,10 +20,12 @@ from app.api.v1.deps import (
 )
 from app.config import settings
 from app.database import get_db
+from app.utils import peer_process
 from app.models.database import (
     GithubApprovalRequest,
     GithubWorkItem,
     MailAgentSession,
+    MailPaneLifecycle,
     MailMessage,
     MailTeamMember,
     MailWakeAttempt,
@@ -670,6 +674,8 @@ async def register_agent(
     db: AsyncSession = Depends(get_db),
 ):
     existing = await agent_mail_service.peek_session_by_key(db, request.session_key)
+    if existing is not None and existing.closed_at is not None:
+        raise HTTPException(status_code=409, detail="session_token_closed")
     hashless_rebind = existing is not None and existing.capability_token_hash is None
     if hashless_rebind and settings.mail_capability_tokens_required:
         raise HTTPException(status_code=409, detail="token_required_for_rebind")
@@ -723,14 +729,16 @@ async def register_agent(
             "team_preset_id": binding.preset_id if binding is not None else None,
         }
     )
-    member, session = await agent_mail_service.register_session(db, request)
-    if pane is not None:
-        session.bound_pane_pid = pane.pane_pid
-        session.bound_pane_proc_start = pane.pane_proc_start
-        await db.commit()
-    capability_token = (
-        None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
-    )
+    try:
+        member, session = await agent_mail_service.register_session(
+            db, request, pane=pane, require_existing_token=settings.mail_capability_tokens_required,
+            capability_token=x_deck_session_token,
+        )
+        capability_token = (
+            None if hashless_rebind else await agent_mail_service.ensure_capability_token(db, session)
+        )
+    except MailAuthorityError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     members = await agent_mail_service.list_team(db)
     member_resp = next(candidate for candidate in members if candidate.id == member.id)
     session_resp = next(
@@ -741,6 +749,48 @@ async def register_agent(
         session=session_resp,
         capability_token=capability_token,
     )
+
+
+@router.post("/agent/close")
+async def close_agent(
+    session: MailAgentSession = Depends(close_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    await db.execute(update(MailAgentSession).where(
+        MailAgentSession.id == session.id, MailAgentSession.closed_at.is_(None)
+    ).values(closed_at=datetime.utcnow(), mailbox_status="offline", wake_enabled=False))
+    await db.commit()
+    return {"closed": True}
+
+
+class DeadPaneRetirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pane_pid: int = Field(gt=0)
+    pane_proc_start: str = Field(pattern=r"^[0-9]+$")
+
+
+@router.post("/sessions/retire-dead-pane")
+async def retire_dead_pane(
+    request: DeadPaneRetirement,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    if peer_process.pane_is_alive_strict(request.pane_pid, request.pane_proc_start) is not False:
+        raise HTTPException(status_code=409, detail="pane_not_confirmed_dead")
+    await db.execute(sqlite_insert(MailPaneLifecycle).values(
+        pane_pid=request.pane_pid, pane_proc_start=request.pane_proc_start,
+        retired_at=datetime.utcnow(),
+    ).on_conflict_do_update(
+        index_elements=["pane_pid", "pane_proc_start"],
+        set_={"retired_at": datetime.utcnow()},
+    ))
+    retired = await db.execute(update(MailAgentSession).where(
+        MailAgentSession.bound_pane_pid == request.pane_pid,
+        MailAgentSession.bound_pane_proc_start == request.pane_proc_start,
+        MailAgentSession.closed_at.is_(None),
+    ).values(closed_at=datetime.utcnow(), mailbox_status="offline", wake_enabled=False))
+    await db.commit()
+    return {"retired_count": retired.rowcount}
 
 
 @router.get("/agent/inbox", response_model=MailInboxResponse)

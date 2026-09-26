@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from app.services.providers import get_provider
-from app.services.providers.base import SpawnCommandOptions
+from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.providers.claude_code import ClaudeCodeProvider
 from app.services.providers.platform_env import build_platform_env
 
@@ -73,6 +73,14 @@ def spawn_session(
     if provider.id == "claude-code" and options.mode == "worktree" and not options.worktree_name:
         options = SpawnCommandOptions(**{**options.__dict__, "worktree_name": name})
     command = provider.build_spawn_command(options)
+    if provider.id == "pi-cli":
+        from app.services.pi_mail_readiness import integration_path, pi_mail_environment, pi_mail_readiness
+
+        ready, reason = pi_mail_readiness()
+        if not ready:
+            raise ProviderLaunchError(f"agent_mail_not_configured: {reason}", "agent_mail_not_configured")
+        command[1:1] = ["--extension", str(integration_path() / "extension.ts")]
+        extra_env = {**(extra_env or {}), **pi_mail_environment()}
     shell_command = " ".join(shlex.quote(part) for part in command)
 
     platform_env = build_platform_env(

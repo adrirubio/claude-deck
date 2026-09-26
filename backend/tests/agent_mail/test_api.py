@@ -469,7 +469,7 @@ async def test_wake_binding_refuses_two_matching_panes(db, monkeypatch):
         await agent_mail_service._nudge_session_for_member(db, member.id, datetime.utcnow())
 
 
-async def _dispatch_approval_fixture(db):
+async def _dispatch_approval_fixture(db, provider="codex-cli"):
     preset = AgentTeamPreset(name="Approval", description="", created_by="test")
     db.add(preset)
     await db.flush()
@@ -482,7 +482,7 @@ async def _dispatch_approval_fixture(db):
             preset_id=preset.id,
             position=position,
             display_name=name,
-            provider="codex-cli",
+            provider=provider,
             repo_id="approval",
             repo_path="/tmp/approval",
             repo_name="approval",
@@ -507,7 +507,7 @@ async def _dispatch_approval_fixture(db):
         token = f"token-{position}"
         session = MailAgentSession(
             member_id=member.id,
-            provider="codex-cli",
+            provider=provider,
             source="mcp",
             session_key=f"mcp:approval:{position}",
             cwd="/tmp/approval",
@@ -550,8 +550,8 @@ async def _dispatch_approval_fixture(db):
     return item, members, tokens
 
 
-async def _continuation_approval_fixture(db):
-    item, members, tokens = await _dispatch_approval_fixture(db)
+async def _continuation_approval_fixture(db, provider="codex-cli"):
+    item, members, tokens = await _dispatch_approval_fixture(db, provider)
     scope = await db.get(TeamGithubScope, item.scope_id)
     scope.continuation_enabled = True
     scope.github_auth_mode = "ambient"
@@ -608,12 +608,13 @@ def _continuation_request_body(item):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["codex-cli", "pi-cli"])
 async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
-    client, db, monkeypatch
+    client, db, monkeypatch, provider
 ):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     item, _scope, members, tokens, _workspace = await _continuation_approval_fixture(
-        db
+        db, provider
     )
     _stub_continuation_github(monkeypatch)
 
@@ -666,6 +667,12 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
         "decision": "approved",
         "reason": "Approved bounded continuation",
     }
+    cross_decision = await client.post(
+        "/api/v1/agent-mail/continuation-decisions",
+        headers={"X-Deck-Session-Token": tokens[1]},
+        json=decision_body,
+    )
+    assert cross_decision.status_code == 403
     decided = await client.post(
         "/api/v1/agent-mail/continuation-decisions",
         headers={"X-Deck-Session-Token": tokens[0]},
@@ -725,6 +732,12 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
             )
         ).scalars().all()
     ) == 1
+    cross_ack = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/{revision.revision}/ack",
+        headers={"X-Deck-Session-Token": tokens[0]},
+        json={"dispatch_nonce": item.dispatch_nonce, "lease_token": "lease-secret"},
+    )
+    assert cross_ack.status_code == 403
     activated = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/scope-revisions/"
         f"{revision.revision}/ack",
@@ -767,6 +780,51 @@ async def test_continuation_request_and_explicit_leader_decision_are_idempotent(
         )
     ).scalar_one()
     assert receipt.acked_at is not None
+
+
+@pytest.mark.asyncio
+async def test_pi_distinct_leader_and_read_but_unacked_owner_wakes_are_exact(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    item, _scope, members, tokens, _workspace = await _continuation_approval_fixture(db, "pi-cli")
+    _stub_continuation_github(monkeypatch)
+    sessions = (await db.execute(select(MailAgentSession).where(MailAgentSession.source == "mcp"))).scalars().all()
+    for position, session in enumerate(sessions):
+        session.wake_enabled = True
+        db.add(MailAgentSession(member_id=session.member_id, provider="pi-cli", source="observed", session_key=f"tmux:%{position}", cwd=session.cwd, team_preset_id=session.team_preset_id, team_slot_id=session.team_slot_id, pid=session.bound_pane_pid, pane_id=f"%{position}", tmux_target=f"fixture:0.{position}", mailbox_status="observed", last_seen_at=datetime.utcnow()))
+    await db.commit()
+    async def no_sync(_db):
+        return None
+    monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", no_sync)
+    commands = []
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        pane = command[command.index("-t") + 1]
+        return SimpleNamespace(returncode=0, stderr="", stdout=f"{pane}|{1000 + int(pane[1:])}" if command[1] == "display-message" else "")
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", fake_run)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _: None)
+    proposed = await client.post(f"/api/v1/agent-teams/github-work-items/{item.id}/continuation-requests", headers={"X-Deck-Session-Token": tokens[1]}, json=_continuation_request_body(item))
+    assert proposed.status_code == 200
+    approval_id = proposed.json()["approval"]["id"]
+    leader_read = await client.get("/api/v1/agent-mail/agent/inbox?mark_read=true", headers={"X-Deck-Session-Token": tokens[0]})
+    assert leader_read.status_code == 200
+    commands.clear()
+    assert await agent_mail_service.auto_nudge_members(db, {members[0].id}, bypass_cooldown=True)
+    assert [command[3] for command in commands if command[1] == "send-keys"] == ["%0", "%0"]
+    decided = await client.post("/api/v1/agent-mail/continuation-decisions", headers={"X-Deck-Session-Token": tokens[0]}, json={"approval_request_id": approval_id, "work_item_id": item.id, "dispatch_nonce": item.dispatch_nonce, "decision": "approved", "reason": "Bounded fixture"})
+    assert decided.status_code == 200
+    owner_read = await client.get("/api/v1/agent-mail/agent/inbox?mark_read=true", headers={"X-Deck-Session-Token": tokens[1]})
+    assert owner_read.status_code == 200
+    assert await agent_mail_service.counts_for_member(db, members[1].id) == (0, 0)
+    revision = await db.get(GithubAttemptScopeRevision, proposed.json()["revision"]["id"])
+    commands.clear()
+    assert await github_approval_service.nudge_approved_continuation_owner(db, revision, cooldown=timedelta(seconds=0))
+    assert [command[3] for command in commands if command[1] == "send-keys"] == ["%1", "%1"]
+    last = (await db.execute(select(MailWakeAttempt).order_by(MailWakeAttempt.id.desc()))).scalars().first()
+    assert (last.result, last.target_pane_id, last.reason_code) == ("delivered", "%1", "continuation_owner_ack")
+    assert (await client.post("/api/v1/agent-mail/agent/close", headers={"X-Deck-Session-Token": tokens[1]})).status_code == 200
+    commands.clear()
+    assert await agent_mail_service.auto_nudge_members(db, {members[1].id}, bypass_cooldown=True) == []
+    assert not any(command[1] == "send-keys" for command in commands)
 
 
 @pytest.mark.asyncio
