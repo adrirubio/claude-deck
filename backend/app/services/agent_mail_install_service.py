@@ -731,6 +731,9 @@ async def _backup_before_mutation(db: AsyncSession, scope: str) -> None:
 
 
 async def get_install_status() -> AgentMailInstallStatus:
+    from app.services.pi_mail_readiness import pi_mail_readiness
+
+    pi_ready, pi_reason = pi_mail_readiness()
     installed_hooks = _installed_mail_hooks()
     installed_events = sorted(
         {
@@ -752,6 +755,9 @@ async def get_install_status() -> AgentMailInstallStatus:
     ]
     server = await mcp_service.get_server(MCP_SERVER_NAME, "user")
     return AgentMailInstallStatus(
+        pi_cli_available=shutil.which("pi") is not None,
+        pi_mail_ready=pi_ready,
+        pi_mail_reason=pi_reason,
         claude_code_hooks=installed_events,
         claude_code_hooks_missing=missing,
         claude_code_mcp_installed=server is not None,

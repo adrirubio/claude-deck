@@ -29,7 +29,7 @@ If you only use Claude Code casually with mostly default config, Claude Deck may
 ## Features
 
 - **Dashboard** — Overview of local agent configuration with Claude Code context window visualizer
-- **Provider Switcher** — Move between Claude Code, Codex CLI, and GitHub Copilot CLI surfaces without leaving the app
+- **Provider Switcher** — Move between Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode, and Pi surfaces without leaving the app
 - **Config Editor** — Browse, inspect, and edit Claude Code JSON settings or Codex TOML settings, including Codex profiles, runtime options, and feature flags
 - **MCP Servers** — Add, edit, test, and manage MCP server connections with OAuth support. Browse and install servers from the [MCP Registry](https://registry.modelcontextprotocol.io). View tools, resources, and prompts. Supports stdio, HTTP, and SSE transports
 - **Slash Commands** — Browse, create, and edit custom commands (user and project scope)
@@ -111,8 +111,10 @@ Claude Deck must run in the same environment where your agent CLIs and credentia
 
 - Python 3.11+
 - Node.js 18+
-- At least one supported local agent CLI installed on the same host: Claude Code, Codex CLI, GitHub Copilot CLI, or OpenCode CLI
+- At least one supported local agent CLI installed on the same host: Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode CLI, or Pi
 - **Linux** for agent-team pane binding. Deck reads `/proc/net/tcp` and `/proc/<pid>/stat` to derive which tmux pane a registering agent is running in. On macOS or Windows every other feature works, but agents register unbound, and the Agent Mail capability-token enforcement described in `docs/deploy/pr0-capability-tokens-rollout.md` cannot be turned on
+
+Pi integration requires Pi 0.87.1, Node >=22.19.0, and the repository-local Agent Mail extension dependencies. It supports OpenRouter (default model `moonshotai/kimi-k3`), plain launches and exact project-local resume. No global Pi configuration is installed, and Pi tools are not sandboxed by Deck. See [Pi rollout and team migration](docs/deploy/pi-provider-rollout.md) before deployment or replacing existing team sessions.
 
 ```bash
 git clone https://github.com/adrirubio/claude-deck.git

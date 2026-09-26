@@ -36,6 +36,7 @@ const PROVIDER_FILTERS: { value: ProviderFilter; label: string }[] = [
   { value: 'codex-cli', label: 'Codex' },
   { value: 'copilot-cli', label: 'Copilot' },
   { value: 'opencode-cli', label: 'OpenCode' },
+  { value: 'pi-cli', label: 'Pi' },
 ]
 
 function addTarget(prev: string[], target: string): string[] {
@@ -163,6 +164,7 @@ export function CCBridgePage() {
     'codex-cli': sessions.filter((session) => session.provider === 'codex-cli').length,
     'copilot-cli': sessions.filter((session) => session.provider === 'copilot-cli').length,
     'opencode-cli': sessions.filter((session) => session.provider === 'opencode-cli').length,
+    'pi-cli': sessions.filter((session) => session.provider === 'pi-cli').length,
   }
 
   const initialDialogProvider = providerFilter === 'all' ? selectedProviderId : providerFilter
@@ -291,7 +293,7 @@ export function CCBridgePage() {
             <div className="flex items-baseline gap-2 flex-wrap min-w-0">
               <h1 className="text-base font-semibold">Agent Bridge</h1>
               <span className="text-xs text-muted-foreground">
-                Discover and observe Claude Code, Codex, and Copilot sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
+                Discover and observe agent CLI sessions running in tmux. Select up to 4 sessions to monitor simultaneously.
               </span>
             </div>
             <div className="ml-auto flex rounded-md bg-background border p-0.5 shrink-0">

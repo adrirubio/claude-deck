@@ -2139,6 +2139,9 @@ class MailAgentRegisterResponse(BaseModel):
 
 
 class AgentMailInstallStatus(BaseModel):
+    pi_cli_available: bool = False
+    pi_mail_ready: bool = False
+    pi_mail_reason: Optional[str] = None
     claude_code_hooks: List[str]
     claude_code_hooks_missing: List[str]
     claude_code_mcp_installed: bool
@@ -2204,6 +2207,11 @@ class AgentTeamSlotCreate(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str = "plain"
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    @model_validator(mode="after")
+    def validate_pi_platform(self):
+        if self.provider == "pi-cli" and "platform" in self.launch_options and self.launch_options["platform"] is None:
+            raise ValueError("launch_options.platform must not be null")
+        return self
     area_labels: Optional[List[str]] = None
     expertise: Optional[str] = None
     enabled: bool = True

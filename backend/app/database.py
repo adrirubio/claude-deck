@@ -671,6 +671,8 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
     result = await conn.execute(text("PRAGMA table_info(mail_agent_sessions)"))
     session_columns = {row[1] for row in result.fetchall()}
+    if session_columns and "closed_at" not in session_columns:
+        await conn.execute(text("ALTER TABLE mail_agent_sessions ADD COLUMN closed_at DATETIME"))
     if session_columns and "team_preset_id" not in session_columns:
         await conn.execute(
             text("ALTER TABLE mail_agent_sessions ADD COLUMN team_preset_id INTEGER")

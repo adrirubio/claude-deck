@@ -1,6 +1,7 @@
 """Agent Mail: durable team members, ephemeral sessions, messages, delivery context."""
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -11,8 +12,9 @@ from uuid import uuid4
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -23,6 +25,7 @@ from app.models.database import (
     GithubAttemptScopeRevision,
     GithubWorkItem,
     MailAgentSession,
+    MailPaneLifecycle,
     MailExternalActor,
     MailMessage,
     MailReceipt,
@@ -53,7 +56,7 @@ OBSERVED_TTL_SECONDS = 300
 STALE_REQUEST_MINUTES = 15
 AUTO_NUDGE_COOLDOWN_SECONDS = 30
 TMUX_ENTER_DELAY_SECONDS = 0.25
-TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"}
+TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
 INBOX_CHECK_PROMPT = (
     "Claude Deck Agent Mail: please call `deck_check_inbox(unread_only=False)` now, "
     "then answer any pending context requests or handoffs before continuing."
@@ -184,8 +187,22 @@ class AgentMailService:
         return await self._get_or_create_member_by_values(db, self._slot_member_values(slot))
 
     async def register_session(
-        self, db: AsyncSession, request: MailAgentRegisterRequest
+        self, db: AsyncSession, request: MailAgentRegisterRequest,
+        *, pane: Optional[peer_process.PeerPane] = None,
+        require_existing_token: bool = False, capability_token: str | None = None,
     ) -> tuple[MailTeamMember, MailAgentSession]:
+        if pane is not None:
+            await db.execute(sqlite_insert(MailPaneLifecycle).values(
+                pane_pid=pane.pane_pid, pane_proc_start=pane.pane_proc_start,
+            ).on_conflict_do_nothing())
+            admission = await db.execute(update(MailPaneLifecycle).where(
+                MailPaneLifecycle.pane_pid == pane.pane_pid,
+                MailPaneLifecycle.pane_proc_start == pane.pane_proc_start,
+                MailPaneLifecycle.retired_at.is_(None),
+            ).values(retired_at=None))
+            if admission.rowcount != 1:
+                await db.rollback()
+                raise MailAuthorityError("pane_retired", status_code=409)
         inferred_team_preset_id, inferred_team_slot_id = await self._infer_team_context_from_process(
             db,
             request,
@@ -207,6 +224,26 @@ class AgentMailService:
             select(MailAgentSession).where(MailAgentSession.session_key == request.session_key)
         )
         session = result.scalar_one_or_none()
+        if session is not None:
+            guard = await db.execute(update(MailAgentSession).where(
+                MailAgentSession.id == session.id, MailAgentSession.closed_at.is_(None),
+            ).values(last_seen_at=datetime.utcnow()))
+            if guard.rowcount != 1:
+                await db.rollback()
+                raise MailAuthorityError("session_token_closed", status_code=409)
+            if require_existing_token:
+                if not capability_token or not session.capability_token_hash:
+                    await db.rollback()
+                    raise MailAuthorityError("token_required_for_rebind", status_code=409)
+                if not hmac.compare_digest(session.capability_token_hash, self.hash_capability_token(capability_token)):
+                    await db.rollback()
+                    raise MailAuthorityError("session_token_invalid", status_code=401)
+                if session.team_slot_id is not None and (
+                    pane is None or session.bound_pane_pid != pane.pane_pid
+                    or session.bound_pane_proc_start != pane.pane_proc_start
+                ):
+                    await db.rollback()
+                    raise MailAuthorityError("session_token_stale", status_code=401)
         is_new_session = session is None
         old_member_id = session.member_id if session is not None else None
         old_provider = session.provider if session is not None else None
@@ -273,7 +310,14 @@ class AgentMailService:
             session.bound_pane_proc_start = None
         session.mailbox_status = "connected"
         session.last_seen_at = datetime.utcnow()
-        await db.commit()
+        if pane is not None:
+            session.bound_pane_pid = pane.pane_pid
+            session.bound_pane_proc_start = pane.pane_proc_start
+        try:
+            await db.commit()
+        except IntegrityError as exc:
+            await db.rollback()
+            raise MailAuthorityError("session_key_conflict", status_code=409) from exc
         await db.refresh(member)
         await db.refresh(session)
         return member, session
@@ -304,7 +348,18 @@ class AgentMailService:
         if session.capability_token_hash is not None:
             return None
         token = secrets.token_urlsafe(32)
-        session.capability_token_hash = self.hash_capability_token(token)
+        session_id = session.id
+        written = await db.execute(update(MailAgentSession).where(
+            MailAgentSession.id == session.id,
+            MailAgentSession.closed_at.is_(None),
+            MailAgentSession.capability_token_hash.is_(None),
+        ).values(capability_token_hash=self.hash_capability_token(token)))
+        if written.rowcount != 1:
+            await db.rollback()
+            current = await db.get(MailAgentSession, session_id, populate_existing=True)
+            if current is not None and current.closed_at is None and current.capability_token_hash:
+                return None
+            raise MailAuthorityError("session_token_closed", status_code=409)
         await db.commit()
         await db.refresh(session)
         return token
@@ -448,12 +503,17 @@ class AgentMailService:
             select(MailAgentSession).where(MailAgentSession.session_key == session_key)
         )
         session = result.scalar_one_or_none()
-        if session is None:
+        if session is None or session.closed_at is not None:
             return None
-        session.last_seen_at = datetime.utcnow()
-        session.mailbox_status = "connected" if session.source != "observed" else "observed"
+        values = {
+            "last_seen_at": datetime.utcnow(),
+            "mailbox_status": "connected" if session.source != "observed" else "observed",
+        }
         if activity:
-            session.activity = activity[:200]
+            values["activity"] = activity[:200]
+        await db.execute(update(MailAgentSession).where(
+            MailAgentSession.id == session.id, MailAgentSession.closed_at.is_(None)
+        ).values(**values))
         await db.commit()
         return session
 
@@ -473,6 +533,7 @@ class AgentMailService:
             .where(
                 MailAgentSession.member_id == member_id,
                 MailAgentSession.source == "mcp",
+                MailAgentSession.closed_at.is_(None),
             )
             .order_by(MailAgentSession.last_seen_at.desc())
             .limit(1)
@@ -480,8 +541,9 @@ class AgentMailService:
         session = result.scalar_one_or_none()
         if session is None:
             return
-        session.last_seen_at = datetime.utcnow()
-        session.mailbox_status = "connected"
+        await db.execute(update(MailAgentSession).where(
+            MailAgentSession.id == session.id, MailAgentSession.closed_at.is_(None)
+        ).values(last_seen_at=datetime.utcnow(), mailbox_status="connected"))
         await db.commit()
 
     async def sync_observed_sessions(
@@ -776,6 +838,8 @@ class AgentMailService:
             return False
 
     def _effective_status(self, session: MailAgentSession, now: datetime) -> str:
+        if session.closed_at is not None:
+            return "offline"
         if session.source == "mcp" and session.pid:
             if not self._pid_is_running(session.pid):
                 return "offline"
@@ -1798,6 +1862,7 @@ class AgentMailService:
                     MailAgentSession.member_id == member_id,
                     MailAgentSession.source == "mcp",
                     MailAgentSession.mailbox_status == "connected",
+                    MailAgentSession.closed_at.is_(None),
                     MailAgentSession.capability_token_hash.is_not(None),
                     MailAgentSession.last_seen_at
                     >= now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS),
@@ -1878,6 +1943,7 @@ class AgentMailService:
             now = datetime.utcnow()
             if (
                 session.source != "mcp"
+                or session.closed_at is not None
                 or session.mailbox_status != "connected"
                 or session.capability_token_hash is None
                 or session.bound_pane_pid is None
@@ -2004,6 +2070,7 @@ class AgentMailService:
                 MailAgentSession.team_slot_id == slot_id,
                 MailAgentSession.source == "mcp",
                 MailAgentSession.mailbox_status == "connected",
+                MailAgentSession.closed_at.is_(None),
                 MailAgentSession.capability_token_hash.is_not(None),
                 MailAgentSession.last_seen_at >= cutoff,
             )

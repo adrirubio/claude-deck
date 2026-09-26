@@ -61,6 +61,10 @@ def build_provider_launch_options(provider: Any) -> dict[str, Any]:
         descriptor["model_options"] = list(descriptor.get("model_options", [])) + examples
         descriptor["model_examples"] = list(MODEL_EXAMPLES[PROVIDER_CODEX_CLI])
 
+    if provider.id == "pi-cli":
+        descriptor.update(platform_options=["openrouter"], default_platform="openrouter")
+        descriptor["warnings"] = ["Agent Mail requires the Deck Pi extension. Pi tools are not a Deck sandbox."]
+
     return descriptor
 
 

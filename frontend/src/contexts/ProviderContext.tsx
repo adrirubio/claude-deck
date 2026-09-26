@@ -23,6 +23,7 @@ function readStoredProvider(): AgentProviderId {
     || stored === 'claude-code'
     || stored === 'copilot-cli'
     || stored === 'opencode-cli'
+    || stored === 'pi-cli'
     ? stored
     : DEFAULT_PROVIDER
 }

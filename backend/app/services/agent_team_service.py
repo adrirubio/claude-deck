@@ -845,6 +845,10 @@ class AgentTeamService:
         )
 
     def _agent_mail_ready_reason(self, provider: str, install_status: Any) -> str | None:
+        if provider == "pi-cli":
+            return None if getattr(install_status, "pi_mail_ready", False) else (
+                getattr(install_status, "pi_mail_reason", None) or "Pi Agent Mail extension is not ready"
+            )
         if provider == "claude-code":
             if not install_status.claude_code_mcp_installed:
                 return "Claude Code Agent Mail MCP is not installed"
@@ -892,7 +896,7 @@ class AgentTeamService:
         }
 
     def _is_resume_last_slot(self, slot: AgentTeamSlot) -> bool:
-        if slot.provider not in {"codex-cli", "copilot-cli", "opencode-cli"}:
+        if slot.provider not in {"codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}:
             return False
         if (slot.launch_mode or "plain").strip() != "resume":
             return False
@@ -967,6 +971,14 @@ class AgentTeamService:
             )
         ]
         attached = await self._matching_attached_session(db, slot, eligible, used_matching_sessions)
+        if slot.provider == "pi-cli":
+            eligible_panes = await agent_mail_service.nudgeable_sessions_for_slot(db, slot.id)
+            if attached is not None and any(
+                self._discovered_session_matches_registered(attached, pane)
+                for pane in eligible_panes
+            ):
+                return attached
+            return None
         if attached is not None:
             return attached
         named = self._matching_named_session(slot, eligible, used_matching_sessions)
@@ -1198,6 +1210,8 @@ class AgentTeamService:
         for key, value in raw_options.items():
             if key in _OPTION_FIELDS and key not in {"directory", "mode", "prompt"}:
                 values[key] = value
+        if slot.provider == "pi-cli":
+            values["platform"] = self._clean_optional(raw_options.get("platform")) or "openrouter"
         return SpawnCommandOptions(**values)
 
     async def _bootstrap_prompt(
@@ -1469,6 +1483,7 @@ class AgentTeamService:
         options = launch_options or {}
         unsupported_bedrock_keys = sorted(
             key for key in _BEDROCK_LAUNCH_OPTION_KEYS if key in options
+            and not (provider == "pi-cli" and key == "platform")
         )
         if unsupported_bedrock_keys and not supports_bedrock(provider):
             raise ValueError(
@@ -1491,6 +1506,11 @@ class AgentTeamService:
             )
 
         platform = self._clean_optional(options.get("platform"))
+        if provider == "pi-cli":
+            if "platform" in options and options["platform"] is None:
+                raise ProviderLaunchError("launch_options.platform must not be null", "pi_platform_null")
+            if platform and platform != "openrouter":
+                raise ProviderLaunchError("Pi requires platform=openrouter", "pi_platform_unsupported")
         if platform == PLATFORM_BEDROCK and not supports_bedrock(provider):
             raise ValueError(f"{provider} does not support platform=bedrock")
 

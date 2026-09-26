@@ -43,6 +43,8 @@ def resolve_request_pane(
 
 def require_current_mail_session(session: MailAgentSession) -> None:
     """Reject ended sessions and role-bearing sessions whose pane is stale."""
+    if session.closed_at is not None:
+        raise HTTPException(status_code=401, detail="session_token_closed")
     if not settings.mail_capability_tokens_required:
         return
     if session.mailbox_status == "offline":
@@ -89,6 +91,22 @@ async def require_mail_session(
     if session is None:
         raise HTTPException(status_code=401, detail="session_token_required")
     return session
+
+
+async def close_mail_session(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> MailAgentSession:
+    if not x_deck_session_token:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
+    sessions = (await db.execute(
+        select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
+    )).scalars().all()
+    for session in sessions:
+        if hmac.compare_digest(session.capability_token_hash, hashed):
+            return session
+    raise HTTPException(status_code=401, detail="session_token_invalid")
 
 
 def require_session_slot(session: MailAgentSession) -> int:

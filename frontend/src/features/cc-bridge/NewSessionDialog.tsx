@@ -151,9 +151,10 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const isCodex = provider === 'codex-cli'
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
+  const isPi = provider === 'pi-cli'
   const supportsPlatform = launchDescriptor?.bedrock_supported ?? false
   const isBedrock = supportsPlatform && launchOptions.platform === 'bedrock'
-  const modeOptions = isOpenCode
+  const modeOptions = isOpenCode || isPi
     ? OPENCODE_MODE_OPTIONS
     : isCopilot
       ? COPILOT_MODE_OPTIONS
@@ -218,6 +219,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   // Prefill the remembered platform selection when the dialog opens.
   useEffect(() => {
     if (!open) return
+    if (provider === 'pi-cli') {
+      setLaunchOptions({ platform: 'openrouter' })
+      setMode('plain')
+      return
+    }
     const remembered = loadRememberedPlatform()
     setLaunchOptions((current) => withDefaultLaunchOptions({
       ...current,
@@ -226,7 +232,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       aws_profile: remembered.aws_profile,
       bedrock_model: remembered.bedrock_model,
     }))
-  }, [open])
+  }, [open, provider])
 
   useEffect(() => {
     if (!open) return
@@ -302,7 +308,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
     if (isCopilot && mode === 'resume') {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
-    if (isOpenCode && mode === 'resume') {
+    if ((isOpenCode || isPi) && mode === 'resume') {
       return directory.trim().length > 0 && (useLast || codexSessionId.trim().length > 0)
     }
     if (isClaude && mode === 'resume') return directory.trim().length > 0 && selectedSession !== null
@@ -325,7 +331,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
       const optionAwsRegion = stringOption(launchOptions, 'aws_region').trim()
       const optionAwsProfile = stringOption(launchOptions, 'aws_profile').trim()
       const optionBedrockModel = stringOption(launchOptions, 'bedrock_model').trim()
-      const optionPlatform = stringOption(launchOptions, 'platform') === 'bedrock' ? 'bedrock' : 'anthropic'
+      const optionPlatform = isPi ? 'openrouter' : stringOption(launchOptions, 'platform') === 'bedrock' ? 'bedrock' : 'anthropic'
 
       if (supportsPlatform) {
         try {
@@ -353,9 +359,9 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         }),
         ...(provider === 'claude-code' && skipPermissions && { skip_permissions: true }),
         ...(isCodex && prompt.trim() && { prompt: prompt.trim() }),
-        ...((isCopilot || isOpenCode) && prompt.trim() && { prompt: prompt.trim() }),
+        ...((isCopilot || isOpenCode || isPi) && prompt.trim() && { prompt: prompt.trim() }),
         ...(isCodex && !isBedrock && optionModel && { model: optionModel }),
-        ...((isCopilot || isOpenCode) && optionModel && { model: optionModel }),
+        ...((isCopilot || isOpenCode || isPi) && optionModel && { model: optionModel }),
         ...(isCodex && optionProfile && { profile: optionProfile }),
         ...(isCodex && optionProfileV2 && { profile_v2: optionProfileV2 }),
         ...(isCodex && optionSandbox && { sandbox: optionSandbox }),
@@ -373,13 +379,14 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
-        ...(isOpenCode && mode === 'resume' && {
+        ...((isOpenCode || isPi) && mode === 'resume' && {
           use_last: useLast,
           ...(!useLast && codexSessionId.trim() && { session_id: codexSessionId.trim() }),
         }),
         ...((isCopilot || isOpenCode) && optionAgent && { agent: optionAgent }),
         ...(isCopilot && optionContextTier && { context_tier: optionContextTier }),
-        ...((isCodex || isCopilot) && optionReasoningEffort && { reasoning_effort: optionReasoningEffort }),
+        ...((isCodex || isCopilot || isPi) && optionReasoningEffort && { reasoning_effort: optionReasoningEffort }),
+        ...(isPi && { platform: 'openrouter' as const }),
         ...(isCopilot && boolOption(launchOptions, 'plan') && { plan: true }),
         ...(isCopilot && boolOption(launchOptions, 'remote') && { remote: true }),
         ...(isCopilot && boolOption(launchOptions, 'allow_all') && { allow_all: true }),
@@ -594,7 +601,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </div>
           )}
 
-          {(isCodex || isCopilot || isOpenCode) && (mode === 'resume' || mode === 'fork') && (
+          {(isCodex || isCopilot || isOpenCode || isPi) && (mode === 'resume' || mode === 'fork') && (
             <div className="space-y-2">
               <div className="flex items-center space-x-2">
                 <Checkbox
@@ -603,12 +610,12 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
                   onCheckedChange={(checked) => setUseLast(checked === true)}
                 />
                 <Label htmlFor="codex-use-last" className="cursor-pointer">
-                  Use last {isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} session
+                  Use last {isPi ? 'Pi' : isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} session
                 </Label>
               </div>
               {!useLast && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="codex-session-id">{isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
+                  <Label htmlFor="codex-session-id">{isPi ? 'Pi exact project-local path or full ID' : isOpenCode ? 'OpenCode' : isCopilot ? 'Copilot' : 'Codex'} Session ID</Label>
                   <Input
                     id="codex-session-id"
                     value={codexSessionId}
@@ -636,7 +643,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
             </p>
           )}
 
-          {(isCodex || isCopilot || isOpenCode) && (
+          {(isCodex || isCopilot || isOpenCode || isPi) && (
             <div className="space-y-1.5">
               <Label htmlFor="session-prompt">Initial Prompt</Label>
               <Input

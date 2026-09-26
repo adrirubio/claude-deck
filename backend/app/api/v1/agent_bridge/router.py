@@ -28,7 +28,7 @@ from app.services.agent_bridge.discovery import capture_pane_preview, discover_a
 from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
 from app.services.agent_bridge.spawn import kill_session, spawn_session
 from app.services.providers import get_provider
-from app.services.providers.base import SpawnCommandOptions
+from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.agent_mail_service import (
     MCP_HEARTBEAT_TTL_SECONDS,
     OBSERVED_TTL_SECONDS,
@@ -463,7 +463,9 @@ def spawn_session_endpoint(request: SpawnRequest):
             no_alt_screen=request.no_alt_screen,
             dangerously_bypass_approvals_and_sandbox=request.dangerously_bypass_approvals_and_sandbox,
             use_last=request.use_last,
-            platform=request.platform,
+            platform=("openrouter" if request.provider == "pi-cli" and (
+                "platform" not in request.model_fields_set or not request.platform.strip()
+            ) else request.platform),
             aws_region=request.aws_region,
             aws_profile=request.aws_profile,
             bedrock_model=request.bedrock_model,
@@ -477,6 +479,8 @@ def spawn_session_endpoint(request: SpawnRequest):
         )
         return spawn_session(request.provider, options)
     except ValueError as exc:
+        if request.provider == "pi-cli" and isinstance(exc, ProviderLaunchError):
+            raise HTTPException(status_code=400, detail={"message": str(exc), "block_code": exc.block_code}) from exc
         raise HTTPException(status_code=400, detail=str(exc))
 
 
