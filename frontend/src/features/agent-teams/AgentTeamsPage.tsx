@@ -43,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
+import { autonomousLeaderSlotId } from './leaderSlot'
 import type {
   AgentTeamLaunchPlan,
   AgentTeamLaunchPlanItem,
@@ -495,6 +496,7 @@ function SlotDialog({
               value={form.role ?? ''}
               onChange={(event) => update({ role: event.target.value })}
             />
+            <p className="text-xs text-muted-foreground">Descriptive only. For autonomous dispatch, the first enabled slot in the roster is the Leader. Reorder slots to change it.</p>
           </div>
           <div className="grid gap-2">
             <Label>Color</Label>
@@ -1311,12 +1313,14 @@ export function AgentTeamsPage() {
                 )}
                 {selectedPreset.slots.map((slot, index) => {
                   const colorClasses = getTeamSlotColorClasses(slot.ui_color)
+                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.slots)
                   return (
                     <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
                       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold">{slot.display_name}</p>
+                            {isLeader && <Badge variant="outline" title="First enabled slot by roster position; approves plans and takes issues without another owner match.">Leader for autonomous dispatch</Badge>}
                             <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
                               {slot.enabled ? 'Enabled' : 'Disabled'}
                             </Badge>

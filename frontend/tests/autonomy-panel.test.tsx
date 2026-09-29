@@ -26,6 +26,8 @@ const scope: TeamGithubScope = {
   design_label: 'claude-deck-design',
   merge_policy: 'human',
   github_auth_mode: 'app',
+  github_auth_configured: true,
+  github_poll_token_configured: true,
   max_approval_rounds: 3,
   max_concurrent_dispatched: 3,
   max_verification_retries: 2,
@@ -104,6 +106,24 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
 }
 
 describe('AutonomyPanel', () => {
+  it('distinguishes a missing polling token from unresolved dispatch mode after a poll', () => {
+    const view = render(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_poll_token_configured: false }], workItems: [] })} />)
+    expect(screen.getByText('Polling token not set')).toHaveAttribute('title', expect.stringContaining('backend/.env'))
+    view.rerender(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', last_polled_at: '2026-09-29T12:00:00Z' }], workItems: [] })} />)
+    expect(screen.getByText('Dispatch auth: not selected')).toHaveAttribute('title', expect.stringContaining('successful poll'))
+    expect(screen.queryByText('Polling token not set')).not.toBeInTheDocument()
+  })
+
+  it('explains first-run setup and optional build hints', async () => {
+    const user = userEvent.setup()
+    render(<AutonomyPanel {...panelProps({ scopes: [], workItems: [] })} />)
+    expect(screen.getByText('Before you enable autonomy')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add repo' }))
+    expect(screen.getByText('Build instructions for the agent (optional)')).toBeInTheDocument()
+    expect(screen.getByText(/Deck does not run a build/)).toBeInTheDocument()
+    expect(screen.getByText(/may include \{issue_number\}/)).toBeInTheDocument()
+  })
+
   it('asks for a token on the first history load, then shows the history', async () => {
     clearOperatorToken()
     const user = userEvent.setup()

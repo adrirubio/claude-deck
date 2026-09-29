@@ -2349,6 +2349,8 @@ class TeamGithubScopeResponse(BaseModel):
     design_label: str
     merge_policy: str
     github_auth_mode: str
+    github_auth_configured: bool
+    github_poll_token_configured: bool
     max_approval_rounds: int
     max_concurrent_dispatched: int
     max_verification_retries: int

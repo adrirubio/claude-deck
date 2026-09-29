@@ -200,10 +200,27 @@ function recoveryBlockLabel(code?: string | null) {
   return code.replaceAll('_', ' ')
 }
 
-function authModeLabel(mode: string) {
-  if (mode === 'app') return 'GitHub App'
-  if (mode === 'ambient') return 'Host credential'
-  return 'Auth unresolved'
+function authStatus(scope: TeamGithubScope) {
+  if (!scope.github_poll_token_configured) return {
+    label: 'Polling token not set',
+    help: 'Set github_token in backend/.env and restart Deck. The watcher uses this host token to poll GitHub; private repos cannot be polled through App settings alone.',
+    warning: true,
+  }
+  if (!scope.github_auth_configured) return {
+    label: 'GitHub App setup incomplete',
+    help: 'Complete the GitHub App settings in backend/.env or remove partial App settings, then restart Deck. Deck selects a dispatch auth mode when eligible work is dispatched.',
+    warning: true,
+  }
+  if (scope.github_auth_mode === 'unknown') return {
+    label: 'Dispatch auth: not selected',
+    help: 'The watcher can poll with the host token, but Deck selects a dispatch authentication mode only when eligible work is dispatched. A successful poll alone does not select the mode.',
+    warning: false,
+  }
+  return {
+    label: scope.github_auth_mode === 'app' ? 'Auth mode: GitHub App' : 'Auth mode: host token',
+    help: scope.last_polled_at ? 'Deck has polled this repo. Check Activity for any later GitHub errors.' : 'Authentication mode selected; Deck has not completed a poll yet.',
+    warning: false,
+  }
 }
 
 function phaseLabel(phase?: string | null) {
@@ -238,9 +255,13 @@ function OperatorTokenDialog({
         <DialogHeader>
           <DialogTitle>Operator token</DialogTitle>
           <DialogDescription>
-            Enter the token configured as OPERATOR_TOKEN in backend/.env. It stays in this browser tab only.
+            Enter the token configured as operator_token in backend/.env. It protects recovery policy and operator remedies and stays in this browser tab only.
           </DialogDescription>
         </DialogHeader>
+        <details className="text-sm text-muted-foreground">
+          <summary className="cursor-pointer text-foreground">How do I create one?</summary>
+          <p className="mt-2">On the machine running Deck, run <code>openssl rand -hex 32</code>. Add the result as <code>operator_token=&lt;value&gt;</code> in <code>backend/.env</code>, run <code>chmod 600 backend/.env</code>, then restart the backend. Do not export the token into the agent environment.</p>
+        </details>
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         <form onSubmit={(event) => { event.preventDefault(); onSubmit() }} className="space-y-4">
           <SecretField
@@ -371,6 +392,7 @@ function ScopeDialog({
               value={form.repo_owner}
               onChange={(event) => update({ repo_owner: event.target.value })}
             />
+            <p className="text-xs text-muted-foreground">GitHub owner, as in github.com/owner/name.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="scope-name">Repo name</Label>
@@ -379,6 +401,7 @@ function ScopeDialog({
               value={form.repo_name}
               onChange={(event) => update({ repo_name: event.target.value })}
             />
+            <p className="text-xs text-muted-foreground">GitHub repo name, as in github.com/owner/name.</p>
           </div>
           <div className="grid gap-2 md:col-span-2">
             <Label htmlFor="scope-path">Primary checkout path</Label>
@@ -389,7 +412,7 @@ function ScopeDialog({
               placeholder="/home/user/repos/project"
             />
             <p className="text-xs text-muted-foreground">
-              Existing checkout used to create dispatch worktrees beside it. This does not change slot settings.
+              Existing clone under your home directory. Deck creates one worktree per issue next to it, in the same parent folder, and launches the owner there. Normal slot sessions keep their own repo path.
             </p>
           </div>
           <div className="grid gap-2 md:col-span-2">
@@ -401,7 +424,7 @@ function ScopeDialog({
               placeholder="origin/main"
             />
             <p className="text-xs text-muted-foreground">
-              Git ref used as the dispatch base. Changing it while a workspace is active is blocked.
+              New worktrees start from this Git ref. origin/HEAD means the remote default branch. Changing it while a workspace is active is blocked.
             </p>
           </div>
           <div className="grid gap-2">
@@ -411,7 +434,7 @@ function ScopeDialog({
               value={form.dispatch_label}
               onChange={(event) => update({ dispatch_label: event.target.value })}
             />
-            <p className="text-xs text-muted-foreground">Issues need this GitHub label to enter the dispatch queue.</p>
+            <p className="text-xs text-muted-foreground">Create this label on GitHub, then add it to an issue to queue it. Removing it during work escalates the attempt.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="design-label">Design label</Label>
@@ -420,7 +443,7 @@ function ScopeDialog({
               value={form.design_label}
               onChange={(event) => update({ design_label: event.target.value })}
             />
-            <p className="text-xs text-muted-foreground">Issues with this label use the design-review pipeline.</p>
+            <p className="text-xs text-muted-foreground">Add this alongside the dispatch label for design or documentation work. The Leader acknowledges the plan, and the PR always needs human review.</p>
           </div>
           <div className="grid gap-2 md:col-span-2">
             <Label htmlFor="scope-merge-policy">Merge policy</Label>
@@ -439,6 +462,7 @@ function ScopeDialog({
             <p className="text-xs text-amber-400">
               Applies to the code pipeline only. Design-pipeline PRs always require a human review.
             </p>
+            <p className="text-xs text-muted-foreground">Human: Deck marks the PR ready for review. Auto: merges after GitHub checks pass, within the rolling daily cap; otherwise it waits for a human.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="approval-rounds">Max approval rounds</Label>
@@ -449,6 +473,7 @@ function ScopeDialog({
               value={numberInputs.max_approval_rounds}
               onChange={(event) => setNumberInputs((current) => ({ ...current, max_approval_rounds: event.target.value }))}
             />
+            <p className="text-xs text-muted-foreground">Times the Leader may send an owner&apos;s plan back before escalation.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="concurrent-dispatches">Max concurrent dispatched</Label>
@@ -459,6 +484,7 @@ function ScopeDialog({
               value={numberInputs.max_concurrent_dispatched}
               onChange={(event) => setNumberInputs((current) => ({ ...current, max_concurrent_dispatched: event.target.value }))}
             />
+            <p className="text-xs text-muted-foreground">Issues from this repo worked on at once; extra issues wait.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="verification-retries">Max verification retries</Label>
@@ -469,6 +495,7 @@ function ScopeDialog({
               value={numberInputs.max_verification_retries}
               onChange={(event) => setNumberInputs((current) => ({ ...current, max_verification_retries: event.target.value }))}
             />
+            <p className="text-xs text-muted-foreground">Distinct failing PR heads allowed before escalation.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="auto-merges">Max auto-merges per day</Label>
@@ -480,6 +507,11 @@ function ScopeDialog({
               disabled={form.merge_policy !== 'auto'}
               onChange={(event) => setNumberInputs((current) => ({ ...current, max_auto_merges_per_day: event.target.value }))}
             />
+            <p className="text-xs text-muted-foreground">Rolling 24-hour cap. Beyond it, PRs wait for human review.</p>
+          </div>
+          <div className="md:col-span-2">
+            <h3 className="text-sm font-medium">Build instructions for the agent (optional)</h3>
+            <p className="text-xs text-muted-foreground">Deck does not run a build. These settings become hints in the owner&apos;s brief.</p>
           </div>
           <label className="flex items-center gap-2 text-sm md:col-span-2">
             <Checkbox checked={form.builds_out_of_tree ?? false} onCheckedChange={(checked) => update({ builds_out_of_tree: checked === true })} />
@@ -493,6 +525,7 @@ function ScopeDialog({
               onChange={(event) => update({ build_dir_template: event.target.value })}
               placeholder="build"
             />
+            <p className="text-xs text-muted-foreground">For out-of-tree builds; may include {'{issue_number}'}.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="scope-build-parallelism">Max build parallelism</Label>
@@ -503,6 +536,7 @@ function ScopeDialog({
               value={numberInputs.max_build_parallelism}
               onChange={(event) => setNumberInputs((current) => ({ ...current, max_build_parallelism: event.target.value }))}
             />
+            <p className="text-xs text-muted-foreground">Tells the agent to cap parallel build jobs at this value.</p>
           </div>
           <div className="grid gap-2 md:col-span-2">
             <Label htmlFor="scope-build-hint">Build command hint</Label>
@@ -512,11 +546,13 @@ function ScopeDialog({
               onChange={(event) => update({ build_command_hint: event.target.value })}
               placeholder="meson test -C build"
             />
+            <p className="text-xs text-muted-foreground">Sent to the agent, not executed by Deck. May use {'{build_dir}'} and {'{parallelism}'}.</p>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={form.enabled} onCheckedChange={(checked) => update({ enabled: checked === true })} />
             Enabled
           </label>
+          <p className="text-xs text-muted-foreground md:col-span-2">Disable to pause this repo without deleting it. The team&apos;s Autonomy switch must also be on.</p>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(null)}>Cancel</Button>
@@ -1401,7 +1437,7 @@ export function AutonomyPanel({
             {operatorTokenStored ? 'Clear operator token' : 'Set operator token'}
           </Button>
           <span className="self-center text-xs text-muted-foreground">
-            {operatorTokenStored ? 'Token set for this tab' : 'No token set'}
+            {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected recovery actions'}
           </span>
           <Button variant="outline" onClick={onRefresh} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
@@ -1418,7 +1454,15 @@ export function AutonomyPanel({
         {loading && <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading autonomy state...</div>}
         {!loading && !loadError && scopes.length === 0 && (
           <div className="rounded-lg border p-5 text-sm text-muted-foreground">
-            To get started: add a watched repo and its primary checkout, label an issue with the dispatch label, then enable autonomy. Use an operator token for recovery actions.
+            <h3 className="font-semibold text-foreground">Before you enable autonomy</h3>
+            <ol className="mt-2 list-decimal space-y-1 pl-5">
+              <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Deck. For App-backed dispatch, also configure the GitHub App settings. Deck selects the dispatch mode when work becomes eligible.</li>
+              <li>Add a watched repo with an existing primary checkout under your home directory and labels to watch.</li>
+              <li>In Roster, launch the first enabled slot: it is the Leader who approves plans.</li>
+              <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
+              <li>Enable autonomy. Deck polls GitHub every 60 seconds and shows progress here.</li>
+            </ol>
+            <p className="mt-2">An operator token is only needed for protected recovery actions.</p>
           </div>
         )}
         {scopes.map((scope) => (
@@ -1439,19 +1483,20 @@ export function AutonomyPanel({
                     <Badge
                       variant="outline"
                       className={scope.continuation_enabled ? 'border-emerald-500/70 text-emerald-600 dark:text-emerald-400' : undefined}
+                      title="Bounded recovery of escalated issues with an open PR. Configure under Recovery policy."
                     >
                       recovery: {scope.continuation_enabled ? 'enabled' : 'off'}
                     </Badge>
                     {!scope.enabled && <Badge variant="secondary">disabled</Badge>}
-                    <Badge variant="outline" className={scope.github_auth_mode === 'unknown' ? 'border-amber-500 text-amber-700 dark:text-amber-400' : undefined}>
-                      {authModeLabel(scope.github_auth_mode)}
+                    <Badge variant="outline" title={authStatus(scope).help} className={authStatus(scope).warning ? 'border-amber-500 text-amber-700 dark:text-amber-400' : undefined}>
+                      {authStatus(scope).label}
                     </Badge>
                   </div>
                   <p className="mt-2 truncate text-sm text-muted-foreground">
                     Primary checkout: {scope.repo_path}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Approval rounds: {scope.max_approval_rounds} · Concurrent: {scope.max_concurrent_dispatched} · Verification retries: {scope.max_verification_retries} · Auto-merges/day: {scope.max_auto_merges_per_day} · Last polled {formatDateTime(scope.last_polled_at)}
+                    Approval rounds: {scope.max_approval_rounds} · Concurrent issues: {scope.max_concurrent_dispatched} · Verification retries: {scope.max_verification_retries} · Auto-merges/day: {scope.max_auto_merges_per_day} · Last polled {formatDateTime(scope.last_polled_at)}{!preset.autonomy_enabled ? ' (autonomy off)' : ''}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Recovery limits: {scope.max_continuation_revisions} revisions · {scope.max_continuation_failed_heads} failed heads total · {scope.max_failed_heads_per_revision} per revision · {scope.max_scope_paths} paths · {scope.max_scope_commands} commands

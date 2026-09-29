@@ -8,10 +8,36 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from app.database import get_db
+from app.api.v1.agent_teams import _scope_auth_configured
+from app.config import settings
 from app.main import app
 from app.models.database import AgentTeamPreset, GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
+
+
+@pytest.mark.parametrize(
+    ("mode", "token", "app_id", "key_path", "bot_login", "expected"),
+    [
+        ("unknown", "", "", "", "", False),
+        ("unknown", "token", "", "", "", True),
+        ("unknown", "token", "123", "", "", False),
+        ("unknown", "token", "", "", "bot", True),
+        ("unknown", "", "123", "/tmp/key.pem", "bot", True),
+        ("ambient", "", "123", "/tmp/key.pem", "bot", False),
+        ("ambient", "token", "", "", "", True),
+        ("app", "token", "", "", "", False),
+        ("app", "", "123", "/tmp/key.pem", "bot", True),
+    ],
+)
+def test_scope_auth_configuration_is_truthful_for_selected_mode(
+    monkeypatch, mode, token, app_id, key_path, bot_login, expected
+):
+    monkeypatch.setattr(settings, "github_token", token)
+    monkeypatch.setattr(settings, "github_app_id", app_id)
+    monkeypatch.setattr(settings, "github_app_private_key_path", key_path)
+    monkeypatch.setattr(settings, "github_app_bot_login", bot_login)
+    assert _scope_auth_configured(SimpleNamespace(github_auth_mode=mode)) is expected
 
 
 @pytest_asyncio.fixture
@@ -214,6 +240,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
     assert scope["github_auth_mode"] == "unknown"
+    assert isinstance(scope["github_poll_token_configured"], bool)
     assert scope["max_verification_retries"] == 3
     assert scope["base_ref"] == "origin/main"
     assert scope["builds_out_of_tree"] is True
