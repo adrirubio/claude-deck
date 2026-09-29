@@ -346,8 +346,11 @@ async def test_external_delivery_reports_tmux_wake_success(
     assert body["recipients"][0]["status"] == "wake_succeeded"
     assert body["recipients"][0]["wake_method"] == "tmux"
     tmux_calls = [call for call in calls if call[0][0] == "tmux"]
-    assert len(tmux_calls) == 3
+    assert len(tmux_calls) == 4
     assert tmux_calls[1][0][3] == "%7"
+    assert [call[0][1] for call in tmux_calls] == [
+        "display-message", "send-keys", "display-message", "send-keys"
+    ]
 
 
 @pytest.mark.asyncio

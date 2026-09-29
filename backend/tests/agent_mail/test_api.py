@@ -408,7 +408,7 @@ async def test_wake_route_delivers_only_to_authenticated_bound_pane(client, db, 
     tmux_commands = [command for command in commands if command[0] == "tmux"]
     assert [command[:5] for command in tmux_commands if command[1] == "display-message"] == [
         ["tmux", "display-message", "-p", "-t", "%7"]
-    ] * 2
+    ] * 4
     assert [command for command in tmux_commands if command[1] == "send-keys"] == [
         ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT],
         ["tmux", "send-keys", "-t", "%7", "Enter"],

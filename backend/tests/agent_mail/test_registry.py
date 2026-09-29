@@ -975,6 +975,91 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_agent(
 
 
 @pytest.mark.asyncio
+async def test_wake_refuses_enter_after_pane_replacement(db, svc, tmp_path, monkeypatch):
+    cwd = tmp_path / "replaced"
+    cwd.mkdir()
+    observed = [{
+        "provider": "codex-cli", "tmux_target": "w:0.1", "pane_id": "%7",
+        "cwd": str(cwd), "pid": "4242", "status": "active",
+    }]
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: observed)
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    commands = []
+    display_count = 0
+
+    def replaced_pane(command, **_kwargs):
+        nonlocal display_count
+        commands.append(command)
+        if command[1] == "display-message":
+            display_count += 1
+            return SimpleNamespace(
+                stdout="%7|4242" if display_count == 1 else "%7|9999",
+                stderr="", returncode=0,
+            )
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr("app.services.agent_mail_service.subprocess.run", replaced_pane)
+    monkeypatch.setattr("app.services.agent_mail_service.time.sleep", lambda _delay: None)
+    with pytest.raises(MailWakeError, match="wake_target_stale"):
+        await svc.queue_inbox_check(
+            db, member.id, actor_type="operator", force=True,
+            reason_code="operator_maintenance",
+        )
+
+    assert display_count == 2
+    assert [command for command in commands if command[1] == "send-keys"] == [
+        ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT]
+    ]
+    attempt = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert (attempt.result, attempt.failure_code, attempt.target_pane_id) == (
+        "refused", "wake_target_stale", "%7"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport_fails", [False, True])
+async def test_wake_audit_is_committed_before_terminal_input(
+    db, svc, tmp_path, monkeypatch, transport_fails
+):
+    cwd = tmp_path / "audited"
+    cwd.mkdir()
+    observed = [{
+        "provider": "codex-cli", "tmux_target": "w:0.1", "pane_id": "%7",
+        "cwd": str(cwd), "pid": "4242", "status": "active",
+    }]
+    monkeypatch.setattr("app.services.agent_mail_service.discover_agent_sessions", lambda: observed)
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+
+    def inspect_audit(_session, _prompt):
+        assert not db.in_transaction()
+        attempts = [
+            row for row in db.identity_map.values() if isinstance(row, MailWakeAttempt)
+        ]
+        assert len(attempts) == 1
+        assert attempts[0].id is not None
+        assert (attempts[0].result, attempts[0].target_pane_id) == ("attempted", "%7")
+        if transport_fails:
+            raise MailWakeError("wake_transport_failed")
+        return {"target": "w:0.1", "prompt": INBOX_CHECK_PROMPT}
+
+    monkeypatch.setattr(svc, "_send_tmux_inbox_check", inspect_audit)
+    if transport_fails:
+        with pytest.raises(MailWakeError, match="wake_transport_failed"):
+            await svc.queue_inbox_check(
+                db, member.id, actor_type="operator", force=True,
+                reason_code="operator_maintenance",
+            )
+    else:
+        await svc.queue_inbox_check(
+            db, member.id, actor_type="operator", force=True,
+            reason_code="operator_maintenance",
+        )
+    attempt = (await db.execute(select(MailWakeAttempt))).scalar_one()
+    assert attempt.result == ("refused" if transport_fails else "delivered")
+    assert attempt.failure_code == ("wake_transport_failed" if transport_fails else None)
+
+
+@pytest.mark.asyncio
 async def test_wake_never_targets_observed_only_pane_in_another_repo(
     db, svc, tmp_path, monkeypatch
 ):
