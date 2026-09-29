@@ -1198,8 +1198,8 @@ export function AutonomyPanel({
       if (action.kind === 'resume') return resumeGithubWorkItem(preset.id, item.id, token, reassignToSlotId)
       if (action.kind === 'force_release') {
         const released = await forceReleaseGithubWorkspace(item.scope_id, action.workspace, reason, token)
-        const discardedCount = released.discarded_paths?.split('\n').filter(Boolean).length ?? 0
-        resultMessage = `Released workspace from item #${released.released_item_id}. ${discardedCount} local path${discardedCount === 1 ? '' : 's'} flagged; unpushed commits: ${released.unpushed_commits ?? 'unknown'}.`
+        const discardedCount = released.discarded_paths?.split('\n').filter(Boolean).length
+        resultMessage = `Released workspace from item #${released.released_item_id}. Local paths flagged: ${discardedCount ?? 'unknown'}; unpushed commits: ${released.unpushed_commits ?? 'unknown'}.`
         return
       }
       if (action.kind === 'cancel_request') {
