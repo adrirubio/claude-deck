@@ -1038,9 +1038,11 @@ export function AgentTeamsPage() {
   const retryWorkItem = async (item: GithubWorkItem) => {
     if (!selectedPreset) return
     try {
-      await retryGithubWorkItem(item.id)
+      const updated = await retryGithubWorkItem(item.id)
       await loadAutonomy(selectedPreset.id)
-      toast.success(`Issue #${item.issue_number} reset to pending`)
+      toast.success(updated.dispatch_status === 'pending'
+        ? `Issue #${item.issue_number} reset to pending`
+        : updated.status_note || `Retry requested for issue #${item.issue_number}; awaiting workspace release`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to retry work item')
       throw error

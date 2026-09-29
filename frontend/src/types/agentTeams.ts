@@ -188,6 +188,11 @@ export interface TeamGithubScopeInput {
   max_concurrent_dispatched?: number
   max_verification_retries?: number
   max_auto_merges_per_day?: number
+  base_ref?: string
+  builds_out_of_tree?: boolean
+  build_dir_template?: string
+  build_command_hint?: string | null
+  max_build_parallelism?: number
   enabled?: boolean
 }
 
@@ -202,6 +207,11 @@ export interface TeamGithubScopeUpdate {
   max_concurrent_dispatched?: number
   max_verification_retries?: number
   max_auto_merges_per_day?: number
+  base_ref?: string
+  builds_out_of_tree?: boolean
+  build_dir_template?: string
+  build_command_hint?: string | null
+  max_build_parallelism?: number
   enabled?: boolean
 }
 
@@ -274,6 +284,7 @@ export interface GithubScopeRevision {
   failed_head_count: number
   last_failed_head_sha?: string | null
   status: GithubScopeRevisionStatus
+  recovery_checkpoint_stage?: string | null
   approval_request_id?: number | null
   delivery_message_id?: number | null
   approved_at?: string | null
@@ -347,6 +358,28 @@ export interface GithubWorkItem {
 
 export interface GithubWorkItemListResponse {
   items: GithubWorkItem[]
+}
+
+export interface GithubWorkspace {
+  id: number
+  scope_id: number
+  path: string
+  kind: string
+  lease_state: string
+  leased_item_id?: number | null
+  leased_at?: string | null
+  enabled: boolean
+  provision_error?: string | null
+}
+
+export interface GithubRecoveryGate {
+  active: boolean
+  scope_id?: number
+  work_item_id?: number
+  pr_number?: number
+  identity_matches?: boolean
+  scheduler_running?: boolean
+  job_scheduled?: boolean
 }
 
 export interface AgentTeamLaunchPlanItem {
