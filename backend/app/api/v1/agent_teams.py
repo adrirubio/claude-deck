@@ -1179,7 +1179,7 @@ async def report_dispatch_status(
             if current_owner != report.reporting_slot_id:
                 raise HTTPException(status_code=403, detail="not_item_owner")
         else:
-            blocker = await github_workspace_service.release_blocker(scope, workspace)
+            blocker = await github_workspace_service.release_blocker(scope, workspace, item)
             if blocker is not None:
                 raise HTTPException(
                     status_code=409,

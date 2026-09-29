@@ -5,6 +5,7 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import update
@@ -923,6 +924,120 @@ def _git(env, *args, cwd=None):
         text=True,
         capture_output=True,
     ).stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pull_state", ["merged", "open"])
+async def test_release_accepts_clean_pushed_pr_head_outside_stale_base(
+    db, tmp_path, monkeypatch, pull_state
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    worktree = tmp_path / "worktree"
+    _git(env, "init", "-b", "master", str(repo))
+    _git(env, "config", "user.name", "Tester", cwd=repo)
+    _git(env, "config", "user.email", "tester@example.com", cwd=repo)
+    (repo / "README").write_text("base\n")
+    _git(env, "add", "README", cwd=repo)
+    _git(env, "commit", "-m", "base", cwd=repo)
+    base_sha = _git(env, "rev-parse", "HEAD", cwd=repo).strip()
+    _git(env, "init", "--bare", str(remote))
+    _git(env, "remote", "add", "origin", str(remote), cwd=repo)
+    _git(env, "push", "-u", "origin", "master", cwd=repo)
+    _git(env, "worktree", "add", "-b", "deck/test-attempt", str(worktree), cwd=repo)
+    (worktree / "change.txt").write_text("pushed change\n")
+    _git(env, "add", "change.txt", cwd=worktree)
+    _git(env, "commit", "-m", "change", cwd=worktree)
+    pushed_sha = _git(env, "rev-parse", "HEAD", cwd=worktree).strip()
+    _git(env, "push", "-u", "origin", "deck/test-attempt", cwd=worktree)
+    if pull_state == "merged":
+        _git(env, "merge", "--squash", "deck/test-attempt", cwd=repo)
+        _git(env, "commit", "-m", "squash", cwd=repo)
+        _git(env, "push", "origin", "master", cwd=repo)
+    _git(env, "update-ref", "refs/remotes/origin/master", base_sha, cwd=repo)
+    assert int(_git(env, "rev-list", "--count", "origin/master..HEAD", cwd=worktree)) > 0
+
+    scope, _, item = await _context(db, repo)
+    scope.base_ref = "origin/master"
+    scope.github_auth_mode = "ambient"
+    item.pr_number = 42
+    item.dispatch_head_ref = "deck/test-attempt"
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path=str(worktree), kind="worktree", leased_item_id=item.id
+    )
+    db.add(workspace)
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**env, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+
+    async def get_pull(*_args, **_kwargs):
+        return {
+            "state": "open" if pull_state == "open" else "closed",
+            "merged_at": None if pull_state == "open" else "2026-09-29T08:46:06Z",
+            "head": {
+                "sha": pushed_sha,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": "owner/repo"},
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_client.get_pull", get_pull
+    )
+    service = GithubWorkspaceService()
+    assert await service.release_blocker(scope, workspace, item) is None
+
+    (worktree / "change.txt").write_text("not committed\n")
+    assert "uncommitted" in await service.release_blocker(scope, workspace, item)
+    _git(env, "checkout", "--", "change.txt", cwd=worktree)
+    (worktree / "local.txt").write_text("not pushed\n")
+    _git(env, "add", "local.txt", cwd=worktree)
+    _git(env, "commit", "-m", "local only", cwd=worktree)
+    assert "not the pushed head" in await service.release_blocker(scope, workspace, item)
+
+
+@pytest.mark.asyncio
+async def test_release_refuses_unverifiable_or_unrelated_pr_head(db, tmp_path, monkeypatch):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.pr_number = 42
+    item.dispatch_head_ref = "deck/test-attempt"
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path=str(tmp_path / "worktree"), kind="worktree"
+    )
+    runner = FakeGitRunner()
+    runner.statuses[workspace.path] = ""
+    runner.rev_counts[workspace.path] = "2"
+    runner.identities[workspace.path] = ("a" * 40,)
+    service = GithubWorkspaceService(runner=runner)
+
+    async def get_pull(*_args, **_kwargs):
+        raise httpx.ConnectError("unavailable")
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_client.get_pull", get_pull
+    )
+    assert "could not be verified" in await service.release_blocker(scope, workspace, item)
+
+    async def unrelated_pull(*_args, **_kwargs):
+        return {
+            "state": "open",
+            "merged_at": None,
+            "head": {
+                "sha": "a" * 40,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": "other/repo"},
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_client.get_pull", unrelated_pull
+    )
+    assert "not the pushed head" in await service.release_blocker(scope, workspace, item)
 
 
 @pytest.mark.asyncio

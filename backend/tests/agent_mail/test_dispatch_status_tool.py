@@ -198,6 +198,7 @@ class _FakeGitRunner:
     def __init__(self):
         self.statuses: dict[str, str] = {}
         self.rev_counts: dict[str, str] = {}
+        self.head_shas: dict[str, str] = {}
         self.failures: dict[str, str] = {}
 
     async def __call__(self, args: list[str]) -> tuple[int, str]:
@@ -209,6 +210,8 @@ class _FakeGitRunner:
             return 0, self.statuses.get(path, "")
         if command == "rev-list":
             return 0, f"{self.rev_counts.get(path, '0')}\n"
+        if command == "rev-parse":
+            return 0, f"{self.head_shas.get(path, '')}\n"
         return 0, ""
 
 
@@ -531,6 +534,49 @@ async def test_owner_releases_terminal_item_idempotently(client_and_db, monkeypa
 
     assert first.status_code == 200
     assert second.status_code == 200
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_owner_releases_clean_squash_merged_pr_head(client_and_db, monkeypatch):
+    ac, maker = client_and_db
+    runner = _FakeGitRunner()
+    item_id, owner_id, _, workspace_id, path = await _seed_leased_item(maker)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.pr_number = 875
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        repo_full_name = f"{scope.repo_owner}/{scope.repo_name}"
+        await db.commit()
+    runner.rev_counts[path] = "23"
+    runner.head_shas[path] = "a" * 40
+    monkeypatch.setattr(github_workspace_service, "_runner", runner)
+
+    async def get_pull(*_args, **_kwargs):
+        return {
+            "state": "closed",
+            "merged_at": "2026-09-29T08:46:06Z",
+            "head": {
+                "sha": "a" * 40,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": repo_full_name},
+            },
+        }
+
+    monkeypatch.setattr(agent_teams_routes.github_client, "get_pull", get_pull)
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "workspace_released",
+            "reporting_slot_id": owner_id,
+            "lease_token": "lease-current",
+        },
+    )
+
+    assert response.status_code == 200
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id is None
@@ -1210,7 +1256,7 @@ async def test_workspace_release_cas_survives_wal_interleaving(
     item_id, owner_id, other_id, workspace_id, _ = await _seed_leased_item(maker)
     entered_blocker = False
 
-    async def interleaving_blocker(_scope, _workspace):
+    async def interleaving_blocker(_scope, _workspace, _item):
         nonlocal entered_blocker
         entered_blocker = True
         async with maker() as other_db:

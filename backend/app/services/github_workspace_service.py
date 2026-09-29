@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
+import httpx
 from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +25,7 @@ from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
 )
+from app.services.github_client import GithubClientResponseError, github_client
 
 GIT_TIMEOUT_SECONDS = 300
 
@@ -855,7 +857,10 @@ class GithubWorkspaceService:
         )
 
     async def release_blocker(
-        self, scope: TeamGithubScope, workspace: GithubWorkspace
+        self,
+        scope: TeamGithubScope,
+        workspace: GithubWorkspace,
+        item: GithubWorkItem | None = None,
     ) -> str | None:
         """Return why a workspace must not be released, failing closed."""
         if workspace.kind == "primary":
@@ -873,10 +878,53 @@ class GithubWorkspaceService:
             ["-C", workspace.path, "rev-list", "--count", f"{scope.base_ref}..HEAD"]
         )
         if return_code != 0:
-            return output.strip() or "unpushed commits could not be determined"
-        if output.strip() != "0":
+            return output.strip() or "commits outside the dispatch base could not be determined"
+        count = output.strip()
+        if not count.isdecimal():
+            return "commits outside the dispatch base could not be determined"
+        if count != "0":
+            if item is not None and item.pr_number is not None and item.dispatch_head_ref:
+                return_code, head_output = await self._runner(
+                    ["-C", workspace.path, "rev-parse", "--verify", "HEAD"]
+                )
+                head_sha = head_output.strip()
+                if return_code != 0 or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+                    return "workspace HEAD could not be verified"
+                try:
+                    token = None
+                    if scope.github_auth_mode == "app":
+                        if scope.github_app_installation_id is None:
+                            return "GitHub App installation is not configured"
+                        token = await github_app_auth_service.mint_repository_token(
+                            scope.github_app_installation_id,
+                            scope.repo_owner,
+                            scope.repo_name,
+                            purpose="pull_request",
+                            cache_subject="workspace_release",
+                        )
+                    pull = await github_client.get_pull(
+                        scope.repo_owner,
+                        scope.repo_name,
+                        item.pr_number,
+                        token=token,
+                    )
+                except (GithubAppAuthError, GithubClientResponseError, httpx.HTTPError):
+                    return "pushed PR head could not be verified on GitHub"
+                head = pull.get("head")
+                head_repo = head.get("repo") if isinstance(head, dict) else None
+                if (
+                    isinstance(head, dict)
+                    and isinstance(head_repo, dict)
+                    and head.get("sha") == head_sha
+                    and head.get("ref") == item.dispatch_head_ref
+                    and str(head_repo.get("full_name", "")).casefold()
+                    == f"{scope.repo_owner}/{scope.repo_name}".casefold()
+                    and (pull.get("state") == "open" or pull.get("merged_at") is not None)
+                ):
+                    return None
+                return "workspace HEAD is not the pushed head of its recorded PR"
             return (
-                f"{output.strip()} commit(s) not pushed to {scope.base_ref}; "
+                f"{count} commit(s) not contained in local {scope.base_ref}; "
                 "the next dispatch would reset --hard them away"
             )
         return None
