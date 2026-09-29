@@ -22,6 +22,7 @@ from app.services.agent_team_service import agent_team_service
         ("unknown", "", "", "", "", False),
         ("unknown", "token", "", "", "", True),
         ("unknown", "token", "123", "", "", False),
+        ("unknown", "token", "", "", "bot", True),
         ("unknown", "", "123", "/tmp/key.pem", "bot", True),
         ("ambient", "", "123", "/tmp/key.pem", "bot", False),
         ("ambient", "token", "", "", "", True),
@@ -239,6 +240,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
     assert scope["github_auth_mode"] == "unknown"
+    assert isinstance(scope["github_poll_token_configured"], bool)
     assert scope["max_verification_retries"] == 3
     assert scope["base_ref"] == "origin/main"
     assert scope["builds_out_of_tree"] is True

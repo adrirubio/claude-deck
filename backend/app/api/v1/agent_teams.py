@@ -210,7 +210,7 @@ def _scope_auth_configured(scope: TeamGithubScope) -> bool:
         and settings.github_app_private_key_path
         and settings.github_app_bot_login
     )
-    app_partial = bool(settings.github_app_id or settings.github_app_private_key_path or settings.github_app_bot_login) and not app_configured
+    app_partial = bool(settings.github_app_id or settings.github_app_private_key_path) and not app_configured
     return (
         app_configured if scope.github_auth_mode == "app"
         else bool(settings.github_token) if scope.github_auth_mode == "ambient"
@@ -230,6 +230,7 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         merge_policy=scope.merge_policy,
         github_auth_mode=scope.github_auth_mode,
         github_auth_configured=_scope_auth_configured(scope),
+        github_poll_token_configured=bool(settings.github_token),
         max_approval_rounds=scope.max_approval_rounds,
         max_concurrent_dispatched=scope.max_concurrent_dispatched,
         max_verification_retries=scope.max_verification_retries,

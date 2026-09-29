@@ -88,7 +88,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
 
           <HelpSection icon={GitBranch} title="Autonomous GitHub dispatch">
             <ol className="list-decimal space-y-1 pl-5">
-              <li>Put <code>github_token</code> or GitHub App settings in <code>backend/.env</code> and restart Deck.</li>
+              <li>Put <code>github_token</code> in <code>backend/.env</code> for polling private repos and restart Deck. App-backed dispatch also needs GitHub App settings; App settings alone do not authenticate the watcher.</li>
               <li>Add a watched repo with an existing primary checkout under your home directory.</li>
               <li>The first enabled Roster slot is the Leader; launch it before enabling autonomy. The Role text does not select it.</li>
               <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>

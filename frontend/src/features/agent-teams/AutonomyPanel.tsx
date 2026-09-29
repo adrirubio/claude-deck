@@ -201,14 +201,19 @@ function recoveryBlockLabel(code?: string | null) {
 }
 
 function authStatus(scope: TeamGithubScope) {
+  if (!scope.github_poll_token_configured) return {
+    label: 'Polling token not set',
+    help: 'Set github_token in backend/.env and restart Deck. The watcher uses this host token to poll GitHub; private repos cannot be polled through App settings alone.',
+    warning: true,
+  }
   if (!scope.github_auth_configured) return {
-    label: 'GitHub access needs setup',
-    help: 'Add github_token or complete GitHub App settings in backend/.env, then restart Deck. The mode is checked on the next poll.',
+    label: 'GitHub App setup incomplete',
+    help: 'Complete the GitHub App settings in backend/.env or remove partial App settings, then restart Deck. Deck selects a dispatch auth mode when eligible work is dispatched.',
     warning: true,
   }
   if (scope.github_auth_mode === 'unknown') return {
-    label: 'Auth: awaiting first poll',
-    help: 'Credentials are configured. Deck selects an authentication mode when autonomy first polls this repo; this does not yet prove access.',
+    label: 'Dispatch auth: not selected',
+    help: 'The watcher can poll with the host token, but Deck selects a dispatch authentication mode only when eligible work is dispatched. A successful poll alone does not select the mode.',
     warning: false,
   }
   return {
@@ -1451,7 +1456,7 @@ export function AutonomyPanel({
           <div className="rounded-lg border p-5 text-sm text-muted-foreground">
             <h3 className="font-semibold text-foreground">Before you enable autonomy</h3>
             <ol className="mt-2 list-decimal space-y-1 pl-5">
-              <li>Add <code>github_token</code> or GitHub App settings to <code>backend/.env</code>, then restart Deck. Repo cards show the selected mode after polling.</li>
+              <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Deck. For App-backed dispatch, also configure the GitHub App settings. Deck selects the dispatch mode when work becomes eligible.</li>
               <li>Add a watched repo with an existing primary checkout under your home directory and labels to watch.</li>
               <li>In Roster, launch the first enabled slot: it is the Leader who approves plans.</li>
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>

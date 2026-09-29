@@ -158,6 +158,7 @@ export interface TeamGithubScope {
   merge_policy: TeamGithubMergePolicy | string
   github_auth_mode: 'unknown' | 'ambient' | 'app' | string
   github_auth_configured: boolean
+  github_poll_token_configured: boolean
   max_approval_rounds: number
   max_concurrent_dispatched: number
   max_verification_retries: number

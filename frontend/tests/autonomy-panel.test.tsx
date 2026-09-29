@@ -27,6 +27,7 @@ const scope: TeamGithubScope = {
   merge_policy: 'human',
   github_auth_mode: 'app',
   github_auth_configured: true,
+  github_poll_token_configured: true,
   max_approval_rounds: 3,
   max_concurrent_dispatched: 3,
   max_verification_retries: 2,
@@ -105,12 +106,12 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
 }
 
 describe('AutonomyPanel', () => {
-  it('distinguishes missing GitHub setup from credentials awaiting first poll', () => {
-    const view = render(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_auth_configured: false }], workItems: [] })} />)
-    expect(screen.getByText('GitHub access needs setup')).toHaveAttribute('title', expect.stringContaining('backend/.env'))
-    view.rerender(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_auth_configured: true }], workItems: [] })} />)
-    expect(screen.getByText('Auth: awaiting first poll')).toBeInTheDocument()
-    expect(screen.queryByText('GitHub access needs setup')).not.toBeInTheDocument()
+  it('distinguishes a missing polling token from unresolved dispatch mode after a poll', () => {
+    const view = render(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_poll_token_configured: false }], workItems: [] })} />)
+    expect(screen.getByText('Polling token not set')).toHaveAttribute('title', expect.stringContaining('backend/.env'))
+    view.rerender(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', last_polled_at: '2026-09-29T12:00:00Z' }], workItems: [] })} />)
+    expect(screen.getByText('Dispatch auth: not selected')).toHaveAttribute('title', expect.stringContaining('successful poll'))
+    expect(screen.queryByText('Polling token not set')).not.toBeInTheDocument()
   })
 
   it('explains first-run setup and optional build hints', async () => {
