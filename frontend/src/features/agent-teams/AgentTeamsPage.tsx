@@ -1044,8 +1044,6 @@ export function AgentTeamsPage() {
 
   const removeGithubScope = async (scope: TeamGithubScope) => {
     if (!selectedPreset) return
-    const confirmed = window.confirm(`Remove watched repo ${scope.repo_owner}/${scope.repo_name}?`)
-    if (!confirmed) return
     try {
       await deleteTeamGithubScope(scope.id)
       await loadAutonomy(selectedPreset.id)
@@ -1199,7 +1197,7 @@ export function AgentTeamsPage() {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
         <div className="min-w-0 rounded-lg border">
           <div className="border-b p-3 text-sm font-medium">Saved Teams</div>
           <div className="max-h-[620px] overflow-y-auto p-2">

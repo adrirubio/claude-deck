@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { StrictMode, useState } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -186,5 +186,61 @@ describe('AutonomyPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Save repo' }))
 
     expect(props.onUpdateScope).not.toHaveBeenCalled()
+  })
+
+  it('submits the operator token with Enter', async () => {
+    clearOperatorToken()
+    const user = userEvent.setup()
+    render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
+
+    await user.click(screen.getByRole('button', { name: 'Set operator token' }))
+    await user.type(screen.getByPlaceholderText('Enter secret value'), 'test-token{Enter}')
+
+    expect(await screen.findByText('Token set for this tab')).toBeInTheDocument()
+  })
+
+  it('confirms watched-repo removal in the app instead of using a native dialog', async () => {
+    const user = userEvent.setup()
+    const props = panelProps({ workItems: [] })
+    const confirm = vi.spyOn(window, 'confirm')
+    function RemovalHarness() {
+      const [scopes, setScopes] = useState([scope])
+      return <AutonomyPanel {...props} scopes={scopes} onDeleteScope={async (target) => {
+        await props.onDeleteScope(target)
+        setScopes([])
+      }} />
+    }
+    render(<RemovalHarness />)
+
+    await user.click(screen.getByRole('button', { name: 'Remove example/project' }))
+    expect(screen.getByText('Remove watched repo?')).toBeInTheDocument()
+    expect(screen.getByText(/permanently deletes its saved work-item history/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(props.onDeleteScope).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove example/project' })).toHaveFocus())
+
+    await user.click(screen.getByRole('button', { name: 'Remove example/project' }))
+    await user.click(screen.getByRole('button', { name: 'Remove repo' }))
+    await waitFor(() => expect(props.onDeleteScope).toHaveBeenCalledWith(scope))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add repo' })).toHaveFocus())
+    expect(confirm).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
+
+  it('reports a prepared attempt as queued after the backend returns pending', async () => {
+    setOperatorToken('test-token')
+    const user = userEvent.setup()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      JSON.stringify({ ...workItem, dispatch_status: 'pending' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    render(<AutonomyPanel {...panelProps({ workItems: [{ ...workItem, escalation_reason: 'prepared_owner_unavailable' }] })} />)
+
+    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
+    await user.click(screen.getByRole('button', { name: 'Resume prepared attempt' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm action' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Prepared attempt queued for resumption.')
+    fetchMock.mockRestore()
   })
 })
