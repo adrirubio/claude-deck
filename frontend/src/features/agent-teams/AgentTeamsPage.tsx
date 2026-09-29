@@ -43,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
+import { autonomousLeaderSlotId } from './leaderSlot'
 import type {
   AgentTeamLaunchPlan,
   AgentTeamLaunchPlanItem,
@@ -1312,7 +1313,7 @@ export function AgentTeamsPage() {
                 )}
                 {selectedPreset.slots.map((slot, index) => {
                   const colorClasses = getTeamSlotColorClasses(slot.ui_color)
-                  const isLeader = slot.enabled && slot.id === [...selectedPreset.slots].filter((candidate) => candidate.enabled).sort((first, second) => first.position - second.position)[0]?.id
+                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.slots)
                   return (
                     <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
                       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
