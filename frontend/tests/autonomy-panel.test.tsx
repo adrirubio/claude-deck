@@ -5,7 +5,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { AutonomyPanel } from '../src/features/agent-teams/AutonomyPanel'
 import { clearOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '../src/lib/api'
+import { fetchGithubRecoveryGateActive } from '../src/features/agent-teams/api'
 import type { AgentTeamPreset, GithubScopeRevision, GithubWorkItem, TeamGithubScope } from '../src/types/agentTeams'
+
+vi.mock('../src/features/agent-teams/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/features/agent-teams/api')>()
+  return { ...actual, fetchGithubRecoveryGateActive: vi.fn().mockResolvedValue({ active: false }) }
+})
 
 const preset: AgentTeamPreset = {
   id: 1,
@@ -112,6 +118,27 @@ describe('AutonomyPanel', () => {
     view.rerender(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', last_polled_at: '2026-09-29T12:00:00Z' }], workItems: [] })} />)
     expect(screen.getByText('Dispatch auth: not selected')).toHaveAttribute('title', expect.stringContaining('successful poll'))
     expect(screen.queryByText('Polling token not set')).not.toBeInTheDocument()
+  })
+
+  it('hides the soak-only gate until active and explains it when active', async () => {
+    const view = render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
+    expect(screen.queryByRole('button', { name: 'Recovery-only mode' })).not.toBeInTheDocument()
+    view.unmount()
+    vi.mocked(fetchGithubRecoveryGateActive).mockResolvedValueOnce({ active: true })
+    render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
+    expect(await screen.findByRole('button', { name: 'Recovery-only mode' })).toBeInTheDocument()
+    expect(screen.getByText(/scheduler is limited to one configured issue attempt/)).toBeInTheDocument()
+  })
+
+  it('defines recovery limits and phase and status badges', async () => {
+    const user = userEvent.setup()
+    render(<AutonomyPanel {...panelProps()} />)
+    const row = screen.getByRole('row', { name: /#821 — Fix playback/ })
+    expect(within(row).getByText('escalated')).toHaveAttribute('title', expect.stringContaining('Needs attention'))
+    await user.click(screen.getByRole('button', { name: 'Recovery policy for example/project' }))
+    expect(screen.getByText(/A failed head is a pushed PR commit whose checks fail/)).toBeInTheDocument()
+    expect(screen.getByText('Scope revisions allowed across one attempt.')).toBeInTheDocument()
+    expect(screen.getByText('Saving requires the operator token.', { exact: false })).toBeInTheDocument()
   })
 
   it('explains first-run setup and optional build hints', async () => {

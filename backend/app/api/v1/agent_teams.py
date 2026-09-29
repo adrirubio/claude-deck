@@ -1969,6 +1969,11 @@ async def update_github_scope_continuation_policy(
     return _scope_response(scope)
 
 
+@router.get("/github-recovery-gate/active")
+async def get_github_recovery_gate_active():
+    return {"active": github_dispatch_scheduler.recovery_only_attempt is not None}
+
+
 @router.get("/github-recovery-gate")
 async def get_github_recovery_gate(
     _operator: None = Depends(require_operator),

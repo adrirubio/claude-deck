@@ -47,6 +47,7 @@ import type {
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 import {
   abandonGithubWorkItem, cancelGithubActiveRevision, fetchGithubRecoveryGate,
+  fetchGithubRecoveryGateActive,
   fetchGithubWorkspaces, forceReleaseGithubWorkspace, releaseGithubRecoveryCheckpoint,
   resumeGithubWorkItem,
 } from './api'
@@ -132,6 +133,34 @@ function routeMethodLabel(value?: string | null) {
   return value.replaceAll('_', ' ')
 }
 
+function routeMethodHelp(value?: string | null) {
+  if (value === 'label') return 'Routed to an owner whose area label matched this GitHub issue.'
+  if (value === 'leader_fallback') return 'No owner matched; the Leader took the issue.'
+  if (value === 'classified') return 'Chosen from slot expertise after no area label matched.'
+  return 'No routing method recorded yet.'
+}
+
+function statusHelp(status: string) {
+  const help: Record<string, string> = {
+    pending: 'In progress: queued; the reason appears below when Deck is waiting.',
+    dispatched: 'In progress: an owner session is planning or implementing.',
+    verifying: 'In progress: a PR is open; Deck is watching GitHub checks.',
+    ready_for_review: 'Needs review: checks passed; a human should review or merge.',
+    awaiting_human_review: 'Needs review: the design PR awaits human review.',
+    escalated: 'Needs attention: Deck stopped; see the reason and available remedies.',
+    merged: 'Finished: the PR was merged.',
+    completed: 'Finished: work completed without a merged PR.',
+    failed: 'Needs attention: the attempt failed.',
+  }
+  return help[status] ?? 'See issue details for the current state.'
+}
+
+function phaseHelp(phase?: string | null) {
+  if (phase === 'diagnostic') return 'Diagnostic: investigating failed checks within an approved recovery revision; it is not a product-ready PR.'
+  if (phase === 'implementation') return 'Implementation: working on the issue and its product PR.'
+  return 'The attempt has not started a phase.'
+}
+
 function pendingReasonLabel(item: GithubWorkItem, ownerName?: string) {
   if (item.pending_reason === 'queued_slot_busy') {
     return `queued · behind ${ownerName ?? 'assigned slot'}`
@@ -196,7 +225,7 @@ function prUrl(item: GithubWorkItem) {
 }
 
 function recoveryBlockLabel(code?: string | null) {
-  if (!code) return 'Recovery can continue within the current bounded attempt.'
+  if (!code) return 'Recovery is available for this attempt. The owner proposes a bounded revision for the Leader to approve.'
   return code.replaceAll('_', ' ')
 }
 
@@ -640,6 +669,7 @@ function ContinuationPolicyDialog({
             {scope ? `${scope.repo_owner}/${scope.repo_name}` : 'Configure finite continuation limits.'}
           </DialogDescription>
         </DialogHeader>
+        <p className="text-sm text-muted-foreground">If an issue escalates with its PR still open, the owner can propose a scope revision: a plan with allowed files and commands. The Leader approves it, then the owner continues in the same workspace. A failed head is a pushed PR commit whose checks fail. These caps bound recovery. Saving requires the operator token.</p>
         {errorMessage && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             {errorMessage}
@@ -655,12 +685,12 @@ function ContinuationPolicyDialog({
               Enable bounded attempt continuation
             </label>
             {([
-              ['max_continuation_revisions', 'Attempt revision cap'],
-              ['max_continuation_failed_heads', 'Attempt failed-head cap'],
-              ['max_failed_heads_per_revision', 'Per-revision failed-head cap'],
-              ['max_scope_paths', 'Paths per revision'],
-              ['max_scope_commands', 'Commands per revision'],
-            ] as const).map(([key, label]) => (
+              ['max_continuation_revisions', 'Attempt revision cap', 'Scope revisions allowed across one attempt.'],
+              ['max_continuation_failed_heads', 'Attempt failed-head cap', 'Failed PR heads allowed across the whole attempt.'],
+              ['max_failed_heads_per_revision', 'Per-revision failed-head cap', 'Failed PR heads allowed within one revision.'],
+              ['max_scope_paths', 'Paths per revision', 'Files an owner may list in a scope revision.'],
+              ['max_scope_commands', 'Commands per revision', 'Commands an owner may list in a scope revision.'],
+            ] as const).map(([key, label, help]) => (
               <div className="grid gap-2" key={key}>
                 <Label htmlFor={`policy-${key}`}>{label}</Label>
                 <Input
@@ -670,10 +700,11 @@ function ContinuationPolicyDialog({
                   value={numberInputs[key]}
                   onChange={(event) => setNumberInputs((current) => current ? { ...current, [key]: event.target.value } : current)}
                 />
+                <p className="text-xs text-muted-foreground">{help}</p>
               </div>
             ))}
             <p className="text-xs text-muted-foreground md:col-span-2">
-              Recovery runs only when both this policy and team autonomy are enabled. Finite caps stop repeated recovery honestly.
+              Recovery runs only when both this policy and team autonomy are enabled. Finite caps stop repeated recovery instead of looping.
             </p>
             {form.continuation_enabled && !scope?.continuation_enabled && autonomyEnabled && (
               <label className="flex items-start gap-2 text-sm text-amber-600 dark:text-amber-400 md:col-span-2">
@@ -896,7 +927,7 @@ function WorkItemDialog({
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Retries</dt>
-                    <dd>product {item.retry_count} · diagnostic {item.diagnostic_retry_count}</dd>
+                    <dd>implementation checks {item.retry_count} · diagnostic heads {item.diagnostic_retry_count}</dd>
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Attempt</dt>
@@ -917,7 +948,11 @@ function WorkItemDialog({
                   <div>
                     <h3 id="attempt-recovery-title" className="font-semibold">Attempt recovery</h3>
                     <p className="text-sm text-muted-foreground">
-                      {recoveryBlockLabel(item.continuation_block_code)}
+                      {item.active_scope_status === 'active'
+                        ? `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. No operator action is needed unless it stalls.`
+                        : item.pending_approval_kind === 'continuation' && item.pending_approval_status === 'pending'
+                          ? 'Waiting for the Leader to approve the proposed recovery revision.'
+                          : recoveryBlockLabel(item.continuation_block_code)}
                     </p>
                   </div>
                 </div>
@@ -951,7 +986,7 @@ function WorkItemDialog({
                     <article key={revision.id} className="space-y-3 rounded-md border bg-muted/20 p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">revision {revision.revision}</Badge>
-                        <Badge variant="secondary">{phaseLabel(revision.phase)}</Badge>
+                        <Badge variant="secondary" title={phaseHelp(revision.phase)}>{phaseLabel(revision.phase)}</Badge>
                         <span className="text-sm font-medium">{readableCode(revision.status)}</span>
                         <span className="text-xs text-muted-foreground">
                           failed heads {revision.failed_head_count}/{revision.max_failed_heads}
@@ -961,12 +996,12 @@ function WorkItemDialog({
                       <dl className="grid gap-2 text-sm md:grid-cols-2">
                         <div><dt className="text-muted-foreground">Origin</dt><dd>{escalationReasonLabel(revision.originating_escalation_reason)}</dd></div>
                         <div><dt className="text-muted-foreground">Execution</dt><dd>{readableCode(revision.execution_target)}</dd></div>
-                        <div><dt className="text-muted-foreground">Owner</dt><dd>{slots.find((slot) => slot.id === revision.owner_slot_id)?.display_name ?? `slot #${revision.owner_slot_id}`} · member #{revision.owner_member_id}</dd></div>
-                        <div><dt className="text-muted-foreground">Workspace</dt><dd>#{revision.expected_workspace_id}</dd></div>
+                        <div><dt className="text-muted-foreground">Owner</dt><dd title={`Member #${revision.owner_member_id}`}>{slots.find((slot) => slot.id === revision.owner_slot_id)?.display_name ?? `slot #${revision.owner_slot_id}`}</dd></div>
+                        <div><dt className="text-muted-foreground">Workspace</dt><dd title={`Workspace #${revision.expected_workspace_id}`}>{sameAttempt && item.active_scope_revision === revision.revision && item.workspace_path ? item.workspace_path : `#${revision.expected_workspace_id}`}</dd></div>
                         {approval && (
                           <>
-                            <div><dt className="text-muted-foreground">Approval</dt><dd>request #{approval.id} · {approvalStatusLabel(approval.status)}</dd></div>
-                            <div><dt className="text-muted-foreground">Leader</dt><dd>member #{approval.leader_member_id}</dd></div>
+                            <div><dt className="text-muted-foreground">Approval</dt><dd title={`Request #${approval.id}`}>{approvalStatusLabel(approval.status)}</dd></div>
+                            <div><dt className="text-muted-foreground">Approver</dt><dd title={`Member #${approval.leader_member_id}`}>Leader agent</dd></div>
                           </>
                         )}
                         <div><dt className="text-muted-foreground">Delivered</dt><dd>{formatDateTime(revision.delivered_at)}</dd></div>
@@ -1006,12 +1041,12 @@ function WorkItemDialog({
                         </Button>
                       )}
                       {revision.recovery_checkpoint_stage === 'decision_hold' && (
-                        <Button variant="outline" size="sm" disabled={!decisionReleaseEligible} title={!decisionReleaseEligible ? 'This decision hold is no longer releasable.' : undefined} onClick={() => setOperatorAction({ kind: 'release_decision', revision })}>
+                        <Button variant="outline" size="sm" disabled={!decisionReleaseEligible} title={decisionReleaseEligible ? 'Recovery is paused. Release opens a time-limited window for the Leader to decide.' : 'This decision hold is no longer releasable.'} onClick={() => setOperatorAction({ kind: 'release_decision', revision })}>
                           Release decision hold
                         </Button>
                       )}
                       {revision.recovery_checkpoint_stage === 'ack_hold' && (
-                        <Button variant="outline" size="sm" disabled={!acknowledgementReleaseEligible} title={!acknowledgementReleaseEligible ? 'This acknowledgement hold is no longer releasable.' : undefined} onClick={() => setOperatorAction({ kind: 'release_ack', revision })}>
+                        <Button variant="outline" size="sm" disabled={!acknowledgementReleaseEligible} title={acknowledgementReleaseEligible ? 'Recovery is paused. Release opens a time-limited window for the owner to acknowledge.' : 'This acknowledgement hold is no longer releasable.'} onClick={() => setOperatorAction({ kind: 'release_ack', revision })}>
                           Release acknowledgement hold
                         </Button>
                       )}
@@ -1027,7 +1062,7 @@ function WorkItemDialog({
               <section className="space-y-3 rounded-lg border p-4" aria-labelledby="operator-actions-title">
                 <div>
                   <h3 id="operator-actions-title" className="font-semibold">Operator remedies</h3>
-                  <p className="text-sm text-muted-foreground">Actions are confirmed against the current server state before changing this attempt.</p>
+                  <p className="text-sm text-muted-foreground">Only remedies valid for this state appear. Deck checks current authority before changing the issue.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {item.escalation_reason === 'prepared_owner_unavailable' && (
@@ -1041,7 +1076,7 @@ function WorkItemDialog({
                     </Button>
                   )}
                   {item.workspace_path && (
-                    <Button variant="destructive" size="sm" disabled={workspaceLoading} onClick={() => void inspectWorkspace()}>
+                    <Button variant="destructive" size="sm" title="Reclaim the leased worktree if the owner is gone; this may discard unpushed work." disabled={workspaceLoading} onClick={() => void inspectWorkspace()}>
                       {workspaceLoading ? 'Checking lease…' : 'Force-release workspace…'}
                     </Button>
                   )}
@@ -1070,7 +1105,7 @@ function WorkItemDialog({
                   </AlertDialogTitle>
                   <AlertDialogDescription>
                     {operatorAction?.kind === 'force_release'
-                      ? `This may discard dirty or unpushed work in ${operatorAction.workspace.path}. Lease acquired at ${operatorAction.workspace.leased_at}. Verify the owner is finished before continuing.`
+                      ? `This may discard dirty or unpushed work in ${operatorAction.workspace.path}. Lease acquired ${formatDateTime(operatorAction.workspace.leased_at)}. Verify the owner is finished before continuing.`
                       : operatorAction?.kind === 'release_decision' || operatorAction?.kind === 'release_ack'
                         ? 'This starts a time-limited decision or acknowledgement window. Confirm the responsible agent is available now.'
                         : 'Deck will check current authority and reject stale or ineligible requests.'}
@@ -1171,8 +1206,18 @@ export function AutonomyPanel({
   const [gateLoading, setGateLoading] = useState(false)
   const [gate, setGate] = useState<GithubRecoveryGate | null>(null)
   const [gateError, setGateError] = useState<string | null>(null)
+  const [gateActive, setGateActive] = useState(false)
+  const [gateStatusUnavailable, setGateStatusUnavailable] = useState(false)
   const [repoFilter, setRepoFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
+
+  useEffect(() => {
+    let current = true
+    void fetchGithubRecoveryGateActive()
+      .then(({ active }) => { if (current) { setGateActive(active); setGateStatusUnavailable(false) } })
+      .catch(() => { if (current) setGateStatusUnavailable(true) })
+    return () => { current = false }
+  }, [preset.id])
   const [operatorTokenStored, setOperatorTokenStored] = useState(() => Boolean(getOperatorToken()))
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
@@ -1353,7 +1398,7 @@ export function AutonomyPanel({
       try {
         const team = await fetchAgentMailTeam(false)
         if (!team.members.some((member) => member.team_slot_id === leader.id && member.status === 'connected')) {
-          warnings.push('The Leader is not currently connected in Agent Mail. Work may wait or escalate before approval.')
+          warnings.push('The Leader is not currently connected in Agent Mail. Launch the first enabled slot from Roster before enabling autonomy.')
         }
       } catch {
         warnings.push('Leader availability could not be checked. Confirm it before enabling unattended work.')
@@ -1428,7 +1473,7 @@ export function AutonomyPanel({
           <p className="text-sm text-muted-foreground">{scopeCount} watched repo{scopeCount === 1 ? '' : 's'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" disabled={gateLoading} onClick={() => void inspectGate()}>{gateLoading ? 'Checking gate…' : 'Recovery gate'}</Button>
+          {gateActive && <Button variant="outline" disabled={gateLoading} onClick={() => void inspectGate()}>{gateLoading ? 'Checking gate…' : 'Recovery-only mode'}</Button>}
           <Button
             variant="outline"
             onClick={() => { if (operatorTokenStored) clearStoredToken(); else void requestToken() }}
@@ -1449,6 +1494,9 @@ export function AutonomyPanel({
           </Button>
         </div>
       </div>
+
+      {gateActive && <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Recovery-only mode is active: Deck&apos;s scheduler is limited to one configured issue attempt. Select Recovery-only mode for details.</p>}
+      {gateStatusUnavailable && <p className="text-xs text-muted-foreground">Recovery-only gate status could not be checked.</p>}
 
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
         {loading && <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading autonomy state...</div>}
@@ -1526,10 +1574,10 @@ export function AutonomyPanel({
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>Activity</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">Recent GitHub work items across this preset&apos;s scopes.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Recent GitHub issues across this team&apos;s watched repos.</p>
           </div>
           <span className="text-xs text-muted-foreground sm:shrink-0">
-            {lastRefreshedAt ? `Updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Not refreshed yet'} · every 5s while open
+            {lastRefreshedAt ? `Table updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Table not refreshed yet'} · table every 5s · GitHub poll every 60s by default
           </span>
         </CardHeader>
         <CardContent className="min-w-0">
@@ -1611,14 +1659,14 @@ export function AutonomyPanel({
                             <Badge variant={item.issue_type === 'design' ? 'default' : 'secondary'}>
                               {item.issue_type}
                             </Badge>
-                            <Badge variant="outline">{phaseLabel(item.attempt_phase)}</Badge>
+                            <Badge variant="outline" title={phaseHelp(item.attempt_phase)}>{phaseLabel(item.attempt_phase)}</Badge>
                           </div>
                           {item.active_scope_revision > 0 && (
                             <p className="mt-1 text-xs text-muted-foreground">revision {item.active_scope_revision}</p>
                           )}
                         </td>
                         <td className="px-3 py-3">
-                          <Badge variant="outline" className={statusBadgeClass(item.dispatch_status)}>
+                          <Badge variant="outline" className={statusBadgeClass(item.dispatch_status)} title={statusHelp(item.dispatch_status)}>
                             {item.dispatch_status.replaceAll('_', ' ')}
                           </Badge>
                           {pendingLabel && <p className="mt-1 text-xs text-muted-foreground">{pendingLabel}</p>}
@@ -1638,13 +1686,13 @@ export function AutonomyPanel({
                           )}
                           {item.pending_approval_request_id && (
                             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                              approval #{item.pending_approval_request_id} · {approvalStatusLabel(item.pending_approval_status)}
+                              {approvalStatusLabel(item.pending_approval_status)}
                             </p>
                           )}
                         </td>
                         <td className="px-3 py-3">
                           <span>{owner?.display_name ?? 'Unassigned'}</span>
-                          <p className="mt-1 text-xs text-muted-foreground">{routeMethodLabel(item.routing_method)}</p>
+                          <p className="mt-1 text-xs text-muted-foreground" title={routeMethodHelp(item.routing_method)}>{routeMethodLabel(item.routing_method)}</p>
                         </td>
                         <td className="px-3 py-3">
                           {pullUrl ? (
@@ -1777,7 +1825,8 @@ export function AutonomyPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Enable autonomous dispatch?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deck will resume scheduled autonomy. A configured recovery-only gate limits work to its selected attempt; otherwise enabled watched repos may poll and dispatch labeled issues.
+              Deck will poll enabled repos every 60 seconds by default. Issues with the dispatch label will be assigned to agents, whose sessions run in worktrees beside each primary checkout.
+              {gateActive && ' Recovery-only mode is active, so the scheduler is limited to its configured issue attempt.'}
               Review these conditions before continuing.
             </AlertDialogDescription>
           </AlertDialogHeader>
