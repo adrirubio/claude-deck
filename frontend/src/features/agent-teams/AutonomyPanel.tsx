@@ -71,7 +71,8 @@ const policyNumberKeys: PolicyNumberKey[] = [
 function parsedLimit(value: string, label: string, minimum: number): number {
   const parsed = Number(value)
   if (!value.trim() || !Number.isInteger(parsed)) throw new Error(`Enter a whole number for ${label}.`)
-  return Math.max(minimum, parsed)
+  if (parsed < minimum) throw new Error(`${label} must be at least ${minimum}.`)
+  return parsed
 }
 
 const emptyScope: TeamGithubScopeInput = {
@@ -633,6 +634,7 @@ function WorkItemDialog({
   onOpenChange,
   onRetry,
   onFetchScopeRevisions,
+  onFetchWorkspaces,
   operatorTokenStored,
   onRequestOperatorToken,
   slots,
@@ -644,6 +646,7 @@ function WorkItemDialog({
   onOpenChange: (open: boolean) => void
   onRetry: (item: GithubWorkItem) => void
   onFetchScopeRevisions: (itemId: number) => Promise<GithubScopeRevision[]>
+  onFetchWorkspaces: (scopeId: number) => Promise<{ workspaces: GithubWorkspace[] }>
   operatorTokenStored: boolean
   onRequestOperatorToken: () => Promise<string | null>
   slots: AgentTeamSlot[]
@@ -652,12 +655,13 @@ function WorkItemDialog({
     action: ItemOperatorAction,
     reason: string,
     reassignToSlotId?: number
-  ) => Promise<void>
+  ) => Promise<string | undefined>
 }) {
   const [loadingRevisions, setLoadingRevisions] = useState(false)
   const [revisions, setRevisions] = useState<GithubScopeRevision[]>([])
   const [revisionError, setRevisionError] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [actionResult, setActionResult] = useState<string | null>(null)
   const [operatorAction, setOperatorAction] = useState<ItemOperatorAction | null>(null)
   const [actionReason, setActionReason] = useState('')
   const [reassignToSlotId, setReassignToSlotId] = useState('current')
@@ -733,7 +737,7 @@ function WorkItemDialog({
     setWorkspaceLoading(true)
     setErrorMessage(null)
     try {
-      const response = await fetchGithubWorkspaces(item.scope_id)
+      const response = await onFetchWorkspaces(item.scope_id)
       const workspace = response.workspaces.find((candidate) => candidate.leased_item_id === item.id)
       if (!workspace?.leased_at) throw new Error('No current lease was found for this work item.')
       setOperatorAction({ kind: 'force_release', workspace })
@@ -752,8 +756,10 @@ function WorkItemDialog({
     }
     setActionSaving(true)
     setErrorMessage(null)
+    setActionResult(null)
     try {
-      await onOperate(item, operatorAction, actionReason.trim(), reassignToSlotId === 'current' ? undefined : Number(reassignToSlotId))
+      const result = await onOperate(item, operatorAction, actionReason.trim(), reassignToSlotId === 'current' ? undefined : Number(reassignToSlotId))
+      setActionResult(result ?? 'Operator action completed.')
       setOperatorAction(null)
       setActionReason('')
       loadRevisions(item.id)
@@ -793,6 +799,7 @@ function WorkItemDialog({
                   {errorMessage}
                 </div>
               )}
+              {actionResult && <p role="status" className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm">{actionResult}</p>}
               {item.handoff_state && (
                 <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 p-4 text-sm">
                   <span className="font-medium">{ownerName ?? 'Current owner'}</span>
@@ -852,6 +859,17 @@ function WorkItemDialog({
                 {revisions.map((revision) => {
                   const approval = revision.approval_request
                   const links = safeEvidenceLinks(revision.evidence)
+                  const sameAttempt = item.dispatch_nonce === revision.dispatch_nonce
+                    && item.owner_slot_id === revision.owner_slot_id
+                  const holdEligible = sameAttempt && item.dispatch_status === 'escalated'
+                    && item.escalation_reason === revision.originating_escalation_reason
+                  const activeCancellationEligible = sameAttempt && item.dispatch_status === 'dispatched'
+                    && item.active_scope_revision === revision.revision && item.pr_number != null
+                    && !item.handoff_state
+                  const decisionReleaseEligible = holdEligible && revision.status === 'proposed'
+                    && approval?.status === 'pending'
+                  const acknowledgementReleaseEligible = holdEligible && revision.status === 'approved'
+                    && approval?.status === 'approved' && !!revision.delivered_at
                   return (
                     <article key={revision.id} className="space-y-3 rounded-md border bg-muted/20 p-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -902,6 +920,8 @@ function WorkItemDialog({
                         <Button
                           variant="destructive"
                           size="sm"
+                          disabled={!sameAttempt || item.dispatch_status !== 'escalated'}
+                          title={!sameAttempt || item.dispatch_status !== 'escalated' ? 'This request is no longer current.' : undefined}
                           onClick={() => setOperatorAction({ kind: 'cancel_request', revision })}
                         >
                           <XCircle className="mr-2 h-4 w-4" />
@@ -909,17 +929,17 @@ function WorkItemDialog({
                         </Button>
                       )}
                       {revision.recovery_checkpoint_stage === 'decision_hold' && (
-                        <Button variant="outline" size="sm" onClick={() => setOperatorAction({ kind: 'release_decision', revision })}>
+                        <Button variant="outline" size="sm" disabled={!decisionReleaseEligible} title={!decisionReleaseEligible ? 'This decision hold is no longer releasable.' : undefined} onClick={() => setOperatorAction({ kind: 'release_decision', revision })}>
                           Release decision hold
                         </Button>
                       )}
                       {revision.recovery_checkpoint_stage === 'ack_hold' && (
-                        <Button variant="outline" size="sm" onClick={() => setOperatorAction({ kind: 'release_ack', revision })}>
+                        <Button variant="outline" size="sm" disabled={!acknowledgementReleaseEligible} title={!acknowledgementReleaseEligible ? 'This acknowledgement hold is no longer releasable.' : undefined} onClick={() => setOperatorAction({ kind: 'release_ack', revision })}>
                           Release acknowledgement hold
                         </Button>
                       )}
                       {revision.status === 'active' && (
-                        <Button variant="destructive" size="sm" onClick={() => setOperatorAction({ kind: 'cancel_revision', revision })}>
+                        <Button variant="destructive" size="sm" disabled={!activeCancellationEligible} title={!activeCancellationEligible ? 'This revision is no longer the active dispatched attempt.' : undefined} onClick={() => setOperatorAction({ kind: 'cancel_revision', revision })}>
                           Cancel active revision
                         </Button>
                       )}
@@ -1095,6 +1115,12 @@ export function AutonomyPanel({
     return pending
   }, [])
 
+  useEffect(() => () => {
+    tokenResolverRef.current?.(null)
+    tokenResolverRef.current = null
+    tokenPromiseRef.current = null
+  }, [])
+
   const settleTokenDialog = (token: string | null) => {
     tokenResolverRef.current?.(token)
     tokenResolverRef.current = null
@@ -1141,15 +1167,22 @@ export function AutonomyPanel({
   )
 
   const inspectGate = async () => {
-    setGateOpen(true)
+    setGateOpen(false)
     setGateLoading(true)
+    setGate(null)
     setGateError(null)
+    let cancelled = false
     try {
       setGate(await withOperatorToken(fetchGithubRecoveryGate))
     } catch (error) {
-      setGateError(error instanceof Error ? error.message : 'Failed to read recovery gate')
+      if (error instanceof Error && error.message === 'Operator token is required for this action.') {
+        cancelled = true
+      } else {
+        setGateError(error instanceof Error ? error.message : 'Failed to read recovery gate')
+      }
     } finally {
       setGateLoading(false)
+      if (!cancelled) setGateOpen(true)
     }
   }
 
@@ -1159,10 +1192,16 @@ export function AutonomyPanel({
     reason: string,
     reassignToSlotId?: number
   ) => {
+    let resultMessage: string | undefined
     await withOperatorToken(async (token) => {
       if (action.kind === 'abandon') return abandonGithubWorkItem(item.id, reason, token)
       if (action.kind === 'resume') return resumeGithubWorkItem(preset.id, item.id, token, reassignToSlotId)
-      if (action.kind === 'force_release') return forceReleaseGithubWorkspace(item.scope_id, action.workspace, reason, token)
+      if (action.kind === 'force_release') {
+        const released = await forceReleaseGithubWorkspace(item.scope_id, action.workspace, reason, token)
+        const discardedCount = released.discarded_paths?.split('\n').filter(Boolean).length ?? 0
+        resultMessage = `Released workspace from item #${released.released_item_id}. ${discardedCount} local path${discardedCount === 1 ? '' : 's'} flagged; unpushed commits: ${released.unpushed_commits ?? 'unknown'}.`
+        return
+      }
       if (action.kind === 'cancel_request') {
         const approvalId = action.revision.approval_request_id
         if (!approvalId) throw new Error('This revision has no pending approval request.')
@@ -1176,6 +1215,7 @@ export function AutonomyPanel({
       )
     })
     await onRefresh()
+    return resultMessage
   }
 
   const applyToggle = async (enabled: boolean) => {
@@ -1274,7 +1314,7 @@ export function AutonomyPanel({
           <p className="text-sm text-muted-foreground">{scopeCount} configured scope{scopeCount === 1 ? '' : 's'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => void inspectGate()}>Recovery gate</Button>
+          <Button variant="outline" disabled={gateLoading} onClick={() => void inspectGate()}>{gateLoading ? 'Checking gate…' : 'Recovery gate'}</Button>
           <Button
             variant="outline"
             onClick={() => { if (operatorTokenStored) clearStoredToken(); else void requestToken() }}
@@ -1524,6 +1564,7 @@ export function AutonomyPanel({
         onOpenChange={(open) => setDetailItemId(open ? detailItemId : null)}
         onRetry={setRetryTarget}
         onFetchScopeRevisions={fetchRevisions}
+        onFetchWorkspaces={(scopeId) => withOperatorToken((token) => fetchGithubWorkspaces(scopeId, token))}
         operatorTokenStored={operatorTokenStored}
         onRequestOperatorToken={() => requestToken()}
         slots={preset.slots}
@@ -1559,7 +1600,7 @@ export function AutonomyPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Enable autonomous dispatch?</AlertDialogTitle>
             <AlertDialogDescription>
-              Deck will immediately begin polling enabled watched repos and may dispatch labeled issues.
+              Deck will resume scheduled autonomy. A configured recovery-only gate limits work to its selected attempt; otherwise enabled watched repos may poll and dispatch labeled issues.
               Review these conditions before continuing.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1584,7 +1625,7 @@ export function AutonomyPanel({
           </DialogHeader>
           {gateLoading && <p className="text-sm text-muted-foreground">Checking gate…</p>}
           {gateError && <p className="text-sm text-destructive" role="alert">{gateError}</p>}
-          {!gateLoading && gate && (
+          {!gateLoading && !gateError && gate && (
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <dt>Gate</dt><dd>{gate.active ? 'active' : 'off'}</dd>
               {gate.active && <>

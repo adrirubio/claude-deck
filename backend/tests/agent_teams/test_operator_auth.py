@@ -158,7 +158,13 @@ def _routes(scope_id: int, workspace_id: int, item_id: int):
             "reason": "operator auth boundary test",
         },
     )
-    return [listing, force_release, cancel_active_continuation]
+    abandon = (
+        "abandon",
+        "post",
+        f"/api/v1/agent-teams/github-work-items/{item_id}/abandon",
+        {"reason": "operator auth boundary test"},
+    )
+    return [listing, force_release, cancel_active_continuation, abandon]
 
 
 async def _call(client, method, url, body, headers):
@@ -323,6 +329,14 @@ async def test_the_configured_operator_token_is_accepted(
         headers=headers,
     )
     assert cancelled.status_code not in (401, 503), cancelled.text
+
+    abandoned = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{item_id}/abandon",
+        json={"reason": "operator auth boundary test"},
+        headers=headers,
+    )
+    assert abandoned.status_code == 409
+    assert abandoned.json()["detail"]["block_code"] == "work_item_not_abandonable"
 
 
 @pytest.mark.asyncio

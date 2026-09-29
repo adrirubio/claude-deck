@@ -216,8 +216,10 @@ export function fetchGithubRecoveryGate(operatorToken: string): Promise<GithubRe
   })
 }
 
-export function fetchGithubWorkspaces(scopeId: number): Promise<{ workspaces: GithubWorkspace[] }> {
-  return apiClient<{ workspaces: GithubWorkspace[] }>(`agent-teams/github-scopes/${scopeId}/workspaces`)
+export function fetchGithubWorkspaces(scopeId: number, operatorToken: string): Promise<{ workspaces: GithubWorkspace[] }> {
+  return apiClient<{ workspaces: GithubWorkspace[] }>(`agent-teams/github-scopes/${scopeId}/workspaces`, {
+    headers: operatorHeaders(operatorToken),
+  })
 }
 
 export function abandonGithubWorkItem(workItemId: number, reason: string, operatorToken: string): Promise<GithubWorkItem> {
