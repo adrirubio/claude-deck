@@ -1476,7 +1476,9 @@ export function AutonomyPanel({
               </Select>
             </div>
           </div>
-          {workItems.length === 0 ? (
+          {loading ? (
+            <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading activity…</div>
+          ) : workItems.length === 0 ? (
             <div className="rounded-lg border p-5 text-sm text-muted-foreground">
               No GitHub work items yet.
             </div>

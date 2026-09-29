@@ -744,6 +744,7 @@ export function AgentTeamsPage() {
   const [autonomyTab, setAutonomyTab] = useState<'roster' | 'autonomy'>('roster')
   const [autonomyLastRefreshedAt, setAutonomyLastRefreshedAt] = useState<Date | null>(null)
   const [autonomyLoadError, setAutonomyLoadError] = useState<string | null>(null)
+  const [autonomyDataPresetId, setAutonomyDataPresetId] = useState<number | null>(null)
   const autonomyRequestIdRef = useRef(0)
 
   const selectedPreset = useMemo(
@@ -796,12 +797,16 @@ export function AgentTeamsPage() {
       if (autonomyRequestIdRef.current === requestId) {
         setGithubScopes(scopeResponse.scopes)
         setGithubWorkItems(workItemResponse.items)
+        setAutonomyDataPresetId(presetId)
         setAutonomyLastRefreshedAt(new Date())
         setAutonomyLoadError(null)
       }
     } catch (error) {
       if (autonomyRequestIdRef.current === requestId) {
         const message = error instanceof Error ? error.message : 'Failed to load autonomy state'
+        setGithubScopes([])
+        setGithubWorkItems([])
+        setAutonomyDataPresetId(presetId)
         setAutonomyLoadError(message)
         if (showLoading || manual) toast.error(message)
       }
@@ -836,6 +841,7 @@ export function AgentTeamsPage() {
         setAutonomyRefreshing(false)
         setAutonomyLastRefreshedAt(null)
         setAutonomyLoadError(null)
+        setAutonomyDataPresetId(null)
       })
       return
     }
@@ -1393,12 +1399,12 @@ export function AgentTeamsPage() {
                 <TabsContent value="autonomy" className="mt-5">
                   <AutonomyPanel
                     preset={selectedPreset}
-                    scopes={githubScopes}
-                    workItems={githubWorkItems}
-                    loading={autonomyLoading}
-                    refreshing={autonomyRefreshing}
-                    lastRefreshedAt={autonomyLastRefreshedAt}
-                    loadError={autonomyLoadError}
+                    scopes={autonomyDataPresetId === selectedPreset.id ? githubScopes : []}
+                    workItems={autonomyDataPresetId === selectedPreset.id ? githubWorkItems : []}
+                    loading={autonomyLoading || autonomyDataPresetId !== selectedPreset.id}
+                    refreshing={autonomyDataPresetId === selectedPreset.id && autonomyRefreshing}
+                    lastRefreshedAt={autonomyDataPresetId === selectedPreset.id ? autonomyLastRefreshedAt : null}
+                    loadError={autonomyDataPresetId === selectedPreset.id ? autonomyLoadError : null}
                     onRefresh={refreshAutonomy}
                     onToggleAutonomy={toggleAutonomy}
                     onCreateScope={createGithubScope}
