@@ -2348,6 +2348,7 @@ class TeamGithubScopeResponse(BaseModel):
     dispatch_label: str
     design_label: str
     merge_policy: str
+    github_auth_mode: str
     max_approval_rounds: int
     max_concurrent_dispatched: int
     max_verification_retries: int

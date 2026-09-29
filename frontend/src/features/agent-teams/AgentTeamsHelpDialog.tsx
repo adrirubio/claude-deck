@@ -1,4 +1,4 @@
-import { BookOpen, Inbox, Rocket, UsersRound } from 'lucide-react'
+import { BookOpen, GitBranch, Inbox, Rocket, UsersRound } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -84,6 +84,16 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               to confirm their slot identity, then use <code>deck_request_context</code>,
               <code> deck_reply</code>, and handoffs to coordinate.
             </p>
+          </HelpSection>
+
+          <HelpSection icon={GitBranch} title="Autonomous GitHub dispatch">
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>On the Autonomy tab, add a watched repo with its primary checkout and issue labels.</li>
+              <li>Check that the repo has GitHub authentication and an enabled Leader slot.</li>
+              <li>Label an issue with the dispatch label, then enable autonomy to start polling.</li>
+              <li>Watch Activity for progress; use an operator token only for protected recovery actions.</li>
+            </ol>
+            <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
           </HelpSection>
         </div>
       </DialogContent>

@@ -214,6 +214,7 @@ def _scope_response(scope: TeamGithubScope) -> TeamGithubScopeResponse:
         dispatch_label=scope.dispatch_label,
         design_label=scope.design_label,
         merge_policy=scope.merge_policy,
+        github_auth_mode=scope.github_auth_mode,
         max_approval_rounds=scope.max_approval_rounds,
         max_concurrent_dispatched=scope.max_concurrent_dispatched,
         max_verification_retries=scope.max_verification_retries,
