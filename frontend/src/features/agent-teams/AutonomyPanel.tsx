@@ -793,7 +793,7 @@ function WorkItemDialog({
       const result = await onOperate(item, action, actionReason.trim(), reassignToSlotId === 'current' ? undefined : Number(reassignToSlotId))
       const actionMessages: Record<ItemOperatorAction['kind'], string> = {
         abandon: 'Work item abandoned.',
-        resume: 'Prepared attempt resumed.',
+        resume: 'Prepared attempt queued for resumption.',
         release_decision: 'Decision hold released. The Leader can now decide.',
         release_ack: 'Acknowledgement hold released. The owner can now acknowledge.',
         cancel_request: 'Continuation request cancelled.',
@@ -1122,6 +1122,8 @@ export function AutonomyPanel({
   const [scopeDialog, setScopeDialog] = useState<ScopeDialogState>(null)
   const [scopeToRemove, setScopeToRemove] = useState<TeamGithubScope | null>(null)
   const [scopeRemovalPending, setScopeRemovalPending] = useState(false)
+  const removeTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const addRepoButtonRef = useRef<HTMLButtonElement | null>(null)
   const [policyDialog, setPolicyDialog] = useState<PolicyDialogState>(null)
   const [detailItemId, setDetailItemId] = useState<number | null>(null)
   const [toggleSaving, setToggleSaving] = useState(false)
@@ -1405,7 +1407,7 @@ export function AutonomyPanel({
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button onClick={() => setScopeDialog({ mode: 'add' })}>
+          <Button ref={addRepoButtonRef} onClick={() => setScopeDialog({ mode: 'add' })}>
             <Plus className="mr-2 h-4 w-4" />
             Add repo
           </Button>
@@ -1464,7 +1466,7 @@ export function AutonomyPanel({
                     <Pencil className="mr-2 h-4 w-4" />
                     Edit
                   </Button>
-                  <Button variant="destructive" size="sm" aria-label={`Remove ${scope.repo_owner}/${scope.repo_name}`} onClick={() => setScopeToRemove(scope)}>
+                  <Button variant="destructive" size="sm" aria-label={`Remove ${scope.repo_owner}/${scope.repo_name}`} onClick={(event) => { removeTriggerRef.current = event.currentTarget; setScopeToRemove(scope) }}>
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove
                   </Button>
@@ -1656,11 +1658,16 @@ export function AutonomyPanel({
 
       <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} />
       <AlertDialog open={scopeToRemove !== null} onOpenChange={(open) => { if (!open && !scopeRemovalPending) setScopeToRemove(null) }}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          const target = removeTriggerRef.current?.isConnected ? removeTriggerRef.current : addRepoButtonRef.current
+          target?.focus()
+          removeTriggerRef.current = null
+        }}>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove watched repo?</AlertDialogTitle>
             <AlertDialogDescription>
-              Remove {scopeToRemove?.repo_owner}/{scopeToRemove?.repo_name} from this team. This stops future polling; existing work items are not deleted.
+              Remove {scopeToRemove?.repo_owner}/{scopeToRemove?.repo_name} from this team. This stops polling and permanently deletes its saved work-item history. Active work cannot be removed.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

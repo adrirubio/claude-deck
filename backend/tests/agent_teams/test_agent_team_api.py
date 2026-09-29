@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 
 from app.database import get_db
 from app.main import app
@@ -169,6 +170,8 @@ async def test_preset_autonomy_and_slot_routing_fields_round_trip(client, monkey
 
 @pytest.mark.asyncio
 async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
+    await db.execute(text("PRAGMA foreign_keys=ON"))
+    assert (await db.execute(text("PRAGMA foreign_keys"))).scalar_one() == 1
     repo = tmp_path / "repo"
     repo.mkdir()
     sync_calls = 0
@@ -301,6 +304,11 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
         f"/api/v1/agent-teams/github-scopes/{scope['id']}"
     )
     assert delete_response.status_code == 204
+    item_id = item.id
+    workspace_id = workspace.id
+    db.expire_all()
+    assert await db.get(GithubWorkItem, item_id) is None
+    assert await db.get(GithubWorkspace, workspace_id) is None
     assert sync_calls == 3
 
 
