@@ -1664,7 +1664,12 @@ class GithubVerificationService:
             await db.commit()
             return
         try:
-            await client.merge_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
+            await client.merge_pull(
+                scope.repo_owner,
+                scope.repo_name,
+                int(item.pr_number),
+                expected_head_sha=current_head,
+            )
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
             if status_code in _MERGE_TRANSIENT_STATUS_CODES or status_code >= 500:
