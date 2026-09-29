@@ -229,6 +229,27 @@ function recoveryBlockLabel(code?: string | null) {
   return code.replaceAll('_', ' ')
 }
 
+function recoverySummary(item: GithubWorkItem) {
+  if (item.continuation_block_code === 'continuation_disabled') return 'Recovery policy is off for this repo. Existing work may still need attention.'
+  if (item.dispatch_status === 'escalated') {
+    return item.continuation_block_code
+      ? `Recovery blocked: ${recoveryBlockLabel(item.continuation_block_code)}.`
+      : 'This issue is escalated. Review the reason above before continuing recovery.'
+  }
+  if (item.pending_approval_kind === 'continuation' && item.pending_approval_status === 'pending') {
+    return 'Waiting for the Leader to approve the proposed recovery revision.'
+  }
+  if (item.dispatch_status === 'verifying' && item.active_scope_revision > 0) {
+    return `Recovery revision ${item.active_scope_revision} was submitted; Deck is checking the PR.`
+  }
+  if (item.dispatch_status === 'dispatched' && item.active_scope_status === 'active') {
+    return `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. No operator action is needed unless it stalls.`
+  }
+  if (item.continuation_block_code === 'continuation_not_escalated') return 'Recovery is not needed while this issue is progressing.'
+  if (item.continuation_block_code) return `Recovery blocked: ${recoveryBlockLabel(item.continuation_block_code)}.`
+  return recoveryBlockLabel()
+}
+
 function authStatus(scope: TeamGithubScope) {
   if (!scope.github_poll_token_configured) return {
     label: 'Polling token not set',
@@ -948,11 +969,7 @@ function WorkItemDialog({
                   <div>
                     <h3 id="attempt-recovery-title" className="font-semibold">Attempt recovery</h3>
                     <p className="text-sm text-muted-foreground">
-                      {item.active_scope_status === 'active'
-                        ? `Recovery in progress: the owner is working within approved revision ${item.active_scope_revision}. No operator action is needed unless it stalls.`
-                        : item.pending_approval_kind === 'continuation' && item.pending_approval_status === 'pending'
-                          ? 'Waiting for the Leader to approve the proposed recovery revision.'
-                          : recoveryBlockLabel(item.continuation_block_code)}
+                      {recoverySummary(item)}
                     </p>
                   </div>
                 </div>
@@ -1206,18 +1223,31 @@ export function AutonomyPanel({
   const [gateLoading, setGateLoading] = useState(false)
   const [gate, setGate] = useState<GithubRecoveryGate | null>(null)
   const [gateError, setGateError] = useState<string | null>(null)
-  const [gateActive, setGateActive] = useState(false)
-  const [gateStatusUnavailable, setGateStatusUnavailable] = useState(false)
+  const [gateStatus, setGateStatus] = useState<'loading' | 'active' | 'inactive' | 'unknown'>('loading')
+  const [enableGateActive, setEnableGateActive] = useState(false)
+  const [enableError, setEnableError] = useState<string | null>(null)
+  const gateRequestIdRef = useRef(0)
   const [repoFilter, setRepoFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [showActivityHelp, setShowActivityHelp] = useState(false)
+
+  const checkGateStatus = useCallback(async (): Promise<boolean | null> => {
+    const requestId = ++gateRequestIdRef.current
+    setGateStatus('loading')
+    try {
+      const { active } = await fetchGithubRecoveryGateActive()
+      if (gateRequestIdRef.current === requestId) setGateStatus(active ? 'active' : 'inactive')
+      return active
+    } catch {
+      if (gateRequestIdRef.current === requestId) setGateStatus('unknown')
+      return null
+    }
+  }, [])
 
   useEffect(() => {
-    let current = true
-    void fetchGithubRecoveryGateActive()
-      .then(({ active }) => { if (current) { setGateActive(active); setGateStatusUnavailable(false) } })
-      .catch(() => { if (current) setGateStatusUnavailable(true) })
-    return () => { current = false }
-  }, [preset.id])
+    void checkGateStatus()
+    return () => { gateRequestIdRef.current++ }
+  }, [checkGateStatus, preset.id])
   const [operatorTokenStored, setOperatorTokenStored] = useState(() => Boolean(getOperatorToken()))
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
@@ -1373,6 +1403,14 @@ export function AutonomyPanel({
   const applyToggle = async (enabled: boolean) => {
     setToggleSaving(true)
     try {
+      if (enabled) {
+        const currentGate = await checkGateStatus()
+        if (currentGate === null || currentGate !== enableGateActive) {
+          setEnableConfirmOpen(false)
+          setEnableError('Recovery-only mode changed or could not be checked. Refresh and review the enable confirmation again.')
+          return
+        }
+      }
       await onToggleAutonomy(enabled)
     } catch {
       // Parent handlers surface the error toast; keep the controlled switch stable.
@@ -1386,6 +1424,13 @@ export function AutonomyPanel({
       await applyToggle(false)
       return
     }
+    setEnableError(null)
+    const currentGate = await checkGateStatus()
+    if (currentGate === null) {
+      setEnableError('Recovery-only mode could not be checked. Refresh before enabling autonomy.')
+      return
+    }
+    setEnableGateActive(currentGate)
     const warnings: string[] = []
     if (!scopes.some((scope) => scope.enabled)) warnings.push('No watched repo is enabled, so no issues can dispatch.')
     if (scopes.some((scope) => scope.enabled && scope.merge_policy === 'auto')) {
@@ -1466,6 +1511,7 @@ export function AutonomyPanel({
           </div>
         </CardContent>
       </Card>
+      {enableError && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{enableError}</p>}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -1473,7 +1519,7 @@ export function AutonomyPanel({
           <p className="text-sm text-muted-foreground">{scopeCount} watched repo{scopeCount === 1 ? '' : 's'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {gateActive && <Button variant="outline" disabled={gateLoading} onClick={() => void inspectGate()}>{gateLoading ? 'Checking gate…' : 'Recovery-only mode'}</Button>}
+          {gateStatus === 'active' && <Button variant="outline" disabled={gateLoading} onClick={() => void inspectGate()}>{gateLoading ? 'Checking gate…' : 'Recovery-only mode'}</Button>}
           <Button
             variant="outline"
             onClick={() => { if (operatorTokenStored) clearStoredToken(); else void requestToken() }}
@@ -1484,7 +1530,7 @@ export function AutonomyPanel({
           <span className="self-center text-xs text-muted-foreground">
             {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected recovery actions'}
           </span>
-          <Button variant="outline" onClick={onRefresh} disabled={refreshing}>
+          <Button variant="outline" onClick={() => { void onRefresh(); void checkGateStatus() }} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
           </Button>
@@ -1495,8 +1541,9 @@ export function AutonomyPanel({
         </div>
       </div>
 
-      {gateActive && <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Recovery-only mode is active: Deck&apos;s scheduler is limited to one configured issue attempt. Select Recovery-only mode for details.</p>}
-      {gateStatusUnavailable && <p className="text-xs text-muted-foreground">Recovery-only gate status could not be checked.</p>}
+      {gateStatus === 'active' && <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Recovery-only mode is active: Deck&apos;s scheduler is limited to one configured issue attempt. Select Recovery-only mode for details.</p>}
+      {gateStatus === 'unknown' && <p role="alert" className="text-sm text-destructive">Recovery-only mode could not be checked. Refresh before enabling autonomy.</p>}
+      {gateStatus === 'loading' && <p role="status" className="text-xs text-muted-foreground">Checking recovery-only mode…</p>}
 
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
         {loading && <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading autonomy state...</div>}
@@ -1581,6 +1628,15 @@ export function AutonomyPanel({
           </span>
         </CardHeader>
         <CardContent className="min-w-0">
+          <section className="mb-3 rounded-lg border p-3 text-sm">
+            <Button variant="link" className="h-auto p-0 font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
+            {showActivityHelp && <ul id="autonomy-activity-help" className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+              <li>Queued: waiting for an owner or prerequisite. Dispatched: the owner is planning or implementing. Verifying: Deck is watching the PR&apos;s GitHub checks.</li>
+              <li>Needs review: a human should review or merge. Escalated or failed: Deck stopped; open the issue for the reason and remedies. Merged or completed: finished.</li>
+              <li>Implementation is the product change. Diagnostic investigates failed checks within an approved recovery revision; it cannot promote the product PR.</li>
+              <li>Label match means an area label chose the owner. Classified means slot expertise chose one. Leader fallback means no owner matched and the Leader took the issue.</li>
+            </ul>}
+          </section>
           <div className="mb-3 flex flex-wrap gap-3">
             <div className="w-full min-w-0 space-y-1 sm:w-64">
               <Label htmlFor="activity-repo-filter">Repo</Label>
@@ -1826,7 +1882,7 @@ export function AutonomyPanel({
             <AlertDialogTitle>Enable autonomous dispatch?</AlertDialogTitle>
             <AlertDialogDescription>
               Deck will poll enabled repos every 60 seconds by default. Issues with the dispatch label will be assigned to agents, whose sessions run in worktrees beside each primary checkout.
-              {gateActive && ' Recovery-only mode is active, so the scheduler is limited to its configured issue attempt.'}
+              {enableGateActive && ' Recovery-only mode is active, so the scheduler is limited to its configured issue attempt.'}
               Review these conditions before continuing.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1839,7 +1895,7 @@ export function AutonomyPanel({
           )}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void applyToggle(true)}>Enable autonomy</AlertDialogAction>
+            <AlertDialogAction disabled={toggleSaving} onClick={() => void applyToggle(true)}>Enable autonomy</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
