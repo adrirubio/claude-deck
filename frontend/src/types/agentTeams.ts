@@ -156,6 +156,7 @@ export interface TeamGithubScope {
   dispatch_label: string
   design_label: string
   merge_policy: TeamGithubMergePolicy | string
+  github_auth_mode: 'unknown' | 'ambient' | 'app' | string
   max_approval_rounds: number
   max_concurrent_dispatched: number
   max_verification_retries: number

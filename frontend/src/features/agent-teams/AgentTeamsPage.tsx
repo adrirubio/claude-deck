@@ -741,6 +741,9 @@ export function AgentTeamsPage() {
   const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
   const [autonomyLoading, setAutonomyLoading] = useState(false)
   const [autonomyRefreshing, setAutonomyRefreshing] = useState(false)
+  const [autonomyTab, setAutonomyTab] = useState<'roster' | 'autonomy'>('roster')
+  const [autonomyLastRefreshedAt, setAutonomyLastRefreshedAt] = useState<Date | null>(null)
+  const [autonomyLoadError, setAutonomyLoadError] = useState<string | null>(null)
   const autonomyRequestIdRef = useRef(0)
 
   const selectedPreset = useMemo(
@@ -780,11 +783,11 @@ export function AgentTeamsPage() {
     }
   }, [])
 
-  const loadAutonomy = useCallback(async (presetId: number, showLoading = false) => {
+  const loadAutonomy = useCallback(async (presetId: number, showLoading = false, manual = false) => {
     const requestId = autonomyRequestIdRef.current + 1
     autonomyRequestIdRef.current = requestId
     if (showLoading) setAutonomyLoading(true)
-    setAutonomyRefreshing(true)
+    if (manual) setAutonomyRefreshing(true)
     try {
       const [scopeResponse, workItemResponse] = await Promise.all([
         fetchTeamGithubScopes(presetId),
@@ -793,10 +796,14 @@ export function AgentTeamsPage() {
       if (autonomyRequestIdRef.current === requestId) {
         setGithubScopes(scopeResponse.scopes)
         setGithubWorkItems(workItemResponse.items)
+        setAutonomyLastRefreshedAt(new Date())
+        setAutonomyLoadError(null)
       }
     } catch (error) {
       if (autonomyRequestIdRef.current === requestId) {
-        toast.error(error instanceof Error ? error.message : 'Failed to load autonomy state')
+        const message = error instanceof Error ? error.message : 'Failed to load autonomy state'
+        setAutonomyLoadError(message)
+        if (showLoading || manual) toast.error(message)
       }
     } finally {
       if (autonomyRequestIdRef.current === requestId) {
@@ -827,17 +834,18 @@ export function AgentTeamsPage() {
         setGithubWorkItems([])
         setAutonomyLoading(false)
         setAutonomyRefreshing(false)
+        setAutonomyLastRefreshedAt(null)
+        setAutonomyLoadError(null)
       })
       return
     }
-    queueMicrotask(() => {
-      void loadAutonomy(selectedPresetId, true)
-    })
+    if (autonomyTab !== 'autonomy') return
+    queueMicrotask(() => { void loadAutonomy(selectedPresetId, true) })
     const interval = window.setInterval(() => {
-      void loadAutonomy(selectedPresetId)
+      if (document.visibilityState === 'visible') void loadAutonomy(selectedPresetId)
     }, 5000)
     return () => window.clearInterval(interval)
-  }, [loadAutonomy, selectedPresetId])
+  }, [autonomyTab, loadAutonomy, selectedPresetId])
 
   const stats = useMemo(() => {
     const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
@@ -948,7 +956,7 @@ export function AgentTeamsPage() {
 
   const refreshAutonomy = async () => {
     if (!selectedPreset) return
-    await loadAutonomy(selectedPreset.id)
+    await loadAutonomy(selectedPreset.id, false, true)
   }
 
   const toggleAutonomy = async (enabled: boolean) => {
@@ -1178,8 +1186,8 @@ export function AgentTeamsPage() {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-        <div className="rounded-lg border">
+      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="min-w-0 rounded-lg border">
           <div className="border-b p-3 text-sm font-medium">Saved Teams</div>
           <div className="max-h-[620px] overflow-y-auto p-2">
             {presets.length === 0 && (
@@ -1212,7 +1220,7 @@ export function AgentTeamsPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border">
+        <div className="min-w-0 rounded-lg border">
           {!selectedPreset ? (
             <div className="p-8 text-sm text-muted-foreground">
               Select or create a team.
@@ -1250,7 +1258,7 @@ export function AgentTeamsPage() {
                 </div>
               </div>
 
-              <Tabs defaultValue="roster" className="border-t pt-5">
+              <Tabs value={autonomyTab} onValueChange={(value) => setAutonomyTab(value as 'roster' | 'autonomy')} className="border-t pt-5">
                 <TabsList>
                   <TabsTrigger value="roster">Roster</TabsTrigger>
                   <TabsTrigger value="autonomy">Autonomy</TabsTrigger>
@@ -1389,6 +1397,8 @@ export function AgentTeamsPage() {
                     workItems={githubWorkItems}
                     loading={autonomyLoading}
                     refreshing={autonomyRefreshing}
+                    lastRefreshedAt={autonomyLastRefreshedAt}
+                    loadError={autonomyLoadError}
                     onRefresh={refreshAutonomy}
                     onToggleAutonomy={toggleAutonomy}
                     onCreateScope={createGithubScope}

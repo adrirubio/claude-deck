@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, ExternalLink, GitPullRequest, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, XCircle } from 'lucide-react'
+import { AlertCircle, Eye, GitPullRequest, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Settings2, Trash2, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -200,6 +200,23 @@ function recoveryBlockLabel(code?: string | null) {
   return code.replaceAll('_', ' ')
 }
 
+function authModeLabel(mode: string) {
+  if (mode === 'app') return 'GitHub App'
+  if (mode === 'ambient') return 'Host credential'
+  return 'Auth unresolved'
+}
+
+function phaseLabel(phase?: string | null) {
+  if (phase === 'diagnostic') return 'Diagnostic'
+  if (phase === 'implementation') return 'Implementation'
+  return phase?.replaceAll('_', ' ') ?? 'Not started'
+}
+
+function readableCode(value?: string | null) {
+  if (!value) return 'Not set'
+  return value.replaceAll('_', ' ').replace(/^./, (first) => first.toUpperCase())
+}
+
 function OperatorTokenDialog({
   open,
   value,
@@ -353,14 +370,15 @@ function ScopeDialog({
             />
           </div>
           <div className="grid gap-2 md:col-span-2">
-            <Label htmlFor="scope-path">Local checkout path</Label>
+            <Label htmlFor="scope-path">Primary checkout path</Label>
             <Input
               id="scope-path"
               value={form.repo_path}
               onChange={(event) => update({ repo_path: event.target.value })}
+              placeholder="/home/user/repos/project"
             />
             <p className="text-xs text-muted-foreground">
-              Used as the per-dispatch repo override; it does not change any slot&apos;s saved repo path.
+              Existing checkout used to create dispatch worktrees beside it. This does not change slot settings.
             </p>
           </div>
           <div className="grid gap-2 md:col-span-2">
@@ -382,6 +400,7 @@ function ScopeDialog({
               value={form.dispatch_label}
               onChange={(event) => update({ dispatch_label: event.target.value })}
             />
+            <p className="text-xs text-muted-foreground">Issues need this GitHub label to enter the dispatch queue.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="design-label">Design label</Label>
@@ -390,14 +409,15 @@ function ScopeDialog({
               value={form.design_label}
               onChange={(event) => update({ design_label: event.target.value })}
             />
+            <p className="text-xs text-muted-foreground">Issues with this label use the design-review pipeline.</p>
           </div>
           <div className="grid gap-2 md:col-span-2">
-            <Label>Merge policy</Label>
+            <Label htmlFor="scope-merge-policy">Merge policy</Label>
             <Select
               value={form.merge_policy}
               onValueChange={(mergePolicy) => update({ merge_policy: mergePolicy as TeamGithubMergePolicy })}
             >
-              <SelectTrigger>
+              <SelectTrigger id="scope-merge-policy">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -803,7 +823,7 @@ function WorkItemDialog({
               {item.handoff_state && (
                 <div className="rounded-lg border border-sky-500/40 bg-sky-500/10 p-4 text-sm">
                   <span className="font-medium">{ownerName ?? 'Current owner'}</span>
-                  <span className="mx-2 text-muted-foreground">→ handoff {item.handoff_state} →</span>
+                  <span className="mx-2 text-muted-foreground">→ {readableCode(item.handoff_state)} handoff →</span>
                   <span className="font-medium">{handoffTargetName ?? 'target slot'}</span>
                 </div>
               )}
@@ -811,7 +831,7 @@ function WorkItemDialog({
                 <dl className="grid gap-0 text-sm">
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Status</dt>
-                    <dd>{item.dispatch_status}</dd>
+                    <dd>{readableCode(item.dispatch_status)}</dd>
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Owner</dt>
@@ -823,7 +843,7 @@ function WorkItemDialog({
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Attempt</dt>
-                    <dd>{item.attempt_phase} · revision {item.active_scope_revision}</dd>
+                    <dd>{phaseLabel(item.attempt_phase)} · revision {item.active_scope_revision}</dd>
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Workspace</dt>
@@ -874,8 +894,8 @@ function WorkItemDialog({
                     <article key={revision.id} className="space-y-3 rounded-md border bg-muted/20 p-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">revision {revision.revision}</Badge>
-                        <Badge variant="secondary">{revision.phase}</Badge>
-                        <span className="text-sm font-medium">{revision.status}</span>
+                        <Badge variant="secondary">{phaseLabel(revision.phase)}</Badge>
+                        <span className="text-sm font-medium">{readableCode(revision.status)}</span>
                         <span className="text-xs text-muted-foreground">
                           failed heads {revision.failed_head_count}/{revision.max_failed_heads}
                         </span>
@@ -883,8 +903,8 @@ function WorkItemDialog({
                       <p className="whitespace-pre-wrap text-sm">{revision.summary}</p>
                       <dl className="grid gap-2 text-sm md:grid-cols-2">
                         <div><dt className="text-muted-foreground">Origin</dt><dd>{escalationReasonLabel(revision.originating_escalation_reason)}</dd></div>
-                        <div><dt className="text-muted-foreground">Execution</dt><dd>{revision.execution_target}</dd></div>
-                        <div><dt className="text-muted-foreground">Owner</dt><dd>slot #{revision.owner_slot_id} · member #{revision.owner_member_id}</dd></div>
+                        <div><dt className="text-muted-foreground">Execution</dt><dd>{readableCode(revision.execution_target)}</dd></div>
+                        <div><dt className="text-muted-foreground">Owner</dt><dd>{slots.find((slot) => slot.id === revision.owner_slot_id)?.display_name ?? `slot #${revision.owner_slot_id}`} · member #{revision.owner_member_id}</dd></div>
                         <div><dt className="text-muted-foreground">Workspace</dt><dd>#{revision.expected_workspace_id}</dd></div>
                         {approval && (
                           <>
@@ -911,7 +931,7 @@ function WorkItemDialog({
                               rel="noreferrer"
                               className="text-sm text-primary underline-offset-4 hover:underline"
                             >
-                              {link.label}
+                              {readableCode(link.label)}
                             </a>
                           ))}
                         </div>
@@ -1041,6 +1061,8 @@ export function AutonomyPanel({
   workItems,
   loading,
   refreshing,
+  lastRefreshedAt,
+  loadError,
   onRefresh,
   onToggleAutonomy,
   onCreateScope,
@@ -1056,6 +1078,8 @@ export function AutonomyPanel({
   workItems: GithubWorkItem[]
   loading: boolean
   refreshing: boolean
+  lastRefreshedAt: Date | null
+  loadError: string | null
   onRefresh: () => Promise<void>
   onToggleAutonomy: (enabled: boolean) => Promise<void>
   onCreateScope: (input: TeamGithubScopeInput) => Promise<void>
@@ -1086,6 +1110,8 @@ export function AutonomyPanel({
   const [gateLoading, setGateLoading] = useState(false)
   const [gate, setGate] = useState<GithubRecoveryGate | null>(null)
   const [gateError, setGateError] = useState<string | null>(null)
+  const [repoFilter, setRepoFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [operatorTokenStored, setOperatorTokenStored] = useState(() => Boolean(getOperatorToken()))
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
@@ -1097,6 +1123,18 @@ export function AutonomyPanel({
     [preset.slots]
   )
   const scopeCount = scopes.length
+  const repoOptions = useMemo(
+    () => [...new Set(workItems.map((item) => `${item.repo_owner}/${item.repo_name}`))].sort(),
+    [workItems]
+  )
+  const visibleItems = useMemo(() => workItems.filter((item) => {
+    if (repoFilter !== 'all' && `${item.repo_owner}/${item.repo_name}` !== repoFilter) return false
+    if (statusFilter === 'attention') return item.dispatch_status === 'escalated' || item.dispatch_status === 'failed'
+    if (statusFilter === 'active') return ['pending', 'dispatched', 'verifying'].includes(item.dispatch_status)
+    if (statusFilter === 'review') return ['awaiting_human_review', 'ready_for_review'].includes(item.dispatch_status)
+    if (statusFilter === 'finished') return ['merged', 'completed'].includes(item.dispatch_status)
+    return true
+  }), [repoFilter, statusFilter, workItems])
   const detailItem = useMemo(
     () => workItems.find((item) => item.id === detailItemId) ?? null,
     [detailItemId, workItems]
@@ -1287,6 +1325,7 @@ export function AutonomyPanel({
 
   return (
     <div className="space-y-5">
+      {loadError && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">Refresh failed: {loadError}</p>}
       <Card>
         <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -1296,10 +1335,12 @@ export function AutonomyPanel({
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">
+            <Label htmlFor="autonomy-enabled" className="text-sm text-muted-foreground">
               {preset.autonomy_enabled ? 'Enabled' : 'Disabled'}
-            </span>
+            </Label>
             <Switch
+              id="autonomy-enabled"
+              aria-label="Enable autonomous GitHub dispatch"
               checked={preset.autonomy_enabled}
               disabled={toggleSaving}
               onCheckedChange={toggle}
@@ -1311,7 +1352,7 @@ export function AutonomyPanel({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">Watched repos</h2>
-          <p className="text-sm text-muted-foreground">{scopeCount} configured scope{scopeCount === 1 ? '' : 's'}</p>
+          <p className="text-sm text-muted-foreground">{scopeCount} watched repo{scopeCount === 1 ? '' : 's'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={gateLoading} onClick={() => void inspectGate()}>{gateLoading ? 'Checking gate…' : 'Recovery gate'}</Button>
@@ -1340,7 +1381,7 @@ export function AutonomyPanel({
         {loading && <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading autonomy state...</div>}
         {!loading && scopes.length === 0 && (
           <div className="rounded-lg border p-5 text-sm text-muted-foreground">
-            No watched repos yet. Add a scope before enabling autonomy for useful work.
+            To get started: add a watched repo and its primary checkout, label an issue with the dispatch label, then enable autonomy. Use an operator token for recovery actions.
           </div>
         )}
         {scopes.map((scope) => (
@@ -1350,8 +1391,8 @@ export function AutonomyPanel({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-semibold">{scope.repo_owner}/{scope.repo_name}</p>
-                    <Badge variant="outline">{scope.dispatch_label}</Badge>
-                    <Badge variant="secondary">{scope.design_label}</Badge>
+                    <Badge variant="outline">Dispatch: {scope.dispatch_label}</Badge>
+                    <Badge variant="secondary">Design: {scope.design_label}</Badge>
                     <Badge
                       variant="outline"
                       className={scope.merge_policy === 'auto' ? 'border-primary text-primary' : 'border-amber-500/70 text-amber-400'}
@@ -1365,9 +1406,12 @@ export function AutonomyPanel({
                       recovery: {scope.continuation_enabled ? 'enabled' : 'off'}
                     </Badge>
                     {!scope.enabled && <Badge variant="secondary">disabled</Badge>}
+                    <Badge variant="outline" className={scope.github_auth_mode === 'unknown' ? 'border-amber-500 text-amber-700 dark:text-amber-400' : undefined}>
+                      {authModeLabel(scope.github_auth_mode)}
+                    </Badge>
                   </div>
                   <p className="mt-2 truncate text-sm text-muted-foreground">
-                    Worktree parent: {scope.repo_path}
+                    Primary checkout: {scope.repo_path}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Approval rounds: {scope.max_approval_rounds} · Concurrent: {scope.max_concurrent_dispatched} · Verification retries: {scope.max_verification_retries} · Auto-merges/day: {scope.max_auto_merges_per_day} · Last polled {formatDateTime(scope.last_polled_at)}
@@ -1378,13 +1422,14 @@ export function AutonomyPanel({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button variant="outline" size="sm" onClick={() => setPolicyDialog({ scope })}>
-                    <KeyRound className="mr-2 h-4 w-4" />
+                    <Settings2 className="mr-2 h-4 w-4" />
                     Recovery policy
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setScopeDialog({ mode: 'edit', scope })}>
+                    <Pencil className="mr-2 h-4 w-4" />
                     Edit
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => void deleteScope(scope)}>
+                  <Button variant="destructive" size="sm" onClick={() => void deleteScope(scope)}>
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove
                   </Button>
@@ -1395,21 +1440,52 @@ export function AutonomyPanel({
         ))}
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3">
+      <Card className="min-w-0">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <CardTitle>Activity</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">Recent GitHub work items across this preset&apos;s scopes.</p>
           </div>
-          <Badge variant="secondary">auto-refreshes</Badge>
+          <span className="text-xs text-muted-foreground sm:shrink-0">
+            {lastRefreshedAt ? `Updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Not refreshed yet'} · every 5s while open
+          </span>
         </CardHeader>
-        <CardContent>
+        <CardContent className="min-w-0">
+          <div className="mb-3 flex flex-wrap gap-3">
+            <div className="min-w-40 space-y-1">
+              <Label htmlFor="activity-repo-filter">Repo</Label>
+              <Select value={repoFilter} onValueChange={setRepoFilter}>
+                <SelectTrigger id="activity-repo-filter"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All repos</SelectItem>
+                  {repoOptions.map((repo) => <SelectItem key={repo} value={repo}>{repo}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="min-w-40 space-y-1">
+              <Label htmlFor="activity-status-filter">Status</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger id="activity-status-filter"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="attention">Needs attention</SelectItem>
+                  <SelectItem value="active">In progress</SelectItem>
+                  <SelectItem value="review">Needs review</SelectItem>
+                  <SelectItem value="finished">Finished</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           {workItems.length === 0 ? (
             <div className="rounded-lg border p-5 text-sm text-muted-foreground">
               No GitHub work items yet.
             </div>
+          ) : visibleItems.length === 0 ? (
+            <div className="rounded-lg border p-5 text-sm text-muted-foreground">
+              No work items match these filters.
+            </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="max-w-full overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -1418,11 +1494,11 @@ export function AutonomyPanel({
                     <th className="px-3 py-2 font-medium">Status</th>
                     <th className="px-3 py-2 font-medium">Owner</th>
                     <th className="px-3 py-2 font-medium">PR</th>
-                    <th className="px-3 py-2 font-medium" />
+                    <th className="px-3 py-2 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {workItems.map((item) => {
+                  {visibleItems.map((item) => {
                     const owner = item.owner_slot_id ? slotById.get(item.owner_slot_id) : undefined
                     const handoffTarget = item.handoff_target_slot_id
                       ? slotById.get(item.handoff_target_slot_id)
@@ -1449,7 +1525,7 @@ export function AutonomyPanel({
                             <Badge variant={item.issue_type === 'design' ? 'default' : 'secondary'}>
                               {item.issue_type}
                             </Badge>
-                            <Badge variant="outline">{item.attempt_phase}</Badge>
+                            <Badge variant="outline">{phaseLabel(item.attempt_phase)}</Badge>
                           </div>
                           {item.active_scope_revision > 0 && (
                             <p className="mt-1 text-xs text-muted-foreground">revision {item.active_scope_revision}</p>
@@ -1462,14 +1538,14 @@ export function AutonomyPanel({
                           {pendingLabel && <p className="mt-1 text-xs text-muted-foreground">{pendingLabel}</p>}
                           {item.handoff_state && (
                             <p className="mt-1 text-xs text-sky-400">
-                              handoff {item.handoff_state}
+                              Handoff: {item.handoff_state.replaceAll('_', ' ')}
                               {handoffTarget ? ` → ${handoffTarget.display_name}` : ''}
                             </p>
                           )}
                           {item.escalation_reason && (
                             <p className="mt-1 text-xs text-destructive">{escalationReasonLabel(item.escalation_reason)}</p>
                           )}
-                          {item.dispatch_status === 'pending' && item.status_note && (
+                          {item.status_note && (
                             <p className="mt-1 line-clamp-2 text-xs text-muted-foreground" title={item.status_note}>
                               {item.status_note}
                             </p>
@@ -1477,11 +1553,6 @@ export function AutonomyPanel({
                           {item.pending_approval_request_id && (
                             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
                               approval #{item.pending_approval_request_id} · {approvalStatusLabel(item.pending_approval_status)}
-                            </p>
-                          )}
-                          {item.pr_number && item.dispatch_status === 'escalated' && (
-                            <p className="mt-1 text-xs text-primary">
-                              Continue attempt · {recoveryBlockLabel(item.continuation_block_code)}
                             </p>
                           )}
                         </td>
@@ -1503,12 +1574,9 @@ export function AutonomyPanel({
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            product retries: {item.retry_count} · diagnostic heads: {item.diagnostic_retry_count}
-                          </p>
-                          {item.revision_failed_head_budget != null && (
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              revision heads: {item.revision_failed_head_count ?? 0}/{item.revision_failed_head_budget}
+                          {(item.retry_count > 0 || item.diagnostic_retry_count > 0) && (
+                            <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground" title={`Product retries: ${item.retry_count}; diagnostic failed heads: ${item.diagnostic_retry_count}`}>
+                              Retries {item.retry_count} · diagnostics {item.diagnostic_retry_count}
                             </p>
                           )}
                         </td>
@@ -1530,7 +1598,7 @@ export function AutonomyPanel({
                               </span>
                             )}
                             <Button variant="outline" size="sm" onClick={() => setDetailItemId(item.id)}>
-                              <ExternalLink className="mr-2 h-4 w-4" />
+                              <Eye className="mr-2 h-4 w-4" />
                               View
                             </Button>
                           </div>

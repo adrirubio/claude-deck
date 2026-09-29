@@ -210,6 +210,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     scope = create_response.json()
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
+    assert scope["github_auth_mode"] == "unknown"
     assert scope["max_verification_retries"] == 3
     assert scope["base_ref"] == "origin/main"
     assert scope["builds_out_of_tree"] is True
@@ -221,6 +222,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     )
     assert list_response.status_code == 200
     assert [item["id"] for item in list_response.json()["scopes"]] == [scope["id"]]
+    assert list_response.json()["scopes"][0]["github_auth_mode"] == "unknown"
 
     update_response = await client.patch(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}",
