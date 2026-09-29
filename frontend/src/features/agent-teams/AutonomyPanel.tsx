@@ -532,9 +532,21 @@ function WorkItemDialog({
   const [revisionError, setRevisionError] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const revisionRequestIdRef = useRef(0)
+  const dismissedTokenPromptRef = useRef<number | null>(null)
   const itemId = item?.id ?? null
   const revisionVersion = item
-    ? `${item.active_scope_revision}:${item.active_scope_status ?? ''}:${item.pending_approval_status ?? ''}:${item.dispatch_status}:${item.updated_at}`
+    ? JSON.stringify([
+        item.active_scope_revision,
+        item.active_scope_status,
+        item.revision_delivered_at,
+        item.revision_acknowledged_at,
+        item.revision_failed_head_count,
+        item.pending_approval_request_id,
+        item.pending_approval_status,
+        item.continuation_block_code,
+        item.dispatch_status,
+        item.updated_at,
+      ])
     : null
   const open = item !== null
 
@@ -561,8 +573,12 @@ function WorkItemDialog({
 
   useEffect(() => {
     if (itemId === null) return
-    const token = requestOperatorToken()
+    const requestRef = revisionRequestIdRef
+    const token = getOperatorToken() || (
+      dismissedTokenPromptRef.current === itemId ? null : requestOperatorToken()
+    )
     if (!token) {
+      dismissedTokenPromptRef.current = itemId
       const requestId = ++revisionRequestIdRef.current
       queueMicrotask(() => {
         if (revisionRequestIdRef.current === requestId) {
@@ -570,16 +586,19 @@ function WorkItemDialog({
           setRevisionError('Operator token required to load exact recovery history.')
         }
       })
-      return () => { revisionRequestIdRef.current++ }
+      return () => { requestRef.current++ }
     }
+    dismissedTokenPromptRef.current = null
     loadRevisions(itemId, token)
-    return () => { revisionRequestIdRef.current++ }
+    return () => { requestRef.current++ }
   }, [itemId, revisionVersion, loadRevisions])
 
   const retryLoadRevisions = () => {
     if (itemId === null) return
+    dismissedTokenPromptRef.current = null
     const token = requestOperatorToken()
     if (!token) {
+      dismissedTokenPromptRef.current = itemId
       setRevisionError('Operator token required to load exact recovery history.')
       return
     }
