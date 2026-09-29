@@ -1508,7 +1508,7 @@ export function AutonomyPanel({
               <li>Add a watched repo with an existing primary checkout under your home directory and labels to watch.</li>
               <li>In Roster, launch the first enabled slot: it is the Leader who approves plans.</li>
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
-              <li>Enable autonomy. Deck polls GitHub every 60 seconds and shows progress here.</li>
+              <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>
             <p className="mt-2">An operator token is only needed for protected recovery actions.</p>
           </div>
