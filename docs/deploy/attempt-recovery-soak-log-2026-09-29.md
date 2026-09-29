@@ -1,6 +1,9 @@
 # Tizonia Attempt-Recovery Soak: Final Replay and Cleanup
 
-Status: **evidence draft; not master-merge clearance**. Times below are UTC. This
+Status: **evidence draft; not master-merge clearance**. PR #360's GitHub review
+request was waived at the user's direction after Adri approved it off-platform;
+no GitHub review was submitted. Issues #329 and #359 must be fixed before the
+integration branch can merge to `master`. Times below are UTC. This
 records the final revision and terminal cleanup from live Deck DB/API, Agent Mail,
 GitHub, and the leased checkout. Earlier checkpoints are summarized from durable
 authority rows and private operator artifacts where possible. The private
@@ -90,8 +93,10 @@ was run during the final revision or cleanup, and no auto-merge was attempted.
   are not proven by the terminal-state audit alone.
 - Reconcile the earlier diagnostic runs and exact tree-restoration evidence
   with the durable revision records. No diagnostic authority remains active.
-- Independently review the human branch-protection bypass, restored rules,
-  squash-merge lease exception, and Deck issue #359.
-- Approve this evidence log independently. Keep the integration branch out of
-  `master` until those checks are complete; do not equate green product CI with
-  soak clearance.
+- Independently review the human branch-protection bypass and restored rules.
+- Fix and review Deck issue #329 (Agent Mail wake isolation) and issue #359
+  (normal workspace release after squash merge) before merging the integration
+  branch to `master`; neither issue is deferred past that merge.
+- Reconcile the remaining evidence before `master` merge. Merging PR #360 only
+  records this draft; Adri's off-platform approval of that PR is not soak
+  clearance. Do not equate green product CI with soak clearance.
