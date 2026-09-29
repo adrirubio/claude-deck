@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, ExternalLink, GitPullRequest, KeyRound, Plus, RefreshCw, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -96,7 +96,42 @@ function pendingReasonLabel(item: GithubWorkItem, ownerName?: string) {
   if (item.pending_reason === 'queued_ambiguous_sessions') {
     return `queued · ${ownerName ?? 'owner'} has multiple sessions`
   }
+  if (item.pending_reason === 'queued_auth_mode_unresolved') {
+    return 'queued · GitHub authentication needs configuration'
+  }
   return null
+}
+
+const escalationReasonLabels: Record<string, string> = {
+  plan_blocked: 'Plan blocked',
+  launch_outcome_unknown: 'Session launch outcome unknown',
+  approval_rounds_exhausted: 'Approval rounds exhausted',
+  leader_offline: 'Leader offline',
+  owner_offline: 'Owner offline',
+  brief_unread: 'Owner has not read the brief',
+  leader_ack_timeout: 'Leader acknowledgement timed out',
+  owner_idle_timeout: 'Owner idle timeout',
+  retry_count_exhausted: 'Verification retries exhausted',
+  continuation_revision_exhausted: 'Continuation revision exhausted',
+  continuation_budget_exhausted: 'Continuation budget exhausted',
+  continuation_invalid_state: 'Continuation state invalid',
+  continuation_pr_identity_invalid: 'Continuation PR identity invalid',
+  dispatch_label_removed: 'Dispatch label removed',
+  abandoned_by_operator: 'Abandoned by operator',
+  prepared_owner_unavailable: 'Prepared owner unavailable',
+  pr_closed_unmerged: 'PR closed without merge',
+}
+
+function escalationReasonLabel(reason?: string | null) {
+  if (!reason) return 'Unknown reason'
+  return escalationReasonLabels[reason] ?? reason.replaceAll('_', ' ')
+}
+
+function approvalStatusLabel(status?: string | null) {
+  if (status === 'pending') return 'awaiting Leader decision'
+  if (status === 'approved') return 'approved by Leader'
+  if (status === 'rejected') return 'rejected by Leader'
+  return status?.replaceAll('_', ' ') ?? 'awaiting Leader decision'
 }
 
 function statusBadgeClass(status: string) {
@@ -483,10 +518,7 @@ function WorkItemDialog({
   handoffTargetName?: string
   onOpenChange: (open: boolean) => void
   onRetry: (item: GithubWorkItem) => Promise<void>
-  onFetchScopeRevisions: (
-    item: GithubWorkItem,
-    operatorToken: string
-  ) => Promise<GithubScopeRevision[]>
+  onFetchScopeRevisions: (itemId: number, operatorToken: string) => Promise<GithubScopeRevision[]>
   onCancelContinuationRequest: (
     item: GithubWorkItem,
     requestId: number,
@@ -497,36 +529,81 @@ function WorkItemDialog({
   const [loadingRevisions, setLoadingRevisions] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [revisions, setRevisions] = useState<GithubScopeRevision[]>([])
+  const [revisionError, setRevisionError] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const loadedItemIdRef = useRef<number | null>(null)
+  const revisionRequestIdRef = useRef(0)
+  const dismissedTokenPromptRef = useRef<number | null>(null)
+  const itemId = item?.id ?? null
+  const revisionVersion = item
+    ? JSON.stringify([
+        item.active_scope_revision,
+        item.active_scope_status,
+        item.revision_delivered_at,
+        item.revision_acknowledged_at,
+        item.revision_failed_head_count,
+        item.pending_approval_request_id,
+        item.pending_approval_status,
+        item.continuation_block_code,
+        item.dispatch_status,
+        item.updated_at,
+      ])
+    : null
   const open = item !== null
 
+  const loadRevisions = useCallback((targetItemId: number, token: string) => {
+    const requestId = ++revisionRequestIdRef.current
+    queueMicrotask(() => {
+      if (revisionRequestIdRef.current !== requestId) return
+      setLoadingRevisions(true)
+      setRevisionError(null)
+      void onFetchScopeRevisions(targetItemId, token)
+        .then((rows) => {
+          if (revisionRequestIdRef.current === requestId) setRevisions(rows)
+        })
+        .catch((error) => {
+          if (revisionRequestIdRef.current === requestId) {
+            setRevisionError(error instanceof Error ? error.message : 'Failed to load recovery history')
+          }
+        })
+        .finally(() => {
+          if (revisionRequestIdRef.current === requestId) setLoadingRevisions(false)
+        })
+    })
+  }, [onFetchScopeRevisions])
+
   useEffect(() => {
-    if (!item || loadedItemIdRef.current === item.id) return
-    loadedItemIdRef.current = item.id
-    const token = requestOperatorToken()
+    if (itemId === null) return
+    const requestRef = revisionRequestIdRef
+    const token = getOperatorToken() || (
+      dismissedTokenPromptRef.current === itemId ? null : requestOperatorToken()
+    )
     if (!token) {
-      queueMicrotask(() => setErrorMessage('Operator token required to load exact recovery history.'))
-      return
-    }
-    let cancelled = false
-    queueMicrotask(() => setLoadingRevisions(true))
-    void onFetchScopeRevisions(item, token)
-      .then((rows) => {
-        if (!cancelled) setRevisions(rows)
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : 'Failed to load recovery history')
+      dismissedTokenPromptRef.current = itemId
+      const requestId = ++revisionRequestIdRef.current
+      queueMicrotask(() => {
+        if (revisionRequestIdRef.current === requestId) {
+          setLoadingRevisions(false)
+          setRevisionError('Operator token required to load exact recovery history.')
         }
       })
-      .finally(() => {
-        if (!cancelled) setLoadingRevisions(false)
-      })
-    return () => {
-      cancelled = true
+      return () => { requestRef.current++ }
     }
-  }, [item, onFetchScopeRevisions])
+    dismissedTokenPromptRef.current = null
+    loadRevisions(itemId, token)
+    return () => { requestRef.current++ }
+  }, [itemId, revisionVersion, loadRevisions])
+
+  const retryLoadRevisions = () => {
+    if (itemId === null) return
+    dismissedTokenPromptRef.current = null
+    const token = requestOperatorToken()
+    if (!token) {
+      dismissedTokenPromptRef.current = itemId
+      setRevisionError('Operator token required to load exact recovery history.')
+      return
+    }
+    loadRevisions(itemId, token)
+  }
 
   const retry = async () => {
     if (!item) return
@@ -557,8 +634,7 @@ function WorkItemDialog({
     setErrorMessage(null)
     try {
       await onCancelContinuationRequest(item, approval.id, token)
-      const refreshed = await onFetchScopeRevisions(item, token)
-      setRevisions(refreshed)
+      loadRevisions(item.id, token)
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to cancel continuation')
     } finally {
@@ -584,7 +660,7 @@ function WorkItemDialog({
                     <AlertCircle className="h-4 w-4" />
                     Why this escalated
                   </div>
-                  <p className="mt-2 text-sm">{item.escalation_reason ?? 'Unknown reason'}</p>
+                  <p className="mt-2 text-sm">{escalationReasonLabel(item.escalation_reason)}</p>
                   {item.status_note && (
                     <p className="mt-2 text-sm text-muted-foreground">{item.status_note}</p>
                   )}
@@ -650,9 +726,17 @@ function WorkItemDialog({
                     Clear operator token
                   </Button>
                 </div>
-                {loadingRevisions && <p className="text-sm text-muted-foreground">Loading recovery history...</p>}
-                {!loadingRevisions && revisions.length === 0 && (
+                {loadingRevisions && <p className="text-sm text-muted-foreground">Loading recovery history…</p>}
+                {!loadingRevisions && !revisionError && revisions.length === 0 && (
                   <p className="text-sm text-muted-foreground">No continuation revisions recorded.</p>
+                )}
+                {!loadingRevisions && revisionError && (
+                  <div className="flex flex-wrap items-center gap-2 text-sm text-destructive" role="alert">
+                    <span>{revisionError}</span>
+                    <Button variant="outline" size="sm" onClick={retryLoadRevisions}>
+                      Retry loading history
+                    </Button>
+                  </div>
                 )}
                 {revisions.map((revision) => {
                   const approval = revision.approval_request
@@ -669,13 +753,13 @@ function WorkItemDialog({
                       </div>
                       <p className="whitespace-pre-wrap text-sm">{revision.summary}</p>
                       <dl className="grid gap-2 text-sm md:grid-cols-2">
-                        <div><dt className="text-muted-foreground">Origin</dt><dd>{revision.originating_escalation_reason}</dd></div>
+                        <div><dt className="text-muted-foreground">Origin</dt><dd>{escalationReasonLabel(revision.originating_escalation_reason)}</dd></div>
                         <div><dt className="text-muted-foreground">Execution</dt><dd>{revision.execution_target}</dd></div>
                         <div><dt className="text-muted-foreground">Owner</dt><dd>slot #{revision.owner_slot_id} · member #{revision.owner_member_id}</dd></div>
                         <div><dt className="text-muted-foreground">Workspace</dt><dd>#{revision.expected_workspace_id}</dd></div>
                         {approval && (
                           <>
-                            <div><dt className="text-muted-foreground">Approval</dt><dd>request #{approval.id} · {approval.status}</dd></div>
+                            <div><dt className="text-muted-foreground">Approval</dt><dd>request #{approval.id} · {approvalStatusLabel(approval.status)}</dd></div>
                             <div><dt className="text-muted-foreground">Leader</dt><dd>member #{approval.leader_member_id}</dd></div>
                           </>
                         )}
@@ -767,10 +851,7 @@ export function AutonomyPanel({
   ) => Promise<void>
   onDeleteScope: (scope: TeamGithubScope) => Promise<void>
   onRetryWorkItem: (item: GithubWorkItem) => Promise<void>
-  onFetchScopeRevisions: (
-    item: GithubWorkItem,
-    operatorToken: string
-  ) => Promise<GithubScopeRevision[]>
+  onFetchScopeRevisions: (itemId: number, operatorToken: string) => Promise<GithubScopeRevision[]>
   onCancelContinuationRequest: (
     item: GithubWorkItem,
     requestId: number,
@@ -1012,11 +1093,16 @@ export function AutonomyPanel({
                             </p>
                           )}
                           {item.escalation_reason && (
-                            <p className="mt-1 text-xs text-destructive">{item.escalation_reason}</p>
+                            <p className="mt-1 text-xs text-destructive">{escalationReasonLabel(item.escalation_reason)}</p>
+                          )}
+                          {item.dispatch_status === 'pending' && item.status_note && (
+                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground" title={item.status_note}>
+                              {item.status_note}
+                            </p>
                           )}
                           {item.pending_approval_request_id && (
                             <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-                              approval #{item.pending_approval_request_id} · {item.pending_approval_status ?? 'pending'}
+                              approval #{item.pending_approval_request_id} · {approvalStatusLabel(item.pending_approval_status)}
                             </p>
                           )}
                           {item.pr_number && item.dispatch_status === 'escalated' && (

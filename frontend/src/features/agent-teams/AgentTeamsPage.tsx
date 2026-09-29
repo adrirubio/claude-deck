@@ -51,7 +51,6 @@ import type {
   AgentTeamPreset,
   AgentTeamSlot,
   AgentTeamSlotInput,
-  GithubScopeRevision,
   GithubWorkItem,
   SlotLaunchOptions,
   TeamGithubScope,
@@ -1006,11 +1005,6 @@ export function AgentTeamsPage() {
     }
   }
 
-  const loadGithubScopeRevisions = async (
-    item: GithubWorkItem,
-    operatorToken: string
-  ): Promise<GithubScopeRevision[]> => fetchGithubScopeRevisions(item.id, operatorToken)
-
   const cancelGithubContinuation = async (
     item: GithubWorkItem,
     requestId: number,
@@ -1400,7 +1394,7 @@ export function AgentTeamsPage() {
                     onUpdateContinuationPolicy={updateGithubContinuationPolicy}
                     onDeleteScope={removeGithubScope}
                     onRetryWorkItem={retryWorkItem}
-                    onFetchScopeRevisions={loadGithubScopeRevisions}
+                    onFetchScopeRevisions={fetchGithubScopeRevisions}
                     onCancelContinuationRequest={cancelGithubContinuation}
                   />
                 </TabsContent>
