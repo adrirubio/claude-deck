@@ -512,6 +512,7 @@ async def test_recovery_gate_preflight_requires_operator_and_reports_paused_targ
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             endpoint = "/api/v1/agent-teams/github-recovery-gate"
+            active_status = await client.get(f"{endpoint}/active")
             assert (await client.get(endpoint)).status_code == 401
             assert (
                 await client.get(endpoint, headers={"X-Deck-Operator-Token": "wrong"})
@@ -520,12 +521,15 @@ async def test_recovery_gate_preflight_requires_operator_and_reports_paused_targ
                 endpoint, headers={"X-Deck-Operator-Token": "test-operator-token"}
             )
             monkeypatch.setattr(github_dispatch_scheduler, "recovery_only_attempt", None)
+            inactive_status = await client.get(f"{endpoint}/active")
             inactive_response = await client.get(
                 endpoint, headers={"X-Deck-Operator-Token": "test-operator-token"}
             )
     finally:
         app.dependency_overrides.clear()
 
+    assert active_status.json() == {"active": True}
+    assert inactive_status.json() == {"active": False}
     assert response.status_code == 200
     assert response.json() == {
         "active": True,

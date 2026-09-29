@@ -216,6 +216,10 @@ export function fetchGithubRecoveryGate(operatorToken: string): Promise<GithubRe
   })
 }
 
+export function fetchGithubRecoveryGateActive(): Promise<{ active: boolean }> {
+  return apiClient<{ active: boolean }>('agent-teams/github-recovery-gate/active')
+}
+
 export function fetchGithubWorkspaces(scopeId: number, operatorToken: string): Promise<{ workspaces: GithubWorkspace[] }> {
   return apiClient<{ workspaces: GithubWorkspace[] }>(`agent-teams/github-scopes/${scopeId}/workspaces`, {
     headers: operatorHeaders(operatorToken),

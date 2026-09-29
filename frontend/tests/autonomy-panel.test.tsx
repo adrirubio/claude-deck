@@ -5,7 +5,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { AutonomyPanel } from '../src/features/agent-teams/AutonomyPanel'
 import { clearOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '../src/lib/api'
+import { fetchGithubRecoveryGateActive } from '../src/features/agent-teams/api'
 import type { AgentTeamPreset, GithubScopeRevision, GithubWorkItem, TeamGithubScope } from '../src/types/agentTeams'
+
+vi.mock('../src/features/agent-teams/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/features/agent-teams/api')>()
+  return { ...actual, fetchGithubRecoveryGateActive: vi.fn().mockResolvedValue({ active: false }) }
+})
 
 const preset: AgentTeamPreset = {
   id: 1,
@@ -112,6 +118,80 @@ describe('AutonomyPanel', () => {
     view.rerender(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', last_polled_at: '2026-09-29T12:00:00Z' }], workItems: [] })} />)
     expect(screen.getByText('Dispatch auth: not selected')).toHaveAttribute('title', expect.stringContaining('successful poll'))
     expect(screen.queryByText('Polling token not set')).not.toBeInTheDocument()
+  })
+
+  it('hides the soak-only gate until active and explains it when active', async () => {
+    const view = render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
+    expect(screen.queryByRole('button', { name: 'Recovery-only mode' })).not.toBeInTheDocument()
+    view.unmount()
+    vi.mocked(fetchGithubRecoveryGateActive).mockResolvedValueOnce({ active: true })
+    render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
+    expect(await screen.findByRole('button', { name: 'Recovery-only mode' })).toBeInTheDocument()
+    expect(screen.getByText(/scheduler is limited to one configured issue attempt/)).toBeInTheDocument()
+  })
+
+  it('recovers gate visibility after a failed status check and Refresh', async () => {
+    vi.mocked(fetchGithubRecoveryGateActive)
+      .mockRejectedValueOnce(new Error('backend restarting'))
+      .mockRejectedValueOnce(new Error('backend restarting'))
+      .mockResolvedValueOnce({ active: true })
+    const user = userEvent.setup()
+    const props = panelProps({ workItems: [] })
+    render(<AutonomyPanel {...props} />)
+    expect(await screen.findByText('Recovery-only mode could not be checked. Refresh before enabling autonomy.')).toBeInTheDocument()
+    await user.click(screen.getByRole('switch', { name: 'Enable autonomous GitHub dispatch' }))
+    expect(props.onToggleAutonomy).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: 'Enable autonomous dispatch?' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await screen.findByRole('button', { name: 'Recovery-only mode' })).toBeInTheDocument()
+  })
+
+  it('refuses enablement when the gate changes after confirmation', async () => {
+    const user = userEvent.setup()
+    const props = panelProps({ preset: { ...preset, slots: [] }, workItems: [] })
+    render(<AutonomyPanel {...props} />)
+    await waitFor(() => expect(screen.queryByText('Checking recovery-only mode…')).not.toBeInTheDocument())
+    vi.mocked(fetchGithubRecoveryGateActive)
+      .mockResolvedValueOnce({ active: false })
+      .mockResolvedValueOnce({ active: true })
+    await user.click(screen.getByRole('switch', { name: 'Enable autonomous GitHub dispatch' }))
+    await user.click(screen.getByRole('button', { name: 'Enable autonomy' }))
+    expect(await screen.findByText(/Recovery-only mode changed or could not be checked/)).toBeInTheDocument()
+    expect(props.onToggleAutonomy).not.toHaveBeenCalled()
+  })
+
+  it('offers keyboard-accessible status, phase, and route explanations', async () => {
+    const user = userEvent.setup()
+    render(<AutonomyPanel {...panelProps()} />)
+    const helpButton = screen.getByRole('button', { name: 'What do statuses, phases, and routes mean?' })
+    helpButton.focus()
+    await user.keyboard('{Enter}')
+    expect(helpButton).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText(/Label match means an area label chose the owner/)).toBeVisible()
+  })
+
+  it('does not claim an escalated active revision is still running', async () => {
+    setOperatorToken('test-token')
+    const user = userEvent.setup()
+    const props = panelProps({ workItems: [{ ...workItem, active_scope_status: 'active', escalation_reason: 'dispatch_label_removed' }] })
+    const view = render(<AutonomyPanel {...props} />)
+    await user.click(screen.getByRole('button', { name: 'View issue #821 details' }))
+    expect(screen.getByText('This issue is escalated. Review the reason above before continuing recovery.')).toBeInTheDocument()
+    expect(screen.queryByText(/No operator action is needed/)).not.toBeInTheDocument()
+    view.rerender(<AutonomyPanel {...props} workItems={[{ ...workItem, dispatch_status: 'dispatched', active_scope_status: 'active', continuation_block_code: 'continuation_disabled' }]} />)
+    expect(screen.getByText('Recovery policy is off for this repo. Existing work may still need attention.')).toBeInTheDocument()
+    expect(screen.queryByText(/No operator action is needed/)).not.toBeInTheDocument()
+  })
+
+  it('defines recovery limits and phase and status badges', async () => {
+    const user = userEvent.setup()
+    render(<AutonomyPanel {...panelProps()} />)
+    const row = screen.getByRole('row', { name: /#821 — Fix playback/ })
+    expect(within(row).getByText('escalated')).toHaveAttribute('title', expect.stringContaining('Needs attention'))
+    await user.click(screen.getByRole('button', { name: 'Recovery policy for example/project' }))
+    expect(screen.getByText(/A failed head is a pushed PR commit whose checks fail/)).toBeInTheDocument()
+    expect(screen.getByText('Scope revisions allowed across one attempt.')).toBeInTheDocument()
+    expect(screen.getByText('Saving requires the operator token.', { exact: false })).toBeInTheDocument()
   })
 
   it('explains first-run setup and optional build hints', async () => {
