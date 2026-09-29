@@ -88,12 +88,15 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
 
           <HelpSection icon={GitBranch} title="Autonomous GitHub dispatch">
             <ol className="list-decimal space-y-1 pl-5">
-              <li>On the Autonomy tab, add a watched repo with its primary checkout and issue labels.</li>
-              <li>Check that the repo has GitHub authentication and an enabled Leader slot.</li>
-              <li>Label an issue with the dispatch label, then enable autonomy to start polling.</li>
-              <li>Watch Activity for progress; use an operator token only for protected recovery actions.</li>
+              <li>Put <code>github_token</code> or GitHub App settings in <code>backend/.env</code> and restart Deck.</li>
+              <li>Add a watched repo with an existing primary checkout under your home directory.</li>
+              <li>The first enabled Roster slot is the Leader; launch it before enabling autonomy. The Role text does not select it.</li>
+              <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>
+              <li>Watch Activity. An operator token is needed only for protected recovery actions.</li>
             </ol>
             <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
+            <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Deck stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>
+            <p><a href="https://github.com/adrirubio/claude-deck/blob/feature/autonomous-github-dispatch/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy operator guide</a>.</p>
           </HelpSection>
         </div>
       </DialogContent>
