@@ -746,6 +746,7 @@ export function AgentTeamsPage() {
   const [autonomyLoadError, setAutonomyLoadError] = useState<string | null>(null)
   const [autonomyDataPresetId, setAutonomyDataPresetId] = useState<number | null>(null)
   const autonomyRequestIdRef = useRef(0)
+  const autonomyDataPresetIdRef = useRef<number | null>(null)
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId),
@@ -797,6 +798,7 @@ export function AgentTeamsPage() {
       if (autonomyRequestIdRef.current === requestId) {
         setGithubScopes(scopeResponse.scopes)
         setGithubWorkItems(workItemResponse.items)
+        autonomyDataPresetIdRef.current = presetId
         setAutonomyDataPresetId(presetId)
         setAutonomyLastRefreshedAt(new Date())
         setAutonomyLoadError(null)
@@ -804,9 +806,13 @@ export function AgentTeamsPage() {
     } catch (error) {
       if (autonomyRequestIdRef.current === requestId) {
         const message = error instanceof Error ? error.message : 'Failed to load autonomy state'
-        setGithubScopes([])
-        setGithubWorkItems([])
-        setAutonomyDataPresetId(presetId)
+        if (autonomyDataPresetIdRef.current !== presetId) {
+          setGithubScopes([])
+          setGithubWorkItems([])
+          setAutonomyLastRefreshedAt(null)
+          autonomyDataPresetIdRef.current = presetId
+          setAutonomyDataPresetId(presetId)
+        }
         setAutonomyLoadError(message)
         if (showLoading || manual) toast.error(message)
       }
@@ -834,6 +840,7 @@ export function AgentTeamsPage() {
   useEffect(() => {
     if (!selectedPresetId) {
       autonomyRequestIdRef.current += 1
+      autonomyDataPresetIdRef.current = null
       queueMicrotask(() => {
         setGithubScopes([])
         setGithubWorkItems([])
@@ -1398,6 +1405,7 @@ export function AgentTeamsPage() {
                 </TabsContent>
                 <TabsContent value="autonomy" className="mt-5">
                   <AutonomyPanel
+                    key={selectedPreset.id}
                     preset={selectedPreset}
                     scopes={autonomyDataPresetId === selectedPreset.id ? githubScopes : []}
                     workItems={autonomyDataPresetId === selectedPreset.id ? githubWorkItems : []}

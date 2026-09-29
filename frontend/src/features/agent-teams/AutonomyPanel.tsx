@@ -1124,9 +1124,17 @@ export function AutonomyPanel({
   )
   const scopeCount = scopes.length
   const repoOptions = useMemo(
-    () => [...new Set(workItems.map((item) => `${item.repo_owner}/${item.repo_name}`))].sort(),
-    [workItems]
+    () => [...new Set([
+      ...scopes.map((scope) => `${scope.repo_owner}/${scope.repo_name}`),
+      ...workItems.map((item) => `${item.repo_owner}/${item.repo_name}`),
+    ])].sort(),
+    [scopes, workItems]
   )
+  useEffect(() => {
+    if (repoFilter !== 'all' && !repoOptions.includes(repoFilter)) {
+      queueMicrotask(() => setRepoFilter('all'))
+    }
+  }, [repoFilter, repoOptions])
   const visibleItems = useMemo(() => workItems.filter((item) => {
     if (repoFilter !== 'all' && `${item.repo_owner}/${item.repo_name}` !== repoFilter) return false
     if (statusFilter === 'attention') return item.dispatch_status === 'escalated' || item.dispatch_status === 'failed'
@@ -1377,22 +1385,22 @@ export function AutonomyPanel({
         </div>
       </div>
 
-      <div className="grid gap-3">
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
         {loading && <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading autonomy state...</div>}
-        {!loading && scopes.length === 0 && (
+        {!loading && !loadError && scopes.length === 0 && (
           <div className="rounded-lg border p-5 text-sm text-muted-foreground">
             To get started: add a watched repo and its primary checkout, label an issue with the dispatch label, then enable autonomy. Use an operator token for recovery actions.
           </div>
         )}
         {scopes.map((scope) => (
-          <Card key={scope.id} className={cn(!scope.enabled && 'opacity-70')}>
-            <CardContent className="p-4">
+          <Card key={scope.id} className={cn('min-w-0', !scope.enabled && 'opacity-70')}>
+            <CardContent className="min-w-0 p-4">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-semibold">{scope.repo_owner}/{scope.repo_name}</p>
-                    <Badge variant="outline">Dispatch: {scope.dispatch_label}</Badge>
-                    <Badge variant="secondary">Design: {scope.design_label}</Badge>
+                    <p className="min-w-0 break-all font-semibold">{scope.repo_owner}/{scope.repo_name}</p>
+                    <Badge variant="outline" className="max-w-full truncate" title={scope.dispatch_label}>Dispatch: {scope.dispatch_label}</Badge>
+                    <Badge variant="secondary" className="max-w-full truncate" title={scope.design_label}>Design: {scope.design_label}</Badge>
                     <Badge
                       variant="outline"
                       className={scope.merge_policy === 'auto' ? 'border-primary text-primary' : 'border-amber-500/70 text-amber-400'}
@@ -1452,7 +1460,7 @@ export function AutonomyPanel({
         </CardHeader>
         <CardContent className="min-w-0">
           <div className="mb-3 flex flex-wrap gap-3">
-            <div className="min-w-40 space-y-1">
+            <div className="w-full min-w-0 space-y-1 sm:w-64">
               <Label htmlFor="activity-repo-filter">Repo</Label>
               <Select value={repoFilter} onValueChange={setRepoFilter}>
                 <SelectTrigger id="activity-repo-filter"><SelectValue /></SelectTrigger>
@@ -1478,6 +1486,8 @@ export function AutonomyPanel({
           </div>
           {loading ? (
             <div className="rounded-lg border p-5 text-sm text-muted-foreground">Loading activity…</div>
+          ) : loadError && workItems.length === 0 ? (
+            <div className="rounded-lg border p-5 text-sm text-muted-foreground">Activity is unavailable. Use Refresh to try again.</div>
           ) : workItems.length === 0 ? (
             <div className="rounded-lg border p-5 text-sm text-muted-foreground">
               No GitHub work items yet.
