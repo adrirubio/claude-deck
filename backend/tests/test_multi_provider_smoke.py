@@ -31,7 +31,8 @@ def test_provider_registry_smoke_exposes_provider_statuses():
     assert opencode_status["capabilities"]["plugins"] is True
 
 
-def test_agent_bridge_session_filter_smoke(monkeypatch):
+@pytest.mark.asyncio
+async def test_agent_bridge_session_filter_smoke(monkeypatch):
     from app.api.v1.agent_bridge import router as agent_bridge_api
 
     calls = []
@@ -48,8 +49,8 @@ def test_agent_bridge_session_filter_smoke(monkeypatch):
 
     monkeypatch.setattr(agent_bridge_api, "discover_agent_sessions", fake_discover)
 
-    all_response = agent_bridge_api.list_sessions(provider=None)
-    codex_response = agent_bridge_api.list_sessions(provider="codex-cli")
+    all_response = await agent_bridge_api.list_sessions(provider=None, db=None)
+    codex_response = await agent_bridge_api.list_sessions(provider="codex-cli", db=None)
 
     assert calls == [None, "codex-cli"]
     assert all_response["count"] == 1
