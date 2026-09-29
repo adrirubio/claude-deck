@@ -187,4 +187,33 @@ describe('AutonomyPanel', () => {
 
     expect(props.onUpdateScope).not.toHaveBeenCalled()
   })
+
+  it('submits the operator token with Enter', async () => {
+    clearOperatorToken()
+    const user = userEvent.setup()
+    render(<AutonomyPanel {...panelProps({ workItems: [] })} />)
+
+    await user.click(screen.getByRole('button', { name: 'Set operator token' }))
+    await user.type(screen.getByPlaceholderText('Enter secret value'), 'test-token{Enter}')
+
+    expect(await screen.findByText('Token set for this tab')).toBeInTheDocument()
+  })
+
+  it('confirms watched-repo removal in the app instead of using a native dialog', async () => {
+    const user = userEvent.setup()
+    const props = panelProps({ workItems: [] })
+    const confirm = vi.spyOn(window, 'confirm')
+    render(<AutonomyPanel {...props} />)
+
+    await user.click(screen.getByRole('button', { name: 'Remove example/project' }))
+    expect(screen.getByText('Remove watched repo?')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(props.onDeleteScope).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Remove example/project' }))
+    await user.click(screen.getByRole('button', { name: 'Remove repo' }))
+    await waitFor(() => expect(props.onDeleteScope).toHaveBeenCalledWith(scope))
+    expect(confirm).not.toHaveBeenCalled()
+    confirm.mockRestore()
+  })
 })

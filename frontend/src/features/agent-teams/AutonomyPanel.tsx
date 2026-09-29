@@ -242,17 +242,19 @@ function OperatorTokenDialog({
           </DialogDescription>
         </DialogHeader>
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-        <SecretField
-          id="autonomy-operator-token"
-          label="Operator token"
-          value={value}
-          onChange={onValueChange}
-          required
-        />
-        <DialogFooter>
-          <Button variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button onClick={onSubmit} disabled={!value.trim()}>Use token</Button>
-        </DialogFooter>
+        <form onSubmit={(event) => { event.preventDefault(); onSubmit() }} className="space-y-4">
+          <SecretField
+            id="autonomy-operator-token"
+            label="Operator token"
+            value={value}
+            onChange={onValueChange}
+            required
+          />
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+            <Button type="submit" disabled={!value.trim()}>Use token</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   )
@@ -787,8 +789,18 @@ function WorkItemDialog({
     setErrorMessage(null)
     setActionResult(null)
     try {
-      const result = await onOperate(item, operatorAction, actionReason.trim(), reassignToSlotId === 'current' ? undefined : Number(reassignToSlotId))
-      setActionResult(result ?? 'Operator action completed.')
+      const action = operatorAction
+      const result = await onOperate(item, action, actionReason.trim(), reassignToSlotId === 'current' ? undefined : Number(reassignToSlotId))
+      const actionMessages: Record<ItemOperatorAction['kind'], string> = {
+        abandon: 'Work item abandoned.',
+        resume: 'Prepared attempt resumed.',
+        release_decision: 'Decision hold released. The Leader can now decide.',
+        release_ack: 'Acknowledgement hold released. The owner can now acknowledge.',
+        cancel_request: 'Continuation request cancelled.',
+        cancel_revision: 'Active continuation cancelled.',
+        force_release: 'Workspace lease released.',
+      }
+      setActionResult(result ?? actionMessages[action.kind])
       setOperatorAction(null)
       setActionReason('')
       loadRevisions(item.id)
@@ -1108,6 +1120,8 @@ export function AutonomyPanel({
   ) => Promise<void>
 }) {
   const [scopeDialog, setScopeDialog] = useState<ScopeDialogState>(null)
+  const [scopeToRemove, setScopeToRemove] = useState<TeamGithubScope | null>(null)
+  const [scopeRemovalPending, setScopeRemovalPending] = useState(false)
   const [policyDialog, setPolicyDialog] = useState<PolicyDialogState>(null)
   const [detailItemId, setDetailItemId] = useState<number | null>(null)
   const [toggleSaving, setToggleSaving] = useState(false)
@@ -1320,10 +1334,14 @@ export function AutonomyPanel({
   }
 
   const deleteScope = async (scope: TeamGithubScope) => {
+    setScopeRemovalPending(true)
     try {
       await onDeleteScope(scope)
+      setScopeToRemove(null)
     } catch {
       // Parent handlers surface the error toast.
+    } finally {
+      setScopeRemovalPending(false)
     }
   }
 
@@ -1446,7 +1464,7 @@ export function AutonomyPanel({
                     <Pencil className="mr-2 h-4 w-4" />
                     Edit
                   </Button>
-                  <Button variant="destructive" size="sm" aria-label={`Remove ${scope.repo_owner}/${scope.repo_name}`} onClick={() => void deleteScope(scope)}>
+                  <Button variant="destructive" size="sm" aria-label={`Remove ${scope.repo_owner}/${scope.repo_name}`} onClick={() => setScopeToRemove(scope)}>
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove
                   </Button>
@@ -1637,6 +1655,22 @@ export function AutonomyPanel({
       </Card>
 
       <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} />
+      <AlertDialog open={scopeToRemove !== null} onOpenChange={(open) => { if (!open && !scopeRemovalPending) setScopeToRemove(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove watched repo?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove {scopeToRemove?.repo_owner}/{scopeToRemove?.repo_name} from this team. This stops future polling; existing work items are not deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={scopeRemovalPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={scopeRemovalPending} onClick={(event) => { event.preventDefault(); if (scopeToRemove) void deleteScope(scopeToRemove) }}>
+              {scopeRemovalPending ? 'Removing…' : 'Remove repo'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <ContinuationPolicyDialog
         state={policyDialog}
         autonomyEnabled={preset.autonomy_enabled}
