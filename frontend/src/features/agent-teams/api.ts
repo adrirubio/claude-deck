@@ -15,6 +15,8 @@ import type {
   GithubWorkItemListResponse,
   GithubApprovalRequest,
   GithubScopeRevision,
+  GithubRecoveryGate,
+  GithubWorkspace,
   TeamGithubContinuationPolicyUpdate,
   TeamGithubScope,
   TeamGithubScopeInput,
@@ -205,5 +207,72 @@ export function fetchGithubWorkItems(presetId: number, limit = 50): Promise<Gith
 export function retryGithubWorkItem(workItemId: number): Promise<GithubWorkItem> {
   return apiClient<GithubWorkItem>(`agent-teams/github-work-items/${workItemId}/retry`, {
     method: 'POST',
+  })
+}
+
+export function fetchGithubRecoveryGate(operatorToken: string): Promise<GithubRecoveryGate> {
+  return apiClient<GithubRecoveryGate>('agent-teams/github-recovery-gate', {
+    headers: operatorHeaders(operatorToken),
+  })
+}
+
+export function fetchGithubWorkspaces(scopeId: number, operatorToken: string): Promise<{ workspaces: GithubWorkspace[] }> {
+  return apiClient<{ workspaces: GithubWorkspace[] }>(`agent-teams/github-scopes/${scopeId}/workspaces`, {
+    headers: operatorHeaders(operatorToken),
+  })
+}
+
+export function abandonGithubWorkItem(workItemId: number, reason: string, operatorToken: string): Promise<GithubWorkItem> {
+  return apiClient<GithubWorkItem>(`agent-teams/github-work-items/${workItemId}/abandon`, {
+    method: 'POST', headers: operatorHeaders(operatorToken), body: JSON.stringify({ reason }),
+  })
+}
+
+export function resumeGithubWorkItem(presetId: number, workItemId: number, operatorToken: string, reassignToSlotId?: number): Promise<GithubWorkItem> {
+  return apiClient<GithubWorkItem>(`agent-teams/presets/${presetId}/work-items/${workItemId}/resume-attempt`, {
+    method: 'POST', headers: operatorHeaders(operatorToken),
+    body: JSON.stringify({ resume: true, reassign_to_slot_id: reassignToSlotId ?? null }),
+  })
+}
+
+export function releaseGithubRecoveryCheckpoint(
+  workItemId: number,
+  revision: GithubScopeRevision,
+  stage: 'decision' | 'ack',
+  operatorToken: string
+): Promise<GithubScopeRevision> {
+  return apiClient<GithubScopeRevision>(
+    `agent-teams/github-work-items/${workItemId}/scope-revisions/${revision.revision}/checkpoint-release`,
+    {
+      method: 'POST', headers: operatorHeaders(operatorToken),
+      body: JSON.stringify({ release: true, dispatch_nonce: revision.dispatch_nonce, approval_request_id: revision.approval_request_id, stage }),
+    }
+  )
+}
+
+export function cancelGithubActiveRevision(
+  workItemId: number,
+  revision: GithubScopeRevision,
+  reason: string,
+  operatorToken: string
+): Promise<GithubWorkItem> {
+  return apiClient<GithubWorkItem>(
+    `agent-teams/github-work-items/${workItemId}/scope-revisions/${revision.revision}/cancel`,
+    {
+      method: 'POST', headers: operatorHeaders(operatorToken),
+      body: JSON.stringify({ cancel: true, dispatch_nonce: revision.dispatch_nonce, reason }),
+    }
+  )
+}
+
+export function forceReleaseGithubWorkspace(
+  scopeId: number,
+  workspace: GithubWorkspace,
+  reason: string,
+  operatorToken: string
+): Promise<{ released_item_id: number; discarded_paths?: string | null; unpushed_commits?: number | null }> {
+  return apiClient(`agent-teams/github-scopes/${scopeId}/workspaces/${workspace.id}/force-release`, {
+    method: 'POST', headers: operatorHeaders(operatorToken),
+    body: JSON.stringify({ force: true, expected_leased_at: workspace.leased_at, reason, requested_by: 'Deck UI operator' }),
   })
 }

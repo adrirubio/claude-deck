@@ -2316,6 +2316,7 @@ async def abandon_github_work_item(
     work_item_id: int,
     request: GithubWorkItemAbandonRequest | None = None,
     db: AsyncSession = Depends(get_db),
+    _operator: None = Depends(require_operator),
 ):
     item = await db.get(GithubWorkItem, work_item_id)
     if item is None:

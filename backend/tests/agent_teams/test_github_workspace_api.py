@@ -822,6 +822,7 @@ async def test_work_item_feed_bulk_projects_normalized_continuation_authority(
     abandoned = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/abandon",
         json={"reason": "operator stopped the continuation"},
+        headers=OPERATOR_HEADERS,
     )
 
     assert abandoned.status_code == 200
@@ -2958,6 +2959,7 @@ async def test_abandon_changes_status_but_retains_workspace(client, db, tmp_path
     response = await client.post(
         f"/api/v1/agent-teams/github-work-items/{item.id}/abandon",
         json={"reason": "PR will not proceed"},
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 200
@@ -2985,7 +2987,8 @@ async def test_abandon_terminal_item_returns_machine_code(client, db, tmp_path):
     await db.commit()
 
     response = await client.post(
-        f"/api/v1/agent-teams/github-work-items/{item.id}/abandon"
+        f"/api/v1/agent-teams/github-work-items/{item.id}/abandon",
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 409
