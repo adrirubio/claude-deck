@@ -1,4 +1,5 @@
 """GitHub client + watcher service tests."""
+import json
 from datetime import datetime
 
 import httpx
@@ -91,13 +92,14 @@ async def test_github_client_pr_check_and_merge_requests():
         checks = await client.list_check_runs_for_ref("o", "r", "abc")
         status = await client.get_combined_status_for_ref("o", "r", "abc")
         ready = await client.mark_pull_ready_for_review("PR_node")
-        merged = await client.merge_pull("o", "r", 5)
+        merged = await client.merge_pull("o", "r", 5, expected_head_sha="abc")
 
     assert pull["head"]["sha"] == "abc"
     assert checks[0]["name"] == "ci"
     assert status["state"] == "success"
     assert ready["data"]["markPullRequestReadyForReview"]["pullRequest"]["id"] == "PR_node"
     assert merged["merged"] is True
+    assert json.loads(transport.requests[-1].content) == {"sha": "abc"}
 
 
 @pytest_asyncio.fixture

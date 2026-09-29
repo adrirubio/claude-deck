@@ -323,6 +323,7 @@ class _Client:
         self.ready_error = ready_error
         self.ready_calls = 0
         self.merge_calls = 0
+        self.merge_head_shas = []
         self.pull_calls = 0
 
     async def get_pull(self, owner, repo, pr_number):
@@ -341,8 +342,9 @@ class _Client:
             raise self.ready_error
         return {"ok": True}
 
-    async def merge_pull(self, owner, repo, pr_number):
+    async def merge_pull(self, owner, repo, pr_number, *, expected_head_sha):
         self.merge_calls += 1
+        self.merge_head_shas.append(expected_head_sha)
         if self.merge_error is not None:
             raise self.merge_error
         return self.merge_result
@@ -1269,7 +1271,39 @@ async def test_auto_merge_proceeds_when_head_unchanged_and_green(db):
     await db.refresh(item)
     assert item.dispatch_status == "merged"
     assert client.merge_calls == 1
+    assert client.merge_head_shas == ["aaa111"]
     assert len(await _blocker_merged_messages(db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_merge_rejects_head_changed_after_green_check(db):
+    scope, item, client = await _auto_ready_item(
+        db,
+        last_verified_sha="aaa111",
+        current_head="aaa111",
+        head_checks=[{"status": "completed", "conclusion": "success"}],
+    )
+    await _owner(db, scope)
+
+    async def merge_after_push(owner, repo, pr_number, *, expected_head_sha):
+        client.merge_calls += 1
+        client.merge_head_shas.append(expected_head_sha)
+        client.pull["head"]["sha"] = "bbb222"
+        if client.pull["head"]["sha"] != expected_head_sha:
+            raise _http_error(409)
+        return {"merged": True}
+
+    client.merge_pull = merge_after_push
+    await github_verification_service._process_review_item(db, scope, item, client)
+    await db.refresh(item)
+    assert client.merge_head_shas == ["aaa111"]
+    assert item.dispatch_status == "ready_for_review"
+    assert item.auto_merged_at is None
+
+    await github_verification_service._process_review_item(db, scope, item, client)
+    await db.refresh(item)
+    assert item.dispatch_status == "verifying"
+    assert client.merge_calls == 1
 
 
 @pytest.mark.asyncio
@@ -2882,8 +2916,9 @@ async def test_unexpected_merge_status_is_transient_and_does_not_abort_batch(db)
                 "user": {"login": "human"},
             }
 
-        async def merge_pull(self, owner, repo, pr_number):
+        async def merge_pull(self, owner, repo, pr_number, *, expected_head_sha):
             self.merge_calls += 1
+            self.merge_head_shas.append(expected_head_sha)
             if pr_number == 5:
                 raise _http_error(422)
             return {"merged": True}

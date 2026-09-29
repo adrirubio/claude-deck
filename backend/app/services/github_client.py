@@ -532,12 +532,15 @@ class GithubClient:
             if self._http is None:
                 await client.aclose()
 
-    async def merge_pull(self, owner: str, repo: str, pr_number: int) -> dict:
+    async def merge_pull(
+        self, owner: str, repo: str, pr_number: int, *, expected_head_sha: str
+    ) -> dict:
         client = self._client()
         try:
             resp = await client.put(
                 f"/repos/{owner}/{repo}/pulls/{pr_number}/merge",
                 headers=self._headers(),
+                json={"sha": expected_head_sha},
             )
             resp.raise_for_status()
             return self._json_object(resp, "merge")
