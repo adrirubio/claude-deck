@@ -1421,15 +1421,15 @@ export function AutonomyPanel({
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setPolicyDialog({ scope })}>
+                  <Button variant="outline" size="sm" aria-label={`Recovery policy for ${scope.repo_owner}/${scope.repo_name}`} onClick={() => setPolicyDialog({ scope })}>
                     <Settings2 className="mr-2 h-4 w-4" />
                     Recovery policy
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => setScopeDialog({ mode: 'edit', scope })}>
+                  <Button variant="outline" size="sm" aria-label={`Edit ${scope.repo_owner}/${scope.repo_name}`} onClick={() => setScopeDialog({ mode: 'edit', scope })}>
                     <Pencil className="mr-2 h-4 w-4" />
                     Edit
                   </Button>
-                  <Button variant="destructive" size="sm" onClick={() => void deleteScope(scope)}>
+                  <Button variant="destructive" size="sm" aria-label={`Remove ${scope.repo_owner}/${scope.repo_name}`} onClick={() => void deleteScope(scope)}>
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove
                   </Button>
@@ -1566,6 +1566,7 @@ export function AutonomyPanel({
                               href={pullUrl}
                               target="_blank"
                               rel="noreferrer"
+                              aria-label={`Open pull request #${item.pr_number}`}
                               className="inline-flex items-center gap-1 text-primary"
                             >
                               <GitPullRequest className="h-3.5 w-3.5" />
@@ -1585,6 +1586,7 @@ export function AutonomyPanel({
                             {item.retry_allowed && (
                               <Button
                                 size="sm"
+                                aria-label={`Retry issue #${item.issue_number}`}
                                 disabled={retryingWorkItemId !== null}
                                 onClick={() => setRetryTarget(item)}
                               >
@@ -1597,7 +1599,7 @@ export function AutonomyPanel({
                                 Retry blocked: {recoveryBlockLabel(item.retry_block_code)}
                               </span>
                             )}
-                            <Button variant="outline" size="sm" onClick={() => setDetailItemId(item.id)}>
+                            <Button variant="outline" size="sm" aria-label={`View issue #${item.issue_number} details`} onClick={() => setDetailItemId(item.id)}>
                               <Eye className="mr-2 h-4 w-4" />
                               View
                             </Button>
