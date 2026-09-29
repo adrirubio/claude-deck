@@ -305,6 +305,87 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_github_scope_build_hint_can_be_cleared(client, monkeypatch, tmp_path):
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await client.post(
+        "/api/v1/agent-teams/presets", json={"name": "Scope team", "slots": []}
+    )
+    created = await client.post(
+        f"/api/v1/agent-teams/presets/{preset.json()['id']}/github-scopes",
+        json={
+            "repo_owner": "adrirubio",
+            "repo_name": "snazzyemail",
+            "repo_path": str(repo),
+            "build_command_hint": "meson compile -C {build_dir}",
+        },
+    )
+    assert created.status_code == 200
+    url = f"/api/v1/agent-teams/github-scopes/{created.json()['id']}"
+
+    unchanged = await client.patch(url, json={"max_approval_rounds": 4})
+    assert unchanged.status_code == 200
+    assert unchanged.json()["build_command_hint"] == "meson compile -C {build_dir}"
+
+    cleared = await client.patch(url, json={"build_command_hint": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["build_command_hint"] is None
+
+    restored = await client.patch(url, json={"build_command_hint": "make -j{parallelism}"})
+    assert restored.status_code == 200
+    cleared_empty = await client.patch(url, json={"build_command_hint": ""})
+    assert cleared_empty.status_code == 200
+    assert cleared_empty.json()["build_command_hint"] is None
+
+
+@pytest.mark.asyncio
+async def test_github_scope_noop_identity_edit_allowed_while_active(client, db, monkeypatch, tmp_path):
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await client.post(
+        "/api/v1/agent-teams/presets", json={"name": "Scope team", "slots": []}
+    )
+    created = await client.post(
+        f"/api/v1/agent-teams/presets/{preset.json()['id']}/github-scopes",
+        json={"repo_owner": "adrirubio", "repo_name": "snazzyemail", "repo_path": str(repo), "base_ref": "origin/main"},
+    )
+    assert created.status_code == 200
+    scope_id = created.json()["id"]
+    db.add(GithubWorkItem(
+        scope_id=scope_id,
+        issue_number=1,
+        issue_title="active",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/1",
+        github_updated_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    url = f"/api/v1/agent-teams/github-scopes/{scope_id}"
+
+    updated = await client.patch(url, json={
+        "repo_owner": "adrirubio",
+        "repo_name": "snazzyemail",
+        "repo_path": str(repo),
+        "base_ref": "origin/main",
+        "max_approval_rounds": 5,
+    })
+    assert updated.status_code == 200
+    assert updated.json()["max_approval_rounds"] == 5
+    assert updated.json()["base_ref"] == "origin/main"
+
+    blocked = await client.patch(url, json={"base_ref": "origin/release"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "scope_identity_in_use"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [

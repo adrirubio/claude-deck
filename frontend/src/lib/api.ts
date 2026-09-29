@@ -30,6 +30,7 @@ const operatorErrorMessages: Record<string, string> = {
   operator_token_required: 'Enter the Deck operator token to continue.',
   operator_token_invalid: 'The Deck operator token was rejected. Clear it and enter a valid token.',
   operator_token_unconfigured: 'The Deck operator token is not configured on the backend.',
+  scope_identity_in_use: 'This repo has active work. Change its identity or base ref only after that work is finished.',
 }
 
 function apiErrorMessage(error: ApiError, fallback = 'An error occurred'): string {

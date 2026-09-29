@@ -683,12 +683,16 @@ def _apply_scope_create(
             allowed_fields={"issue_number"},
             render_values={"issue_number": 1},
         )
-    if request.build_command_hint is not None:
-        scope.build_command_hint = _validate_template(
-            request.build_command_hint,
-            label="Build command hint",
-            allowed_fields={"build_dir", "parallelism"},
-            render_values={"build_dir": "build", "parallelism": 4},
+    if "build_command_hint" in request.model_fields_set:
+        scope.build_command_hint = (
+            _validate_template(
+                request.build_command_hint,
+                label="Build command hint",
+                allowed_fields={"build_dir", "parallelism"},
+                render_values={"build_dir": "build", "parallelism": 4},
+            )
+            if request.build_command_hint and request.build_command_hint.strip()
+            else None
         )
     if request.max_build_parallelism is not None:
         scope.max_build_parallelism = request.max_build_parallelism
@@ -1901,19 +1905,18 @@ async def update_github_scope(
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
-    identity_change = any(
-        value is not None
-        for value in (
-            request.repo_owner,
-            request.repo_name,
-            request.repo_path,
-            request.base_ref,
-        )
-    )
-    if identity_change:
-        if await _scope_identity_in_use(db, scope_id):
-            raise HTTPException(status_code=409, detail="scope_identity_in_use")
     try:
+        identity_change = (
+            (request.repo_owner is not None and _clean_repo_part(request.repo_owner, "Repo owner") != scope.repo_owner)
+            or (request.repo_name is not None and _clean_repo_part(request.repo_name, "Repo name") != scope.repo_name)
+            or (
+                request.repo_path is not None
+                and agent_team_service.normalize_repo_path(request.repo_path)[0] != scope.repo_path
+            )
+            or (request.base_ref is not None and _clean_required(request.base_ref, "Base ref") != scope.base_ref)
+        )
+        if identity_change and await _scope_identity_in_use(db, scope_id):
+            raise HTTPException(status_code=409, detail="scope_identity_in_use")
         _apply_scope_create(scope, request)
         await db.commit()
         await db.refresh(scope)

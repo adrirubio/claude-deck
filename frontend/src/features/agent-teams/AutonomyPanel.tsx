@@ -314,7 +314,7 @@ function ScopeDialog({
     setSaving(true)
     setErrorMessage(null)
     try {
-      await onSave({
+      const input: TeamGithubScopeInput = {
         ...form,
         max_approval_rounds: parsedLimit(numberInputs.max_approval_rounds, 'max approval rounds', 1),
         max_concurrent_dispatched: parsedLimit(numberInputs.max_concurrent_dispatched, 'max concurrent dispatched', 1),
@@ -329,7 +329,16 @@ function ScopeDialog({
         build_command_hint: form.build_command_hint?.trim() || null,
         dispatch_label: form.dispatch_label?.trim() || 'claude-deck-ready',
         design_label: form.design_label?.trim() || 'claude-deck-design',
-      })
+      }
+      if (state?.mode === 'edit' && state.scope) {
+        const original = scopeToInput(state.scope)
+        const changes = Object.fromEntries(
+          Object.entries(input).filter(([key, value]) => value !== original[key as keyof TeamGithubScopeInput])
+        ) as TeamGithubScopeUpdate
+        if (Object.keys(changes).length > 0) await onSave(changes)
+      } else {
+        await onSave(input)
+      }
       onOpenChange(null)
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save watched repo')
