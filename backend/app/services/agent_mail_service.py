@@ -2085,7 +2085,8 @@ class AgentMailService:
     ) -> dict[str, str]:
         if not session.tmux_target or not session.pane_id or session.pid is None:
             raise MailWakeError("wake_target_unbound")
-        try:
+
+        def require_current_pane() -> None:
             current = subprocess.run(
                 ["tmux", "display-message", "-p", "-t", session.pane_id,
                  "#{pane_id}|#{pane_pid}"],
@@ -2096,6 +2097,9 @@ class AgentMailService:
             )
             if current.stdout.strip() != f"{session.pane_id}|{session.pid}":
                 raise MailWakeError("wake_target_stale")
+
+        try:
+            require_current_pane()
             subprocess.run(
                 ["tmux", "send-keys", "-t", session.pane_id, "-l", nudge_prompt],
                 capture_output=True,
@@ -2104,6 +2108,7 @@ class AgentMailService:
                 check=True,
             )
             time.sleep(TMUX_ENTER_DELAY_SECONDS)
+            require_current_pane()
             subprocess.run(
                 ["tmux", "send-keys", "-t", session.pane_id, "Enter"],
                 capture_output=True,
@@ -2185,15 +2190,25 @@ class AgentMailService:
                     raise MailWakeError("wake_session_mismatch", status_code=403)
             audit.target_session_id = session.id
             audit.target_pane_id = session.pane_id
-            result = self._send_tmux_inbox_check(session, nudge_prompt)
-            audit.result = "delivered"
-            return {"method": "tmux", **result}
         except MailWakeError as exc:
             audit.failure_code = exc.code
-            raise
-        finally:
             db.add(audit)
             await db.commit()
+            raise
+
+        audit.result = "attempted"
+        db.add(audit)
+        await db.commit()
+        try:
+            result = self._send_tmux_inbox_check(session, nudge_prompt)
+        except MailWakeError as exc:
+            audit.result = "refused"
+            audit.failure_code = exc.code
+            await db.commit()
+            raise
+        audit.result = "delivered"
+        await db.commit()
+        return {"method": "tmux", **result}
 
     async def auto_nudge_members(
         self,
