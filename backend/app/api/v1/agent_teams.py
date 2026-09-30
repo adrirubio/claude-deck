@@ -2487,12 +2487,42 @@ async def reorder_slots(
         raise _bad_request(exc) from exc
 
 
+def _require_safe_agent_launch(
+    request: AgentTeamLaunchRequest | None,
+    principal: MailAgentSession | None,
+) -> None:
+    if principal is None:
+        return
+    if (
+        not settings.mail_capability_tokens_required
+        or principal.source != "mcp"
+        or principal.mailbox_status != "connected"
+    ):
+        raise HTTPException(status_code=403, detail="authenticated_mcp_session_required")
+    if request is not None and (
+        request.slot_prompt_overrides is not None
+        or request.repo_path_override is not None
+        or request.include_disabled
+        or not request.reuse_existing
+        or request.skip_plan_confirmation
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Launch overrides and forced respawn require an operator token",
+                "block_code": "operator_launch_override_required",
+            },
+        )
+
+
 @router.post("/presets/{preset_id}/plan-launch", response_model=AgentTeamLaunchPlan)
 async def plan_launch(
     preset_id: int,
     request: AgentTeamLaunchRequest | None = None,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_safe_agent_launch(request, principal)
     try:
         return await agent_team_service.plan_launch(db, preset_id, request)
     except ValueError as exc:
@@ -2507,17 +2537,20 @@ async def plan_launch(
 async def plan_launch_compat(
     preset_id: int,
     request: AgentTeamLaunchRequest | None = None,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    return await plan_launch(preset_id, request, db)
+    return await plan_launch(preset_id, request, principal, db)
 
 
 @router.post("/presets/{preset_id}/launch", response_model=AgentTeamLaunchResult)
 async def launch_preset(
     preset_id: int,
     request: AgentTeamLaunchRequest,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_safe_agent_launch(request, principal)
     try:
         return await agent_team_service.launch(db, preset_id, request)
     except PlanConflictError as exc:

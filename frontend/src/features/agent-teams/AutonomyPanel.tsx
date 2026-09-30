@@ -305,7 +305,7 @@ export function OperatorTokenDialog({
         <DialogHeader>
           <DialogTitle>Operator token</DialogTitle>
           <DialogDescription>
-            Enter the token configured as operator_token in backend/.env. It protects roster and watched-repo settings, autonomy, recovery policy, and operator remedies, and stays in this browser tab only.
+            Enter the token configured as operator_token in backend/.env. It protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies, and stays in this browser tab only.
           </DialogDescription>
         </DialogHeader>
         <details className="text-sm text-muted-foreground">
@@ -320,6 +320,7 @@ export function OperatorTokenDialog({
             value={value}
             onChange={onValueChange}
             required
+            autoComplete="off"
           />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>

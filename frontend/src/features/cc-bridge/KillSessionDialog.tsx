@@ -10,7 +10,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import { MODAL_SIZES } from '@/lib/constants'
+import { ApiHttpError } from '@/lib/api'
+import { clearOperatorToken, getOperatorToken, setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { killSession } from './api'
 import type { CCSession } from './types'
 import type { InstanceIdentity } from '@/types/status'
@@ -35,21 +38,34 @@ export function KillSessionDialog({
   const [cleanupWorktree, setCleanupWorktree] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [operatorTokenInput, setOperatorTokenInput] = useState('')
 
   async function handleKill() {
     if (!session) return
+    const operatorToken = getOperatorToken() ?? operatorTokenInput.trim()
+    if (!operatorToken) {
+      setError('Enter the Deck operator token to terminate a session.')
+      return
+    }
     setSubmitting(true)
     setError(null)
     try {
-      const result = await killSession(session.session_name, cleanupWorktree)
+      const result = await killSession(session.session_name, operatorToken, cleanupWorktree)
       if (result.error) {
         setError(result.error)
       } else {
-        onOpenChange(false)
+        setOperatorToken(operatorToken)
+        handleOpenChange(false)
         onKilled()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to kill session')
+      if (err instanceof ApiHttpError && err.status === 401) {
+        clearOperatorToken()
+        setOperatorTokenInput('')
+        setError('The Deck operator token was rejected. Enter a valid token and retry.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to kill session')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -59,6 +75,7 @@ export function KillSessionDialog({
     if (!value) {
       setCleanupWorktree(false)
       setError(null)
+      setOperatorTokenInput('')
       setSubmitting(false)
     }
     onOpenChange(value)
@@ -90,6 +107,20 @@ export function KillSessionDialog({
             <Label htmlFor="cleanup-worktree" className="cursor-pointer">
               Also remove git worktree
             </Label>
+          </div>
+        )}
+
+        {!getOperatorToken() && (
+          <div className="space-y-2">
+            <Label htmlFor="kill-session-operator-token">Operator token</Label>
+            <Input
+              id="kill-session-operator-token"
+              type="password"
+              autoComplete="off"
+              value={operatorTokenInput}
+              onChange={(event) => setOperatorTokenInput(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Use the token configured in backend/.env; an agent session token cannot terminate another session.</p>
           </div>
         )}
 

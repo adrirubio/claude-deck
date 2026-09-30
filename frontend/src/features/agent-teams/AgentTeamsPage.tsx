@@ -449,7 +449,7 @@ function SlotDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => onOpenChange(next ? state : null)}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{state?.mode === 'edit' ? 'Edit Slot' : 'Add Slot'}</DialogTitle>
         </DialogHeader>
@@ -1157,7 +1157,7 @@ export function AgentTeamsPage() {
     setPlannedSlotIds(slotIds)
     try {
       const request: AgentTeamLaunchRequest = slotIds ? { slot_ids: slotIds } : {}
-      setPlan(await planAgentTeamLaunch(selectedPreset.id, request))
+      setPlan(await withOperatorToken((token) => planAgentTeamLaunch(selectedPreset.id, request, token)))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
     } finally {
@@ -1174,7 +1174,7 @@ export function AgentTeamsPage() {
         slot_ids: plannedSlotIds,
         confirm_plan_hash: plan.plan_hash,
       }
-      const result = await launchAgentTeam(selectedPreset.id, request)
+      const result = await withOperatorToken((token) => launchAgentTeam(selectedPreset.id, request, token))
       setLaunchResult(result)
       await loadPresets()
       toast.success('Launch complete')

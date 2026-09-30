@@ -123,20 +123,24 @@ export function reorderAgentTeamSlots(
 
 export function planAgentTeamLaunch(
   presetId: number,
-  input: AgentTeamLaunchRequest = {}
+  input: AgentTeamLaunchRequest = {},
+  operatorToken: string
 ): Promise<AgentTeamLaunchPlan> {
   return apiClient<AgentTeamLaunchPlan>(`agent-teams/presets/${presetId}/plan-launch`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
 export function launchAgentTeam(
   presetId: number,
-  input: AgentTeamLaunchRequest
+  input: AgentTeamLaunchRequest,
+  operatorToken: string
 ): Promise<AgentTeamLaunchResult> {
   return apiClient<AgentTeamLaunchResult>(`agent-teams/presets/${presetId}/launch`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }

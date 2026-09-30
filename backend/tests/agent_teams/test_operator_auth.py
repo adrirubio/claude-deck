@@ -1,5 +1,6 @@
 """Spec §3.7 test 20 — require_operator refuses every credential an agent can obtain."""
 from datetime import datetime, timedelta
+import importlib
 from pathlib import Path
 
 import httpx
@@ -246,6 +247,7 @@ async def test_retry_requires_current_bound_leader_or_operator(
         db.add_all([leader_slot, other_slot])
         await db.flush()
         tokens = {}
+        members = {}
         for name, slot in (("leader", leader_slot), ("other", other_slot)):
             member = MailTeamMember(
                 identity_key=f"retry:{name}:{item_id}", repo_id="r", repo_path="/tmp/r",
@@ -254,10 +256,27 @@ async def test_retry_requires_current_bound_leader_or_operator(
             )
             db.add(member)
             await db.flush()
+            members[name] = member
             token = f"retry-{name}-{item_id}"
             db.add(MailAgentSession(
                 member_id=member.id, source="mcp", session_key=f"retry:{name}:{item_id}",
                 team_preset_id=scope.preset_id, team_slot_id=slot.id,
+                bound_pane_pid=1234, bound_pane_proc_start="1",
+                capability_token_hash=agent_mail_service.hash_capability_token(token),
+            ))
+            tokens[name] = token
+        other_preset = AgentTeamPreset(name="Other retry team")
+        db.add(other_preset)
+        await db.flush()
+        for name, source, preset_id in (
+            ("hook", "hook", scope.preset_id),
+            ("cross_preset", "mcp", other_preset.id),
+        ):
+            token = f"retry-{name}-{item_id}"
+            db.add(MailAgentSession(
+                member_id=members["leader"].id, source=source,
+                session_key=f"retry:{name}:{item_id}",
+                team_preset_id=preset_id, team_slot_id=leader_slot.id,
                 bound_pane_pid=1234, bound_pane_proc_start="1",
                 capability_token_hash=agent_mail_service.hash_capability_token(token),
             ))
@@ -279,6 +298,10 @@ async def test_retry_requires_current_bound_leader_or_operator(
     nonleader = await client.post(url, headers={"X-Deck-Session-Token": tokens["other"]})
     assert nonleader.status_code == 403
     assert nonleader.json()["detail"] == "current_leader_required"
+    for name in ("hook", "cross_preset"):
+        refused = await client.post(url, headers={"X-Deck-Session-Token": tokens[name]})
+        assert refused.status_code == 403, name
+        assert refused.json()["detail"] == "current_leader_required"
     operator = await client.post(url, headers={"X-Deck-Operator-Token": OPERATOR_TOKEN})
     assert operator.status_code == 409
     leader = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
@@ -314,6 +337,84 @@ async def test_retry_requires_current_bound_leader_or_operator(
     monkeypatch.setattr("app.api.v1.deps.peer_process.pane_is_alive", lambda *_: False)
     stale = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
     assert stale.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_team_launch_requires_authority_and_agents_cannot_override(
+    client_and_db, operator_token_configured, monkeypatch
+):
+    client, maker = client_and_db
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    session_token = await _agent_session_token(maker)
+    async with maker() as db:
+        preset = AgentTeamPreset(name="Launch authority", description="", created_by="test")
+        db.add(preset)
+        await db.commit()
+        preset_id = preset.id
+
+    base = f"/api/v1/agent-teams/presets/{preset_id}"
+    session_headers = {"X-Deck-Session-Token": session_token}
+    operator_headers = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+    for path in ("plan-launch", "launch/plan", "launch"):
+        anonymous = await client.post(f"{base}/{path}", json={})
+        assert anonymous.status_code == 401, path
+        assert anonymous.json()["detail"] == "operator_token_required"
+
+    plan = await client.post(f"{base}/plan-launch", json={}, headers=session_headers)
+    assert plan.status_code == 200
+    assert plan.json()["spawn_count"] == 0
+    launched = await client.post(
+        f"{base}/launch",
+        json={"confirm_plan_hash": plan.json()["plan_hash"]},
+        headers=session_headers,
+    )
+    assert launched.status_code == 200
+
+    for payload in (
+        {"slot_prompt_overrides": {"1": "untrusted prompt"}},
+        {"repo_path_override": "/tmp"},
+        {"include_disabled": True},
+        {"reuse_existing": False},
+        {"skip_plan_confirmation": True},
+    ):
+        for path in ("plan-launch", "launch/plan", "launch"):
+            refused = await client.post(f"{base}/{path}", json=payload, headers=session_headers)
+            assert refused.status_code == 403, (path, payload)
+            assert refused.json()["detail"]["block_code"] == "operator_launch_override_required"
+    operator_plan = await client.post(
+        f"{base}/plan-launch", json={"reuse_existing": False}, headers=operator_headers
+    )
+    assert operator_plan.status_code == 200
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    unenforced = await client.post(f"{base}/plan-launch", json={}, headers=session_headers)
+    assert unenforced.status_code == 403
+    assert unenforced.json()["detail"] == "authenticated_mcp_session_required"
+
+
+@pytest.mark.asyncio
+async def test_session_kill_requires_operator_before_termination(
+    client_and_db, operator_token_configured, monkeypatch
+):
+    client, maker = client_and_db
+    session_token = await _agent_session_token(maker)
+    bridge = importlib.import_module("app.api.v1.agent_bridge.router")
+    killed = []
+
+    def fake_kill(*, session_name, cleanup_worktree):
+        killed.append((session_name, cleanup_worktree))
+        return {"status": "killed"}
+
+    monkeypatch.setattr(bridge, "kill_session", fake_kill)
+    url = "/api/v1/agent-bridge/sessions/not-the-leader"
+    assert (await client.delete(url)).status_code == 401
+    assert (
+        await client.delete(url, headers={"X-Deck-Session-Token": session_token})
+    ).status_code == 401
+    assert killed == []
+    operator = await client.delete(url, headers={"X-Deck-Operator-Token": OPERATOR_TOKEN})
+    assert operator.status_code == 200
+    assert killed == [("not-the-leader", False)]
 
 
 @pytest.mark.asyncio

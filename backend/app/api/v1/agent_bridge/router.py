@@ -23,6 +23,7 @@ from app.models.schemas import (
     BridgeAttachmentResponse,
 )
 from app.config import settings
+from app.api.v1.deps import require_operator
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
 from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
@@ -485,5 +486,9 @@ def spawn_session_endpoint(request: SpawnRequest):
 
 
 @router.delete("/sessions/{target}")
-def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
+def kill_session_endpoint(
+    target: str,
+    cleanup_worktree: bool = False,
+    _operator: None = Depends(require_operator),
+):
     return kill_session(session_name=target, cleanup_worktree=cleanup_worktree)

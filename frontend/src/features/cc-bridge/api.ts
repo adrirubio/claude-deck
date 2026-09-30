@@ -109,10 +109,11 @@ export async function fetchCodexLaunchOptions(): Promise<CodexLaunchOptionsRespo
   return apiClient<CodexLaunchOptionsResponse>('providers/codex-cli/launch-options')
 }
 
-export async function killSession(target: string, cleanupWorktree: boolean = false): Promise<KillSessionResponse> {
+export async function killSession(target: string, operatorToken: string, cleanupWorktree: boolean = false): Promise<KillSessionResponse> {
   const params = cleanupWorktree ? '?cleanup_worktree=true' : ''
   return apiClient<KillSessionResponse>(`${BASE}/sessions/${encodeURIComponent(target)}${params}`, {
     method: 'DELETE',
+    headers: { 'X-Deck-Operator-Token': operatorToken },
   })
 }
 
