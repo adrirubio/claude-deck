@@ -43,6 +43,7 @@ from app.services.github_client import (
 )
 from app.services.github_workspace_service import (
     GithubWorkspaceCredentialRevokeError,
+    GithubWorkspaceConfigError,
     GithubWorkspaceError,
     GithubWorkspaceResetError,
     github_workspace_service,
@@ -2528,6 +2529,62 @@ async def test_force_release_with_matching_acquisition(client, db, tmp_path, mon
     assert body["released_item_id"] == item.id
     assert body["workspace"]["leased_item_id"] is None
     assert "lease_token" not in body["workspace"]
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_force_release_reports_config_failure_without_clearing_lease(
+    client, db, tmp_path, monkeypatch
+):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    _, workspace, leased_at = await _leased_workspace(db, scope, tmp_path / "ws")
+    (tmp_path / "ws").mkdir()
+
+    async def fail_snapshot(_workspace):
+        raise GithubWorkspaceConfigError("unreadable worktree config")
+
+    monkeypatch.setattr(github_workspace_service, "_runner", ApiGitRunner(repo_path))
+    monkeypatch.setattr(github_workspace_service, "snapshot_worktree_config", fail_snapshot)
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "force": True,
+            "expected_leased_at": leased_at.isoformat(),
+            "reason": "owner unavailable",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["block_code"] == "workspace_config_failed"
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is not None
+
+
+@pytest.mark.asyncio
+async def test_force_release_missing_worktree_clears_lease(client, db, tmp_path):
+    repo_path = tmp_path / "repo"
+    _, scope = await _scope(db, repo_path)
+    _, workspace, leased_at = await _leased_workspace(
+        db, scope, tmp_path / "deleted-worktree"
+    )
+
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/"
+        f"{workspace.id}/force-release",
+        json={
+            "force": True,
+            "expected_leased_at": leased_at.isoformat(),
+            "reason": "worktree directory was removed",
+        },
+        headers=OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 200
     await db.refresh(workspace)
     assert workspace.leased_item_id is None
 

@@ -101,6 +101,7 @@ from app.services.github_app_auth_service import (
 from app.services.github_workspace_service import (
     _RELEASABLE_STATUSES,
     GithubWorkspaceCredentialRevokeError,
+    GithubWorkspaceConfigError,
     GithubWorkspaceError,
     GithubWorkspaceResetError,
     github_workspace_service,
@@ -2186,6 +2187,11 @@ async def force_release_github_workspace(
         )
     except GithubWorkspaceCredentialRevokeError as exc:
         raise HTTPException(status_code=503, detail=exc.block_code) from exc
+    except GithubWorkspaceConfigError as exc:
+        raise _conflict(
+            "Workspace configuration could not be safely cleaned up; no lease was released.",
+            block_code=exc.block_code,
+        ) from exc
     if not released:
         await db.refresh(workspace)
         if workspace.leased_item_id is None:

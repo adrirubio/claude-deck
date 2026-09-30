@@ -346,6 +346,21 @@ class GithubWorkspaceService:
             values[key] = await self._config_values(workspace, key)
         return WorktreeConfigSnapshot(values)
 
+    async def _worktree_config_unavailable(self, workspace: GithubWorkspace) -> bool:
+        try:
+            os.stat(workspace.path)
+        except (FileNotFoundError, NotADirectoryError):
+            return True
+        return_code, output = await self._runner(
+            [
+                "-C", workspace.path, "config", "--local", "--bool",
+                "extensions.worktreeConfig",
+            ]
+        )
+        return (return_code == 1 and not output.strip()) or (
+            return_code == 0 and output.strip() == "false"
+        )
+
     async def _clear_config_key(self, workspace: GithubWorkspace, key: str) -> None:
         return_code, output = await self._runner(
             ["-C", workspace.path, "config", "--worktree", "--unset-all", key]
@@ -674,11 +689,13 @@ class GithubWorkspaceService:
                 await db.rollback()
                 return False
             await db.commit()
-            snapshot = (
-                None
-                if config_workspace.kind == "primary"
-                else await self.snapshot_worktree_config(config_workspace)
-            )
+            snapshot = None
+            if config_workspace.kind != "primary":
+                try:
+                    snapshot = await self.snapshot_worktree_config(config_workspace)
+                except GithubWorkspaceConfigError:
+                    if not await self._worktree_config_unavailable(config_workspace):
+                        raise
             predicates = [
                 GithubWorkspace.id == workspace_id,
                 GithubWorkspace.scope_id == scope_id,
@@ -727,7 +744,7 @@ class GithubWorkspaceService:
                         else current_owner_slot_id
                     ),
                 )
-                if config_workspace.kind != "primary":
+                if snapshot is not None:
                     await self.remove_managed_worktree_config(config_workspace)
                 await db.commit()
                 return True
