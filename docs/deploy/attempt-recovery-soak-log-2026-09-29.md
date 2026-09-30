@@ -14,7 +14,8 @@ authority rows and private operator artifacts where possible. The private
 `attempt-recovery-soak-20260829T205204Z.md` record the pre-deployment backup
 reference/digest and early checkpoint evidence; do not copy the database or its
 private backup details into the repository. A private conversation-derived cap
-ledger dated 2026-09-30 identifies authorizations and one ambiguous change;
+ledger dated 2026-09-30 identifies authorizations, one contextual approval,
+and one ambiguous change;
 it is not a persisted policy audit trail.
 
 ## Identity and safety boundary
@@ -43,7 +44,7 @@ sessions. The #329 code fix merged after this soak and was not exercised by it.
 |---|---|---|
 | 0 — deployment | Backend healthy at integration tip, no integration-to-`master` merge | The original preflight and backup are in private artifacts. A timestamped operator conversation reports deploying `d4d7f5dc` on 2026-09-26 at 19:34 and an owner re-entry/read-only preflight PASS at 19:59. No surviving deployment/process log proves uninterrupted use of that process through the final replay; the current backend is a later restart. |
 | 1 — team and scope | Distinct owner and Leader slots/members; one observed pane and one fresh authenticated MCP session for each at final proposal | Private log records Checkpoint 1 PASS on 2026-08-30 with isolated panes. Live DB and tmux checks repeated on 2026-09-28. |
-| 2 — continuation policy | Finite policy, autonomy off at proposal | Private log records initial 6/8/2 cap and Checkpoint 2 PASS on 2026-08-30. Final proposal used 15/11/2. A private, timestamped conversation ledger reconstructs the intermediate changes, but 7→8 was applied after a general “yes” that preceded the numeric question; its specific authorization is unproven and needs gate-owner acceptance. The early autonomy-on windows preceded the recovery-only gate. |
+| 2 — continuation policy | Finite policy, autonomy off at proposal | Private log records initial 6/8/2 cap and Checkpoint 2 PASS on 2026-08-30. Final proposal used 15/11/2. A private, timestamped conversation ledger reconstructs the intermediate changes. The 6→7 approval is contextual rather than value-specific; 7→8 was applied after a general “yes” that preceded the numeric question. Both need gate-owner disposition. The early autonomy-on windows preceded the recovery-only gate. |
 | 3 — owner proposal | Revision 15 proposed by member 17 at `decision_hold` | Created 2026-09-28 22:48:23; approval request 15, request mail 1118. Scope: implementation, one allowed path `player/src/decoders/tizflacgraph.cpp`, hosted CI, two failed heads. No coordinator proposal. |
 | 4 — decision and ack | Distinct Leader approved; owner acknowledged | Decision mail 1121 at 22:57:53; server delivery mail 1122 at 22:57:53; member 17 acknowledged at 22:58:55. Decision and ack holds were separately released by the operator. |
 | 5 — diagnostics and restoration | Earlier diagnostic revisions 3, 6, 8, 9, 12, 13 completed; all diagnostic revisions now terminal | Independent review matched every diagnostic revert commit tree to its persisted baseline tree. Run 33221787425 is a pre-recovery red head reused by revision 3, not a revision-3 run. Revision 6 used run 35969694440; revision 8, 36041701517; revision 9, 36049559994; revision 12, 36352060714; revision 13, 36480800340. No diagnostic authority remains active. |
@@ -121,8 +122,8 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
   The gate owner must explicitly disposition these deviations. Issue #379
   holds the product-level budget-bypass decision.
 - The private cap ledger reconstructs the changes from timestamped operator
-  conversation, but 7→8 lacks an unambiguous value-specific approval. Obtain
-  explicit gate-owner acceptance of that ambiguity and of the blanket-cap
+  conversation, but 6→7 is contextual and 7→8 lacks an unambiguous
+  value-specific approval. Obtain explicit gate-owner acceptance of both and of the blanket-cap
   interpretation for later changes; do not invent a contemporaneous approval.
 - The `d4d7f5dc` deployment has a timestamped conversation report and read-only
   preflight report, but no surviving process log proving uninterrupted service
@@ -134,8 +135,9 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
   The merge was not a protected or independently approved merge.
 - The #329 and #359 fixes were reviewed and merged to integration after the
   soak; neither ran in the observed replay. A targeted isolated normal-release
-  replay against the #359 fix passed through the owner report route; this is
-  code-path validation, **not** a live Tizonia terminal-release observation.
+  replay against the #359 fix passed through the owner report route
+  (`test_owner_release_after_real_squash_merge_uses_normal_route`, 2026-09-30).
+  This is code-path validation, **not** a live Tizonia terminal-release observation.
   Do not claim the historical runbook step passed.
 - Have the independent reviewer re-assess the amended evidence before a
   `master` PR. PR #360 recorded a draft only; green product CI and current
