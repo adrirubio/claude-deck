@@ -267,6 +267,65 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_force_release_clears_lease_when_worktree_directory_is_gone(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "missing-worktree"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="acquisition-token",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert await GithubWorkspaceService().force_release_acquisition(
+        db,
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        item_id=item.id,
+        expected_leased_at=workspace.leased_at,
+        lease_token=workspace.lease_token,
+    ) is True
+
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+    assert workspace.lease_token is None
+
+
+@pytest.mark.asyncio
+async def test_force_release_skips_unavailable_worktree_config(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "linked-worktree"
+    subprocess.run(["git", "init", "-b", "master", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Tester", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "base"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "test-worktree", str(worktree)], check=True, capture_output=True)
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(worktree),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="acquisition-token",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert await GithubWorkspaceService().force_release_acquisition(
+        db,
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        item_id=item.id,
+        expected_leased_at=workspace.leased_at,
+        lease_token=workspace.lease_token,
+    ) is True
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
 async def test_stale_release_does_not_revoke_any_acquisition_token(
     db, tmp_path, monkeypatch
 ):
