@@ -150,7 +150,7 @@ To make the dev environment reachable from another machine on your LAN or tailne
 
 Both servers will then bind to all interfaces.
 
-Only use this option on a trusted network. Deck's team and autonomy configuration routes do not require an operator token; anyone who can reach a non-loopback backend can change them. For remote access, prefer a trusted tunnel to the loopback listener. If you intentionally run the Vite dev UI from another origin, set `CORS_ORIGINS` to a JSON list containing that exact origin (for example, `["http://deck-host:5173"]`). Production UI served by Deck uses the same origin and needs no CORS entry.
+Only use this option on a trusted network. Many team and autonomy configuration routes do not require an operator token; anyone who can reach a non-loopback backend can change them. For remote access, prefer a trusted tunnel to the loopback listener. If you intentionally run the Vite dev UI from another origin, set `CORS_ORIGINS` to a JSON list containing that exact origin (for example, `["http://deck-host:5173"]`). Production UI served by Deck uses the same origin and needs no CORS entry.
 
 Remote use should still be native: run Claude Deck on the remote host where the agents, credentials, repositories, and tmux sessions exist, then connect from your browser over a trusted tunnel or network route.
 
