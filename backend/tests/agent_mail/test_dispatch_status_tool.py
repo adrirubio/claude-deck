@@ -2,6 +2,8 @@
 
 import ast
 import inspect
+import os
+import subprocess
 import textwrap
 from datetime import datetime
 
@@ -580,6 +582,109 @@ async def test_owner_releases_clean_squash_merged_pr_head(client_and_db, monkeyp
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_owner_release_after_real_squash_merge_uses_normal_route(
+    client_and_db, monkeypatch, tmp_path
+):
+    ac, maker = client_and_db
+    home = tmp_path / "home"
+    home.mkdir()
+    environment = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    worktree = tmp_path / "worktree"
+
+    def run_git(*arguments, cwd=None):
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            env=environment,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    run_git("init", "-b", "master", str(repo))
+    run_git("config", "user.name", "Tester", cwd=repo)
+    run_git("config", "user.email", "tester@example.com", cwd=repo)
+    run_git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    (repo / "README").write_text("base\n")
+    run_git("add", "README", cwd=repo)
+    run_git("commit", "-m", "base", cwd=repo)
+    base_sha = run_git("rev-parse", "HEAD", cwd=repo)
+    run_git("init", "--bare", str(remote))
+    run_git("remote", "add", "origin", str(remote), cwd=repo)
+    run_git("push", "-u", "origin", "master", cwd=repo)
+    run_git("worktree", "add", "-b", "deck/test-attempt", str(worktree), cwd=repo)
+    (worktree / "change.txt").write_text("pushed change\n")
+    run_git("add", "change.txt", cwd=worktree)
+    run_git("commit", "-m", "change", cwd=worktree)
+    pushed_sha = run_git("rev-parse", "HEAD", cwd=worktree)
+    run_git("push", "-u", "origin", "deck/test-attempt", cwd=worktree)
+    run_git("merge", "--squash", "deck/test-attempt", cwd=repo)
+    run_git("commit", "-m", "squash", cwd=repo)
+    run_git("push", "origin", "master", cwd=repo)
+    run_git("update-ref", "refs/remotes/origin/master", base_sha, cwd=repo)
+    assert int(run_git("rev-list", "--count", "origin/master..HEAD", cwd=worktree)) > 0
+
+    item_id, owner_id, _, workspace_id, _ = await _seed_leased_item(maker)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        scope.base_ref = "origin/master"
+        scope.github_auth_mode = "ambient"
+        item.pr_number = 875
+        workspace.path = str(worktree)
+        workspace.kind = "worktree"
+        workspace.leased_at = datetime.utcnow()
+        repo_full_name = f"{scope.repo_owner}/{scope.repo_name}"
+        await db.commit()
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**environment, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+
+    async def get_pull(*_args, **_kwargs):
+        return {
+            "state": "closed",
+            "merged_at": "2026-09-29T08:46:06Z",
+            "head": {
+                "sha": pushed_sha,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": repo_full_name},
+            },
+        }
+
+    monkeypatch.setattr(agent_teams_routes.github_client, "get_pull", get_pull)
+    normal_releases = []
+    original_release = github_workspace_service.release_by_owner
+
+    async def release_by_owner(*arguments, **kwargs):
+        normal_releases.append((arguments, kwargs))
+        return await original_release(*arguments, **kwargs)
+
+    monkeypatch.setattr(github_workspace_service, "release_by_owner", release_by_owner)
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "workspace_released",
+            "reporting_slot_id": owner_id,
+            "lease_token": "lease-current",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(normal_releases) == 1
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id is None
+        assert workspace.lease_token is None
+        assert workspace.released_at is not None
 
 
 @pytest.mark.asyncio
