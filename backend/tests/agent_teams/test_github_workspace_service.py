@@ -267,8 +267,25 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_force_release_clears_lease_when_worktree_directory_is_gone(db, tmp_path):
+@pytest.mark.parametrize("app_auth", [False, True])
+async def test_force_release_clears_lease_when_worktree_directory_is_gone(
+    db, tmp_path, monkeypatch, app_auth
+):
     scope, _, item = await _context(db, tmp_path / "repo")
+    revoked = []
+    if app_auth:
+        scope.github_auth_mode = "app"
+        scope.github_app_installation_id = 55
+
+        async def revoke(installation_id, owner, repo, **kwargs):
+            revoked.append((installation_id, owner, repo, kwargs["cache_subject"]))
+            return True
+
+        monkeypatch.setattr(
+            "app.services.github_workspace_service.github_app_auth_service."
+            "revoke_cached_repository_token",
+            revoke,
+        )
     workspace = GithubWorkspace(
         scope_id=scope.id,
         path=str(tmp_path / "missing-worktree"),
@@ -276,6 +293,9 @@ async def test_force_release_clears_lease_when_worktree_directory_is_gone(db, tm
         leased_item_id=item.id,
         leased_at=datetime.utcnow(),
         lease_token="acquisition-token",
+        push_token_expires_at=(
+            datetime.utcnow() + timedelta(minutes=30) if app_auth else None
+        ),
     )
     db.add(workspace)
     await db.commit()
@@ -292,6 +312,7 @@ async def test_force_release_clears_lease_when_worktree_directory_is_gone(db, tm
     await db.refresh(workspace)
     assert workspace.leased_item_id is None
     assert workspace.lease_token is None
+    assert len(revoked) == int(app_auth)
 
 
 @pytest.mark.asyncio
