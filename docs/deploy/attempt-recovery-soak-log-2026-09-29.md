@@ -1,6 +1,6 @@
 # Tizonia Attempt-Recovery Soak: Final Replay and Cleanup
 
-Status: **evidence conditional; not master-merge clearance**.
+Status: **soak-evidence gate PASS (independent review 2026-09-30); not master-merge clearance**.
 PR #360's GitHub review request was waived at the user's direction after Adri
 approved it off-platform; no GitHub review was submitted. The 2026-09-30
 independent evidence review found the exceptions and gaps documented below.
@@ -172,19 +172,22 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
 - The `d4d7f5dc` deployment has a timestamped conversation report and read-only
   preflight report, but no surviving process log proving uninterrupted service
   through the final replay. The later `deck-soak` socket claim is also not
-  independently established. An independent reviewer must decide whether the
-  remaining evidence suffices or requires a targeted check.
+  independently established. The final independent reviewer accepted these as
+  documented, non-blocking residuals for the soak-evidence gate.
 - Current `master` protection was confirmed by an admin API read, but the
   temporary review-rule bypass on PR #875 remains a documented exception.
   The merge was not a protected or independently approved merge.
 - The #329, #359 and #379 fixes were reviewed and merged to integration after the
-  soak; neither ran in the observed replay. A targeted isolated normal-release
+  soak; none ran in the observed replay. A targeted isolated normal-release
   replay against the #359 fix passed through the owner report route
   (`test_owner_release_after_real_squash_merge_uses_normal_route`, 2026-09-30).
   This is code-path validation under ambient and GitHub App auth, **not** a live
   Tizonia terminal-release observation. The operator accepted the historical
   force-release exception; the normal-release step remains failed.
   Do not claim the historical runbook step passed.
-- Have the independent reviewer re-assess the amended evidence before a
-  `master` PR. PR #360 recorded a draft only; green product CI and current
-  protection settings do not themselves clear the soak gate.
+- The final independent review on 2026-09-30 marked the soak-evidence gate
+  PASS only. Before any integration-to-`master` merge, review the combined tip,
+  run its tests, obtain UI acceptance, and confirm the #361, #362 and #381
+  fixes are deployed before any future autonomous replay. PR #360 recorded a
+  draft only; green product CI and current protection settings do not by
+  themselves approve a `master` merge.
