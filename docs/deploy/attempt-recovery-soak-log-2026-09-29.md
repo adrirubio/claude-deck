@@ -1,6 +1,6 @@
 # Tizonia Attempt-Recovery Soak: Final Replay and Cleanup
 
-Status: **evidence draft; independent review FAIL; not master-merge clearance**.
+Status: **evidence conditional; not master-merge clearance**.
 PR #360's GitHub review request was waived at the user's direction after Adri
 approved it off-platform; no GitHub review was submitted. The 2026-09-30
 independent evidence review found the exceptions and gaps documented below.
@@ -129,6 +129,8 @@ invariant; issue #379 remains a master blocker.
    to the route; no durable record of that reason survives.
    Workspace 2 released at 08:59:47; the lease token and item pointer are NULL.
    This was a runbook-step failure, even though the operator cleanup was safe.
+   On 2026-09-30 the operator retrospectively accepted the force-release as
+   a historical Checkpoint 7 step-8 exception, not as a successful normal release.
    Follow-up: [Deck issue #359](https://github.com/adrirubio/claude-deck/issues/359).
 4. The recovery-only selector was removed from the ignored, mode-0600
    `backend/.env` at 09:00:13; an operator-facing report at 09:00:49 said Deck
@@ -175,7 +177,9 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
   soak; neither ran in the observed replay. A targeted isolated normal-release
   replay against the #359 fix passed through the owner report route
   (`test_owner_release_after_real_squash_merge_uses_normal_route`, 2026-09-30).
-  This is code-path validation, **not** a live Tizonia terminal-release observation.
+  This is code-path validation under ambient and GitHub App auth, **not** a live
+  Tizonia terminal-release observation. The operator accepted the historical
+  force-release exception; the normal-release step remains failed.
   Do not claim the historical runbook step passed.
 - Have the independent reviewer re-assess the amended evidence before a
   `master` PR. PR #360 recorded a draft only; green product CI and current

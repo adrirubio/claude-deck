@@ -26,7 +26,8 @@ from app.services.github_approval_service import (
     GithubApprovalError,
     github_approval_service,
 )
-from app.services.github_client import GithubCommitSnapshot
+from app.services.github_app_auth_service import github_app_auth_service
+from app.services.github_client import GithubCommitSnapshot, github_client
 from app.services.github_dispatch_service import github_dispatch_service
 
 
@@ -37,6 +38,21 @@ OPERATOR_HEADERS = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
 @pytest.fixture(autouse=True)
 def operator_token(monkeypatch):
     monkeypatch.setattr(settings, "operator_token", OPERATOR_TOKEN)
+
+
+@pytest.fixture(autouse=True)
+def cancellation_pull(monkeypatch):
+    async def get_pull(owner, repo, _pr_number, *, token=None):
+        return {
+            "state": "open",
+            "head": {
+                "sha": "a" * 40,
+                "ref": "deck/slot-2/issue-821-cancel-active-nonce",
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+
+    monkeypatch.setattr(github_client, "get_pull", get_pull)
 
 
 @pytest_asyncio.fixture
@@ -167,7 +183,7 @@ async def _active_continuation(db, tmp_path):
         allowed_commands=[],
         prohibited_actions=["Do not push"],
         tool_fallbacks={},
-        baseline_head_sha="baseline-head",
+        baseline_head_sha="a" * 40,
         baseline_tree_sha="baseline-tree",
         originating_escalation_reason="retry_count_exhausted",
         expected_workspace_id=workspace.id,
@@ -385,6 +401,218 @@ async def test_exact_cancel_replay_is_idempotent_but_a_changed_reason_is_not(
             .where(MailMessage.delivery_key == f"github-scope:{revision.id}:cancelled")
         )
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_charges_unclassified_pushed_head_once(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, scope, item, workspace, revision, _approval, _owner = (
+        await _active_continuation(db, tmp_path)
+    )
+    scope.max_continuation_failed_heads = 1
+    await db.commit()
+
+    async def pushed_pull(owner, repo, _pr_number, *, token=None):
+        return {
+            "state": "open",
+            "head": {
+                "sha": "b" * 40,
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+
+    monkeypatch.setattr(github_client, "get_pull", pushed_pull)
+    original_lease = (workspace.leased_item_id, workspace.lease_token)
+    response = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+    replay = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+
+    assert response.status_code == 200, response.text
+    assert replay.status_code == 200, replay.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert revision.failed_head_count == 1
+    assert revision.last_failed_head_sha == "b" * 40
+    assert item.retry_count == 4
+    assert item.last_verified_sha == "b" * 40
+    assert item.escalation_reason == "continuation_budget_exhausted"
+    assert "consumed one failed-head" in item.status_note
+    assert (workspace.leased_item_id, workspace.lease_token) == original_lease
+
+
+@pytest.mark.asyncio
+async def test_cancel_does_not_recharge_a_counted_head(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = (
+        await _active_continuation(db, tmp_path)
+    )
+    revision.failed_head_count = 1
+    revision.last_failed_head_sha = "b" * 40
+    await db.commit()
+
+    async def counted_pull(owner, repo, _pr_number, *, token=None):
+        return {
+            "state": "open",
+            "head": {
+                "sha": "b" * 40,
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+
+    monkeypatch.setattr(github_client, "get_pull", counted_pull)
+    response = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+
+    assert response.status_code == 200, response.text
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert revision.failed_head_count == 1
+    assert item.retry_count == 3
+
+
+@pytest.mark.asyncio
+async def test_cancel_reads_app_authenticated_pull(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, scope, item, _workspace, revision, _approval, _owner = (
+        await _active_continuation(db, tmp_path)
+    )
+    scope.github_auth_mode = "app"
+    scope.github_app_installation_id = 1234
+    await db.commit()
+    mint_calls = []
+    pull_tokens = []
+
+    async def mint_repository_token(*args, **kwargs):
+        mint_calls.append((args, kwargs))
+        return "app-test-token"
+
+    async def app_pull(owner, repo, _pr_number, *, token=None):
+        pull_tokens.append(token)
+        return {
+            "state": "open",
+            "head": {
+                "sha": "a" * 40,
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint_repository_token)
+    monkeypatch.setattr(github_client, "get_pull", app_pull)
+    response = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+
+    assert response.status_code == 200, response.text
+    assert pull_tokens == ["app-test-token", "app-test-token"]
+    assert len(mint_calls) == 2
+    await db.refresh(revision)
+    assert revision.failed_head_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_refuses_to_charge_diagnostic_head_as_product_failure(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = (
+        await _active_continuation(db, tmp_path)
+    )
+    revision.phase = "diagnostic"
+    item.attempt_phase = "diagnostic"
+    await db.commit()
+
+    async def diagnostic_pull(owner, repo, _pr_number, *, token=None):
+        return {
+            "state": "open",
+            "head": {
+                "sha": "b" * 40,
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+
+    monkeypatch.setattr(github_client, "get_pull", diagnostic_pull)
+    response = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "active_continuation_diagnostic_head_unrestored"
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert revision.status == "active"
+    assert revision.failed_head_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_refuses_when_pr_head_moves_during_write(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = (
+        await _active_continuation(db, tmp_path)
+    )
+    calls = 0
+
+    async def moving_pull(owner, repo, _pr_number, *, token=None):
+        nonlocal calls
+        calls += 1
+        return {
+            "state": "open",
+            "head": {
+                "sha": ("b" if calls == 1 else "c") * 40,
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+
+    monkeypatch.setattr(github_client, "get_pull", moving_pull)
+    response = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "active_continuation_head_changed"
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 3
+    assert revision.status == "active"
+    assert revision.failed_head_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_refuses_unverifiable_pr_head(
+    client, db, tmp_path, monkeypatch
+):
+    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = (
+        await _active_continuation(db, tmp_path)
+    )
+
+    async def unverifiable_pull(*_args, **_kwargs):
+        return {"state": "open", "head": {"sha": "b" * 40}}
+
+    monkeypatch.setattr(github_client, "get_pull", unverifiable_pull)
+    response = await client.post(
+        _cancel_url(item), json=_cancel_body(item), headers=OPERATOR_HEADERS
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "active_continuation_head_unverifiable"
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "dispatched"
+    assert revision.status == "active"
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from weakref import WeakValueDictionary
 
+import httpx
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,8 +30,11 @@ from app.models.database import (
 )
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
-from app.services.github_app_auth_service import github_app_auth_service
-from app.services.github_client import github_client
+from app.services.github_app_auth_service import (
+    GithubAppAuthError,
+    github_app_auth_service,
+)
+from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_recovery_gate import configured_recovery_only_attempt
 
 
@@ -2093,6 +2097,12 @@ class GithubApprovalService:
             or item.dispatch_nonce != revision.dispatch_nonce
         ):
             raise GithubApprovalError("active_continuation_cancel_conflict")
+        next_step = (
+            "The failed-head budget is exhausted; no further proposal is allowed."
+            if item.escalation_reason == "continuation_budget_exhausted"
+            else "The preserved attempt returned to its originating escalation "
+            "and requires a fresh bounded proposal."
+        )
         await agent_mail_service.send_direct_message(
             db,
             recipient_member_id=revision.owner_member_id,
@@ -2102,8 +2112,7 @@ class GithubApprovalService:
             ),
             body_markdown=(
                 f"Continuation revision {revision.revision} was superseded by the "
-                "operator. Stop using that revision. The preserved attempt returned "
-                "to its originating escalation and requires a fresh bounded proposal.\n\n"
+                f"operator. Stop using that revision. {next_step}\n\n"
                 f"Reason: {revision.cancellation_reason}"
             ),
             payload={
@@ -2135,7 +2144,6 @@ class GithubApprovalService:
             or revision.cancellation_reason != reason
             or item.dispatch_nonce != revision.dispatch_nonce
             or item.dispatch_status != "escalated"
-            or item.escalation_reason != revision.originating_escalation_reason
             or item.active_scope_revision != 0
             or item.attempt_phase != "implementation"
             or item.continuation_nudged_at is not None
@@ -2143,6 +2151,11 @@ class GithubApprovalService:
             or item.owner_slot_id != revision.owner_slot_id
             or item.pr_number is None
         ):
+            return False
+        if item.escalation_reason not in {
+            revision.originating_escalation_reason,
+            "continuation_budget_exhausted",
+        }:
             return False
         approval = (
             await db.get(GithubApprovalRequest, revision.approval_request_id)
@@ -2171,6 +2184,40 @@ class GithubApprovalService:
             and self.lease_token_hash(workspace.lease_token)
             == revision.expected_lease_token_hash
         )
+
+    async def _active_cancellation_head_sha(
+        self, scope: TeamGithubScope, item: GithubWorkItem
+    ) -> str:
+        try:
+            token = await self.github_read_token(scope)
+            pull = await github_client.get_pull(
+                scope.repo_owner,
+                scope.repo_name,
+                item.pr_number,
+                token=token,
+            )
+        except (
+            GithubApprovalError,
+            GithubAppAuthError,
+            GithubClientResponseError,
+            httpx.HTTPError,
+        ) as exc:
+            raise GithubApprovalError("active_continuation_head_unverifiable") from exc
+        head = pull.get("head")
+        head_repo = head.get("repo") if isinstance(head, dict) else None
+        head_sha = head.get("sha") if isinstance(head, dict) else None
+        if (
+            pull.get("state") != "open"
+            or not isinstance(head, dict)
+            or not isinstance(head_repo, dict)
+            or not isinstance(head_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None
+            or head.get("ref") != item.dispatch_head_ref
+            or str(head_repo.get("full_name", "")).casefold()
+            != f"{scope.repo_owner}/{scope.repo_name}".casefold()
+        ):
+            raise GithubApprovalError("active_continuation_head_unverifiable")
+        return head_sha
 
     async def cancel_active_continuation(
         self,
@@ -2253,6 +2300,36 @@ class GithubApprovalService:
         workspace_id = workspace.id
         workspace_lease_token = workspace.lease_token
 
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        if scope is None:
+            raise GithubApprovalError("scope_not_found")
+        head_sha = await self._active_cancellation_head_sha(scope, item)
+        charge_head = (
+            head_sha != revision.baseline_head_sha
+            and not (
+                revision.failed_head_count > 0
+                and revision.last_failed_head_sha == head_sha
+            )
+        )
+        if charge_head and revision.phase != "implementation":
+            raise GithubApprovalError("active_continuation_diagnostic_head_unrestored")
+        _, failed_heads = await self.continuation_budget_usage(
+            db, item.id, dispatch_nonce
+        )
+        attempt_exhausted = (
+            failed_heads + int(charge_head) >= scope.max_continuation_failed_heads
+        )
+        charged_head_note = (
+            " An unclassified pushed head consumed one failed-head budget unit."
+            if charge_head
+            else ""
+        )
+        next_step_note = (
+            "The failed-head budget is exhausted; no further proposal is allowed."
+            if attempt_exhausted
+            else "The preserved attempt requires a fresh bounded proposal."
+        )
+
         now = datetime.utcnow()
         revision_result = await db.execute(
             update(GithubAttemptScopeRevision)
@@ -2262,8 +2339,14 @@ class GithubApprovalService:
                 GithubAttemptScopeRevision.dispatch_nonce == dispatch_nonce,
                 GithubAttemptScopeRevision.revision == revision_number,
                 GithubAttemptScopeRevision.owner_slot_id == item.owner_slot_id,
+                GithubAttemptScopeRevision.baseline_head_sha
+                == revision.baseline_head_sha,
                 GithubAttemptScopeRevision.status == "active",
                 GithubAttemptScopeRevision.cancelled_at.is_(None),
+                GithubAttemptScopeRevision.failed_head_count
+                == revision.failed_head_count,
+                GithubAttemptScopeRevision.last_failed_head_sha
+                == revision.last_failed_head_sha,
                 exists(
                     select(GithubApprovalRequest.id).where(
                         GithubApprovalRequest.id == approval.id,
@@ -2279,7 +2362,9 @@ class GithubApprovalService:
                         GithubWorkItem.active_scope_revision == revision_number,
                         GithubWorkItem.owner_slot_id == revision.owner_slot_id,
                         GithubWorkItem.handoff_state.is_(None),
-                        GithubWorkItem.pr_number.is_not(None),
+                        GithubWorkItem.scope_id == item.scope_id,
+                        GithubWorkItem.pr_number == item.pr_number,
+                        GithubWorkItem.dispatch_head_ref == item.dispatch_head_ref,
                     )
                 ),
                 exists(
@@ -2295,6 +2380,10 @@ class GithubApprovalService:
                 status="superseded",
                 cancelled_at=now,
                 cancellation_reason=canonical_reason,
+                failed_head_count=revision.failed_head_count + int(charge_head),
+                last_failed_head_sha=(
+                    head_sha if charge_head else revision.last_failed_head_sha
+                ),
             )
             .execution_options(synchronize_session=False)
         )
@@ -2307,7 +2396,11 @@ class GithubApprovalService:
                 GithubWorkItem.active_scope_revision == revision_number,
                 GithubWorkItem.owner_slot_id == revision.owner_slot_id,
                 GithubWorkItem.handoff_state.is_(None),
-                GithubWorkItem.pr_number.is_not(None),
+                GithubWorkItem.scope_id == item.scope_id,
+                GithubWorkItem.pr_number == item.pr_number,
+                GithubWorkItem.dispatch_head_ref == item.dispatch_head_ref,
+                GithubWorkItem.retry_count == item.retry_count,
+                GithubWorkItem.last_verified_sha == item.last_verified_sha,
                 exists(
                     select(GithubAttemptScopeRevision.id).where(
                         GithubAttemptScopeRevision.id == revision.id,
@@ -2325,15 +2418,28 @@ class GithubApprovalService:
                         GithubWorkspace.lease_token == workspace_lease_token,
                     )
                 ),
+                exists(
+                    select(TeamGithubScope.id).where(
+                        TeamGithubScope.id == scope.id,
+                        TeamGithubScope.max_continuation_failed_heads
+                        == scope.max_continuation_failed_heads,
+                    )
+                ),
             )
             .values(
                 dispatch_status="escalated",
-                escalation_reason=revision.originating_escalation_reason,
+                escalation_reason=(
+                    "continuation_budget_exhausted"
+                    if attempt_exhausted
+                    else revision.originating_escalation_reason
+                ),
                 status_note=(
                     f"Continuation revision {revision.revision} was cancelled by "
-                    "the operator. The preserved attempt requires a fresh bounded "
-                    f"proposal. Reason: {canonical_reason}"
+                    f"the operator. {next_step_note} Reason: {canonical_reason}"
+                    f"{charged_head_note}"
                 ),
+                retry_count=item.retry_count + int(charge_head),
+                last_verified_sha=head_sha if charge_head else item.last_verified_sha,
                 active_scope_revision=0,
                 attempt_phase="implementation",
                 continuation_nudged_at=None,
@@ -2375,6 +2481,12 @@ class GithubApprovalService:
                 )
                 return fresh_item, fresh_revision, False
             raise GithubApprovalError("active_continuation_cancel_conflict")
+        try:
+            if await self._active_cancellation_head_sha(scope, item) != head_sha:
+                raise GithubApprovalError("active_continuation_head_changed")
+        except GithubApprovalError:
+            await db.rollback()
+            raise
         await db.commit()
         await db.refresh(item)
         await db.refresh(revision)
