@@ -27,7 +27,11 @@ from app.services.github_approval_service import (
     github_approval_service,
 )
 from app.services.github_app_auth_service import github_app_auth_service
-from app.services.github_client import GithubCommitSnapshot, github_client
+from app.services.github_client import (
+    GithubClientResponseError,
+    GithubCommitSnapshot,
+    github_client,
+)
 from app.services.github_dispatch_service import github_dispatch_service
 
 
@@ -407,7 +411,7 @@ async def test_exact_cancel_replay_is_idempotent_but_a_changed_reason_is_not(
 async def test_cancel_charges_unclassified_pushed_head_once(
     client, db, tmp_path, monkeypatch
 ):
-    _preset, _slots, scope, item, workspace, revision, _approval, _owner = (
+    _preset, _slots, scope, item, workspace, revision, _approval, owner = (
         await _active_continuation(db, tmp_path)
     )
     scope.max_continuation_failed_heads = 1
@@ -444,6 +448,26 @@ async def test_cancel_charges_unclassified_pushed_head_once(
     assert item.escalation_reason == "continuation_budget_exhausted"
     assert "consumed one failed-head" in item.status_note
     assert (workspace.leased_item_id, workspace.lease_token) == original_lease
+    with pytest.raises(GithubApprovalError) as exc_info:
+        await github_approval_service.create_continuation_request(
+            db,
+            item,
+            scope,
+            authenticated_owner_member_id=owner.id,
+            authenticated_owner_slot_id=item.owner_slot_id,
+            dispatch_nonce=item.dispatch_nonce,
+            phase="implementation",
+            execution_target="hosted_ci",
+            summary="Another bounded attempt",
+            allowed_paths=["tests/playback_smoke.py.in"],
+            allowed_actions=["push_pr_head", "request_verification"],
+            allowed_commands=[],
+            prohibited_actions=[],
+            max_failed_heads=1,
+            tool_fallbacks={},
+            lease_token=workspace.lease_token,
+        )
+    assert exc_info.value.detail == "continuation_reason_not_allowed"
 
 
 @pytest.mark.asyncio
@@ -592,15 +616,57 @@ async def test_cancel_refuses_when_pr_head_moves_during_write(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_head_fields",
+        "foreign_repo",
+        "wrong_ref",
+        "closed_pr",
+        "github_response_error",
+        "http_error",
+        "app_installation_missing",
+    ],
+)
 async def test_cancel_refuses_unverifiable_pr_head(
-    client, db, tmp_path, monkeypatch
+    client, db, tmp_path, monkeypatch, case
 ):
-    _preset, _slots, _scope, item, _workspace, revision, _approval, _owner = (
+    _preset, _slots, scope, item, workspace, revision, _approval, _owner = (
         await _active_continuation(db, tmp_path)
     )
+    if case == "app_installation_missing":
+        scope.github_auth_mode = "app"
+        scope.github_app_installation_id = None
+        await db.commit()
 
-    async def unverifiable_pull(*_args, **_kwargs):
-        return {"state": "open", "head": {"sha": "b" * 40}}
+    async def unexpected_mint(*_args, **_kwargs):
+        raise AssertionError("an unconfigured App must not mint a token")
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", unexpected_mint)
+
+    async def unverifiable_pull(owner, repo, _pr_number, *, token=None):
+        if case == "github_response_error":
+            raise GithubClientResponseError("private-token")
+        if case == "http_error":
+            raise httpx.ConnectError("private-token")
+        pull = {
+            "state": "open",
+            "head": {
+                "sha": "b" * 40,
+                "ref": item.dispatch_head_ref,
+                "repo": {"full_name": f"{owner}/{repo}"},
+            },
+        }
+        if case == "missing_head_fields":
+            pull["head"] = {"sha": "b" * 40}
+        elif case == "foreign_repo":
+            pull["head"]["repo"]["full_name"] = "other/repo"
+        elif case == "wrong_ref":
+            pull["head"]["ref"] = "other/branch"
+        elif case == "closed_pr":
+            pull["state"] = "closed"
+            pull["merged_at"] = "2026-09-30T00:00:00Z"
+        return pull
 
     monkeypatch.setattr(github_client, "get_pull", unverifiable_pull)
     response = await client.post(
@@ -609,10 +675,15 @@ async def test_cancel_refuses_unverifiable_pr_head(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "active_continuation_head_unverifiable"
+    assert "private-token" not in response.text
     await db.refresh(item)
     await db.refresh(revision)
+    await db.refresh(workspace)
     assert item.dispatch_status == "dispatched"
+    assert item.retry_count == 3
     assert revision.status == "active"
+    assert revision.failed_head_count == 0
+    assert workspace.leased_item_id == item.id
 
 
 @pytest.mark.asyncio
