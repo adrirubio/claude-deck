@@ -1834,6 +1834,7 @@ async def get_preset(preset_id: int, db: AsyncSession = Depends(get_db)):
 async def update_preset(
     preset_id: int,
     request: AgentTeamPresetUpdate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1852,7 +1853,11 @@ async def update_preset(
 
 
 @router.delete("/presets/{preset_id}", status_code=204)
-async def delete_preset(preset_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_preset(
+    preset_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         await agent_team_service.delete_preset(db, preset_id)
         await _sync_github_jobs(db)
@@ -1887,6 +1892,7 @@ async def list_github_scopes(preset_id: int, db: AsyncSession = Depends(get_db))
 async def create_github_scope(
     preset_id: int,
     request: TeamGithubScopeCreate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1917,6 +1923,7 @@ async def create_github_scope(
 async def update_github_scope(
     scope_id: int,
     request: TeamGithubScopeUpdate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     scope = await db.get(TeamGithubScope, scope_id)
@@ -2011,7 +2018,11 @@ async def get_github_recovery_gate(
 
 
 @router.delete("/github-scopes/{scope_id}", status_code=204)
-async def delete_github_scope(scope_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_github_scope(
+    scope_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
@@ -2055,6 +2066,7 @@ async def list_github_workspaces(
 async def create_github_workspace(
     scope_id: int,
     request: GithubWorkspaceCreate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     scope = await db.get(TeamGithubScope, scope_id)
@@ -2111,6 +2123,7 @@ async def create_github_workspace(
 async def reprobe_github_workspace(
     scope_id: int,
     workspace_id: int,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     scope = await db.get(TeamGithubScope, scope_id)
@@ -2276,6 +2289,7 @@ async def list_github_work_items(
 async def retry_github_work_item(
     work_item_id: int,
     request: GithubWorkItemRetryRequest | None = None,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(GithubWorkItem, work_item_id)
@@ -2284,6 +2298,33 @@ async def retry_github_work_item(
     scope = await db.get(TeamGithubScope, item.scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
+    if principal is not None:
+        slots = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            )
+        ).scalars().all()
+        leader = github_dispatch_service._leader_slot(list(slots))
+        leader_member = (
+            await github_dispatch_service._slot_member(db, leader.id)
+            if leader is not None
+            else None
+        )
+        if (
+            not settings.mail_capability_tokens_required
+            or principal.source != "mcp"
+            or principal.mailbox_status != "connected"
+            or leader is None
+            or leader_member is None
+            or principal.team_slot_id != leader.id
+            or principal.team_preset_id != scope.preset_id
+            or principal.member_id != leader_member.id
+            or leader_member.team_slot_id != leader.id
+            or leader_member.team_preset_id != scope.preset_id
+        ):
+            raise HTTPException(status_code=403, detail="current_leader_required")
     authority = (await _load_work_item_authority(db, [item]))[item.id]
     eligibility = github_dispatch_service.retry_eligibility(
         item,
@@ -2399,6 +2440,7 @@ async def duplicate_preset(
 async def add_slot(
     preset_id: int,
     request: AgentTeamSlotCreate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -2411,6 +2453,7 @@ async def add_slot(
 async def update_slot(
     slot_id: int,
     request: AgentTeamSlotUpdate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -2420,7 +2463,11 @@ async def update_slot(
 
 
 @router.delete("/slots/{slot_id}", response_model=AgentTeamPresetResponse)
-async def delete_slot(slot_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_slot(
+    slot_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
     try:
         return await agent_team_service.delete_slot(db, slot_id)
     except ValueError as exc:
@@ -2431,6 +2478,7 @@ async def delete_slot(slot_id: int, db: AsyncSession = Depends(get_db)):
 async def reorder_slots(
     preset_id: int,
     request: AgentTeamSlotReorderRequest,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -2439,12 +2487,42 @@ async def reorder_slots(
         raise _bad_request(exc) from exc
 
 
+def _require_safe_agent_launch(
+    request: AgentTeamLaunchRequest | None,
+    principal: MailAgentSession | None,
+) -> None:
+    if principal is None:
+        return
+    if (
+        not settings.mail_capability_tokens_required
+        or principal.source != "mcp"
+        or principal.mailbox_status != "connected"
+    ):
+        raise HTTPException(status_code=403, detail="authenticated_mcp_session_required")
+    if request is not None and (
+        request.slot_prompt_overrides is not None
+        or request.repo_path_override is not None
+        or request.include_disabled
+        or not request.reuse_existing
+        or request.skip_plan_confirmation
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Launch overrides and forced respawn require an operator token",
+                "block_code": "operator_launch_override_required",
+            },
+        )
+
+
 @router.post("/presets/{preset_id}/plan-launch", response_model=AgentTeamLaunchPlan)
 async def plan_launch(
     preset_id: int,
     request: AgentTeamLaunchRequest | None = None,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_safe_agent_launch(request, principal)
     try:
         return await agent_team_service.plan_launch(db, preset_id, request)
     except ValueError as exc:
@@ -2459,17 +2537,20 @@ async def plan_launch(
 async def plan_launch_compat(
     preset_id: int,
     request: AgentTeamLaunchRequest | None = None,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    return await plan_launch(preset_id, request, db)
+    return await plan_launch(preset_id, request, principal, db)
 
 
 @router.post("/presets/{preset_id}/launch", response_model=AgentTeamLaunchResult)
 async def launch_preset(
     preset_id: int,
     request: AgentTeamLaunchRequest,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
+    _require_safe_agent_launch(request, principal)
     try:
         return await agent_team_service.launch(db, preset_id, request)
     except PlanConflictError as exc:

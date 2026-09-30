@@ -849,14 +849,27 @@ def test_deck_plan_team_launch_returns_plan_hash(monkeypatch):
 
     def fake_team_request(method, path, **kwargs):
         assert (method, path) == ("POST", "/presets/12/plan-launch")
-        assert kwargs["json"]["reuse_existing"] is False
+        assert kwargs["json"]["reuse_existing"] is True
         return {"ok": True, "data": {"plan_hash": "abc", "items": []}}
 
     monkeypatch.setattr(shim, "_team_request", fake_team_request)
 
-    result = shim.deck_plan_team_launch(12, reuse_existing=False)
+    result = shim.deck_plan_team_launch(12)
 
     assert result == {"ok": True, "plan": {"plan_hash": "abc", "items": []}}
+
+
+def test_agent_team_tools_refuse_launch_overrides_without_http(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("agent launch override reached Deck HTTP")
+
+    monkeypatch.setattr(shim, "_team_request", forbidden)
+    assert shim.deck_plan_team_launch(12, reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
+    assert shim.deck_plan_team_launch(12, include_disabled=True)["error"]["code"] == "operator_launch_override_required"
+    assert shim.deck_launch_team(12, confirm_plan_hash="abc", reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
+    assert shim.deck_launch_team(12, force_without_plan=True)["error"]["code"] == "operator_launch_override_required"
 
 
 def test_deck_launch_team_requires_plan_hash(monkeypatch):

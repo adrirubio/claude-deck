@@ -885,7 +885,16 @@ def deck_plan_team_launch(
     include_disabled: bool = False,
 ) -> dict:
     """Plan an Agent Team launch and return the plan_hash required by
-    deck_launch_team. Review blocked items and warnings before launching."""
+    deck_launch_team. Agent sessions cannot include disabled slots or force
+    replacement of a running session; those options require an operator."""
+    if not reuse_existing or include_disabled:
+        return {
+            "ok": False,
+            "error": {
+                "code": "operator_launch_override_required",
+                "message": "Disabled slots and forced respawn require an operator token.",
+            },
+        }
     payload = {
         "reuse_existing": reuse_existing,
         "slot_ids": slot_ids,
@@ -908,12 +917,21 @@ def deck_launch_team(
     """Launch an Agent Team preset.
 
     Call deck_plan_team_launch first and pass its plan_hash as
-    confirm_plan_hash. force_without_plan bypasses that safety check only when
-    explicitly set true. Launch behavior uses the per-provider launch_options
-    accepted by deck_create_team; validation errors include machine-readable
+    confirm_plan_hash. Forced respawn and force_without_plan require an
+    operator and are not available through this agent tool. Launch behavior
+    uses the per-provider launch_options accepted by deck_create_team;
+    validation errors include machine-readable
     block_code values when available.
     """
-    if not confirm_plan_hash and not force_without_plan:
+    if not reuse_existing or force_without_plan:
+        return {
+            "ok": False,
+            "error": {
+                "code": "operator_launch_override_required",
+                "message": "Forced respawn and plan bypass require an operator token.",
+            },
+        }
+    if not confirm_plan_hash:
         return {
             "ok": False,
             "error": {

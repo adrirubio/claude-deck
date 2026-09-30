@@ -132,6 +132,7 @@ async def test_generic_scope_patch_cannot_enable_continuation(client, db, tmp_pa
 
     response = await client.patch(
         f"/api/v1/agent-teams/github-scopes/{scope.id}",
+        headers=OPERATOR_HEADERS,
         json={"continuation_enabled": True},
     )
 
@@ -852,7 +853,8 @@ async def test_retry_blocks_pending_approval_and_active_revision(
     )
 
     pending = await client.post(
-        f"/api/v1/agent-teams/github-work-items/{item.id}/retry"
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        headers=OPERATOR_HEADERS,
     )
 
     assert pending.status_code == 409
@@ -863,7 +865,8 @@ async def test_retry_blocks_pending_approval_and_active_revision(
     item.active_scope_revision = revision.revision
     await db.commit()
     active = await client.post(
-        f"/api/v1/agent-teams/github-work-items/{item.id}/retry"
+        f"/api/v1/agent-teams/github-work-items/{item.id}/retry",
+        headers=OPERATOR_HEADERS,
     )
 
     assert active.status_code == 409
@@ -2732,6 +2735,7 @@ async def test_create_workspace_provisions_and_honors_explicit_flags(
 
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={
             "path": str(workspace_path),
             "kind": "worktree",
@@ -2761,6 +2765,7 @@ async def test_create_primary_defaults_non_dispatchable_and_never_mutates_git(
 
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={"path": str(repo_path), "kind": "primary"},
     )
 
@@ -2783,6 +2788,7 @@ async def test_create_workspace_rejects_duplicate_before_git_mutation(
 
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={"path": str(missing_path), "kind": "worktree"},
     )
 
@@ -2796,6 +2802,7 @@ async def test_create_workspace_rejects_invalid_kind(client, db, tmp_path):
     _, scope = await _scope(db, tmp_path / "repo")
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={"path": str(tmp_path / "ws"), "kind": "Primary"},
     )
     assert response.status_code == 400
@@ -2813,6 +2820,7 @@ async def test_create_workspace_rejects_path_outside_scope_checkout_parent(
 
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={"path": str(tmp_path / "outside"), "kind": "worktree"},
     )
 
@@ -2833,6 +2841,7 @@ async def test_create_workspace_failure_persists_no_row(
 
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={"path": str(tmp_path / "ws"), "kind": "worktree"},
     )
 
@@ -2882,6 +2891,7 @@ async def test_create_workspace_conflicts_include_machine_code(
 
     response = await client.post(
         f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces",
+        headers=OPERATOR_HEADERS,
         json={
             "path": str(candidate),
             "kind": "worktree",
@@ -2912,7 +2922,8 @@ async def test_reprobe_reenables_only_after_success(client, db, tmp_path, monkey
 
     monkeypatch.setattr(github_workspace_service, "reset_workspace", succeeds)
     response = await client.post(
-        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/{workspace.id}/reprobe"
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/{workspace.id}/reprobe",
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 200
@@ -2940,7 +2951,8 @@ async def test_reprobe_failure_stays_disabled_with_block_code(
 
     monkeypatch.setattr(github_workspace_service, "reset_workspace", fails)
     response = await client.post(
-        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/{workspace.id}/reprobe"
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/{workspace.id}/reprobe",
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 409
@@ -2978,7 +2990,8 @@ async def test_reprobe_guard_runs_before_reset(client, db, tmp_path, monkeypatch
 
     monkeypatch.setattr(github_workspace_service, "reset_workspace", should_not_run)
     response = await client.post(
-        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/{workspace.id}/reprobe"
+        f"/api/v1/agent-teams/github-scopes/{scope.id}/workspaces/{workspace.id}/reprobe",
+        headers=OPERATOR_HEADERS,
     )
 
     assert response.status_code == 409

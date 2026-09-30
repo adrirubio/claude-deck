@@ -11,6 +11,7 @@ interface SecretFieldProps {
   onChange: (value: string) => void;
   placeholder?: string;
   required?: boolean;
+  autoComplete?: string;
 }
 
 export function SecretField({
@@ -20,6 +21,7 @@ export function SecretField({
   onChange,
   placeholder = "Enter secret value",
   required = false,
+  autoComplete,
 }: SecretFieldProps) {
   const [showSecret, setShowSecret] = useState(false);
 
@@ -37,6 +39,7 @@ export function SecretField({
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           required={required}
+          autoComplete={autoComplete}
           className="flex-1"
         />
         <Button
