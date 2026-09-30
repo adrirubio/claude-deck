@@ -31,6 +31,7 @@ from app.services.github_app_auth_service import (
     GithubAppMintError,
     GithubAppNotInstalled,
     GithubAppUnconfigured,
+    github_app_auth_service,
 )
 from app.services.github_client import GithubClientResponseError
 from app.services.github_workspace_service import (
@@ -585,8 +586,9 @@ async def test_owner_releases_clean_squash_merged_pr_head(client_and_db, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", ["ambient", "app"])
 async def test_owner_release_after_real_squash_merge_uses_normal_route(
-    client_and_db, monkeypatch, tmp_path
+    client_and_db, monkeypatch, tmp_path, auth_mode
 ):
     ac, maker = client_and_db
     home = tmp_path / "home"
@@ -635,7 +637,9 @@ async def test_owner_release_after_real_squash_merge_uses_normal_route(
         scope = await db.get(TeamGithubScope, item.scope_id)
         workspace = await db.get(GithubWorkspace, workspace_id)
         scope.base_ref = "origin/master"
-        scope.github_auth_mode = "ambient"
+        scope.github_auth_mode = auth_mode
+        if auth_mode == "app":
+            scope.github_app_installation_id = 1234
         item.pr_number = 875
         workspace.path = str(worktree)
         workspace.kind = "worktree"
@@ -648,7 +652,17 @@ async def test_owner_release_after_real_squash_merge_uses_normal_route(
         {**environment, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
     )
 
-    async def get_pull(*_args, **_kwargs):
+    minted = []
+
+    async def mint_repository_token(*args, **kwargs):
+        minted.append((args, kwargs))
+        return "app-test-token"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint_repository_token)
+    pull_tokens = []
+
+    async def get_pull(*_args, **kwargs):
+        pull_tokens.append(kwargs.get("token"))
         return {
             "state": "closed",
             "merged_at": "2026-09-29T08:46:06Z",
@@ -680,6 +694,8 @@ async def test_owner_release_after_real_squash_merge_uses_normal_route(
 
     assert response.status_code == 200
     assert len(normal_releases) == 1
+    assert pull_tokens == ["app-test-token" if auth_mode == "app" else None]
+    assert len(minted) == (1 if auth_mode == "app" else 0)
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id is None
