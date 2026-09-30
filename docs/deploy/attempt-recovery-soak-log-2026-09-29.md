@@ -51,6 +51,34 @@ sessions. The #329 code fix merged after this soak and was not exercised by it.
 | 6 — implementation and product CI | Revision 15 completed; item became `ready_for_review` | One-file commit `b6880f54` on preserved PR branch; submitted at 23:39:58, completed at 23:41:49. Hosted run 36498366182: Core Meson build and full Playback smoke both SUCCESS on that head. Revision failed-head count 0; product and diagnostic retry counts remained 6 each. **Exception:** revision 14 pushed red head `06c00c42` (run 36490136422), then was cancelled with zero failed heads before Deck counted it. Revision 15 used that head as its baseline. Issue #379 tracks the budget bypass. |
 | 7 — human merge and cleanup | PR and item merged; autonomy, continuation and gate disabled; lease cleared | Human squash merge at 2026-09-29 08:46:06; Deck item `merged` at 08:46:47. The owner's normal release returned 409; operator force-release cleared the lease, so runbook step 8 **failed**, not passed. Cleanup details below. Independent evidence clearance remains pending. |
 
+The independent reviewer compared these diagnostic revert commit trees with the
+baseline tree persisted for each revision; the full identifiers are in the
+GitHub PR and durable revision rows:
+
+| Revision | Diagnostic head | Restoration head | Hosted run | Baseline tree prefix restored |
+|---|---|---|---|---|
+| 3 | No new mutation; reused pre-existing red head `c1c7ef1a` | Not applicable | 33221787425, before revision 3 | No diagnostic tree to restore |
+| 6 | `93184083` | `dc52a085` | 35969694440 | `477ec137` |
+| 8 | `6354e3f3` | `9310b69a` | 36041701517 | `5b084e1f` |
+| 9 | `3951cfbc` | `b2e9c0ba` | 36049559994 | `5b084e1f` |
+| 12 | `d81b5b8c` | `9963255a` | 36352060714 | `5a9cc1e6` |
+| 13 | `c07eae0f` | `3dab62aa` | 36480800340 | `5a9cc1e6` |
+
+The cap-change trail was reconstructed from timestamped operator conversation,
+not a persisted policy-change log. These are report times, not asserted API
+write times:
+
+| Change | Reported applied (UTC) | Authorization quality |
+|---|---|---|
+| Revisions 6→7 | 2026-09-24 05:48 | Contextual “good, continue” after a stated 6→7 recommendation; gate-owner disposition needed |
+| Revisions 7→8 | 2026-09-24 09:28 | General “yes” preceded the numeric question; unproven specific approval |
+| Revisions 8→9 | 2026-09-24 18:56 | Explicit yes to the bounded 8→9 sequence |
+| Revisions 9→10 | 2026-09-26 11:19 | Explicit yes and operator-reported guarded-script verification |
+| Revisions 10→11 | 2026-09-26 15:32 | Explicit confirmation of 10→11 |
+| Revisions 11→13; failed heads 8→9 | 2026-09-26 21:09 | Explicit approval of both limits |
+| Revisions 13→14; failed heads 9→11 | 2026-09-28 08:47 | Prospective blanket approval after the exact 14/11 proposal |
+| Revisions 14→15 | 2026-09-28 22:27 | Prospective blanket approval, subject to gate-owner interpretation |
+
 Revisions 1–15 are all terminal. The private early-soak log records Checkpoint 3
 and 4 blockers/retries and the first diagnostic-restoration PASS; it does not
 cover every later revision. Its deployment log also records an **unsanctioned
