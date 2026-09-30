@@ -1,6 +1,6 @@
 # Tizonia Attempt-Recovery Soak: Final Replay and Cleanup
 
-Status: **evidence draft; independent review FAIL; not master-merge clearance**.
+Status: **evidence conditional; not master-merge clearance**.
 PR #360's GitHub review request was waived at the user's direction after Adri
 approved it off-platform; no GitHub review was submitted. The 2026-09-30
 independent evidence review found the exceptions and gaps documented below.
@@ -79,10 +79,12 @@ write times:
 | Revisions 13→14; failed heads 9→11 | 2026-09-28 08:47 | Prospective blanket approval after the exact 14/11 proposal; failed-head raise departed from Checkpoint 1.6 |
 | Revisions 14→15 | 2026-09-28 22:27 | Prospective blanket approval only; departed from Checkpoint 1.6's separate-decision instruction |
 
-On 2026-09-30 the operator retrospectively accepted the cap increases, including
-contextual 6→7, agent-construed 7→8, and blanket coverage of 14→15. This does
-not create contemporaneous value-specific approvals or erase the runbook
-deviations.
+On 2026-09-30 the operator retrospectively accepted the cap increases. In a
+follow-up written confirmation, the operator explicitly included the
+agent-construed 7→8 raise, blanket approval covering 14→15, and failed-head
+raises 8→9→11 despite Checkpoint 1.6; contextual 6→7 was included in the
+earlier acceptance. These statements do not create contemporaneous
+value-specific approvals or turn the runbook deviations into passed checks.
 
 Revisions 1–15 are all terminal. The private early-soak log records Checkpoint 3
 and 4 blockers/retries and the first diagnostic-restoration PASS; it does not
@@ -129,6 +131,8 @@ invariant; issue #379 remains a master blocker.
    to the route; no durable record of that reason survives.
    Workspace 2 released at 08:59:47; the lease token and item pointer are NULL.
    This was a runbook-step failure, even though the operator cleanup was safe.
+   On 2026-09-30 the operator retrospectively accepted the force-release as
+   a historical Checkpoint 7 step-8 exception, not as a successful normal release.
    Follow-up: [Deck issue #359](https://github.com/adrirubio/claude-deck/issues/359).
 4. The recovery-only selector was removed from the ignored, mode-0600
    `backend/.env` at 09:00:13; an operator-facing report at 09:00:49 said Deck
@@ -161,8 +165,9 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
   budget-bypass fix required before master.
 - The private cap ledger reconstructs the changes from timestamped operator
   conversation, but 6→7 is contextual and 7→8 lacks an unambiguous
-  value-specific approval. The gate owner retrospectively accepted the cap
-  increases on 2026-09-30; do not invent a contemporaneous approval.
+  value-specific approval. The gate owner retrospectively accepted both, the
+  blanket 14→15 interpretation, and the failed-head cap deviations from
+  Checkpoint 1.6 on 2026-09-30; do not invent contemporaneous approvals.
 - The `d4d7f5dc` deployment has a timestamped conversation report and read-only
   preflight report, but no surviving process log proving uninterrupted service
   through the final replay. The later `deck-soak` socket claim is also not
@@ -175,7 +180,9 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
   soak; neither ran in the observed replay. A targeted isolated normal-release
   replay against the #359 fix passed through the owner report route
   (`test_owner_release_after_real_squash_merge_uses_normal_route`, 2026-09-30).
-  This is code-path validation, **not** a live Tizonia terminal-release observation.
+  This is code-path validation under ambient and GitHub App auth, **not** a live
+  Tizonia terminal-release observation. The operator accepted the historical
+  force-release exception; the normal-release step remains failed.
   Do not claim the historical runbook step passed.
 - Have the independent reviewer re-assess the amended evidence before a
   `master` PR. PR #360 recorded a draft only; green product CI and current
