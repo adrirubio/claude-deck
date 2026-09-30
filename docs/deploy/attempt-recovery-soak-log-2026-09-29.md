@@ -79,10 +79,12 @@ write times:
 | Revisions 13→14; failed heads 9→11 | 2026-09-28 08:47 | Prospective blanket approval after the exact 14/11 proposal; failed-head raise departed from Checkpoint 1.6 |
 | Revisions 14→15 | 2026-09-28 22:27 | Prospective blanket approval only; departed from Checkpoint 1.6's separate-decision instruction |
 
-On 2026-09-30 the operator retrospectively accepted the cap increases, including
-contextual 6→7, agent-construed 7→8, and blanket coverage of 14→15. This does
-not create contemporaneous value-specific approvals or erase the runbook
-deviations.
+On 2026-09-30 the operator retrospectively accepted the cap increases. In a
+follow-up written confirmation, the operator explicitly included the
+agent-construed 7→8 raise, blanket approval covering 14→15, and failed-head
+raises 8→9→11 despite Checkpoint 1.6; contextual 6→7 was included in the
+earlier acceptance. These statements do not create contemporaneous
+value-specific approvals or turn the runbook deviations into passed checks.
 
 Revisions 1–15 are all terminal. The private early-soak log records Checkpoint 3
 and 4 blockers/retries and the first diagnostic-restoration PASS; it does not
@@ -163,8 +165,9 @@ the Tizonia roster was edited and sessions were relaunched around 21:36 on
   budget-bypass fix required before master.
 - The private cap ledger reconstructs the changes from timestamped operator
   conversation, but 6→7 is contextual and 7→8 lacks an unambiguous
-  value-specific approval. The gate owner retrospectively accepted the cap
-  increases on 2026-09-30; do not invent a contemporaneous approval.
+  value-specific approval. The gate owner retrospectively accepted both, the
+  blanket 14→15 interpretation, and the failed-head cap deviations from
+  Checkpoint 1.6 on 2026-09-30; do not invent contemporaneous approvals.
 - The `d4d7f5dc` deployment has a timestamped conversation report and read-only
   preflight report, but no surviving process log proving uninterrupted service
   through the final replay. The later `deck-soak` socket claim is also not
