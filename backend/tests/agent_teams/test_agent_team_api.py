@@ -41,13 +41,18 @@ def test_scope_auth_configuration_is_truthful_for_selected_mode(
 
 
 @pytest_asyncio.fixture
-async def client(db):
+async def client(db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "agent-team-api-test-operator-token")
     async def _override():
         yield db
 
     app.dependency_overrides[get_db] = _override
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Deck-Operator-Token": "agent-team-api-test-operator-token"},
+    ) as c:
         yield c
     app.dependency_overrides.clear()
 

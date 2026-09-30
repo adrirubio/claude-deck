@@ -1,10 +1,11 @@
 """Spec §3.7 test 20 — require_operator refuses every credential an agent can obtain."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -12,6 +13,7 @@ from app.database import Base, get_db
 from app.main import app
 from app.models.database import (
     AgentTeamPreset,
+    AgentTeamSlot,
     GithubWorkItem,
     GithubWorkspace,
     MailAgentSession,
@@ -164,13 +166,154 @@ def _routes(scope_id: int, workspace_id: int, item_id: int):
         f"/api/v1/agent-teams/github-work-items/{item_id}/abandon",
         {"reason": "operator auth boundary test"},
     )
-    return [listing, force_release, cancel_active_continuation, abandon]
+    arming = [
+        ("preset-update", "patch", "/api/v1/agent-teams/presets/999999", {"autonomy_enabled": True}),
+        ("preset-delete", "delete", "/api/v1/agent-teams/presets/999999", None),
+        ("scope-create", "post", "/api/v1/agent-teams/presets/999999/github-scopes", {"repo_owner": "o", "repo_name": "r", "repo_path": "/tmp/r"}),
+        ("scope-update", "patch", f"/api/v1/agent-teams/github-scopes/{scope_id}", {"merge_policy": "auto"}),
+        ("scope-delete", "delete", "/api/v1/agent-teams/github-scopes/999999", None),
+        ("workspace-register", "post", "/api/v1/agent-teams/github-scopes/999999/workspaces", {"path": "/tmp/ws", "kind": "worktree"}),
+        ("workspace-reprobe", "post", "/api/v1/agent-teams/github-scopes/999999/workspaces/999999/reprobe", None),
+        ("slot-add", "post", "/api/v1/agent-teams/presets/999999/slots", {"display_name": "x", "provider": "codex-cli", "repo_path": "/tmp/r"}),
+        ("slot-update", "patch", "/api/v1/agent-teams/slots/999999", {"enabled": False}),
+        ("slot-delete", "delete", "/api/v1/agent-teams/slots/999999", None),
+        ("slot-reorder", "post", "/api/v1/agent-teams/presets/999999/slots/reorder", {"slot_ids": []}),
+    ]
+    return [listing, force_release, cancel_active_continuation, abandon, *arming]
 
 
 async def _call(client, method, url, body, headers):
     if method == "get":
         return await client.get(url, headers=headers)
+    if method == "patch":
+        return await client.patch(url, json=body, headers=headers)
+    if method == "delete":
+        return await client.delete(url, headers=headers)
     return await client.post(url, json=body, headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_operator_arming_routes_refuse_anonymous_and_agent_but_accept_operator(
+    client_and_db, tmp_path, operator_token_configured
+):
+    client, maker = client_and_db
+    scope_id, workspace_id, item_id = await _leased_scope_and_workspace(maker, tmp_path)
+    session_token = await _agent_session_token(maker)
+    for label, method, url, body in _routes(scope_id, workspace_id, item_id)[4:]:
+        anonymous = await _call(client, method, url, body, {})
+        agent = await _call(client, method, url, body, {"X-Deck-Session-Token": session_token})
+        operator = await _call(client, method, url, body, {"X-Deck-Operator-Token": OPERATOR_TOKEN})
+        assert anonymous.status_code == 401, label
+        assert agent.status_code == 401, label
+        assert operator.status_code not in (401, 503), label
+        if label == "scope-update":
+            assert operator.status_code == 200
+            assert operator.json()["merge_policy"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_workspace_reprobe_form_post_needs_operator(
+    client_and_db, tmp_path, operator_token_configured
+):
+    client, maker = client_and_db
+    scope_id, workspace_id, _ = await _leased_scope_and_workspace(maker, tmp_path)
+    response = await client.post(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}/workspaces/{workspace_id}/reprobe",
+        data={"submit": "reprobe"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "operator_token_required"
+
+
+@pytest.mark.asyncio
+async def test_retry_requires_current_bound_leader_or_operator(
+    client_and_db, tmp_path, operator_token_configured, monkeypatch
+):
+    client, maker = client_and_db
+    scope_id, _, item_id = await _leased_scope_and_workspace(maker, tmp_path)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr("app.api.v1.deps.peer_process.pane_is_alive", lambda *_: True)
+    async with maker() as db:
+        scope = await db.get(TeamGithubScope, scope_id)
+        leader_slot = AgentTeamSlot(
+            preset_id=scope.preset_id, position=0, display_name="Leader",
+            provider="codex-cli", repo_id="r", repo_path="/tmp/r", repo_name="r",
+        )
+        other_slot = AgentTeamSlot(
+            preset_id=scope.preset_id, position=1, display_name="Specialist",
+            provider="codex-cli", repo_id="r", repo_path="/tmp/r", repo_name="r",
+        )
+        db.add_all([leader_slot, other_slot])
+        await db.flush()
+        tokens = {}
+        for name, slot in (("leader", leader_slot), ("other", other_slot)):
+            member = MailTeamMember(
+                identity_key=f"retry:{name}:{item_id}", repo_id="r", repo_path="/tmp/r",
+                repo_name="r", display_name=name, participant_kind="team_slot",
+                team_preset_id=scope.preset_id, team_slot_id=slot.id,
+            )
+            db.add(member)
+            await db.flush()
+            token = f"retry-{name}-{item_id}"
+            db.add(MailAgentSession(
+                member_id=member.id, source="mcp", session_key=f"retry:{name}:{item_id}",
+                team_preset_id=scope.preset_id, team_slot_id=slot.id,
+                bound_pane_pid=1234, bound_pane_proc_start="1",
+                capability_token_hash=agent_mail_service.hash_capability_token(token),
+            ))
+            tokens[name] = token
+        eligible = GithubWorkItem(
+            scope_id=scope_id, issue_number=2, issue_title="Retry eligible",
+            issue_url="u", github_updated_at=datetime.utcnow(),
+            dispatch_status="escalated", escalation_reason="plan_blocked",
+        )
+        db.add(eligible)
+        await db.commit()
+        eligible_id = eligible.id
+
+    url = f"/api/v1/agent-teams/github-work-items/{item_id}/retry"
+    assert (await client.post(url)).status_code == 401
+    invalid = await client.post(url, headers={"X-Deck-Operator-Token": "invalid"})
+    assert invalid.status_code == 401
+    assert invalid.json()["detail"] == "operator_token_invalid"
+    nonleader = await client.post(url, headers={"X-Deck-Session-Token": tokens["other"]})
+    assert nonleader.status_code == 403
+    assert nonleader.json()["detail"] == "current_leader_required"
+    operator = await client.post(url, headers={"X-Deck-Operator-Token": OPERATOR_TOKEN})
+    assert operator.status_code == 409
+    leader = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    assert leader.status_code == 409
+    eligible_retry = await client.post(
+        f"/api/v1/agent-teams/github-work-items/{eligible_id}/retry",
+        headers={"X-Deck-Session-Token": tokens["leader"]},
+    )
+    assert eligible_retry.status_code == 200
+    assert eligible_retry.json()["dispatch_status"] == "pending"
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    unenforced = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    assert unenforced.status_code == 403
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+
+    async with maker() as db:
+        leader_member = (
+            await db.execute(
+                select(MailTeamMember).where(MailTeamMember.identity_key == f"retry:leader:{item_id}")
+            )
+        ).scalar_one()
+        db.add(MailTeamMember(
+            identity_key=f"retry:replacement:{item_id}", repo_id="r", repo_path="/tmp/r",
+            repo_name="r", display_name="replacement", participant_kind="team_slot",
+            team_preset_id=leader_member.team_preset_id, team_slot_id=leader_member.team_slot_id,
+            updated_at=datetime.utcnow() + timedelta(seconds=1),
+        ))
+        await db.commit()
+    replaced = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    assert replaced.status_code == 403
+
+    monkeypatch.setattr("app.api.v1.deps.peer_process.pane_is_alive", lambda *_: False)
+    stale = await client.post(url, headers={"X-Deck-Session-Token": tokens["leader"]})
+    assert stale.status_code == 401
 
 
 @pytest.mark.asyncio

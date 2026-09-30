@@ -284,7 +284,7 @@ function readableCode(value?: string | null) {
   return value.replaceAll('_', ' ').replace(/^./, (first) => first.toUpperCase())
 }
 
-function OperatorTokenDialog({
+export function OperatorTokenDialog({
   open,
   value,
   error,
@@ -305,7 +305,7 @@ function OperatorTokenDialog({
         <DialogHeader>
           <DialogTitle>Operator token</DialogTitle>
           <DialogDescription>
-            Enter the token configured as operator_token in backend/.env. It protects recovery policy and operator remedies and stays in this browser tab only.
+            Enter the token configured as operator_token in backend/.env. It protects roster and watched-repo settings, autonomy, recovery policy, and operator remedies, and stays in this browser tab only.
           </DialogDescription>
         </DialogHeader>
         <details className="text-sm text-muted-foreground">
@@ -1190,16 +1190,16 @@ export function AutonomyPanel({
   lastRefreshedAt: Date | null
   loadError: string | null
   onRefresh: () => Promise<void>
-  onToggleAutonomy: (enabled: boolean) => Promise<void>
-  onCreateScope: (input: TeamGithubScopeInput) => Promise<void>
-  onUpdateScope: (scopeId: number, input: TeamGithubScopeUpdate) => Promise<void>
+  onToggleAutonomy: (enabled: boolean, operatorToken: string) => Promise<void>
+  onCreateScope: (input: TeamGithubScopeInput, operatorToken: string) => Promise<void>
+  onUpdateScope: (scopeId: number, input: TeamGithubScopeUpdate, operatorToken: string) => Promise<void>
   onUpdateContinuationPolicy: (
     scopeId: number,
     input: TeamGithubContinuationPolicyUpdate,
     operatorToken: string
   ) => Promise<void>
-  onDeleteScope: (scope: TeamGithubScope) => Promise<void>
-  onRetryWorkItem: (item: GithubWorkItem) => Promise<void>
+  onDeleteScope: (scope: TeamGithubScope, operatorToken: string) => Promise<void>
+  onRetryWorkItem: (item: GithubWorkItem, operatorToken: string) => Promise<void>
   onFetchScopeRevisions: (itemId: number, operatorToken: string) => Promise<GithubScopeRevision[]>
   onCancelContinuationRequest: (
     item: GithubWorkItem,
@@ -1411,7 +1411,7 @@ export function AutonomyPanel({
           return
         }
       }
-      await onToggleAutonomy(enabled)
+      await withOperatorToken((token) => onToggleAutonomy(enabled, token))
     } catch {
       // Parent handlers surface the error toast; keep the controlled switch stable.
     } finally {
@@ -1455,16 +1455,17 @@ export function AutonomyPanel({
 
   const saveScope = async (input: TeamGithubScopeInput | TeamGithubScopeUpdate) => {
     if (scopeDialog?.mode === 'edit' && scopeDialog.scope) {
-      await onUpdateScope(scopeDialog.scope.id, input)
+      const scopeId = scopeDialog.scope.id
+      await withOperatorToken((token) => onUpdateScope(scopeId, input, token))
     } else {
-      await onCreateScope(input as TeamGithubScopeInput)
+      await withOperatorToken((token) => onCreateScope(input as TeamGithubScopeInput, token))
     }
   }
 
   const deleteScope = async (scope: TeamGithubScope) => {
     setScopeRemovalPending(true)
     try {
-      await onDeleteScope(scope)
+      await withOperatorToken((token) => onDeleteScope(scope, token))
       setScopeToRemove(null)
     } catch {
       // Parent handlers surface the error toast.
@@ -1477,7 +1478,7 @@ export function AutonomyPanel({
     if (retryingWorkItemId !== null) return
     setRetryingWorkItemId(item.id)
     try {
-      await onRetryWorkItem(item)
+      await withOperatorToken((token) => onRetryWorkItem(item, token))
       setDetailItemId(null)
     } catch {
       // Parent handlers surface the error toast.

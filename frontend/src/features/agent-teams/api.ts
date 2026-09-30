@@ -51,17 +51,20 @@ export function createAgentTeamFromBridge(input: AgentTeamCreateFromBridgeReques
 
 export function updateAgentTeamPreset(
   presetId: number,
-  input: AgentTeamPresetUpdate
+  input: AgentTeamPresetUpdate,
+  operatorToken: string
 ): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>(`agent-teams/presets/${presetId}`, {
     method: 'PATCH',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
-export function deleteAgentTeamPreset(presetId: number): Promise<Record<string, never>> {
+export function deleteAgentTeamPreset(presetId: number, operatorToken: string): Promise<Record<string, never>> {
   return apiClient<Record<string, never>>(`agent-teams/presets/${presetId}`, {
     method: 'DELETE',
+    headers: operatorHeaders(operatorToken),
   })
 }
 
@@ -77,36 +80,43 @@ export function duplicateAgentTeamPreset(
 
 export function addAgentTeamSlot(
   presetId: number,
-  input: AgentTeamSlotInput
+  input: AgentTeamSlotInput,
+  operatorToken: string
 ): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>(`agent-teams/presets/${presetId}/slots`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
 export function updateAgentTeamSlot(
   slotId: number,
-  input: AgentTeamSlotUpdate
+  input: AgentTeamSlotUpdate,
+  operatorToken: string
 ): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>(`agent-teams/slots/${slotId}`, {
     method: 'PATCH',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
-export function deleteAgentTeamSlot(slotId: number): Promise<AgentTeamPreset> {
+export function deleteAgentTeamSlot(slotId: number, operatorToken: string): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>(`agent-teams/slots/${slotId}`, {
     method: 'DELETE',
+    headers: operatorHeaders(operatorToken),
   })
 }
 
 export function reorderAgentTeamSlots(
   presetId: number,
-  slotIds: number[]
+  slotIds: number[],
+  operatorToken: string
 ): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>(`agent-teams/presets/${presetId}/slots/reorder`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify({ slot_ids: slotIds }),
   })
 }
@@ -137,27 +147,32 @@ export function fetchTeamGithubScopes(presetId: number): Promise<TeamGithubScope
 
 export function createTeamGithubScope(
   presetId: number,
-  input: TeamGithubScopeInput
+  input: TeamGithubScopeInput,
+  operatorToken: string
 ): Promise<TeamGithubScope> {
   return apiClient<TeamGithubScope>(`agent-teams/presets/${presetId}/github-scopes`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
 export function updateTeamGithubScope(
   scopeId: number,
-  input: TeamGithubScopeUpdate
+  input: TeamGithubScopeUpdate,
+  operatorToken: string
 ): Promise<TeamGithubScope> {
   return apiClient<TeamGithubScope>(`agent-teams/github-scopes/${scopeId}`, {
     method: 'PATCH',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
-export function deleteTeamGithubScope(scopeId: number): Promise<Record<string, never>> {
+export function deleteTeamGithubScope(scopeId: number, operatorToken: string): Promise<Record<string, never>> {
   return apiClient<Record<string, never>>(`agent-teams/github-scopes/${scopeId}`, {
     method: 'DELETE',
+    headers: operatorHeaders(operatorToken),
   })
 }
 
@@ -204,9 +219,10 @@ export function fetchGithubWorkItems(presetId: number, limit = 50): Promise<Gith
   )
 }
 
-export function retryGithubWorkItem(workItemId: number): Promise<GithubWorkItem> {
+export function retryGithubWorkItem(workItemId: number, operatorToken: string): Promise<GithubWorkItem> {
   return apiClient<GithubWorkItem>(`agent-teams/github-work-items/${workItemId}/retry`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
   })
 }
 
