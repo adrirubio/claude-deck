@@ -19,6 +19,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { MODAL_SIZES } from '@/lib/constants'
+import { ApiHttpError } from '@/lib/api'
+import { clearOperatorToken, getOperatorToken, setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { claudeProjectFolderFromPath, cn } from '@/lib/utils'
 import { formatTimestamp } from '@/features/usage/utils'
 import type { ProjectResponse } from '@/types/projects'
@@ -136,6 +138,7 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   const [useLast, setUseLast] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [operatorTokenInput, setOperatorTokenInput] = useState('')
 
   const [recentSessions, setRecentSessions] = useState<SessionSummary[]>([])
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null)
@@ -316,6 +319,11 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
   })()
 
   async function handleLaunch() {
+    const operatorToken = getOperatorToken() ?? operatorTokenInput.trim()
+    if (!operatorToken) {
+      setError('Enter the Deck operator token to launch a session.')
+      return
+    }
     setError(null)
     setSubmitting(true)
 
@@ -397,11 +405,19 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
         ...(isBedrock && (isClaude || isCodex) && optionBedrockModel && { bedrock_model: optionBedrockModel }),
       }
 
-      const response = await spawnSession(request)
+      const response = await spawnSession(request, operatorToken)
+      setOperatorToken(operatorToken)
+      setOperatorTokenInput('')
       onSpawned(response.tmux_target)
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to spawn session')
+      if (err instanceof ApiHttpError && err.status === 401) {
+        clearOperatorToken()
+        setOperatorTokenInput('')
+        setError('The Deck operator token was rejected. Enter a valid token and retry.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to spawn session')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -670,6 +686,19 @@ export function NewSessionDialog({ open, onOpenChange, onSpawned, initialProvide
               <p className="text-xs text-destructive/80 ml-6">
                 Allows Claude to run tools without asking for confirmation
               </p>
+            </div>
+          )}
+
+          {!getOperatorToken() && (
+            <div className="space-y-1.5">
+              <Label htmlFor="new-session-operator-token">Operator token</Label>
+              <Input
+                id="new-session-operator-token"
+                type="password"
+                autoComplete="off"
+                value={operatorTokenInput}
+                onChange={(event) => setOperatorTokenInput(event.target.value)}
+              />
             </div>
           )}
 

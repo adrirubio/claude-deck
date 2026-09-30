@@ -23,7 +23,7 @@ from app.models.schemas import (
     BridgeAttachmentResponse,
 )
 from app.config import settings
-from app.api.v1.deps import require_operator
+from app.api.v1.deps import require_mail_session_or_operator, require_operator
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
 from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
@@ -37,6 +37,7 @@ from app.services.agent_mail_service import (
     agent_mail_service,
 )
 from app.utils import peer_process
+from app.utils.repo_utils import derive_repo_identity
 
 logger = logging.getLogger(__name__)
 
@@ -444,7 +445,32 @@ async def delete_session_attachment(
 
 
 @router.post("/sessions")
-def spawn_session_endpoint(request: SpawnRequest):
+def spawn_session_endpoint(
+    request: SpawnRequest,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
+):
+    if principal is not None:
+        if (
+            not settings.mail_capability_tokens_required
+            or principal.source != "mcp"
+            or principal.mailbox_status != "connected"
+        ):
+            raise HTTPException(status_code=403, detail="authenticated_mcp_session_required")
+        if (
+            request.provider != principal.provider
+            or not principal.cwd
+            or derive_repo_identity(request.directory)["repo_id"]
+            != derive_repo_identity(principal.cwd)["repo_id"]
+            or request.mode != "plain"
+            or request.model_fields_set - {"provider", "directory", "mode"}
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Agent sessions may only start a plain session in their own repository without overrides",
+                    "block_code": "operator_spawn_override_required",
+                },
+            )
     try:
         get_provider(request.provider)
         options = SpawnCommandOptions(
