@@ -63,6 +63,8 @@ CLAUDE_DECK_INSTANCE_ID="studio-mac" \
 ./scripts/dev.sh --host 0.0.0.0
 ```
 
+Use a trusted network or tunnel when binding to all interfaces: many team and autonomy configuration routes are not operator-token protected. A Vite dev UI on another origin needs that exact origin in the JSON `CORS_ORIGINS` setting; Deck's production UI is same-origin.
+
 The instance name appears in the header, browser tab title, Agent Bridge terminal panes, and kill-session confirmations. Supported accents are `blue`, `green`, `purple`, `orange`, `red`, `pink`, `cyan`, and `slate`.
 
 ## Key Pages
