@@ -127,6 +127,7 @@ function formatDate(value: string) {
 function actionBadgeClass(action: AgentTeamLaunchPlanItem['action']) {
   if (action === 'spawn') return 'border-emerald-500/70 text-emerald-400'
   if (action === 'reuse') return 'border-sky-500/70 text-sky-400'
+  if (action === 'adopt') return 'border-amber-500/70 text-amber-400'
   if (action === 'blocked') return 'border-destructive/70 text-destructive'
   return 'border-muted-foreground/50 text-muted-foreground'
 }
@@ -644,6 +645,8 @@ function LaunchPlanDialog({
   launching,
   onOpenChange,
   onLaunch,
+  onReviewAdoption,
+  onReviewFreshSpawn,
 }: {
   plan: AgentTeamLaunchPlan | null
   result: AgentTeamLaunchResult | null
@@ -651,6 +654,8 @@ function LaunchPlanDialog({
   launching: boolean
   onOpenChange: (open: boolean) => void
   onLaunch: () => Promise<void>
+  onReviewAdoption: () => Promise<void>
+  onReviewFreshSpawn: () => Promise<void>
 }) {
   const open = Boolean(plan || loading || result)
 
@@ -661,7 +666,7 @@ function LaunchPlanDialog({
           <DialogTitle>Launch Plan</DialogTitle>
           {plan && (
             <DialogDescription>
-              {plan.reuse_count} reuse, {plan.spawn_count} spawn, {plan.skipped_count} skipped, {plan.blocked_count} blocked
+              {plan.reuse_count} reuse, {plan.adopt_count ?? 0} adopt, {plan.spawn_count} spawn, {plan.skipped_count} skipped, {plan.blocked_count} blocked
             </DialogDescription>
           )}
         </DialogHeader>
@@ -685,6 +690,12 @@ function LaunchPlanDialog({
                 </div>
                 {item.reasons.length > 0 && (
                   <p className="mt-3 text-sm text-muted-foreground">{item.reasons.join('; ')}</p>
+                )}
+                {(item.action === 'adopt' || item.block_code === 'unbound_pane_requires_operator_adoption') && (
+                  <p className="mt-2 text-sm text-amber-300">
+                    Unbound pane: {String(item.matching_session?.tmux_target ?? 'unknown')} (PID {String(item.matching_session?.pid ?? 'unknown')}).
+                    Its current prompt and authority were not created by this roster.
+                  </p>
                 )}
                 {item.warnings && item.warnings.length > 0 && (
                   <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
@@ -715,10 +726,20 @@ function LaunchPlanDialog({
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+          {plan?.items.some((item) => item.block_code === 'unbound_pane_requires_operator_adoption') && (
+            <>
+              <Button variant="outline" onClick={onReviewFreshSpawn} disabled={loading || launching}>
+                Review fresh spawn
+              </Button>
+              <Button variant="outline" onClick={onReviewAdoption} disabled={loading || launching}>
+                Review explicit adoption
+              </Button>
+            </>
+          )}
           {plan && (
-            <Button onClick={onLaunch} disabled={launching || !plan.can_launch || plan.spawn_count + plan.reuse_count === 0}>
+            <Button onClick={onLaunch} disabled={launching || !plan.can_launch || plan.spawn_count + plan.reuse_count + (plan.adopt_count ?? 0) === 0}>
               <Rocket className="mr-2 h-4 w-4" />
-              {launching ? 'Launching' : 'Launch'}
+              {launching ? 'Launching' : (plan.adopt_count ?? 0) > 0 ? 'Adopt and launch' : 'Launch'}
             </Button>
           )}
         </DialogFooter>
@@ -739,6 +760,8 @@ export function AgentTeamsPage() {
   const [planLoading, setPlanLoading] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [plannedSlotIds, setPlannedSlotIds] = useState<number[] | null>(null)
+  const [adoptUnboundSessions, setAdoptUnboundSessions] = useState(false)
+  const [reuseExistingSessions, setReuseExistingSessions] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
   const [launchOptionsByProvider, setLaunchOptionsByProvider] = useState<LaunchOptionsByProvider>({})
   const [githubScopes, setGithubScopes] = useState<TeamGithubScope[]>([])
@@ -1149,14 +1172,24 @@ export function AgentTeamsPage() {
     }
   }
 
-  const openPlan = async (slotIds: number[] | null = null) => {
+  const openPlan = async (
+    slotIds: number[] | null = null,
+    adoptUnbound: boolean = false,
+    reuseExisting: boolean = true
+  ) => {
     if (!selectedPreset) return
     setPlanLoading(true)
     setPlan(null)
     setLaunchResult(null)
     setPlannedSlotIds(slotIds)
+    setAdoptUnboundSessions(adoptUnbound)
+    setReuseExistingSessions(reuseExisting)
     try {
-      const request: AgentTeamLaunchRequest = slotIds ? { slot_ids: slotIds } : {}
+      const request: AgentTeamLaunchRequest = {
+        slot_ids: slotIds,
+        adopt_unbound_sessions: adoptUnbound,
+        reuse_existing: reuseExisting,
+      }
       setPlan(await withOperatorToken((token) => planAgentTeamLaunch(selectedPreset.id, request, token)))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
@@ -1172,6 +1205,8 @@ export function AgentTeamsPage() {
       const request: AgentTeamLaunchRequest = {
         requested_by: 'deck-ui',
         slot_ids: plannedSlotIds,
+        adopt_unbound_sessions: adoptUnboundSessions,
+        reuse_existing: reuseExistingSessions,
         confirm_plan_hash: plan.plan_hash,
       }
       const result = await withOperatorToken((token) => launchAgentTeam(selectedPreset.id, request, token))
@@ -1515,6 +1550,8 @@ export function AgentTeamsPage() {
           }
         }}
         onLaunch={runLaunch}
+        onReviewAdoption={() => openPlan(plannedSlotIds, true)}
+        onReviewFreshSpawn={() => openPlan(plannedSlotIds, false, false)}
       />
     </div>
   )

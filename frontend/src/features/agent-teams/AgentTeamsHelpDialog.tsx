@@ -75,6 +75,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               <li>Use Plan launch to confirm what will spawn or reuse.</li>
               <li>Launch from Agent Teams so MCP, hooks, and tmux observation attach to the slot.</li>
               <li>Use reuse only when the existing sessions already belong to the intended slots.</li>
+              <li>An unbound pane blocks the normal plan. Only an operator can review its target and PID, then explicitly adopt it; do not adopt an unknown pane as Leader.</li>
             </ol>
           </HelpSection>
 

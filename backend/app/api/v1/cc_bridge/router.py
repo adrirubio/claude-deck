@@ -3,12 +3,12 @@ import logging
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Header, HTTPException, Query, Response, WebSocket
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, WebSocket
 from pydantic import BaseModel
 
+from app.api.v1.deps import require_operator
 from app.services.cc_bridge.discovery import discover_cc_sessions, capture_pane_preview
 from app.services.cc_bridge.pty_relay import PtyRelay
-from app.api.v1.deps import require_operator
 from app.services.bridge_terminal_tokens import (
     TERMINAL_PROTOCOL_PREFIX,
     TerminalTokenStore,
@@ -111,7 +111,7 @@ async def session_terminal(
 
 
 @router.post("/sessions")
-def spawn_session_endpoint(request: SpawnRequest):
+def spawn_session_endpoint(request: SpawnRequest, _operator: None = Depends(require_operator)):
     """Spawn a new Claude Code session in tmux."""
     from app.services.cc_bridge.spawn import spawn_session as do_spawn
     try:
@@ -129,7 +129,11 @@ def spawn_session_endpoint(request: SpawnRequest):
 
 
 @router.delete("/sessions/{target}")
-def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
+def kill_session_endpoint(
+    target: str,
+    cleanup_worktree: bool = False,
+    _operator: None = Depends(require_operator),
+):
     """Kill a tmux session and optionally clean up its worktree."""
     from app.services.cc_bridge.spawn import kill_session
     return kill_session(session_name=target, cleanup_worktree=cleanup_worktree)

@@ -1,5 +1,5 @@
 export type AgentTeamProvider = 'claude-code' | 'codex-cli' | 'copilot-cli' | 'opencode-cli' | 'pi-cli'
-export type AgentTeamLaunchAction = 'reuse' | 'spawn' | 'skip' | 'blocked'
+export type AgentTeamLaunchAction = 'reuse' | 'adopt' | 'spawn' | 'skip' | 'blocked'
 export type AgentTeamLaunchStatus =
   | 'ready'
   | 'blocked'
@@ -138,6 +138,7 @@ export interface AgentTeamLaunchRequest {
   requested_by?: string | null
   slot_ids?: number[] | null
   reuse_existing?: boolean
+  adopt_unbound_sessions?: boolean
   include_disabled?: boolean
   confirm_plan_hash?: string | null
   skip_plan_confirmation?: boolean
@@ -408,6 +409,7 @@ export interface AgentTeamLaunchPlan {
   can_launch: boolean
   items: AgentTeamLaunchPlanItem[]
   reuse_count: number
+  adopt_count: number
   spawn_count: number
   skipped_count: number
   blocked_count: number

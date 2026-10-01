@@ -107,9 +107,10 @@ export function buildTerminalWsUrl(target: string, mode: 'readonly' | 'interacti
   return `${protocol}//${host}/api/v1/${BASE}/sessions/${encodeURIComponent(target)}/terminal?mode=${mode}`
 }
 
-export async function spawnSession(request: SpawnSessionRequest): Promise<SpawnSessionResponse> {
+export async function spawnSession(request: SpawnSessionRequest, operatorToken: string): Promise<SpawnSessionResponse> {
   return apiClient<SpawnSessionResponse>(BASE + '/sessions', {
     method: 'POST',
+    headers: { 'X-Deck-Operator-Token': operatorToken },
     body: JSON.stringify(request),
   })
 }
