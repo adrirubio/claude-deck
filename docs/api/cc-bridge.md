@@ -49,6 +49,11 @@ POST /api/v1/cc-bridge/sessions
 
 Modes: `plain`, `worktree`, `resume`
 
+The legacy Claude Code endpoint uses the same spawn and kill service as Agent
+Bridge. Resume with an empty `directory` requires a matching Claude transcript;
+otherwise, provide the directory explicitly. Spawning and killing require the
+operator token.
+
 ### Kill Session
 
 ```http
