@@ -1,6 +1,7 @@
 """Spawn and kill Claude Code sessions in tmux."""
 import json
 import logging
+import re
 import shlex
 import subprocess
 import uuid
@@ -14,16 +15,29 @@ _spawned_sessions: dict[str, dict] = {}
 def _resolve_project_directory(project_folder: str, session_id: str | None = None) -> str:
     """Resolve a Claude project folder name to the actual project directory.
 
-    Prefer the selected transcript's recorded cwd. Reconstructing the path from
-    Claude's folder name is lossy because both slashes and hyphens are encoded as
-    hyphens.
+    Use the selected transcript's recorded cwd. Claude's folder name cannot
+    reconstruct the directory reliably because slashes and hyphens collide.
     """
     folder_path = Path(project_folder)
-    if folder_path.name != project_folder or ".." in folder_path.parts:
+    if not project_folder or folder_path.name != project_folder or ".." in folder_path.parts:
+        raise ValueError(f"Invalid project folder: '{project_folder}'")
+    projects_root = (Path.home() / ".claude" / "projects").resolve()
+    try:
+        project_dir = (projects_root / project_folder).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Invalid project folder: '{project_folder}'") from exc
+    if project_dir.parent != projects_root:
         raise ValueError(f"Invalid project folder: '{project_folder}'")
 
     if session_id:
-        transcript = Path.home() / ".claude" / "projects" / project_folder / f"{session_id}.jsonl"
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
+            raise ValueError("Invalid Claude session ID")
+        try:
+            transcript = (project_dir / f"{session_id}.jsonl").resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("Invalid Claude transcript path") from exc
+        if transcript.parent != project_dir:
+            raise ValueError("Invalid Claude transcript path")
         if transcript.is_file():
             try:
                 with transcript.open("r", encoding="utf-8") as handle:
@@ -39,14 +53,6 @@ def _resolve_project_directory(project_folder: str, session_id: str | None = Non
                             return str(resolved)
             except OSError:
                 logger.warning("Could not read Claude transcript for directory resolution: %s", transcript)
-
-    decoded = "/" + project_folder.lstrip("-").replace("-", "/")
-    resolved = Path(decoded).resolve()
-    # Guard against path traversal — must be an existing absolute directory
-    if not resolved.is_absolute() or ".." in Path(decoded).parts:
-        raise ValueError(f"Invalid project folder: '{project_folder}'")
-    if resolved.is_dir():
-        return str(resolved)
 
     raise ValueError(
         f"Could not resolve project directory for '{project_folder}'. "
@@ -94,7 +100,6 @@ def spawn_session(
     directory = str(dir_path)
 
     # Generate tmux session name including project directory basename
-    import re
     dir_basename = dir_path.name or "project"
     # Sanitize: tmux disallows dots and colons in session names
     safe_basename = re.sub(r"[^a-zA-Z0-9_-]", "-", dir_basename)[:20]

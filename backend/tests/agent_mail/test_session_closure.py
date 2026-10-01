@@ -137,6 +137,28 @@ def test_strict_liveness_distinguishes_missing_reused_and_malformed(monkeypatch)
     assert peer_process.pane_is_alive_strict(42, "1") is None
 
 
+@pytest.mark.parametrize("pane_pid", ["../etc/passwd", "42/../../", -1, 0, True, 3.5])
+def test_strict_liveness_rejects_invalid_pid_before_file_access(monkeypatch, pane_pid):
+    import builtins
+
+    def unexpected_open(*_args, **_kwargs):
+        raise AssertionError("invalid PID reached the filesystem")
+
+    monkeypatch.setattr(builtins, "open", unexpected_open)
+    assert peer_process.pane_is_alive_strict(pane_pid, "1") is None
+
+
+@pytest.mark.asyncio
+async def test_operator_retirement_rejects_path_pid(client, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "fixture-operator")
+    response = await client.post(
+        "/api/v1/agent-mail/sessions/retire-dead-pane",
+        json={"pane_pid": "../../etc/passwd", "pane_proc_start": "1"},
+        headers={"X-Deck-Operator-Token": "fixture-operator"},
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_mint_close_race_is_a_structured_conflict(client, db, tmp_path, monkeypatch):
     original = agent_mail_service.ensure_capability_token
