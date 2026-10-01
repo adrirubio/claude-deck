@@ -138,6 +138,46 @@ def test_claude_resume_rejects_symlink_escapes(monkeypatch, tmp_path):
         claude_spawn._resolve_project_directory("-safe-project", "session-123")
 
 
+def test_legacy_claude_bridge_uses_provider_spawn_and_kill(monkeypatch, tmp_path):
+    from app.services.agent_bridge import spawn as provider_spawn
+    from app.services.cc_bridge import spawn as claude_spawn
+
+    calls = []
+
+    def fake_run(args, capture_output=True, text=True, timeout=10):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="4321\n", stderr="")
+
+    monkeypatch.setattr(provider_spawn, "_session_name_for", lambda directory: "repo-abcd")
+    monkeypatch.setattr(provider_spawn.subprocess, "run", fake_run)
+    provider_spawn.get_spawned_sessions().clear()
+
+    result = claude_spawn.spawn_session(
+        directory=str(tmp_path), mode="worktree", worktree_name="feature-x"
+    )
+
+    assert result == {"tmux_target": "repo-abcd:0.0", "session_name": "repo-abcd"}
+    assert calls[0][:10] == [
+        "tmux", "new-session", "-d", "-s", "repo-abcd", "-c", str(tmp_path), "-P", "-F", "#{pane_pid}"
+    ]
+    assert "--worktree feature-x" in calls[0][-1]
+    assert claude_spawn.get_spawned_sessions()["repo-abcd"]["worktree_name"] == "feature-x"
+
+    assert claude_spawn.kill_session("repo-abcd", cleanup_worktree=True) == {"killed": True}
+    assert calls[1] == ["tmux", "kill-session", "-t", "repo-abcd"]
+    assert calls[2] == [
+        "git", "-C", str(tmp_path), "worktree", "remove", "feature-x", "--force"
+    ]
+    assert "repo-abcd" not in provider_spawn.get_spawned_sessions()
+
+
+def test_legacy_claude_bridge_rejects_traversal_in_directory(tmp_path):
+    from app.services.cc_bridge import spawn as claude_spawn
+
+    with pytest.raises(ValueError, match="traversal"):
+        claude_spawn.spawn_session(directory=str(tmp_path / ".."))
+
+
 def test_bedrock_platform_injects_env_flags(monkeypatch, tmp_path):
     from app.services.agent_bridge import spawn
     from app.services.providers.base import SpawnCommandOptions
