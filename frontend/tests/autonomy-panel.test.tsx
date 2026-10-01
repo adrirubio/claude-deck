@@ -262,6 +262,7 @@ describe('AutonomyPanel', () => {
   })
 
   it('sends only changed scope fields and an explicit null when clearing the build hint', async () => {
+    setOperatorToken('test-token')
     const user = userEvent.setup()
     const props = panelProps({ workItems: [] })
     render(<AutonomyPanel {...props} />)
@@ -274,7 +275,7 @@ describe('AutonomyPanel', () => {
     await waitFor(() => expect(props.onUpdateScope).toHaveBeenCalledWith(2, {
       build_command_hint: null,
       max_approval_rounds: 4,
-    }))
+    }, 'test-token'))
   })
 
   it('does not PATCH an unchanged scope', async () => {
@@ -300,13 +301,14 @@ describe('AutonomyPanel', () => {
   })
 
   it('confirms watched-repo removal in the app instead of using a native dialog', async () => {
+    setOperatorToken('test-token')
     const user = userEvent.setup()
     const props = panelProps({ workItems: [] })
     const confirm = vi.spyOn(window, 'confirm')
     function RemovalHarness() {
       const [scopes, setScopes] = useState([scope])
-      return <AutonomyPanel {...props} scopes={scopes} onDeleteScope={async (target) => {
-        await props.onDeleteScope(target)
+      return <AutonomyPanel {...props} scopes={scopes} onDeleteScope={async (target, token) => {
+        await props.onDeleteScope(target, token)
         setScopes([])
       }} />
     }
@@ -321,7 +323,7 @@ describe('AutonomyPanel', () => {
 
     await user.click(screen.getByRole('button', { name: 'Remove example/project' }))
     await user.click(screen.getByRole('button', { name: 'Remove repo' }))
-    await waitFor(() => expect(props.onDeleteScope).toHaveBeenCalledWith(scope))
+    await waitFor(() => expect(props.onDeleteScope).toHaveBeenCalledWith(scope, 'test-token'))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add repo' })).toHaveFocus())
     expect(confirm).not.toHaveBeenCalled()
     confirm.mockRestore()
