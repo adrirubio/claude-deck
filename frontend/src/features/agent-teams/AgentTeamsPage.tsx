@@ -1537,22 +1537,24 @@ export function AgentTeamsPage() {
         }}
         onCancel={() => settleOperatorToken(null)}
       />
-      <LaunchPlanDialog
-        plan={plan}
-        result={launchResult}
-        loading={planLoading}
-        launching={launching}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPlan(null)
-            setLaunchResult(null)
-            setPlanLoading(false)
-          }
-        }}
-        onLaunch={runLaunch}
-        onReviewAdoption={() => openPlan(plannedSlotIds, true)}
-        onReviewFreshSpawn={() => openPlan(plannedSlotIds, false, false)}
-      />
+      {!tokenDialogOpen && (
+        <LaunchPlanDialog
+          plan={plan}
+          result={launchResult}
+          loading={planLoading}
+          launching={launching}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPlan(null)
+              setLaunchResult(null)
+              setPlanLoading(false)
+            }
+          }}
+          onLaunch={runLaunch}
+          onReviewAdoption={() => openPlan(plannedSlotIds, true)}
+          onReviewFreshSpawn={() => openPlan(plannedSlotIds, false, false)}
+        />
+      )}
     </div>
   )
 }
