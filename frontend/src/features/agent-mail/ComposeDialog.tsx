@@ -44,6 +44,13 @@ const composeKinds: Array<Exclude<MailMessageKind, 'answer'>> = [
   'handoff',
 ]
 
+type BroadcastAudience = {
+  type: 'repository' | 'team_preset'
+  id: string
+  label: string
+  members: MailMemberResponse[]
+}
+
 function recipientLabel(member: MailMemberResponse): string {
   const role = member.role ? `, ${member.role}` : ''
   const team = member.team_preset_name ? `, ${member.team_preset_name}` : ''
@@ -87,6 +94,7 @@ function deliveryWarning(member: MailMemberResponse, kind: Exclude<MailMessageKi
 export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: ComposeDialogProps) {
   const [kind, setKind] = useState<Exclude<MailMessageKind, 'answer'>>('message')
   const [recipient, setRecipient] = useState('')
+  const [broadcastAudience, setBroadcastAudience] = useState('')
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [whyNeeded, setWhyNeeded] = useState('')
@@ -101,6 +109,34 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
     }),
     [members],
   )
+  const broadcastAudiences = useMemo(() => {
+    const audiences = new Map<string, BroadcastAudience>()
+    for (const member of members) {
+      const repositoryKey = `repository:${member.repo_id}`
+      const repositoryAudience = audiences.get(repositoryKey) ?? {
+        type: 'repository',
+        id: member.repo_id,
+        label: `${member.repo_name} (repository)`,
+        members: [],
+      }
+      repositoryAudience.members.push(member)
+      audiences.set(repositoryKey, repositoryAudience)
+
+      if (member.team_preset_id != null) {
+        const teamId = String(member.team_preset_id)
+        const teamKey = `team_preset:${teamId}`
+        const teamAudience = audiences.get(teamKey) ?? {
+          type: 'team_preset',
+          id: teamId,
+          label: `${member.team_preset_name ?? `Team preset ${teamId}`} (team preset)`,
+          members: [],
+        }
+        teamAudience.members.push(member)
+        audiences.set(teamKey, teamAudience)
+      }
+    }
+    return [...audiences.values()].sort((left, right) => left.label.localeCompare(right.label))
+  }, [members])
 
   useEffect(() => {
     if (!open) return
@@ -109,6 +145,7 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
       if (cancelled) return
       setKind(preset?.kind ?? 'message')
       setRecipient(preset?.recipient_member_id ? String(preset.recipient_member_id) : '')
+      setBroadcastAudience('')
       setSubject(preset?.subject ?? '')
       setBody('')
       setWhyNeeded('')
@@ -125,11 +162,15 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
     ? members.find((member) => member.id === Number(recipient)) ?? null
     : null
   const selectedDeliveryWarning = selectedMember ? deliveryWarning(selectedMember, kind) : null
+  const selectedBroadcastAudience = broadcastAudiences.find(
+    (audience) => `${audience.type}:${audience.id}` === broadcastAudience,
+  ) ?? null
   const canSend = useMemo(() => {
     if (!body.trim()) return false
     if (needsRecipient && !recipient) return false
+    if (kind === 'broadcast' && !selectedBroadcastAudience) return false
     return true
-  }, [body, needsRecipient, recipient])
+  }, [body, kind, needsRecipient, recipient, selectedBroadcastAudience])
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -150,6 +191,8 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
       await onSend({
         kind,
         recipient_member_id: needsRecipient ? Number(recipient) : null,
+        audience_type: kind === 'broadcast' ? selectedBroadcastAudience?.type : null,
+        audience_id: kind === 'broadcast' ? selectedBroadcastAudience?.id : null,
         subject: subject || null,
         body_markdown: body,
         payload: Object.keys(payload).length ? payload : null,
@@ -200,7 +243,32 @@ export function ComposeDialog({ open, members, preset, onOpenChange, onSend }: C
                 </Select>
               </div>
             )}
+            {kind === 'broadcast' && (
+              <div className="space-y-2">
+                <Label>Broadcast audience</Label>
+                <Select value={broadcastAudience} onValueChange={setBroadcastAudience}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a repository or team preset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {broadcastAudiences.map((audience) => (
+                      <SelectItem key={`${audience.type}:${audience.id}`} value={`${audience.type}:${audience.id}`}>
+                        {audience.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
+
+          {kind === 'broadcast' && selectedBroadcastAudience && (
+            <p className="text-sm text-muted-foreground">
+              This broadcast will reach {selectedBroadcastAudience.members.length} participant
+              {selectedBroadcastAudience.members.length === 1 ? '' : 's'}: {' '}
+              {selectedBroadcastAudience.members.map((member) => member.display_name).join(', ')}.
+            </p>
+          )}
 
           {needsRecipient && selectedDeliveryWarning && (
             <Alert className="border-amber-300 bg-amber-50/60 dark:bg-amber-950/20">

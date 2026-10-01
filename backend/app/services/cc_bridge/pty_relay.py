@@ -83,13 +83,17 @@ class PtyRelay:
     def __init__(self, target: str, read_only: bool = True):
         self.target = target
         self.read_only = read_only
+        self._interactive_granted = not read_only
         self.master_fd: Optional[int] = None
         self.process: Optional[subprocess.Popen] = None
         self._closed = False
 
-    async def run(self, websocket: WebSocket) -> None:
+    def set_read_only(self, requested: bool) -> None:
+        self.read_only = not (self._interactive_granted and requested is False)
+
+    async def run(self, websocket: WebSocket, *, subprotocol: str | None = None) -> None:
         """Main relay loop — connect tmux to the WebSocket."""
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
 
         master_fd, slave_fd = pty.openpty()
         self.master_fd = master_fd
@@ -168,7 +172,7 @@ class PtyRelay:
                         if ctrl["type"] == "resize":
                             resize_pty(master_fd, ctrl.get("rows", 24), ctrl.get("cols", 80), self.process)
                         elif ctrl["type"] == "mode":
-                            self.read_only = ctrl.get("readOnly", True)
+                            self.set_read_only(ctrl.get("readOnly", True))
                     elif not self.read_only:
                         os.write(master_fd, text.encode())
 
@@ -177,12 +181,21 @@ class PtyRelay:
             except Exception as e:
                 logger.debug(f"Input relay ended: {e}")
 
+        output_task = asyncio.create_task(relay_output())
+        input_task = asyncio.create_task(relay_input())
         try:
-            await asyncio.gather(relay_output(), relay_input())
+            await asyncio.wait(
+                {output_task, input_task}, return_when=asyncio.FIRST_COMPLETED
+            )
         finally:
-            self.close()
+            for task in (output_task, input_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(output_task, input_task, return_exceptions=True)
             loop.remove_reader(master_fd)
-            _active_relays.pop(self.target, None)
+            if _active_relays.get(self.target) is self:
+                _active_relays.pop(self.target, None)
+            await asyncio.to_thread(self.close)
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.close()
 
@@ -211,9 +224,13 @@ class PtyRelay:
 
 async def close_all_relays() -> None:
     """Close all active pty relays. Called on app shutdown."""
-    for relay in list(_active_relays.values()):
-        relay.close()
-    _active_relays.clear()
+    relays = list(_active_relays.values())
+    try:
+        await asyncio.gather(*(asyncio.to_thread(relay.close) for relay in relays))
+    finally:
+        for relay in relays:
+            if _active_relays.get(relay.target) is relay:
+                _active_relays.pop(relay.target, None)
 
 
 def cleanup_orphaned_relays() -> None:

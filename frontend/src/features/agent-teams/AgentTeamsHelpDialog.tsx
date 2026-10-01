@@ -1,4 +1,4 @@
-import { BookOpen, Inbox, Rocket, UsersRound } from 'lucide-react'
+import { BookOpen, GitBranch, Inbox, Rocket, UsersRound } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog,
@@ -75,6 +75,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               <li>Use Plan launch to confirm what will spawn or reuse.</li>
               <li>Launch from Agent Teams so MCP, hooks, and tmux observation attach to the slot.</li>
               <li>Use reuse only when the existing sessions already belong to the intended slots.</li>
+              <li>An unbound pane blocks the normal plan. Only an operator can review its target and PID, then explicitly adopt it; do not adopt an unknown pane as Leader.</li>
             </ol>
           </HelpSection>
 
@@ -84,6 +85,19 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               to confirm their slot identity, then use <code>deck_request_context</code>,
               <code> deck_reply</code>, and handoffs to coordinate.
             </p>
+          </HelpSection>
+
+          <HelpSection icon={GitBranch} title="Autonomous GitHub dispatch">
+            <ol className="list-decimal space-y-1 pl-5">
+              <li>Put <code>github_token</code> in <code>backend/.env</code> for polling private repos and restart Deck. App-backed dispatch also needs GitHub App settings; App settings alone do not authenticate the watcher.</li>
+              <li>Add a watched repo with an existing primary checkout under your home directory.</li>
+              <li>The first enabled Roster slot is the Leader; launch it before enabling autonomy. The Role text does not select it.</li>
+              <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>
+              <li>Watch Activity. An operator token is needed only for protected recovery actions.</li>
+            </ol>
+            <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
+            <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Deck stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>
+            <p><a href="https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy operator guide</a>.</p>
           </HelpSection>
         </div>
       </DialogContent>

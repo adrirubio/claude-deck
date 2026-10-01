@@ -1,4 +1,5 @@
 """Claude Deck Agent Mail MCP server over stdio."""
+import asyncio
 import os
 import threading
 import time
@@ -20,6 +21,9 @@ HEARTBEAT_UNAVAILABLE_INTERVAL_SECONDS = 300.0
 
 mcp = FastMCP("claude-deck-mail")
 _register_lock = threading.Lock()
+_heartbeat_stop = threading.Event()
+_heartbeat_thread: threading.Thread | None = None
+_request_budget = threading.local()
 
 _state: dict[str, Any] = {
     "member_id": None,
@@ -27,6 +31,8 @@ _state: dict[str, Any] = {
     "session_key": f"mcp:{uuid.uuid4().hex[:12]}",
     "offline_until": 0.0,
     "last_error": None,
+    "closing": False,
+    "closed": False,
 }
 
 
@@ -52,20 +58,24 @@ def _http_error_result(exc: httpx.HTTPStatusError) -> dict:
     response = exc.response
     message = response.text
     block_code = None
+    detail_code = None
     try:
         body = response.json()
         detail = body.get("detail") if isinstance(body, dict) else body
         if isinstance(detail, str):
             message = detail
+            if detail.replace("_", "").isalnum():
+                detail_code = detail
         elif isinstance(detail, dict):
             message = str(detail.get("message") or detail)
             block_code = detail.get("block_code")
+            detail_code = detail.get("code") or block_code
         elif detail is not None:
             message = str(detail)
     except ValueError:
         pass
     error = {
-        "code": "deck_http_error",
+        "code": detail_code or "deck_http_error",
         "status_code": response.status_code,
         "message": message,
     }
@@ -77,7 +87,33 @@ def _http_error_result(exc: httpx.HTTPStatusError) -> dict:
     }
 
 
+async def _bounded_http_request(method: str, url: str, budget: float, timeout, kwargs) -> httpx.Response:
+    async with asyncio.timeout(budget):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.request(method, url, **kwargs)
+
+
+def _run_bounded_http_request(method: str, url: str, budget: float, timeout, kwargs) -> httpx.Response:
+    results = []
+    failures = []
+    def run():
+        try:
+            results.append(asyncio.run(_bounded_http_request(method, url, budget, timeout, kwargs)))
+        except Exception as exc:
+            failures.append(exc)
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=budget)
+    if worker.is_alive():
+        raise TimeoutError("Deck request total deadline expired")
+    if failures:
+        raise failures[0]
+    return results[0]
+
+
 def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
+    if _state.get("closing") and path != "/agent/close":
+        return {"ok": False, "error": {"code": "mail_generation_closing"}}
     now = time.monotonic()
     if now < _state.get("offline_until", 0.0):
         return _unreachable_result(_state.get("last_error") or "Claude Deck is unavailable.")
@@ -88,8 +124,19 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["X-Deck-Session-Token"] = session_token
         kwargs["headers"] = headers
+    budget = kwargs.pop("total_timeout", None)
+    deadline = getattr(_request_budget, "deadline", None)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        budget = min(budget, remaining) if budget is not None else remaining
+    if budget is not None and budget <= 0:
+        return {"ok": False, "error": {"code": "mail_startup_expired"}}
     try:
-        response = httpx.request(method, url, timeout=DECK_HTTP_TIMEOUT, **kwargs)
+        timeout = kwargs.pop("timeout", DECK_HTTP_TIMEOUT)
+        response = (
+            _run_bounded_http_request(method, url, budget, timeout, kwargs)
+            if budget is not None else httpx.request(method, url, timeout=timeout, **kwargs)
+        )
         response.raise_for_status()
         _state["offline_until"] = 0.0
         _state["last_error"] = None
@@ -98,10 +145,14 @@ def _deck_request(method: str, api_prefix: str, path: str, **kwargs) -> dict:
         _state["offline_until"] = 0.0
         _state["last_error"] = None
         return _http_error_result(exc)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, TimeoutError) as exc:
         _state["offline_until"] = time.monotonic() + OFFLINE_BACKOFF_SECONDS
         _state["last_error"] = str(exc)
-        return _unreachable_result(str(exc))
+        result = _unreachable_result(str(exc))
+        if method.upper() not in {"GET", "HEAD"}:
+            result["outcome"] = "unknown"
+            result["suggestion"] = "Do not repeat this mutation blindly; reconcile its outcome first."
+        return result
 
 
 def _request(method: str, path: str, **kwargs) -> dict:
@@ -120,8 +171,10 @@ def _dispatch_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-teams", path, **kwargs)
 
 
-def _bridge_request_with_token(method: str, path: str, **kwargs) -> dict:
-    token_result = _bridge_request("GET", "/token")
+def _bridge_request_with_token(method: str, path: str, *, target: str, **kwargs) -> dict:
+    token_result = _bridge_request(
+        "GET", f"/token?target={quote(target, safe='')}&purpose=attachment"
+    )
     if not token_result["ok"]:
         return token_result
     token = token_result["data"].get("token")
@@ -144,6 +197,8 @@ def _bridge_session_path(target: str) -> str:
 
 def _ensure_registered() -> dict:
     with _register_lock:
+        if _state.get("closing"):
+            return {"ok": False, "error": {"code": "mail_generation_closing"}}
         payload = {
             "source": "mcp",
             "provider": PROVIDER,
@@ -157,16 +212,36 @@ def _ensure_registered() -> dict:
             payload["team_preset_id"] = team_preset_id
         if team_slot_id is not None:
             payload["team_slot_id"] = team_slot_id
-        result = _request(
-            "POST",
-            "/agent/register",
-            json=payload,
-        )
+        deadline = time.monotonic() + 15.0
+        outer_deadline = getattr(_request_budget, "deadline", None)
+        if outer_deadline is not None:
+            deadline = min(deadline, outer_deadline)
+        delay = 0.25
+        while True:
+            remaining = deadline - time.monotonic()
+            if PROVIDER == "pi-cli" and (remaining <= 0 or _heartbeat_stop.is_set()):
+                return {"ok": False, "error": {"code": "mail_startup_expired"}}
+            result = _request("POST", "/agent/register", json=payload, **(
+                {"total_timeout": remaining} if PROVIDER == "pi-cli" else {}
+            ))
+            if (
+                PROVIDER != "pi-cli"
+                or result.get("ok")
+                or result.get("error", {}).get("code") != "bind_pending"
+                or time.monotonic() >= deadline
+                or _heartbeat_stop.is_set()
+            ):
+                break
+            if _heartbeat_stop.wait(min(delay, max(0.0, deadline - time.monotonic()))):
+                break
+            delay = min(delay * 2, 1.0)
         if result["ok"]:
             _state["member_id"] = result["data"]["member"]["id"]
             minted = result["data"].get("capability_token")
             if minted:
                 _state["capability_token"] = minted
+            if PROVIDER == "pi-cli" and _heartbeat_thread is None and not _heartbeat_stop.is_set():
+                _start_heartbeat_thread()
         return result
 
 
@@ -178,18 +253,46 @@ def _heartbeat_once() -> float:
 
 
 def _heartbeat_loop() -> None:
-    while True:
-        time.sleep(_heartbeat_once())
+    while not _heartbeat_stop.is_set():
+        if _heartbeat_stop.wait(_heartbeat_once()):
+            break
 
 
 def _start_heartbeat_thread() -> threading.Thread:
+    global _heartbeat_thread
     thread = threading.Thread(
         target=_heartbeat_loop,
         name="claude-deck-agent-mail-heartbeat",
         daemon=True,
     )
     thread.start()
+    _heartbeat_thread = thread
     return thread
+
+
+def __deck_mail_close_generation() -> dict:
+    """Private lifecycle control; not a model tool."""
+    if _state.get("closed"):
+        return {"ok": True, "closed": True}
+    _state["closing"] = True
+    _heartbeat_stop.set()
+    if not _register_lock.acquire(timeout=2.0):
+        return {"ok": False, "error": {"code": "close_unconfirmed"}}
+    try:
+        if not _state.get("capability_token"):
+            return {"ok": False, "error": {"code": "close_unconfirmed"}}
+        result = _request("POST", "/agent/close", timeout=httpx.Timeout(3.0), total_timeout=3.0)
+        if result.get("ok") and result.get("data", {}).get("closed") is True:
+            _state["closed"] = True
+            return {"ok": True, "closed": True}
+        return {"ok": False, "error": {"code": "close_unconfirmed"}}
+    finally:
+        _register_lock.release()
+
+
+if PROVIDER == "pi-cli":
+    mcp.tool()(__deck_mail_close_generation)
+    mcp._tool_manager.get_tool("__deck_mail_close_generation").parameters["additionalProperties"] = False
 
 
 def _counts() -> dict:
@@ -217,6 +320,16 @@ def deck_whoami() -> dict:
     """Register with Claude Deck Agent Mail and return your participant identity, role,
     charter, repo, live status, and unread/pending inbox counts. Call this once when
     starting coordinated work."""
+    if PROVIDER != "pi-cli":
+        return _whoami()
+    _request_budget.deadline = time.monotonic() + 15.0
+    try:
+        return _whoami()
+    finally:
+        del _request_budget.deadline
+
+
+def _whoami() -> dict:
     err = _guard()
     if err:
         return err
@@ -338,14 +451,57 @@ def deck_reply(thread_root_id: int, body: str) -> dict:
 
 
 @mcp.tool()
+def deck_request_work_item_approval(
+    work_item_id: int,
+    dispatch_nonce: str,
+    summary: str,
+    plan_metadata: Optional[dict[str, Any]] = None,
+) -> dict:
+    """Submit the current work item's initial plan to its designated Leader.
+
+    This creates normalized approval authority and returns its stable request id.
+    Do not use deck_request_context for initial-plan approval; ordinary context
+    questions are non-authoritative.
+    """
+    err = _guard()
+    if err:
+        return err
+    result = _request(
+        "POST",
+        "/approval-requests",
+        json={
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "summary": summary,
+            "plan_metadata": plan_metadata or {},
+        },
+    )
+    if not result["ok"]:
+        return result
+    approval = result["data"]
+    return {
+        "ok": True,
+        "approval_request_id": approval["id"],
+        "request_message_id": approval.get("request_message_id"),
+        "status": approval["status"],
+        "approval_round": approval["approval_round"],
+        **_counts(),
+    }
+
+
+@mcp.tool()
 def deck_approve_work_item(
     work_item_id: int,
     dispatch_nonce: str,
     decision: str,
     reason: str,
+    approval_request_id: int,
 ) -> dict:
-    """Approve or reject the current dispatch approval round as its designated
-    leader. A rejection opens the next round automatically when one remains."""
+    """Approve or reject a normalized initial-plan request as its designated Leader.
+
+    Pass approval_request_id from deck_request_work_item_approval. A rejection opens
+    the next round automatically when one remains.
+    """
     if decision not in {"approved", "rejected"}:
         return {
             "ok": False,
@@ -363,6 +519,7 @@ def deck_approve_work_item(
         json={
             "work_item_id": work_item_id,
             "dispatch_nonce": dispatch_nonce,
+            "approval_request_id": approval_request_id,
             "decision": decision,
             "reason": reason,
         },
@@ -375,6 +532,127 @@ def deck_approve_work_item(
         "decision": result["data"].get("decision"),
         **_counts(),
     }
+
+
+@mcp.tool()
+def deck_request_continuation(
+    work_item_id: int,
+    dispatch_nonce: str,
+    phase: str,
+    execution_target: str,
+    summary: str,
+    allowed_paths: list[str],
+    allowed_actions: list[str],
+    allowed_commands: list[str],
+    prohibited_actions: list[str],
+    max_failed_heads: int,
+    tool_fallbacks: dict[str, Any],
+    lease_token: str,
+) -> dict:
+    """Request one bounded continuation revision from the designated Leader."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/continuation-requests",
+        json={
+            "dispatch_nonce": dispatch_nonce,
+            "phase": phase,
+            "execution_target": execution_target,
+            "summary": summary,
+            "allowed_paths": allowed_paths,
+            "allowed_actions": allowed_actions,
+            "allowed_commands": allowed_commands,
+            "prohibited_actions": prohibited_actions,
+            "max_failed_heads": max_failed_heads,
+            "tool_fallbacks": tool_fallbacks,
+            "lease_token": lease_token,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, **result["data"], **_counts()}
+
+
+@mcp.tool()
+def deck_decide_continuation(
+    approval_request_id: int,
+    work_item_id: int,
+    dispatch_nonce: str,
+    decision: str,
+    reason: str,
+) -> dict:
+    """Approve or reject one explicit continuation authority request."""
+    if decision not in {"approved", "rejected"}:
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_decision",
+                "message": "decision must be approved or rejected",
+            },
+        }
+    err = _guard()
+    if err:
+        return err
+    result = _request(
+        "POST",
+        "/continuation-decisions",
+        json={
+            "approval_request_id": approval_request_id,
+            "work_item_id": work_item_id,
+            "dispatch_nonce": dispatch_nonce,
+            "decision": decision,
+            "reason": reason,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {
+        "ok": True,
+        "message_id": result["data"]["id"],
+        "decision": result["data"].get("decision"),
+        **_counts(),
+    }
+
+
+@mcp.tool()
+def deck_ack_continuation(
+    work_item_id: int,
+    revision: int,
+    dispatch_nonce: str,
+    lease_token: str,
+) -> dict:
+    """Acknowledge and activate one delivered continuation revision."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "POST",
+        f"/github-work-items/{work_item_id}/scope-revisions/{revision}/ack",
+        json={
+            "dispatch_nonce": dispatch_nonce,
+            "lease_token": lease_token,
+        },
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "work_item": result["data"]}
+
+
+@mcp.tool()
+def deck_list_scope_revisions(work_item_id: int) -> dict:
+    """List safe continuation authority history for one work item."""
+    err = _guard()
+    if err:
+        return err
+    result = _dispatch_request(
+        "GET",
+        f"/github-work-items/{work_item_id}/scope-revisions",
+    )
+    if not result["ok"]:
+        return result
+    return {"ok": True, "revisions": result["data"]}
 
 
 @mcp.tool()
@@ -403,8 +681,12 @@ def deck_request_context(
     work_item_id: Optional[int] = None,
     dispatch_nonce: Optional[str] = None,
 ) -> dict:
-    """Ask another Agent Mail participant a structured question about something they know.
-    Creates a pending context request they will be nudged to answer."""
+    """Ask another Agent Mail participant a non-authoritative structured question.
+
+    Creates a pending context request they will be nudged to answer. For initial-plan
+    approval, use deck_request_work_item_approval instead; a context answer cannot
+    authorize implementation.
+    """
     err = _guard()
     if err:
         return err
@@ -500,6 +782,7 @@ def deck_attach_image_to_bridge_session(
         upload = _bridge_request_with_token(
             "POST",
             f"{_bridge_session_path(target)}/attachments",
+            target=target,
             files={"file": (os.path.basename(expanded_path), handle)},
             data=data,
         )
@@ -510,6 +793,7 @@ def deck_attach_image_to_bridge_session(
     paste = _bridge_request_with_token(
         "POST",
         f"{_bridge_session_path(target)}/attachments/{attachment['id']}/paste",
+        target=target,
         json={"submit": submit},
     )
     if not paste["ok"]:
@@ -520,7 +804,9 @@ def deck_attach_image_to_bridge_session(
 @mcp.tool()
 def deck_list_bridge_attachments(target: str) -> dict:
     """List recent image attachments for an Agent Bridge tmux target."""
-    result = _bridge_request_with_token("GET", f"{_bridge_session_path(target)}/attachments")
+    result = _bridge_request_with_token(
+        "GET", f"{_bridge_session_path(target)}/attachments", target=target
+    )
     if not result["ok"]:
         return result
     return {"ok": True, **result["data"]}
@@ -537,6 +823,7 @@ def deck_paste_bridge_attachment(
     result = _bridge_request_with_token(
         "POST",
         f"{_bridge_session_path(target)}/attachments/{attachment_id}/paste",
+        target=target,
         json={"submit": submit},
     )
     if not result["ok"]:
@@ -605,7 +892,16 @@ def deck_plan_team_launch(
     include_disabled: bool = False,
 ) -> dict:
     """Plan an Agent Team launch and return the plan_hash required by
-    deck_launch_team. Review blocked items and warnings before launching."""
+    deck_launch_team. Agent sessions cannot include disabled slots or force
+    replacement of a running session; those options require an operator."""
+    if not reuse_existing or include_disabled:
+        return {
+            "ok": False,
+            "error": {
+                "code": "operator_launch_override_required",
+                "message": "Disabled slots and forced respawn require an operator token.",
+            },
+        }
     payload = {
         "reuse_existing": reuse_existing,
         "slot_ids": slot_ids,
@@ -628,12 +924,21 @@ def deck_launch_team(
     """Launch an Agent Team preset.
 
     Call deck_plan_team_launch first and pass its plan_hash as
-    confirm_plan_hash. force_without_plan bypasses that safety check only when
-    explicitly set true. Launch behavior uses the per-provider launch_options
-    accepted by deck_create_team; validation errors include machine-readable
+    confirm_plan_hash. Forced respawn and force_without_plan require an
+    operator and are not available through this agent tool. Launch behavior
+    uses the per-provider launch_options accepted by deck_create_team;
+    validation errors include machine-readable
     block_code values when available.
     """
-    if not confirm_plan_hash and not force_without_plan:
+    if not reuse_existing or force_without_plan:
+        return {
+            "ok": False,
+            "error": {
+                "code": "operator_launch_override_required",
+                "message": "Forced respawn and plan bypass require an operator token.",
+            },
+        }
+    if not confirm_plan_hash:
         return {
             "ok": False,
             "error": {
@@ -663,13 +968,22 @@ def deck_report_dispatch_status(
     reassign_to_slot_id: Optional[int] = None,
     note: Optional[str] = None,
     lease_token: Optional[str] = None,
+    revision: Optional[int] = None,
+    dispatch_nonce: Optional[str] = None,
+    current_head_sha: Optional[str] = None,
+    summary: Optional[str] = None,
+    evidence: Optional[dict[str, Any]] = None,
 ) -> dict:
     """Report progress on a Claude-Deck-dispatched GitHub issue back to the brain.
 
     status is one of: triaging, ack_received, in_progress, pr_ready (with
     head_ref), pr_opened (with pr_number), handoff_initiated (with
-    reassign_to_slot_id), handoff_accepted, blocked, workspace_released. Never
-    send both head_ref and pr_number. Report ack_received only after the designated
+    reassign_to_slot_id), handoff_accepted, blocked, continuation_completed,
+    diagnostic_completed, workspace_released. Both completion statuses require
+    revision, dispatch_nonce, current_head_sha, summary, evidence, and lease_token.
+    diagnostic_completed is accepted only after the PR tree is restored exactly to
+    the approved diagnostic baseline. Never send both head_ref and pr_number. Report
+    ack_received only after the designated
     leader records an explicit approved decision with deck_approve_work_item;
     prose replies are not approval. Called by the owner slot the brain dispatched
     the issue to. Include work_item_id and lease_token from your bootstrap prompt.
@@ -685,6 +999,11 @@ def deck_report_dispatch_status(
         "reassign_to_slot_id": reassign_to_slot_id,
         "note": note,
         "lease_token": lease_token,
+        "revision": revision,
+        "dispatch_nonce": dispatch_nonce,
+        "current_head_sha": current_head_sha,
+        "summary": summary,
+        "evidence": evidence,
     }
     return _dispatch_request("POST", "/dispatch-status", json=payload)
 
@@ -750,6 +1069,27 @@ def deck_list_work_items(status: str = "escalated", limit: int = 100) -> dict:
                 "ack_approval_round": item.get("ack_approval_round"),
                 "ack_enforcement_epoch": item.get("ack_enforcement_epoch"),
                 "dispatch_head_ref": item.get("dispatch_head_ref"),
+                "pr_number": item.get("pr_number"),
+                "attempt_phase": item.get("attempt_phase"),
+                "active_scope_revision": item.get("active_scope_revision"),
+                "active_scope_summary": item.get("active_scope_summary"),
+                "active_scope_status": item.get("active_scope_status"),
+                "pending_approval_request_id": item.get(
+                    "pending_approval_request_id"
+                ),
+                "pending_approval_kind": item.get("pending_approval_kind"),
+                "diagnostic_retry_count": item.get("diagnostic_retry_count"),
+                "revision_failed_head_count": item.get(
+                    "revision_failed_head_count"
+                ),
+                "revision_failed_head_budget": item.get(
+                    "revision_failed_head_budget"
+                ),
+                "continuation_block_code": item.get("continuation_block_code"),
+                "retry_allowed": item.get("retry_allowed"),
+                "retry_block_code": item.get("retry_block_code"),
+                "continuation_nudged_at": item.get("continuation_nudged_at"),
+                "continuation_activated_at": item.get("continuation_activated_at"),
             }
             for item in items
         ],
@@ -772,5 +1112,6 @@ def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
 
 
 if __name__ == "__main__":
-    _start_heartbeat_thread()
+    if PROVIDER != "pi-cli":
+        _start_heartbeat_thread()
     mcp.run()

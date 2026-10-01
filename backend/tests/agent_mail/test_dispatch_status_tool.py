@@ -2,6 +2,8 @@
 
 import ast
 import inspect
+import os
+import subprocess
 import textwrap
 from datetime import datetime
 
@@ -29,12 +31,14 @@ from app.services.github_app_auth_service import (
     GithubAppMintError,
     GithubAppNotInstalled,
     GithubAppUnconfigured,
+    github_app_auth_service,
 )
 from app.services.github_client import GithubClientResponseError
 from app.services.github_workspace_service import (
     GithubWorkspaceCredentialRevokeError,
     github_workspace_service,
 )
+from app.utils import peer_process
 
 DEFAULT_TOKEN = "default-owner-token"
 
@@ -42,6 +46,11 @@ DEFAULT_TOKEN = "default-owner-token"
 @pytest.fixture(autouse=True)
 def require_capabilities(monkeypatch):
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+
+
+@pytest.fixture(autouse=True)
+def live_slot_session_bindings(monkeypatch):
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: True)
 
 
 @pytest.fixture(autouse=True)
@@ -192,6 +201,7 @@ class _FakeGitRunner:
     def __init__(self):
         self.statuses: dict[str, str] = {}
         self.rev_counts: dict[str, str] = {}
+        self.head_shas: dict[str, str] = {}
         self.failures: dict[str, str] = {}
 
     async def __call__(self, args: list[str]) -> tuple[int, str]:
@@ -203,6 +213,8 @@ class _FakeGitRunner:
             return 0, self.statuses.get(path, "")
         if command == "rev-list":
             return 0, f"{self.rev_counts.get(path, '0')}\n"
+        if command == "rev-parse":
+            return 0, f"{self.head_shas.get(path, '')}\n"
         return 0, ""
 
 
@@ -363,6 +375,7 @@ def _statuses_the_route_accepts() -> set[str]:
         ("ack_received", {}),
         ("pr_opened", {"pr_number": 7, "lease_token": "lease"}),
         ("pr_ready", {"head_ref": "deck/test-attempt", "lease_token": "lease"}),
+        ("diagnostic_completed", {}),
         ("in_progress", {}),
         ("workspace_released", {"lease_token": "lease"}),
     ],
@@ -410,6 +423,27 @@ async def test_triaging_does_not_increment_approval_rounds(client_and_db):
         assert item.dispatch_status == "dispatched"
         assert item.approval_round_count == 1
         assert item.escalation_reason is None
+
+
+@pytest.mark.asyncio
+async def test_stale_owner_token_cannot_update_dispatch_status(
+    client_and_db, monkeypatch
+):
+    ac, maker = client_and_db
+    item_id = await _seed_item(maker, status_note="original")
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: False)
+
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={"work_item_id": item_id, "status": "triaging", "note": "stale write"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        assert item.dispatch_status == "dispatched"
+        assert item.status_note == "original"
 
 
 @pytest.mark.asyncio
@@ -506,6 +540,167 @@ async def test_owner_releases_terminal_item_idempotently(client_and_db, monkeypa
     async with maker() as db:
         workspace = await db.get(GithubWorkspace, workspace_id)
         assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+async def test_owner_releases_clean_squash_merged_pr_head(client_and_db, monkeypatch):
+    ac, maker = client_and_db
+    runner = _FakeGitRunner()
+    item_id, owner_id, _, workspace_id, path = await _seed_leased_item(maker)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        item.pr_number = 875
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        repo_full_name = f"{scope.repo_owner}/{scope.repo_name}"
+        await db.commit()
+    runner.rev_counts[path] = "23"
+    runner.head_shas[path] = "a" * 40
+    monkeypatch.setattr(github_workspace_service, "_runner", runner)
+
+    async def get_pull(*_args, **_kwargs):
+        return {
+            "state": "closed",
+            "merged_at": "2026-09-29T08:46:06Z",
+            "head": {
+                "sha": "a" * 40,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": repo_full_name},
+            },
+        }
+
+    monkeypatch.setattr(agent_teams_routes.github_client, "get_pull", get_pull)
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "workspace_released",
+            "reporting_slot_id": owner_id,
+            "lease_token": "lease-current",
+        },
+    )
+
+    assert response.status_code == 200
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", ["ambient", "app"])
+async def test_owner_release_after_real_squash_merge_uses_normal_route(
+    client_and_db, monkeypatch, tmp_path, auth_mode
+):
+    ac, maker = client_and_db
+    home = tmp_path / "home"
+    home.mkdir()
+    environment = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    worktree = tmp_path / "worktree"
+
+    def run_git(*arguments, cwd=None):
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            env=environment,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    run_git("init", "-b", "master", str(repo))
+    run_git("config", "user.name", "Tester", cwd=repo)
+    run_git("config", "user.email", "tester@example.com", cwd=repo)
+    run_git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    (repo / "README").write_text("base\n")
+    run_git("add", "README", cwd=repo)
+    run_git("commit", "-m", "base", cwd=repo)
+    base_sha = run_git("rev-parse", "HEAD", cwd=repo)
+    run_git("init", "--bare", str(remote))
+    run_git("remote", "add", "origin", str(remote), cwd=repo)
+    run_git("push", "-u", "origin", "master", cwd=repo)
+    run_git("worktree", "add", "-b", "deck/test-attempt", str(worktree), cwd=repo)
+    (worktree / "change.txt").write_text("pushed change\n")
+    run_git("add", "change.txt", cwd=worktree)
+    run_git("commit", "-m", "change", cwd=worktree)
+    pushed_sha = run_git("rev-parse", "HEAD", cwd=worktree)
+    run_git("push", "-u", "origin", "deck/test-attempt", cwd=worktree)
+    run_git("merge", "--squash", "deck/test-attempt", cwd=repo)
+    run_git("commit", "-m", "squash", cwd=repo)
+    run_git("push", "origin", "master", cwd=repo)
+    run_git("update-ref", "refs/remotes/origin/master", base_sha, cwd=repo)
+    assert int(run_git("rev-list", "--count", "origin/master..HEAD", cwd=worktree)) > 0
+
+    item_id, owner_id, _, workspace_id, _ = await _seed_leased_item(maker)
+    async with maker() as db:
+        item = await db.get(GithubWorkItem, item_id)
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        scope.base_ref = "origin/master"
+        scope.github_auth_mode = auth_mode
+        if auth_mode == "app":
+            scope.github_app_installation_id = 1234
+        item.pr_number = 875
+        workspace.path = str(worktree)
+        workspace.kind = "worktree"
+        workspace.leased_at = datetime.utcnow()
+        repo_full_name = f"{scope.repo_owner}/{scope.repo_name}"
+        await db.commit()
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**environment, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+
+    minted = []
+
+    async def mint_repository_token(*args, **kwargs):
+        minted.append((args, kwargs))
+        return "app-test-token"
+
+    monkeypatch.setattr(github_app_auth_service, "mint_repository_token", mint_repository_token)
+    pull_tokens = []
+
+    async def get_pull(*_args, **kwargs):
+        pull_tokens.append(kwargs.get("token"))
+        return {
+            "state": "closed",
+            "merged_at": "2026-09-29T08:46:06Z",
+            "head": {
+                "sha": pushed_sha,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": repo_full_name},
+            },
+        }
+
+    monkeypatch.setattr(agent_teams_routes.github_client, "get_pull", get_pull)
+    normal_releases = []
+    original_release = github_workspace_service.release_by_owner
+
+    async def release_by_owner(*arguments, **kwargs):
+        normal_releases.append((arguments, kwargs))
+        return await original_release(*arguments, **kwargs)
+
+    monkeypatch.setattr(github_workspace_service, "release_by_owner", release_by_owner)
+    response = await ac.post(
+        "/api/v1/agent-teams/dispatch-status",
+        json={
+            "work_item_id": item_id,
+            "status": "workspace_released",
+            "reporting_slot_id": owner_id,
+            "lease_token": "lease-current",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(normal_releases) == 1
+    assert pull_tokens == ["app-test-token" if auth_mode == "app" else None]
+    assert len(minted) == (1 if auth_mode == "app" else 0)
+    async with maker() as db:
+        workspace = await db.get(GithubWorkspace, workspace_id)
+        assert workspace.leased_item_id is None
+        assert workspace.lease_token is None
+        assert workspace.released_at is not None
 
 
 @pytest.mark.asyncio
@@ -811,6 +1006,7 @@ def test_shim_exposes_dispatch_status_tool():
     shim = importlib.import_module("mcp_shim.agent_mail_server")
     assert hasattr(shim, "deck_report_dispatch_status")
     assert hasattr(shim, "deck_retry_work_item")
+    assert hasattr(shim, "deck_request_work_item_approval")
     assert hasattr(shim, "_dispatch_request")
 
 
@@ -880,7 +1076,8 @@ def test_shim_approval_requires_registration(monkeypatch):
 
     monkeypatch.setattr(shim, "_request", unexpected_request)
 
-    assert shim.deck_approve_work_item(1, "nonce", "approved", "safe") == refusal
+    assert shim.deck_approve_work_item(1, "nonce", "approved", "safe", 41) == refusal
+    assert shim.deck_request_work_item_approval(1, "nonce", "safe plan") == refusal
 
 
 def test_shim_retry_work_item_posts_reason(monkeypatch):
@@ -941,8 +1138,20 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                         "id": 17,
                         "issue_number": 817,
                         "dispatch_status": "escalated",
-                        "escalation_reason": "plan_blocked",
-                        "status_note": "Blocked by #816",
+                            "escalation_reason": "plan_blocked",
+                            "status_note": "Blocked by #816",
+                            "active_scope_summary": "Fix one bounded path",
+                            "active_scope_status": "active",
+                            "pending_approval_request_id": 73,
+                            "pending_approval_kind": "continuation",
+                            "revision_failed_head_count": 1,
+                            "revision_failed_head_budget": 2,
+                            "continuation_block_code": "approval_pending",
+                            "retry_allowed": False,
+                            "retry_block_code": "approval_pending",
+                            "expected_lease_token_hash": "never-project",
+                            "lease_token": "never-project",
+                            "allowed_commands": ["never-project"],
                     },
                     {
                         "id": 16,
@@ -971,6 +1180,21 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
                 "ack_approval_round": None,
                 "ack_enforcement_epoch": None,
                 "dispatch_head_ref": None,
+                "pr_number": None,
+                    "attempt_phase": None,
+                    "active_scope_revision": None,
+                    "active_scope_summary": "Fix one bounded path",
+                    "active_scope_status": "active",
+                    "pending_approval_request_id": 73,
+                    "pending_approval_kind": "continuation",
+                    "diagnostic_retry_count": None,
+                    "revision_failed_head_count": 1,
+                    "revision_failed_head_budget": 2,
+                    "continuation_block_code": "approval_pending",
+                    "retry_allowed": False,
+                    "retry_block_code": "approval_pending",
+                    "continuation_nudged_at": None,
+                "continuation_activated_at": None,
             }
         ],
     }
@@ -981,6 +1205,10 @@ def test_shim_list_work_items_filters_status_and_maps_ids(monkeypatch):
             {"params": {"limit": 25}},
         )
     ]
+    projected = result["items"][0]
+    assert "expected_lease_token_hash" not in projected
+    assert "lease_token" not in projected
+    assert "allowed_commands" not in projected
 
 
 _OWNER_ONLY_STATUSES = [
@@ -1149,7 +1377,7 @@ async def test_workspace_release_cas_survives_wal_interleaving(
     item_id, owner_id, other_id, workspace_id, _ = await _seed_leased_item(maker)
     entered_blocker = False
 
-    async def interleaving_blocker(_scope, _workspace):
+    async def interleaving_blocker(_scope, _workspace, _item):
         nonlocal entered_blocker
         entered_blocker = True
         async with maker() as other_db:
@@ -1402,7 +1630,7 @@ async def test_an_invalid_token_never_falls_back_to_the_legacy_path(client_and_d
 
 def test_every_accepted_status_has_an_authorization_rule():
     accepted = _statuses_the_route_accepts()
-    assert len(accepted) == 10, f"branch count changed: {sorted(accepted)}"
+    assert len(accepted) == 12, f"branch count changed: {sorted(accepted)}"
     missing = accepted - set(agent_teams_routes._DISPATCH_STATUS_RULES)
     assert not missing, f"statuses with no authorization rule: {sorted(missing)}"
 

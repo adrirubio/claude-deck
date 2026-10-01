@@ -58,7 +58,7 @@ export function ImageAttachmentDialog({
             Attach image to session
           </DialogTitle>
           <DialogDescription>
-            Uploads the image to this Claude Deck host and pastes a file-path prompt into {targetLabel}.
+            Uploads the image to this Claude Deck host. Pasting its file-path prompt into {targetLabel} requires interactive mode and the Deck operator token.
           </DialogDescription>
         </DialogHeader>
 
@@ -97,7 +97,7 @@ export function ImageAttachmentDialog({
 
             {readOnly && !error && (
               <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-amber-300">
-                This terminal is read-only. Switch to interactive mode before pasting into tmux.
+                This terminal is read-only. Enter the Deck operator token to switch to interactive mode before pasting into tmux.
               </div>
             )}
           </div>

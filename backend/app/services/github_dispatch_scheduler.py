@@ -8,9 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubWorkItem, TeamGithubScope
+from app.models.database import (
+    AgentTeamPreset,
+    AgentTeamSlot,
+    GithubAttemptScopeRevision,
+    GithubWorkItem,
+    GithubWorkspace,
+    TeamGithubScope,
+)
+from app.services.agent_mail_service import agent_mail_service
+from app.services.github_approval_service import github_approval_service
 from app.services.github_client import GithubClient, github_client
 from app.services.github_dispatch_service import github_dispatch_service
+from app.services.github_recovery_gate import (
+    GithubRecoveryOnlyAttempt,
+    configured_recovery_only_attempt,
+)
 from app.services.github_verification_service import github_verification_service
 from app.services.github_watcher_service import github_watcher_service
 
@@ -34,6 +47,7 @@ class GithubDispatchScheduler:
         self.watcher = watcher
         self.dispatch = dispatch
         self.verification = verification
+        self.recovery_only_attempt = configured_recovery_only_attempt()
 
     def _ensure_scheduler(self):
         if self.scheduler is None:
@@ -55,17 +69,18 @@ class GithubDispatchScheduler:
 
     async def sync_jobs(self, db: AsyncSession) -> None:
         scheduler = self._ensure_scheduler()
-        rows = (
-            await db.execute(
-                select(TeamGithubScope.repo_owner, TeamGithubScope.repo_name)
-                .join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id)
-                .where(
-                    TeamGithubScope.enabled.is_(True),
-                    AgentTeamPreset.autonomy_enabled.is_(True),
-                )
-                .distinct()
+        query = (
+            select(TeamGithubScope.repo_owner, TeamGithubScope.repo_name)
+            .join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id)
+            .where(
+                TeamGithubScope.enabled.is_(True),
+                AgentTeamPreset.autonomy_enabled.is_(True),
             )
-        ).all()
+            .distinct()
+        )
+        if self.recovery_only_attempt is not None:
+            query = query.where(TeamGithubScope.id == self.recovery_only_attempt.scope_id)
+        rows = (await db.execute(query)).all()
         desired = {self._job_id(owner, repo): (owner, repo) for owner, repo in rows}
         existing = {
             job.id
@@ -120,15 +135,19 @@ class GithubDispatchScheduler:
                 .order_by(TeamGithubScope.id)
             )
         ).scalars().all()
+        await db.commit()
+        if self.recovery_only_attempt is not None:
+            await self._run_recovery_only(db, scopes, client=client)
+            return
         for scope in scopes:
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.watcher.poll_scope(db, scope, client)
-            slots = (
-                await db.execute(
-                    select(AgentTeamSlot)
-                    .where(AgentTeamSlot.preset_id == scope.preset_id)
-                    .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-                )
-            ).scalars().all()
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
             issues_by_number = await self._pending_issues_by_number(db, scope, client)
             issue_labels_by_number = {
                 number: [label["name"] for label in issue.get("labels", []) if "name" in label]
@@ -144,9 +163,177 @@ class GithubDispatchScheduler:
                 issue_labels_by_number=issue_labels_by_number,
                 issue_details_by_number=issues_by_number,
             )
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.monitor_dispatched(db, scope, slots)
-            await self.dispatch.remind_held_leases(db, scope)
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.monitor_continuation(db, scope, slots)
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.verification.process_scope(db, scope, client=client)
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.monitor_recovery(db, scope, slots)
+            await db.commit()
+            if not await self._scope_remains_autonomous(db, scope.id):
+                continue
+            scope, _slots = await self._reload_scope_context(db, scope.id)
+            await self.dispatch.remind_held_leases(db, scope)
+            await db.commit()
+
+    async def _run_recovery_only(
+        self,
+        db: AsyncSession,
+        scopes: list[TeamGithubScope],
+        *,
+        client: GithubClient,
+    ) -> None:
+        attempt = self.recovery_only_attempt
+        if attempt is None:
+            return
+        scope = next((scope for scope in scopes if scope.id == attempt.scope_id), None)
+        if scope is None or not await self._recovery_only_target_current(db, attempt):
+            return
+        await agent_mail_service.sync_observed_sessions(db, strict=True)
+        await db.commit()
+        for stage in ("continuation", "verification", "recovery"):
+            if not await self._recovery_only_target_current(db, attempt):
+                return
+            scope, slots = await self._reload_scope_context(db, attempt.scope_id)
+            if stage == "continuation":
+                await self.dispatch.monitor_continuation(
+                    db, scope, slots, recovery_only_attempt=attempt
+                )
+            elif stage == "verification":
+                await self.verification.process_scope(
+                    db, scope, client=client, recovery_only_attempt=attempt
+                )
+            else:
+                await self.dispatch.monitor_recovery(
+                    db, scope, slots, recovery_only_attempt=attempt
+                )
+            await db.commit()
+
+    async def _recovery_only_target_current(
+        self,
+        db: AsyncSession,
+        attempt: GithubRecoveryOnlyAttempt,
+        *,
+        require_autonomy: bool = True,
+    ) -> bool:
+        autonomy_requirement = (
+            (AgentTeamPreset.autonomy_enabled.is_(True),)
+            if require_autonomy
+            else ()
+        )
+        target = (
+            await db.execute(
+                select(
+                    GithubWorkspace.id.label("workspace_id"),
+                    GithubWorkspace.lease_token,
+                    GithubWorkItem.owner_slot_id,
+                )
+                .join(GithubWorkItem, GithubWorkspace.leased_item_id == GithubWorkItem.id)
+                .join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id)
+                .join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id)
+                .where(
+                    *attempt.item_filters(),
+                    GithubWorkItem.owner_slot_id.is_not(None),
+                    GithubWorkItem.dispatch_status.in_(
+                        (
+                            "escalated",
+                            "dispatched",
+                            "verifying",
+                            "ready_for_review",
+                            "awaiting_human_review",
+                        )
+                    ),
+                    TeamGithubScope.enabled.is_(True),
+                    TeamGithubScope.continuation_enabled.is_(True),
+                    TeamGithubScope.merge_policy == "human",
+                    *autonomy_requirement,
+                    GithubWorkspace.scope_id == attempt.scope_id,
+                    GithubWorkspace.lease_token.is_not(None),
+                    GithubWorkspace.leased_at.is_not(None),
+                )
+            )
+        ).one_or_none()
+        if target is None:
+            return False
+        revision = (
+            await db.execute(
+                select(
+                    GithubAttemptScopeRevision.expected_workspace_id,
+                    GithubAttemptScopeRevision.expected_lease_token_hash,
+                    GithubAttemptScopeRevision.owner_slot_id,
+                )
+                .where(
+                    GithubAttemptScopeRevision.work_item_id == attempt.work_item_id,
+                    GithubAttemptScopeRevision.dispatch_nonce == attempt.dispatch_nonce,
+                )
+                .order_by(GithubAttemptScopeRevision.revision.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+        return bool(
+            revision is not None
+            and revision.expected_workspace_id == target.workspace_id
+            and revision.owner_slot_id == target.owner_slot_id
+            and github_approval_service.lease_token_matches(
+                target.lease_token, revision.expected_lease_token_hash
+            )
+        )
+
+    async def _scope_remains_autonomous(
+        self,
+        db: AsyncSession,
+        scope_id: int,
+    ) -> bool:
+        return (
+            await db.scalar(
+                select(TeamGithubScope.id)
+                .join(
+                    AgentTeamPreset,
+                    AgentTeamPreset.id == TeamGithubScope.preset_id,
+                )
+                .where(
+                    TeamGithubScope.id == scope_id,
+                    TeamGithubScope.enabled.is_(True),
+                    AgentTeamPreset.autonomy_enabled.is_(True),
+                )
+            )
+        ) is not None
+
+    async def _reload_scope_context(
+        self,
+        db: AsyncSession,
+        scope_id: int,
+    ) -> tuple[TeamGithubScope, list[AgentTeamSlot]]:
+        scope = (
+            await db.execute(
+                select(TeamGithubScope)
+                .where(TeamGithubScope.id == scope_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one()
+        slots = (
+            await db.execute(
+                select(AgentTeamSlot)
+                .where(AgentTeamSlot.preset_id == scope.preset_id)
+                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalars().all()
+        return scope, list(slots)
 
     async def _pending_issues_by_number(
         self,

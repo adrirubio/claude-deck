@@ -61,6 +61,8 @@ export interface MailMessageCreate {
   kind?: MailMessageKind
   sender_member_id?: number | null
   recipient_member_id?: number | null
+  audience_type?: 'repository' | 'team_preset' | null
+  audience_id?: string | null
   thread_root_id?: number | null
   subject?: string | null
   body_markdown: string
@@ -77,6 +79,8 @@ export interface MailMessageResponse {
   sender_actor_kind?: string | null
   sender_name: string
   recipient_member_id?: number | null
+  audience_type?: 'repository' | 'team_preset' | string | null
+  audience_id?: string | null
   subject?: string | null
   body_markdown: string
   payload?: Record<string, unknown> | null
@@ -100,6 +104,9 @@ export interface MailInboxResponse {
 }
 
 export interface AgentMailInstallStatus {
+  pi_cli_available?: boolean
+  pi_mail_ready?: boolean
+  pi_mail_reason?: string | null
   claude_code_hooks: string[]
   claude_code_hooks_missing: string[]
   claude_code_mcp_installed: boolean

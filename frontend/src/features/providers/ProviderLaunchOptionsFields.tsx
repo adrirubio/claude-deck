@@ -66,7 +66,7 @@ export function ProviderLaunchOptionsFields({
     onChange(updated)
   }
 
-  const platform = stringValue(value.platform) || 'anthropic'
+  const platform = stringValue(value.platform) || descriptor?.default_platform || (provider === 'pi-cli' ? 'openrouter' : 'anthropic')
   const isBedrock = platform === 'bedrock'
   const model = stringValue(value.model)
   const bedrockModel = stringValue(value.bedrock_model)
@@ -81,7 +81,7 @@ export function ProviderLaunchOptionsFields({
   const isClaude = provider === 'claude-code'
   const isCopilot = provider === 'copilot-cli'
   const isOpenCode = provider === 'opencode-cli'
-  const usesSimpleModelInput = isCopilot || isOpenCode || ((isCodex || isClaude) && isBedrock)
+  const usesSimpleModelInput = isCopilot || isOpenCode || provider === 'pi-cli' || ((isCodex || isClaude) && isBedrock)
   const simpleModelKey: keyof SlotLaunchOptions = (isCodex || isClaude) && isBedrock ? 'bedrock_model' : 'model'
   const simpleModelValue = (isCodex || isClaude) && isBedrock ? bedrockModel : model
 
@@ -111,6 +111,9 @@ export function ProviderLaunchOptionsFields({
 
   return (
     <div className="grid gap-4">
+      {provider === 'pi-cli' && (
+        <p className="text-sm text-muted-foreground">OpenRouter · default moonshotai/kimi-k3. Agent Mail requires the Deck extension; Pi tools are not sandboxed by Deck.</p>
+      )}
       {descriptor?.bedrock_supported && (
         <div className="grid gap-2">
           <Label>Platform</Label>

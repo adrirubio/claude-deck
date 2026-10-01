@@ -1,7 +1,16 @@
 import httpx
 import pytest
 
-from app.services.github_client import GithubClient, GithubClientResponseError
+from app.services.github_client import (
+    GithubClient,
+    GithubClientResponseError,
+    GithubTreeEntry,
+)
+
+
+COMMIT_SHA = "a" * 40
+TREE_SHA = "b" * 40
+BLOB_SHA = "c" * 40
 
 
 def test_explicit_authorization_does_not_mutate_ambient_token():
@@ -203,3 +212,167 @@ async def test_pull_list_rejects_non_object_members():
                 head="owner:x",
                 token="app-token",
             )
+
+
+@pytest.mark.asyncio
+async def test_commit_and_recursive_tree_use_explicit_token_and_preserve_identity():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if "/git/commits/" in request.url.path:
+            return httpx.Response(
+                200,
+                request=request,
+                json={"sha": COMMIT_SHA, "tree": {"sha": TREE_SHA}},
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "sha": TREE_SHA,
+                "truncated": False,
+                "tree": [
+                    {
+                        "path": "src/a.py",
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": BLOB_SHA,
+                    },
+                    {
+                        "path": "src/b.py",
+                        "mode": "100755",
+                        "type": "blob",
+                        "sha": BLOB_SHA,
+                    },
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        client = GithubClient(http=http, token="ambient-token")
+        commit = await client.get_commit_snapshot(
+            "owner", "repo", COMMIT_SHA, token="app-token"
+        )
+        tree = await client.get_recursive_tree(
+            "owner", "repo", commit.tree_sha, token="app-token"
+        )
+
+    assert commit.sha == COMMIT_SHA
+    assert commit.tree_sha == TREE_SHA
+    assert tree == {
+        "src/a.py": GithubTreeEntry("src/a.py", "100644", "blob", BLOB_SHA),
+        "src/b.py": GithubTreeEntry("src/b.py", "100755", "blob", BLOB_SHA),
+    }
+    assert all(request.headers["Authorization"] == "Bearer app-token" for request in seen)
+    assert seen[1].url.params["recursive"] == "1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body,match",
+    [
+        ({"sha": "short", "tree": {"sha": TREE_SHA}}, "SHA"),
+        ({"sha": COMMIT_SHA}, "tree metadata"),
+        ({"sha": COMMIT_SHA, "tree": {"sha": "short"}}, "SHA"),
+        ({"sha": "d" * 40, "tree": {"sha": TREE_SHA}}, "requested SHA"),
+    ],
+)
+async def test_commit_snapshot_rejects_inconclusive_payloads(body, match):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, json=body)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        with pytest.raises(GithubClientResponseError, match=match):
+            await GithubClient(http=http).get_commit_snapshot(
+                "owner", "repo", COMMIT_SHA, token="app-token"
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body,match",
+    [
+        ({"sha": TREE_SHA, "truncated": True, "tree": []}, "truncated"),
+        ({"sha": TREE_SHA, "truncated": False, "tree": [1]}, "non-object"),
+        (
+            {
+                "sha": TREE_SHA,
+                "truncated": False,
+                "tree": [
+                    {"path": "../x", "mode": "100644", "type": "blob", "sha": BLOB_SHA}
+                ],
+            },
+            "path",
+        ),
+        (
+            {
+                "sha": TREE_SHA,
+                "truncated": False,
+                "tree": [
+                    {"path": "x", "mode": "040000", "type": "blob", "sha": BLOB_SHA}
+                ],
+            },
+            "mode",
+        ),
+        (
+            {
+                "sha": TREE_SHA,
+                "truncated": False,
+                "tree": [
+                    {"path": "x", "mode": "100644", "type": "blob", "sha": BLOB_SHA},
+                    {"path": "x", "mode": "100755", "type": "blob", "sha": BLOB_SHA},
+                ],
+            },
+            "duplicate",
+        ),
+    ],
+)
+async def test_recursive_tree_rejects_unsafe_or_inconclusive_payloads(body, match):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request, json=body)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.github.com"
+    ) as http:
+        with pytest.raises(GithubClientResponseError, match=match):
+            await GithubClient(http=http).get_recursive_tree(
+                "owner", "repo", TREE_SHA, token="app-token"
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["commit", "tree"])
+async def test_git_reads_reject_cross_origin_response_locations(kind):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.github.com":
+            return httpx.Response(
+                302,
+                request=request,
+                headers={"Location": f"https://evil.example{request.url.path}"},
+            )
+        body = (
+            {"sha": COMMIT_SHA, "tree": {"sha": TREE_SHA}}
+            if kind == "commit"
+            else {"sha": TREE_SHA, "truncated": False, "tree": []}
+        )
+        return httpx.Response(200, request=request, json=body)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+        follow_redirects=True,
+    ) as http:
+        with pytest.raises(GithubClientResponseError, match="Unsafe"):
+            if kind == "commit":
+                await GithubClient(http=http).get_commit_snapshot(
+                    "owner", "repo", COMMIT_SHA, token="app-token"
+                )
+            else:
+                await GithubClient(http=http).get_recursive_tree(
+                    "owner", "repo", TREE_SHA, token="app-token"
+                )

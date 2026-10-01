@@ -43,6 +43,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TEAM_SLOT_COLOR_OPTIONS, getTeamSlotColorClasses } from '@/lib/agentTeamColors'
 import { cn } from '@/lib/utils'
+import { ApiHttpError } from '@/lib/api'
+import { autonomousLeaderSlotId } from './leaderSlot'
 import type {
   AgentTeamLaunchPlan,
   AgentTeamLaunchPlanItem,
@@ -54,12 +56,14 @@ import type {
   GithubWorkItem,
   SlotLaunchOptions,
   TeamGithubScope,
+  TeamGithubContinuationPolicyUpdate,
   TeamGithubScopeInput,
   TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import type { AgentProviderId, ProviderLaunchOptionsResponse } from '@/types/providers'
 import {
   addAgentTeamSlot,
+  cancelGithubContinuationRequest,
   createTeamGithubScope,
   createAgentTeamFromBridge,
   createAgentTeamFromMail,
@@ -70,6 +74,7 @@ import {
   duplicateAgentTeamPreset,
   fetchAgentTeamPresets,
   fetchGithubWorkItems,
+  fetchGithubScopeRevisions,
   fetchTeamGithubScopes,
   launchAgentTeam,
   planAgentTeamLaunch,
@@ -77,6 +82,7 @@ import {
   reorderAgentTeamSlots,
   updateAgentTeamPreset,
   updateAgentTeamSlot,
+  updateTeamGithubContinuationPolicy,
   updateTeamGithubScope,
 } from './api'
 import { fetchAgentMailTeam } from '@/features/agent-mail/api'
@@ -84,13 +90,14 @@ import { fetchProviderLaunchOptions } from '@/hooks/useProviders'
 import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
-import { AutonomyPanel } from './AutonomyPanel'
+import { AutonomyPanel, OperatorTokenDialog } from './AutonomyPanel'
+import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 
 type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
 type SlotDialogState = { mode: 'add' | 'edit'; slot?: AgentTeamSlot } | null
 type LaunchOptionsByProvider = Partial<Record<AgentProviderId, ProviderLaunchOptionsResponse>>
 
-const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli']
+const PROVIDER_IDS: AgentProviderId[] = ['codex-cli', 'claude-code', 'copilot-cli', 'opencode-cli', 'pi-cli']
 const DEFAULT_SLOT_COLOR_VALUE = 'default'
 
 const emptySlot: AgentTeamSlotInput = {
@@ -120,6 +127,7 @@ function formatDate(value: string) {
 function actionBadgeClass(action: AgentTeamLaunchPlanItem['action']) {
   if (action === 'spawn') return 'border-emerald-500/70 text-emerald-400'
   if (action === 'reuse') return 'border-sky-500/70 text-sky-400'
+  if (action === 'adopt') return 'border-amber-500/70 text-amber-400'
   if (action === 'blocked') return 'border-destructive/70 text-destructive'
   return 'border-muted-foreground/50 text-muted-foreground'
 }
@@ -442,7 +450,7 @@ function SlotDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => onOpenChange(next ? state : null)}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{state?.mode === 'edit' ? 'Edit Slot' : 'Add Slot'}</DialogTitle>
         </DialogHeader>
@@ -459,10 +467,10 @@ function SlotDialog({
             <Label>Provider</Label>
             <Select
               value={form.provider}
-              onValueChange={(provider) => update({
-                provider,
-                launch_mode: normalizeModeForProvider(provider, form.launch_mode, launchOptionsByProvider),
-              })}
+              onValueChange={(provider) => {
+                update({ provider, launch_mode: normalizeModeForProvider(provider, form.launch_mode, launchOptionsByProvider) })
+                if (provider === 'pi-cli') updateLaunchOptions({ platform: 'openrouter' })
+              }}
             >
               <SelectTrigger>
                 <SelectValue />
@@ -472,6 +480,7 @@ function SlotDialog({
                 <SelectItem value="claude-code">Claude Code</SelectItem>
                 <SelectItem value="copilot-cli">GitHub Copilot CLI</SelectItem>
                 <SelectItem value="opencode-cli">OpenCode CLI</SelectItem>
+                <SelectItem value="pi-cli">Pi (OpenRouter)</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -490,6 +499,7 @@ function SlotDialog({
               value={form.role ?? ''}
               onChange={(event) => update({ role: event.target.value })}
             />
+            <p className="text-xs text-muted-foreground">Descriptive only. For autonomous dispatch, the first enabled slot in the roster is the Leader. Reorder slots to change it.</p>
           </div>
           <div className="grid gap-2">
             <Label>Color</Label>
@@ -635,6 +645,8 @@ function LaunchPlanDialog({
   launching,
   onOpenChange,
   onLaunch,
+  onReviewAdoption,
+  onReviewFreshSpawn,
 }: {
   plan: AgentTeamLaunchPlan | null
   result: AgentTeamLaunchResult | null
@@ -642,6 +654,8 @@ function LaunchPlanDialog({
   launching: boolean
   onOpenChange: (open: boolean) => void
   onLaunch: () => Promise<void>
+  onReviewAdoption: () => Promise<void>
+  onReviewFreshSpawn: () => Promise<void>
 }) {
   const open = Boolean(plan || loading || result)
 
@@ -652,7 +666,7 @@ function LaunchPlanDialog({
           <DialogTitle>Launch Plan</DialogTitle>
           {plan && (
             <DialogDescription>
-              {plan.reuse_count} reuse, {plan.spawn_count} spawn, {plan.skipped_count} skipped, {plan.blocked_count} blocked
+              {plan.reuse_count} reuse, {plan.adopt_count ?? 0} adopt, {plan.spawn_count} spawn, {plan.skipped_count} skipped, {plan.blocked_count} blocked
             </DialogDescription>
           )}
         </DialogHeader>
@@ -676,6 +690,12 @@ function LaunchPlanDialog({
                 </div>
                 {item.reasons.length > 0 && (
                   <p className="mt-3 text-sm text-muted-foreground">{item.reasons.join('; ')}</p>
+                )}
+                {(item.action === 'adopt' || item.block_code === 'unbound_pane_requires_operator_adoption') && (
+                  <p className="mt-2 text-sm text-amber-300">
+                    Unbound pane: {String(item.matching_session?.tmux_target ?? 'unknown')} (PID {String(item.matching_session?.pid ?? 'unknown')}).
+                    Its current prompt and authority were not created by this roster.
+                  </p>
                 )}
                 {item.warnings && item.warnings.length > 0 && (
                   <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-300">
@@ -706,10 +726,20 @@ function LaunchPlanDialog({
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+          {plan?.items.some((item) => item.block_code === 'unbound_pane_requires_operator_adoption') && (
+            <>
+              <Button variant="outline" onClick={onReviewFreshSpawn} disabled={loading || launching}>
+                Review fresh spawn
+              </Button>
+              <Button variant="outline" onClick={onReviewAdoption} disabled={loading || launching}>
+                Review explicit adoption
+              </Button>
+            </>
+          )}
           {plan && (
-            <Button onClick={onLaunch} disabled={launching || !plan.can_launch || plan.spawn_count + plan.reuse_count === 0}>
+            <Button onClick={onLaunch} disabled={launching || !plan.can_launch || plan.spawn_count + plan.reuse_count + (plan.adopt_count ?? 0) === 0}>
               <Rocket className="mr-2 h-4 w-4" />
-              {launching ? 'Launching' : 'Launch'}
+              {launching ? 'Launching' : (plan.adopt_count ?? 0) > 0 ? 'Adopt and launch' : 'Launch'}
             </Button>
           )}
         </DialogFooter>
@@ -730,13 +760,66 @@ export function AgentTeamsPage() {
   const [planLoading, setPlanLoading] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [plannedSlotIds, setPlannedSlotIds] = useState<number[] | null>(null)
+  const [adoptUnboundSessions, setAdoptUnboundSessions] = useState(false)
+  const [reuseExistingSessions, setReuseExistingSessions] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
   const [launchOptionsByProvider, setLaunchOptionsByProvider] = useState<LaunchOptionsByProvider>({})
   const [githubScopes, setGithubScopes] = useState<TeamGithubScope[]>([])
   const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
   const [autonomyLoading, setAutonomyLoading] = useState(false)
   const [autonomyRefreshing, setAutonomyRefreshing] = useState(false)
+  const [autonomyTab, setAutonomyTab] = useState<'roster' | 'autonomy'>('roster')
+  const [autonomyLastRefreshedAt, setAutonomyLastRefreshedAt] = useState<Date | null>(null)
+  const [autonomyLoadError, setAutonomyLoadError] = useState<string | null>(null)
+  const [autonomyDataPresetId, setAutonomyDataPresetId] = useState<number | null>(null)
   const autonomyRequestIdRef = useRef(0)
+  const autonomyDataPresetIdRef = useRef<number | null>(null)
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
+  const [tokenInput, setTokenInput] = useState('')
+  const [tokenError, setTokenError] = useState<string | null>(null)
+  const tokenResolverRef = useRef<((token: string | null) => void) | null>(null)
+  const tokenPromiseRef = useRef<Promise<string | null> | null>(null)
+
+  useEffect(() => () => {
+    tokenResolverRef.current?.(null)
+    tokenResolverRef.current = null
+    tokenPromiseRef.current = null
+  }, [])
+
+  const requestOperatorToken = (error: string | null = null): Promise<string | null> => {
+    const stored = getOperatorToken()
+    if (stored) return Promise.resolve(stored)
+    if (tokenPromiseRef.current) return tokenPromiseRef.current
+    setTokenError(error)
+    setTokenDialogOpen(true)
+    const pending = new Promise<string | null>((resolve) => { tokenResolverRef.current = resolve })
+    tokenPromiseRef.current = pending
+    return pending
+  }
+
+  const settleOperatorToken = (token: string | null) => {
+    tokenResolverRef.current?.(token)
+    tokenResolverRef.current = null
+    tokenPromiseRef.current = null
+    setTokenDialogOpen(false)
+    setTokenInput('')
+    setTokenError(null)
+  }
+
+  const withOperatorToken = async <Result,>(action: (token: string) => Promise<Result>): Promise<Result> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const token = await requestOperatorToken(attempt ? 'The operator token was rejected. Enter a valid token to retry.' : null)
+      if (!token) throw new Error('Operator token is required for this action.')
+      try {
+        return await action(token)
+      } catch (error) {
+        if (!(error instanceof ApiHttpError) || error.status !== 401) throw error
+        clearOperatorToken()
+        if (attempt === 1) throw error
+      }
+    }
+    throw new Error('Operator token was rejected.')
+  }
 
   const selectedPreset = useMemo(
     () => presets.find((preset) => preset.id === selectedPresetId),
@@ -775,11 +858,11 @@ export function AgentTeamsPage() {
     }
   }, [])
 
-  const loadAutonomy = useCallback(async (presetId: number, showLoading = false) => {
+  const loadAutonomy = useCallback(async (presetId: number, showLoading = false, manual = false) => {
     const requestId = autonomyRequestIdRef.current + 1
     autonomyRequestIdRef.current = requestId
     if (showLoading) setAutonomyLoading(true)
-    setAutonomyRefreshing(true)
+    if (manual) setAutonomyRefreshing(true)
     try {
       const [scopeResponse, workItemResponse] = await Promise.all([
         fetchTeamGithubScopes(presetId),
@@ -788,10 +871,23 @@ export function AgentTeamsPage() {
       if (autonomyRequestIdRef.current === requestId) {
         setGithubScopes(scopeResponse.scopes)
         setGithubWorkItems(workItemResponse.items)
+        autonomyDataPresetIdRef.current = presetId
+        setAutonomyDataPresetId(presetId)
+        setAutonomyLastRefreshedAt(new Date())
+        setAutonomyLoadError(null)
       }
     } catch (error) {
       if (autonomyRequestIdRef.current === requestId) {
-        toast.error(error instanceof Error ? error.message : 'Failed to load autonomy state')
+        const message = error instanceof Error ? error.message : 'Failed to load autonomy state'
+        if (autonomyDataPresetIdRef.current !== presetId) {
+          setGithubScopes([])
+          setGithubWorkItems([])
+          setAutonomyLastRefreshedAt(null)
+          autonomyDataPresetIdRef.current = presetId
+          setAutonomyDataPresetId(presetId)
+        }
+        setAutonomyLoadError(message)
+        if (showLoading || manual) toast.error(message)
       }
     } finally {
       if (autonomyRequestIdRef.current === requestId) {
@@ -817,22 +913,25 @@ export function AgentTeamsPage() {
   useEffect(() => {
     if (!selectedPresetId) {
       autonomyRequestIdRef.current += 1
+      autonomyDataPresetIdRef.current = null
       queueMicrotask(() => {
         setGithubScopes([])
         setGithubWorkItems([])
         setAutonomyLoading(false)
         setAutonomyRefreshing(false)
+        setAutonomyLastRefreshedAt(null)
+        setAutonomyLoadError(null)
+        setAutonomyDataPresetId(null)
       })
       return
     }
-    queueMicrotask(() => {
-      void loadAutonomy(selectedPresetId, true)
-    })
+    if (autonomyTab !== 'autonomy') return
+    queueMicrotask(() => { void loadAutonomy(selectedPresetId, true) })
     const interval = window.setInterval(() => {
-      void loadAutonomy(selectedPresetId)
+      if (document.visibilityState === 'visible') void loadAutonomy(selectedPresetId)
     }, 5000)
     return () => window.clearInterval(interval)
-  }, [loadAutonomy, selectedPresetId])
+  }, [autonomyTab, loadAutonomy, selectedPresetId])
 
   const stats = useMemo(() => {
     const slots = presets.reduce((count, preset) => count + preset.slots.length, 0)
@@ -852,10 +951,10 @@ export function AgentTeamsPage() {
     if (!selectedPreset) return
     setSaving(true)
     try {
-      const updated = await updateAgentTeamPreset(selectedPreset.id, {
+      const updated = await withOperatorToken((token) => updateAgentTeamPreset(selectedPreset.id, {
         name,
         description,
-      })
+      }, token))
       replacePreset(updated)
       toast.success('Team saved')
     } catch (error) {
@@ -916,7 +1015,7 @@ export function AgentTeamsPage() {
   const removePreset = async () => {
     if (!selectedPreset) return
     try {
-      await deleteAgentTeamPreset(selectedPreset.id)
+      await withOperatorToken((token) => deleteAgentTeamPreset(selectedPreset.id, token))
       setPresets((current) => current.filter((preset) => preset.id !== selectedPreset.id))
       setSelectedPresetId((current) => {
         const remaining = presets.filter((preset) => preset.id !== current)
@@ -934,24 +1033,24 @@ export function AgentTeamsPage() {
       ...input,
       position: input.position ?? undefined,
     }
-    const saved = slotDialog.mode === 'edit' && slotDialog.slot
-      ? await updateAgentTeamSlot(slotDialog.slot.id, normalizedInput)
-      : await addAgentTeamSlot(selectedPreset.id, normalizedInput)
+    const saved = await withOperatorToken((token) => slotDialog.mode === 'edit' && slotDialog.slot
+      ? updateAgentTeamSlot(slotDialog.slot.id, normalizedInput, token)
+      : addAgentTeamSlot(selectedPreset.id, normalizedInput, token))
     replacePreset(saved)
     toast.success('Slot saved')
   }
 
   const refreshAutonomy = async () => {
     if (!selectedPreset) return
-    await loadAutonomy(selectedPreset.id)
+    await loadAutonomy(selectedPreset.id, false, true)
   }
 
-  const toggleAutonomy = async (enabled: boolean) => {
+  const toggleAutonomy = async (enabled: boolean, operatorToken: string) => {
     if (!selectedPreset) return
     try {
       const updated = await updateAgentTeamPreset(selectedPreset.id, {
         autonomy_enabled: enabled,
-      })
+      }, operatorToken)
       replacePreset(updated)
       toast.success(enabled ? 'Autonomy enabled' : 'Autonomy disabled')
     } catch (error) {
@@ -960,10 +1059,10 @@ export function AgentTeamsPage() {
     }
   }
 
-  const createGithubScope = async (input: TeamGithubScopeInput) => {
+  const createGithubScope = async (input: TeamGithubScopeInput, operatorToken: string) => {
     if (!selectedPreset) return
     try {
-      await createTeamGithubScope(selectedPreset.id, input)
+      await createTeamGithubScope(selectedPreset.id, input, operatorToken)
       await loadAutonomy(selectedPreset.id)
       toast.success('Watched repo added')
     } catch (error) {
@@ -972,10 +1071,10 @@ export function AgentTeamsPage() {
     }
   }
 
-  const updateGithubScope = async (scopeId: number, input: TeamGithubScopeUpdate) => {
+  const updateGithubScope = async (scopeId: number, input: TeamGithubScopeUpdate, operatorToken: string) => {
     if (!selectedPreset) return
     try {
-      await updateTeamGithubScope(scopeId, input)
+      await updateTeamGithubScope(scopeId, input, operatorToken)
       await loadAutonomy(selectedPreset.id)
       toast.success('Watched repo saved')
     } catch (error) {
@@ -984,12 +1083,42 @@ export function AgentTeamsPage() {
     }
   }
 
-  const removeGithubScope = async (scope: TeamGithubScope) => {
+  const updateGithubContinuationPolicy = async (
+    scopeId: number,
+    input: TeamGithubContinuationPolicyUpdate,
+    operatorToken: string
+  ) => {
     if (!selectedPreset) return
-    const confirmed = window.confirm(`Remove watched repo ${scope.repo_owner}/${scope.repo_name}?`)
-    if (!confirmed) return
     try {
-      await deleteTeamGithubScope(scope.id)
+      await updateTeamGithubContinuationPolicy(scopeId, input, operatorToken)
+      await loadAutonomy(selectedPreset.id)
+      toast.success('Attempt recovery policy saved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save recovery policy')
+      throw error
+    }
+  }
+
+  const cancelGithubContinuation = async (
+    item: GithubWorkItem,
+    requestId: number,
+    operatorToken: string
+  ) => {
+    if (!selectedPreset) return
+    try {
+      await cancelGithubContinuationRequest(item.id, requestId, operatorToken)
+      await loadAutonomy(selectedPreset.id)
+      toast.success(`Continuation request #${requestId} cancelled`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to cancel continuation')
+      throw error
+    }
+  }
+
+  const removeGithubScope = async (scope: TeamGithubScope, operatorToken: string) => {
+    if (!selectedPreset) return
+    try {
+      await deleteTeamGithubScope(scope.id, operatorToken)
       await loadAutonomy(selectedPreset.id)
       toast.success('Watched repo removed')
     } catch (error) {
@@ -998,12 +1127,14 @@ export function AgentTeamsPage() {
     }
   }
 
-  const retryWorkItem = async (item: GithubWorkItem) => {
+  const retryWorkItem = async (item: GithubWorkItem, operatorToken: string) => {
     if (!selectedPreset) return
     try {
-      await retryGithubWorkItem(item.id)
+      const updated = await retryGithubWorkItem(item.id, operatorToken)
       await loadAutonomy(selectedPreset.id)
-      toast.success(`Issue #${item.issue_number} reset to pending`)
+      toast.success(updated.dispatch_status === 'pending'
+        ? `Issue #${item.issue_number} reset to pending`
+        : updated.status_note || `Retry requested for issue #${item.issue_number}; awaiting workspace release`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to retry work item')
       throw error
@@ -1012,7 +1143,7 @@ export function AgentTeamsPage() {
 
   const removeSlot = async (slot: AgentTeamSlot) => {
     try {
-      const updated = await deleteAgentTeamSlot(slot.id)
+      const updated = await withOperatorToken((token) => deleteAgentTeamSlot(slot.id, token))
       replacePreset(updated)
       toast.success('Slot deleted')
     } catch (error) {
@@ -1029,10 +1160,11 @@ export function AgentTeamsPage() {
     const [moved] = nextSlots.splice(currentIndex, 1)
     nextSlots.splice(nextIndex, 0, moved)
     try {
-      const updated = await reorderAgentTeamSlots(
+      const updated = await withOperatorToken((token) => reorderAgentTeamSlots(
         selectedPreset.id,
-        nextSlots.map((item) => item.id)
-      )
+        nextSlots.map((item) => item.id),
+        token
+      ))
       replacePreset(updated)
       toast.success('Slot reordered')
     } catch (error) {
@@ -1040,15 +1172,25 @@ export function AgentTeamsPage() {
     }
   }
 
-  const openPlan = async (slotIds: number[] | null = null) => {
+  const openPlan = async (
+    slotIds: number[] | null = null,
+    adoptUnbound: boolean = false,
+    reuseExisting: boolean = true
+  ) => {
     if (!selectedPreset) return
     setPlanLoading(true)
     setPlan(null)
     setLaunchResult(null)
     setPlannedSlotIds(slotIds)
+    setAdoptUnboundSessions(adoptUnbound)
+    setReuseExistingSessions(reuseExisting)
     try {
-      const request: AgentTeamLaunchRequest = slotIds ? { slot_ids: slotIds } : {}
-      setPlan(await planAgentTeamLaunch(selectedPreset.id, request))
+      const request: AgentTeamLaunchRequest = {
+        slot_ids: slotIds,
+        adopt_unbound_sessions: adoptUnbound,
+        reuse_existing: reuseExisting,
+      }
+      setPlan(await withOperatorToken((token) => planAgentTeamLaunch(selectedPreset.id, request, token)))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
     } finally {
@@ -1063,9 +1205,11 @@ export function AgentTeamsPage() {
       const request: AgentTeamLaunchRequest = {
         requested_by: 'deck-ui',
         slot_ids: plannedSlotIds,
+        adopt_unbound_sessions: adoptUnboundSessions,
+        reuse_existing: reuseExistingSessions,
         confirm_plan_hash: plan.plan_hash,
       }
-      const result = await launchAgentTeam(selectedPreset.id, request)
+      const result = await withOperatorToken((token) => launchAgentTeam(selectedPreset.id, request, token))
       setLaunchResult(result)
       await loadPresets()
       toast.success('Launch complete')
@@ -1139,8 +1283,8 @@ export function AgentTeamsPage() {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-        <div className="rounded-lg border">
+      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="min-w-0 rounded-lg border">
           <div className="border-b p-3 text-sm font-medium">Saved Teams</div>
           <div className="max-h-[620px] overflow-y-auto p-2">
             {presets.length === 0 && (
@@ -1173,7 +1317,7 @@ export function AgentTeamsPage() {
           </div>
         </div>
 
-        <div className="rounded-lg border">
+        <div className="min-w-0 rounded-lg border">
           {!selectedPreset ? (
             <div className="p-8 text-sm text-muted-foreground">
               Select or create a team.
@@ -1211,7 +1355,7 @@ export function AgentTeamsPage() {
                 </div>
               </div>
 
-              <Tabs defaultValue="roster" className="border-t pt-5">
+              <Tabs value={autonomyTab} onValueChange={(value) => setAutonomyTab(value as 'roster' | 'autonomy')} className="border-t pt-5">
                 <TabsList>
                   <TabsTrigger value="roster">Roster</TabsTrigger>
                   <TabsTrigger value="autonomy">Autonomy</TabsTrigger>
@@ -1253,12 +1397,14 @@ export function AgentTeamsPage() {
                 )}
                 {selectedPreset.slots.map((slot, index) => {
                   const colorClasses = getTeamSlotColorClasses(slot.ui_color)
+                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.slots)
                   return (
                     <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
                       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold">{slot.display_name}</p>
+                            {isLeader && <Badge variant="outline" title="First enabled slot by roster position; approves plans and takes issues without another owner match.">Leader for autonomous dispatch</Badge>}
                             <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
                               {slot.enabled ? 'Enabled' : 'Disabled'}
                             </Badge>
@@ -1345,17 +1491,23 @@ export function AgentTeamsPage() {
                 </TabsContent>
                 <TabsContent value="autonomy" className="mt-5">
                   <AutonomyPanel
+                    key={selectedPreset.id}
                     preset={selectedPreset}
-                    scopes={githubScopes}
-                    workItems={githubWorkItems}
-                    loading={autonomyLoading}
-                    refreshing={autonomyRefreshing}
+                    scopes={autonomyDataPresetId === selectedPreset.id ? githubScopes : []}
+                    workItems={autonomyDataPresetId === selectedPreset.id ? githubWorkItems : []}
+                    loading={autonomyLoading || autonomyDataPresetId !== selectedPreset.id}
+                    refreshing={autonomyDataPresetId === selectedPreset.id && autonomyRefreshing}
+                    lastRefreshedAt={autonomyDataPresetId === selectedPreset.id ? autonomyLastRefreshedAt : null}
+                    loadError={autonomyDataPresetId === selectedPreset.id ? autonomyLoadError : null}
                     onRefresh={refreshAutonomy}
                     onToggleAutonomy={toggleAutonomy}
                     onCreateScope={createGithubScope}
                     onUpdateScope={updateGithubScope}
+                    onUpdateContinuationPolicy={updateGithubContinuationPolicy}
                     onDeleteScope={removeGithubScope}
                     onRetryWorkItem={retryWorkItem}
+                    onFetchScopeRevisions={fetchGithubScopeRevisions}
+                    onCancelContinuationRequest={cancelGithubContinuation}
                   />
                 </TabsContent>
               </Tabs>
@@ -1372,20 +1524,37 @@ export function AgentTeamsPage() {
         launchOptionsByProvider={launchOptionsByProvider}
       />
       <AgentTeamsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
-      <LaunchPlanDialog
-        plan={plan}
-        result={launchResult}
-        loading={planLoading}
-        launching={launching}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPlan(null)
-            setLaunchResult(null)
-            setPlanLoading(false)
-          }
+      <OperatorTokenDialog
+        open={tokenDialogOpen}
+        value={tokenInput}
+        error={tokenError}
+        onValueChange={setTokenInput}
+        onSubmit={() => {
+          const token = tokenInput.trim()
+          if (!token) return
+          setOperatorToken(token)
+          settleOperatorToken(token)
         }}
-        onLaunch={runLaunch}
+        onCancel={() => settleOperatorToken(null)}
       />
+      {!tokenDialogOpen && (
+        <LaunchPlanDialog
+          plan={plan}
+          result={launchResult}
+          loading={planLoading}
+          launching={launching}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPlan(null)
+              setLaunchResult(null)
+              setPlanLoading(false)
+            }
+          }}
+          onLaunch={runLaunch}
+          onReviewAdoption={() => openPlan(plannedSlotIds, true)}
+          onReviewFreshSpawn={() => openPlan(plannedSlotIds, false, false)}
+        />
+      )}
     </div>
   )
 }

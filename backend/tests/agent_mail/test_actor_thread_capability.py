@@ -319,7 +319,8 @@ async def test_6g_two_tabs_do_not_evict_each_other(client, db):
 
 _COMPOSE_ROUTES = [
     ("message", "external/agent-mail/messages", {}),
-    ("broadcast", "external/agent-mail/broadcasts", {}),
+    ("broadcast", "external/agent-mail/broadcasts",
+     {"audience_type": "repository", "audience_id": "repo-beta"}),
     ("context_request", "external/agent-mail/context-requests",
      {"why_needed": "to route the work", "files_or_symbols": ["app/x.py"]}),
     ("handoff", "external/agent-mail/handoffs",
@@ -337,7 +338,7 @@ async def test_6a_every_compose_kind_stays_actor_authored(client, db):
         resp = await client.post(
             f"/api/v1/{path}",
             json={
-                "recipient_member_id": recipient.id,
+                **({"recipient_member_id": recipient.id} if kind != "broadcast" else {}),
                 "subject": f"operator {kind}",
                 "body_markdown": "composed in the Deck UI",
                 **extra,

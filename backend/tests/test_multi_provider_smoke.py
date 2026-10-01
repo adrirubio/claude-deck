@@ -8,8 +8,8 @@ def test_provider_registry_smoke_exposes_provider_statuses():
     response = providers_api.list_providers()
 
     provider_ids = {provider["id"] for provider in response["providers"]}
-    assert response["count"] == 4
-    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli", "opencode-cli"}
+    assert response["count"] == 5
+    assert provider_ids == {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
 
     claude_status = providers_api.get_provider_status("claude-code")
     codex_status = providers_api.get_provider_status("codex-cli")
@@ -31,7 +31,8 @@ def test_provider_registry_smoke_exposes_provider_statuses():
     assert opencode_status["capabilities"]["plugins"] is True
 
 
-def test_agent_bridge_session_filter_smoke(monkeypatch):
+@pytest.mark.asyncio
+async def test_agent_bridge_session_filter_smoke(monkeypatch):
     from app.api.v1.agent_bridge import router as agent_bridge_api
 
     calls = []
@@ -48,8 +49,8 @@ def test_agent_bridge_session_filter_smoke(monkeypatch):
 
     monkeypatch.setattr(agent_bridge_api, "discover_agent_sessions", fake_discover)
 
-    all_response = agent_bridge_api.list_sessions(provider=None)
-    codex_response = agent_bridge_api.list_sessions(provider="codex-cli")
+    all_response = await agent_bridge_api.list_sessions(provider=None, db=None)
+    codex_response = await agent_bridge_api.list_sessions(provider="codex-cli", db=None)
 
     assert calls == [None, "codex-cli"]
     assert all_response["count"] == 1
@@ -83,7 +84,8 @@ def test_agent_bridge_spawn_smoke_passes_codex_options(monkeypatch, tmp_path):
             approval_policy="on-request",
             search=True,
             no_alt_screen=True,
-        )
+        ),
+        principal=None,
     )
 
     assert response["provider"] == "codex-cli"
@@ -103,7 +105,8 @@ def test_agent_bridge_spawn_unknown_provider_smoke(tmp_path):
             agent_bridge_api.SpawnRequest(
                 provider="unknown-provider",
                 directory=str(tmp_path),
-            )
+            ),
+            principal=None,
         )
 
     assert exc_info.value.status_code == 400

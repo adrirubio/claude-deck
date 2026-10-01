@@ -40,6 +40,29 @@ def resolve_request_pane(
     """Compatibility projection used by Agent Mail registration."""
     return resolve_request_pane_detailed(http_request).pane
 
+
+def require_current_mail_session(session: MailAgentSession) -> None:
+    """Reject ended sessions and role-bearing sessions whose pane is stale."""
+    if session.closed_at is not None:
+        raise HTTPException(status_code=401, detail="session_token_closed")
+    if not settings.mail_capability_tokens_required:
+        return
+    if session.mailbox_status == "offline":
+        raise HTTPException(status_code=401, detail="session_token_stale")
+    if session.team_slot_id is None:
+        return
+    if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+        raise HTTPException(status_code=401, detail="session_token_stale")
+    if (
+        peer_process.pane_is_alive(
+            session.bound_pane_pid,
+            session.bound_pane_proc_start,
+        )
+        is not True
+    ):
+        raise HTTPException(status_code=401, detail="session_token_stale")
+
+
 async def mail_session(
     x_deck_session_token: Optional[str] = Header(default=None),
     db: AsyncSession = Depends(get_db),
@@ -56,6 +79,7 @@ async def mail_session(
     )
     for session in result.scalars().all():
         if hmac.compare_digest(session.capability_token_hash, hashed):
+            require_current_mail_session(session)
             return session
     raise HTTPException(status_code=401, detail="session_token_invalid")
 
@@ -67,6 +91,22 @@ async def require_mail_session(
     if session is None:
         raise HTTPException(status_code=401, detail="session_token_required")
     return session
+
+
+async def close_mail_session(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> MailAgentSession:
+    if not x_deck_session_token:
+        raise HTTPException(status_code=401, detail="session_token_required")
+    hashed = agent_mail_service.hash_capability_token(x_deck_session_token)
+    sessions = (await db.execute(
+        select(MailAgentSession).where(MailAgentSession.capability_token_hash.is_not(None))
+    )).scalars().all()
+    for session in sessions:
+        if hmac.compare_digest(session.capability_token_hash, hashed):
+            return session
+    raise HTTPException(status_code=401, detail="session_token_invalid")
 
 
 def require_session_slot(session: MailAgentSession) -> int:
@@ -122,3 +162,15 @@ async def require_operator(
         x_deck_operator_token.encode("utf-8"), expected.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="operator_token_invalid")
+
+
+async def require_mail_session_or_operator(
+    x_deck_session_token: Optional[str] = Header(default=None),
+    x_deck_operator_token: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[MailAgentSession]:
+    """Authenticate either one agent session or the configured operator."""
+    if x_deck_session_token:
+        return await mail_session(x_deck_session_token, db)
+    await require_operator(x_deck_operator_token)
+    return None

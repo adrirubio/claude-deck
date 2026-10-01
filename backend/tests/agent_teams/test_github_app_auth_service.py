@@ -499,7 +499,9 @@ async def test_concurrent_same_key_mints_once(tmp_path):
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://api.github.com"
     ) as http:
-        service = GithubAppAuthService(http, config=_settings(private_path))
+        service = GithubAppAuthService(
+            http, config=_settings(private_path), now=lambda: now
+        )
         tokens = await asyncio.gather(
             service.mint_repository_token(7, "owner", "repo"),
             service.mint_repository_token(7, "owner", "repo"),

@@ -112,6 +112,7 @@ export function SessionList({
               session={session}
               gridPosition={pos === -1 ? null : pos}
               onClick={() => onToggleTarget(session.tmux_target)}
+              onRefresh={onRefresh}
               onKill={onKillSession}
               instance={instance}
             />

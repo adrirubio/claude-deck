@@ -49,6 +49,10 @@ EXPECTED_ESCALATION_REASONS = frozenset(
         "leader_ack_timeout",
         "owner_idle_timeout",
         "retry_count_exhausted",
+        "continuation_revision_exhausted",
+        "continuation_budget_exhausted",
+        "continuation_invalid_state",
+        "continuation_pr_identity_invalid",
         "dispatch_label_removed",
         "abandoned_by_operator",
         "prepared_owner_unavailable",
@@ -461,6 +465,8 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
     assert sorted(write.path.as_posix() for write in dynamic_dispatch) == [
         "services/github_verification_service.py",
         "services/github_verification_service.py",
+        "services/github_verification_service.py",
+        "services/github_verification_service.py",
     ]
 
     direct_non_null_escalation_writes = [
@@ -473,7 +479,29 @@ def test_whole_tree_writers_stay_inside_declared_namespaces():
     assert direct_non_null_escalation_writes[0].path.as_posix() == (
         "services/github_dispatch_service.py"
     )
-    assert _escalation_call_reasons() == ESCALATION_REASONS
+    conditional_escalation_writes = [
+        write
+        for write in writes
+        if write.field == "escalation_reason"
+        and write.form == "values"
+        and write.value is not None
+    ]
+    assert [
+        (write.path.as_posix(), write.value)
+        for write in conditional_escalation_writes
+    ] == [
+        (
+            "services/github_dispatch_service.py",
+            "approval_rounds_exhausted",
+        ),
+        (
+            "services/github_dispatch_service.py",
+            "continuation_revision_exhausted",
+        ),
+    ]
+    assert _escalation_call_reasons() | {
+        write.value for write in conditional_escalation_writes
+    } == ESCALATION_REASONS
 
     pending_literals = {
         write.value

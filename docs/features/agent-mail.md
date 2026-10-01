@@ -2,6 +2,8 @@
 
 Agent Mail lets local Claude Code, Codex CLI, and GitHub Copilot CLI sessions coordinate as a user-directed team. Claude Deck keeps durable mail participants, groups them by repository, tracks ephemeral sessions under those participants, and gives agents structured mailboxes for context requests, handoffs, broadcasts, and replies.
 
+Broadcasts require an explicit audience: an Agent Team preset, repository, or GitHub work item. Deck stores that audience with the message and creates receipts only for members in it. Direct messages and replies retain their addressed recipients. An all-member maintenance broadcast requires the operator credential and explicit global intent; a missing audience never means “everyone.” Historical messages keep their original receipts.
+
 ## What It Is For
 
 - Ask the agent that knows one repository to explain a local API, component, convention, or failure mode to another agent.
@@ -28,6 +30,8 @@ When a message is delivered to a reachable Claude Code, Codex, or Copilot member
 Claude Deck uses one visible wake path:
 
 - tmux-observed sessions can be nudged through Agent Bridge by sending text and `Enter` to the pane.
+
+Wake participation is controlled per session. Manually registered sessions start opted out, so they are not woken unless an operator explicitly enables participation. The operator-only Agent Mail API requires a reason for each change and accepts only the wake-enabled flag and reason; it cannot change member, team, or slot assignment. Enabling is accepted only when a fresh authenticated MCP session is bound to exactly one matching observed pane. Participation changes appear in the operator-only wake audit, which records the reason and result without storing credentials or message content.
 
 Non-tmux Claude Code, Codex, and Copilot sessions can still receive and send Agent Mail through MCP, but Claude Deck cannot wake their visible terminal session yet. Messages for those sessions remain delivered and unread until the agent calls `deck_check_inbox` or reaches a provider hook boundary. Agents should call `deck_check_inbox` before major work and after finishing a task.
 

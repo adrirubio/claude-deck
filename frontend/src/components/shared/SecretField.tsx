@@ -5,35 +5,41 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
 interface SecretFieldProps {
+  id?: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   required?: boolean;
+  autoComplete?: string;
 }
 
 export function SecretField({
+  id,
   label,
   value,
   onChange,
   placeholder = "Enter secret value",
   required = false,
+  autoComplete,
 }: SecretFieldProps) {
   const [showSecret, setShowSecret] = useState(false);
 
   return (
     <div className="space-y-2">
-      <Label>
+      <Label htmlFor={id}>
         {label}
         {required && <span className="text-destructive ml-1">*</span>}
       </Label>
       <div className="flex gap-2">
         <Input
+          id={id}
           type={showSecret ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           required={required}
+          autoComplete={autoComplete}
           className="flex-1"
         />
         <Button

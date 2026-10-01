@@ -274,6 +274,28 @@ def resolve_peer_pane(
     ).pane
 
 
+def pane_is_alive_strict(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
+    if type(pane_pid) is not int or pane_pid <= 0:
+        return None
+    canonical_pid = int(pane_pid)
+    try:
+        with open(f"{_PROC_ROOT}/self/stat") as handle:
+            handle.read()
+        try:
+            with open(f"{_PROC_ROOT}/{canonical_pid}/stat") as handle:
+                raw = handle.read()
+        except FileNotFoundError:
+            return False
+        fields = raw[raw.rindex(")") + 2:].split()
+        int(fields[1])
+        current_start = fields[19]
+        if not current_start.isdigit():
+            return None
+        return current_start == pane_proc_start
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
     """Is the process at pane_pid still the one that started at pane_proc_start?
 

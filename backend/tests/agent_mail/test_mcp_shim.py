@@ -1,5 +1,6 @@
 """Standalone Agent Mail MCP shim behavior."""
 import json
+import inspect
 from io import StringIO
 from types import SimpleNamespace
 
@@ -368,6 +369,392 @@ def test_http_error_result_preserves_backend_block_code():
     assert result["error"]["block_code"] == "reasoning_effort_unsupported"
 
 
+def test_http_conflict_preserves_detail_code_without_credentials():
+    import mcp_shim.agent_mail_server as shim
+
+    request = shim.httpx.Request(
+        "POST",
+        "http://deck/api/v1/agent-mail/decisions",
+        headers={"X-Deck-Session-Token": "request-secret"},
+    )
+    response = shim.httpx.Response(
+        409,
+        request=request,
+        headers={"X-Debug-Token": "response-secret"},
+        json={"detail": "request_not_pending"},
+    )
+    error = shim.httpx.HTTPStatusError("conflict", request=request, response=response)
+
+    result = shim._http_error_result(error)
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "request_not_pending",
+            "status_code": 409,
+            "message": "request_not_pending",
+        },
+    }
+    assert "request-secret" not in repr(result)
+    assert "response-secret" not in repr(result)
+
+
+def test_http_conflict_preserves_structured_recovery_detail_without_payload():
+    import mcp_shim.agent_mail_server as shim
+
+    request = shim.httpx.Request(
+        "POST",
+        "http://deck/api/v1/agent-teams/github-work-items/23/dispatch-status",
+        json={"lease_token": "lease-secret", "allowed_commands": ["secret-command"]},
+    )
+    response = shim.httpx.Response(
+        409,
+        request=request,
+        json={
+            "detail": {
+                "code": "diagnostic_tree_not_restored",
+                "message": "The diagnostic tree does not match the persisted baseline.",
+            }
+        },
+    )
+    error = shim.httpx.HTTPStatusError("conflict", request=request, response=response)
+
+    result = shim._http_error_result(error)
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "diagnostic_tree_not_restored",
+            "status_code": 409,
+            "message": "The diagnostic tree does not match the persisted baseline.",
+        },
+    }
+    assert "lease-secret" not in repr(result)
+    assert "secret-command" not in repr(result)
+
+
+def test_request_work_item_approval_uses_agent_mail_authority_route(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if path == "/approval-requests":
+            return {
+                "ok": True,
+                "data": {
+                    "id": 41,
+                    "request_message_id": 73,
+                    "status": "pending",
+                    "approval_round": 2,
+                },
+            }
+        if path.startswith("/agent/inbox"):
+            return {"ok": True, "data": {"unread_count": 0, "pending_count": 1}}
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+
+    result = shim.deck_request_work_item_approval(
+        19,
+        "nonce-19",
+        "Change one file.",
+        {"paths": ["src/example.py"]},
+    )
+
+    assert requests[0] == (
+        "POST",
+        "/approval-requests",
+        {
+            "json": {
+                "work_item_id": 19,
+                "dispatch_nonce": "nonce-19",
+                "summary": "Change one file.",
+                "plan_metadata": {"paths": ["src/example.py"]},
+            }
+        },
+    )
+    assert result == {
+        "ok": True,
+        "approval_request_id": 41,
+        "request_message_id": 73,
+        "status": "pending",
+        "approval_round": 2,
+        "unread_count": 0,
+        "pending_count": 1,
+    }
+
+
+def test_approve_work_item_sends_required_request_id(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+
+    def fake_request(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        if path == "/decisions":
+            return {"ok": True, "data": {"id": 81, "decision": "approved"}}
+        if path.startswith("/agent/inbox"):
+            return {"ok": True, "data": {"unread_count": 0, "pending_count": 0}}
+        raise AssertionError((method, path, kwargs))
+
+    monkeypatch.setattr(shim, "_request", fake_request)
+
+    result = shim.deck_approve_work_item(
+        19,
+        "nonce-19",
+        "approved",
+        "Safe to proceed.",
+        approval_request_id=41,
+    )
+
+    assert requests[0] == (
+        "POST",
+        "/decisions",
+        {
+            "json": {
+                "work_item_id": 19,
+                "dispatch_nonce": "nonce-19",
+                "approval_request_id": 41,
+                "decision": "approved",
+                "reason": "Safe to proceed.",
+            }
+        },
+    )
+    assert result["message_id"] == 81
+
+
+def test_continuation_mcp_tools_forward_explicit_authority(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    dispatch_requests = []
+    mail_requests = []
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(shim, "_counts", lambda: {})
+
+    def fake_dispatch(method, path, **kwargs):
+        dispatch_requests.append((method, path, kwargs))
+        if path.endswith("/continuation-requests"):
+            return {
+                "ok": True,
+                "data": {
+                    "approval": {"id": 71, "status": "pending"},
+                    "revision": {"id": 81, "revision": 2},
+                },
+            }
+        if path.endswith("/ack"):
+            return {"ok": True, "data": {"id": 19, "dispatch_status": "dispatched"}}
+        if path.endswith("/scope-revisions"):
+            return {"ok": True, "data": [{"id": 81, "revision": 2}]}
+        raise AssertionError((method, path, kwargs))
+
+    def fake_mail(method, path, **kwargs):
+        mail_requests.append((method, path, kwargs))
+        return {"ok": True, "data": {"id": 91, "decision": "approved"}}
+
+    monkeypatch.setattr(shim, "_dispatch_request", fake_dispatch)
+    monkeypatch.setattr(shim, "_request", fake_mail)
+
+    requested = shim.deck_request_continuation(
+        19,
+        "nonce-19",
+        "implementation",
+        "workspace",
+        "One bounded change",
+        ["src/example.py"],
+        ["edit_production", "push_pr_head", "request_verification"],
+        ["pytest -q"],
+        ["Do not edit CI"],
+        1,
+        {},
+        "lease-secret",
+    )
+    decided = shim.deck_decide_continuation(
+        71,
+        19,
+        "nonce-19",
+        "approved",
+        "Approved",
+    )
+    acknowledged = shim.deck_ack_continuation(
+        19,
+        2,
+        "nonce-19",
+        "lease-secret",
+    )
+    listed = shim.deck_list_scope_revisions(19)
+
+    assert requested["approval"]["id"] == 71
+    assert decided == {"ok": True, "message_id": 91, "decision": "approved"}
+    assert acknowledged["work_item"]["dispatch_status"] == "dispatched"
+    assert listed["revisions"] == [{"id": 81, "revision": 2}]
+    assert dispatch_requests[0] == (
+        "POST",
+        "/github-work-items/19/continuation-requests",
+        {
+            "json": {
+                "dispatch_nonce": "nonce-19",
+                "phase": "implementation",
+                "execution_target": "workspace",
+                "summary": "One bounded change",
+                "allowed_paths": ["src/example.py"],
+                "allowed_actions": [
+                    "edit_production",
+                    "push_pr_head",
+                    "request_verification",
+                ],
+                "allowed_commands": ["pytest -q"],
+                "prohibited_actions": ["Do not edit CI"],
+                "max_failed_heads": 1,
+                "tool_fallbacks": {},
+                "lease_token": "lease-secret",
+            }
+        },
+    )
+    assert mail_requests == [
+        (
+            "POST",
+            "/continuation-decisions",
+            {
+                "json": {
+                    "approval_request_id": 71,
+                    "work_item_id": 19,
+                    "dispatch_nonce": "nonce-19",
+                    "decision": "approved",
+                    "reason": "Approved",
+                }
+            },
+        )
+    ]
+    signature = inspect.signature(shim.deck_decide_continuation)
+    assert list(signature.parameters) == [
+        "approval_request_id",
+        "work_item_id",
+        "dispatch_nonce",
+        "decision",
+        "reason",
+    ]
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for parameter in signature.parameters.values()
+    )
+
+
+def test_continuation_mcp_preserves_backend_conflict_code(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    monkeypatch.setattr(shim, "_guard", lambda: None)
+    monkeypatch.setattr(
+        shim,
+        "_dispatch_request",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "error": {
+                "code": "continuation_head_changed",
+                "status_code": 409,
+                "message": "continuation_head_changed",
+            },
+        },
+    )
+
+    result = shim.deck_ack_continuation(
+        19,
+        2,
+        "nonce-19",
+        "lease-secret",
+    )
+
+    assert result["error"] == {
+        "code": "continuation_head_changed",
+        "status_code": 409,
+        "message": "continuation_head_changed",
+    }
+    assert "lease-secret" not in repr(result)
+
+
+def test_dispatch_status_tool_carries_completion_evidence(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    requests = []
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    monkeypatch.setattr(
+        shim,
+        "_dispatch_request",
+        lambda method, path, **kwargs: requests.append((method, path, kwargs))
+        or {"ok": True},
+    )
+
+    result = shim.deck_report_dispatch_status(
+        19,
+        "continuation_completed",
+        lease_token="lease-secret",
+        revision=2,
+        dispatch_nonce="nonce-19",
+        current_head_sha="a" * 40,
+        summary="Completed the bounded change",
+        evidence={"checks": ["pytest -q"]},
+    )
+
+    assert result == {"ok": True}
+    assert requests[0][2]["json"] == {
+        "work_item_id": 19,
+        "status": "continuation_completed",
+        "pr_number": None,
+        "head_ref": None,
+        "reassign_to_slot_id": None,
+        "note": None,
+        "lease_token": "lease-secret",
+        "revision": 2,
+        "dispatch_nonce": "nonce-19",
+        "current_head_sha": "a" * 40,
+        "summary": "Completed the bounded change",
+        "evidence": {"checks": ["pytest -q"]},
+    }
+
+
+def test_list_work_items_projects_safe_continuation_fields(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    monkeypatch.setattr(
+        shim,
+        "_ensure_registered",
+        lambda: {"ok": True, "data": {"member": {"team_preset_id": 4}}},
+    )
+    monkeypatch.setattr(
+        shim,
+        "_dispatch_request",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "data": {
+                "items": [
+                    {
+                        "id": 19,
+                        "issue_number": 867,
+                        "dispatch_status": "dispatched",
+                        "pr_number": 875,
+                        "attempt_phase": "implementation",
+                        "active_scope_revision": 2,
+                        "diagnostic_retry_count": 1,
+                        "continuation_nudged_at": "2026-08-29T10:00:00",
+                        "continuation_activated_at": "2026-08-29T10:01:00",
+                        "lease_token": "must-not-project",
+                    }
+                ]
+            },
+        },
+    )
+
+    result = shim.deck_list_work_items(status="")
+
+    assert result["items"][0]["active_scope_revision"] == 2
+    assert result["items"][0]["pr_number"] == 875
+    assert "lease_token" not in result["items"][0]
+    assert "must-not-project" not in repr(result)
+
+
 def test_deck_create_team_posts_to_team_api(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
@@ -401,7 +788,7 @@ def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp
 
     def fake_bridge_request(method, path, **kwargs):
         requests.append((method, path, kwargs))
-        if (method, path) == ("GET", "/token"):
+        if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": f"token-{len(requests)}"}}
         assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"].startswith("token-")
         if method == "POST" and path == "/sessions/snazzy%3A0.0/attachments":
@@ -444,7 +831,7 @@ def test_deck_list_bridge_attachments_uses_bridge_api(monkeypatch):
 
     def fake_bridge_request(method, path, **kwargs):
         requests.append((method, path, kwargs))
-        if (method, path) == ("GET", "/token"):
+        if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": "token"}}
         assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"] == "token"
         return {"ok": True, "data": {"attachments": [{"id": 1}]}}
@@ -462,14 +849,27 @@ def test_deck_plan_team_launch_returns_plan_hash(monkeypatch):
 
     def fake_team_request(method, path, **kwargs):
         assert (method, path) == ("POST", "/presets/12/plan-launch")
-        assert kwargs["json"]["reuse_existing"] is False
+        assert kwargs["json"]["reuse_existing"] is True
         return {"ok": True, "data": {"plan_hash": "abc", "items": []}}
 
     monkeypatch.setattr(shim, "_team_request", fake_team_request)
 
-    result = shim.deck_plan_team_launch(12, reuse_existing=False)
+    result = shim.deck_plan_team_launch(12)
 
     assert result == {"ok": True, "plan": {"plan_hash": "abc", "items": []}}
+
+
+def test_agent_team_tools_refuse_launch_overrides_without_http(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("agent launch override reached Deck HTTP")
+
+    monkeypatch.setattr(shim, "_team_request", forbidden)
+    assert shim.deck_plan_team_launch(12, reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
+    assert shim.deck_plan_team_launch(12, include_disabled=True)["error"]["code"] == "operator_launch_override_required"
+    assert shim.deck_launch_team(12, confirm_plan_hash="abc", reuse_existing=False)["error"]["code"] == "operator_launch_override_required"
+    assert shim.deck_launch_team(12, force_without_plan=True)["error"]["code"] == "operator_launch_override_required"
 
 
 def test_deck_launch_team_requires_plan_hash(monkeypatch):

@@ -75,6 +75,10 @@ class GithubWatcherService:
         if (
             existing.dispatch_status in _RECOVERABLE_STATUSES
             and github_updated_at > existing.github_updated_at
+            and await github_dispatch_service.can_auto_retry_from_issue_update(
+                db,
+                existing,
+            )
         ):
             await github_dispatch_service.reset_for_retry(db, existing)
         if existing.dispatch_status == "pending":

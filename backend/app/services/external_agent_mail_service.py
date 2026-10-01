@@ -151,6 +151,10 @@ class ExternalAgentMailService:
         body_markdown: str | None = None,
         payload: dict | None = None,
     ) -> ExternalAgentMailSendResponse:
+        if kind != "broadcast" and (
+            request.audience_type is not None or request.audience_id is not None
+        ):
+            raise ValueError("audience_fields_only_allowed_for_broadcasts")
         self.check_send_rate_limit(actor.id)
         resolved_recipient_id = (
             request.recipient_member_id
@@ -166,6 +170,8 @@ class ExternalAgentMailService:
             subject=subject if subject is not None else request.subject,
             body_markdown=body_markdown if body_markdown is not None else request.body_markdown,
             payload=payload if payload is not None else request.payload,
+            audience_type=request.audience_type if kind == "broadcast" else None,
+            audience_id=request.audience_id if kind == "broadcast" else None,
         )
         message = await agent_mail_service.send_message(
             db,

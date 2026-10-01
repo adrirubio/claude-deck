@@ -23,20 +23,47 @@ export function buildEndpoint(
 
 export interface ApiError {
   message?: string
-  detail?: string | { msg?: string } | Array<{ msg?: string }>
+  detail?: string | { message?: string; block_code?: string; msg?: string } | Array<{ msg?: string }>
+}
+
+const operatorErrorMessages: Record<string, string> = {
+  operator_token_required: 'Enter the Deck operator token to continue.',
+  operator_token_invalid: 'The Deck operator token was rejected. Clear it and enter a valid token.',
+  operator_token_unconfigured: 'The Deck operator token is not configured on the backend.',
+  scope_identity_in_use: 'This repo has active work. Change its identity or base ref only after that work is finished.',
 }
 
 function apiErrorMessage(error: ApiError, fallback = 'An error occurred'): string {
-  if (error.message) return error.message
-  if (typeof error.detail === 'string') return error.detail
+  if (typeof error.detail === 'string') return operatorErrorMessages[error.detail] ?? error.detail
   if (Array.isArray(error.detail)) {
     const messages = error.detail.map((item) => item.msg).filter(Boolean)
     if (messages.length > 0) return messages.join(', ')
   }
-  if (error.detail && typeof error.detail === 'object' && 'msg' in error.detail && error.detail.msg) {
-    return error.detail.msg
+  if (error.detail && !Array.isArray(error.detail) && typeof error.detail === 'object') {
+    if (error.detail.message) return error.detail.message
+    if (error.detail.msg) return error.detail.msg
   }
-  return fallback
+  return error.message || fallback
+}
+
+export class ApiHttpError extends Error {
+  readonly status: number
+  readonly blockCode?: string
+
+  constructor(message: string, status: number, blockCode?: string) {
+    super(message)
+    this.name = 'ApiHttpError'
+    this.status = status
+    this.blockCode = blockCode
+  }
+}
+
+function httpError(response: Response, body: ApiError): ApiHttpError {
+  const detail = body.detail
+  const blockCode = detail && !Array.isArray(detail) && typeof detail === 'object'
+    ? detail.block_code
+    : undefined
+  return new ApiHttpError(apiErrorMessage(body), response.status, blockCode)
 }
 
 export class ApiClient {
@@ -59,7 +86,7 @@ export class ApiClient {
         const error: ApiError = await response.json().catch(() => ({
           message: `HTTP ${response.status}: ${response.statusText}`,
         }))
-        throw new Error(apiErrorMessage(error))
+        throw httpError(response, error)
       }
 
       return response.json()
@@ -118,7 +145,7 @@ export async function apiClient<T>(endpoint: string, options?: RequestInit): Pro
       const error: ApiError = await response.json().catch(() => ({
         message: `HTTP ${response.status}: ${response.statusText}`,
       }))
-      throw new Error(apiErrorMessage(error))
+      throw httpError(response, error)
     }
 
     return response.json()

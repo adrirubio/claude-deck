@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ConfigFile(BaseModel):
@@ -1815,6 +1815,7 @@ class MailSessionResponse(BaseModel):
     provider: str
     source: str
     session_key: str
+    wake_enabled: bool = False
     cwd: Optional[str] = None
     tmux_target: Optional[str] = None
     team_preset_id: Optional[int] = None
@@ -1873,13 +1874,139 @@ class MailMessageCreate(BaseModel):
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
     decision: Optional[Literal["approved", "rejected"]] = None
+    audience_type: Optional[Literal["member", "team_preset", "repository", "work_item", "operator_global"]] = None
+    audience_id: Optional[str] = None
 
 
 class MailDecisionRequest(BaseModel):
     work_item_id: int
     dispatch_nonce: str
+    approval_request_id: int
     decision: Literal["approved", "rejected"]
     reason: str = Field(min_length=1)
+
+
+class MailApprovalRequestCreate(BaseModel):
+    work_item_id: int
+    dispatch_nonce: str
+    summary: str = Field(min_length=1, max_length=12000)
+    plan_metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GithubDiagnosticToolFallback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: Literal["hosted_ci"]
+    if_missing: Literal["install_temporarily"]
+    package: str = Field(min_length=1, max_length=200)
+    revert_required: Literal[True]
+
+
+class GithubContinuationProposalCreate(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    phase: Literal["implementation", "diagnostic"]
+    execution_target: Literal["workspace", "hosted_ci", "workspace_and_hosted_ci"]
+    summary: str = Field(min_length=1, max_length=12000)
+    allowed_paths: List[str]
+    allowed_actions: List[str]
+    allowed_commands: List[str]
+    prohibited_actions: List[str]
+    max_failed_heads: int = Field(ge=1)
+    tool_fallbacks: Dict[str, GithubDiagnosticToolFallback]
+    lease_token: str = Field(min_length=1)
+
+
+class GithubScopeRevisionResponse(BaseModel):
+    id: int
+    work_item_id: int
+    dispatch_nonce: str
+    revision: int
+    owner_slot_id: int
+    owner_member_id: int
+    phase: str
+    execution_target: str
+    summary: str
+    allowed_paths: List[str]
+    allowed_actions: List[str]
+    allowed_commands: List[str]
+    prohibited_actions: List[str]
+    tool_fallbacks: Dict[str, Any]
+    baseline_head_sha: str
+    baseline_tree_sha: str
+    originating_escalation_reason: str
+    expected_workspace_id: int
+    max_failed_heads: int
+    failed_head_count: int
+    last_failed_head_sha: Optional[str] = None
+    status: str
+    recovery_checkpoint_stage: Optional[str] = None
+    approval_request_id: Optional[int] = None
+    delivery_message_id: Optional[int] = None
+    approved_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    acknowledged_at: Optional[datetime] = None
+    last_delivery_attempt_at: Optional[datetime] = None
+    delivery_attempt_count: int
+    last_ack_nudge_at: Optional[datetime] = None
+    result_summary: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
+    submitted_head_sha: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancellation_reason: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+    approval_request: Optional["GithubApprovalRequestResponse"] = None
+
+
+class GithubContinuationRequestResponse(BaseModel):
+    approval: "GithubApprovalRequestResponse"
+    revision: GithubScopeRevisionResponse
+
+
+class MailContinuationDecisionRequest(BaseModel):
+    approval_request_id: int
+    work_item_id: int
+    dispatch_nonce: str = Field(min_length=1)
+    decision: Literal["approved", "rejected"]
+    reason: str = Field(min_length=1)
+
+
+class GithubContinuationAckRequest(BaseModel):
+    dispatch_nonce: str = Field(min_length=1)
+    lease_token: str = Field(min_length=1)
+
+
+class GithubActiveContinuationCancelRequest(BaseModel):
+    cancel: Literal[True]
+    dispatch_nonce: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class GithubRecoveryCheckpointReleaseRequest(BaseModel):
+    release: Literal[True]
+    dispatch_nonce: str = Field(min_length=1)
+    approval_request_id: int = Field(gt=0)
+    stage: Literal["decision", "ack"]
+
+
+class GithubApprovalRequestResponse(BaseModel):
+    id: int
+    work_item_id: int
+    request_kind: str
+    dispatch_nonce: str
+    approval_round: int
+    owner_member_id: int
+    leader_member_id: int
+    request_message_id: Optional[int] = None
+    decision_message_id: Optional[int] = None
+    scope_revision_id: Optional[int] = None
+    status: str
+    reason: Optional[str] = None
+    created_at: datetime
+    decided_at: Optional[datetime] = None
+    superseded_at: Optional[datetime] = None
 
 
 class MailMessageResponse(BaseModel):
@@ -1892,6 +2019,8 @@ class MailMessageResponse(BaseModel):
     sender_actor_kind: Optional[str] = None
     approval_round: Optional[int] = None
     decision: Optional[str] = None
+    audience_type: Optional[Literal["member", "team_preset", "repository", "work_item", "operator_global"]] = None
+    audience_id: Optional[str] = None
     sender_name: str
     recipient_member_id: Optional[int] = None
     subject: Optional[str] = None
@@ -1943,6 +2072,8 @@ class ExternalAgentMailMessageRequest(BaseModel):
     subject: Optional[str] = None
     body_markdown: str
     payload: Optional[Dict[str, Any]] = None
+    audience_type: Optional[Literal["member", "team_preset", "repository", "work_item", "operator_global"]] = None
+    audience_id: Optional[str] = None
 
 
 class ExternalAgentMailContextRequest(BaseModel):
@@ -2008,6 +2139,9 @@ class MailAgentRegisterResponse(BaseModel):
 
 
 class AgentMailInstallStatus(BaseModel):
+    pi_cli_available: bool = False
+    pi_mail_ready: bool = False
+    pi_mail_reason: Optional[str] = None
     claude_code_hooks: List[str]
     claude_code_hooks_missing: List[str]
     claude_code_mcp_installed: bool
@@ -2046,7 +2180,7 @@ class AgentMailSnippets(BaseModel):
 
 # --- Agent Team Presets ---
 
-AgentTeamLaunchAction = Literal["reuse", "spawn", "skip", "blocked"]
+AgentTeamLaunchAction = Literal["reuse", "adopt", "spawn", "skip", "blocked"]
 AgentTeamLaunchStatus = Literal[
     "ready",
     "blocked",
@@ -2073,6 +2207,11 @@ class AgentTeamSlotCreate(BaseModel):
     bootstrap_prompt: Optional[str] = None
     launch_mode: str = "plain"
     launch_options: Dict[str, Any] = Field(default_factory=dict)
+    @model_validator(mode="after")
+    def validate_pi_platform(self):
+        if self.provider == "pi-cli" and "platform" in self.launch_options and self.launch_options["platform"] is None:
+            raise ValueError("launch_options.platform must not be null")
+        return self
     area_labels: Optional[List[str]] = None
     expertise: Optional[str] = None
     enabled: bool = True
@@ -2209,6 +2348,9 @@ class TeamGithubScopeResponse(BaseModel):
     dispatch_label: str
     design_label: str
     merge_policy: str
+    github_auth_mode: str
+    github_auth_configured: bool
+    github_poll_token_configured: bool
     max_approval_rounds: int
     max_concurrent_dispatched: int
     max_verification_retries: int
@@ -2218,6 +2360,12 @@ class TeamGithubScopeResponse(BaseModel):
     build_dir_template: Optional[str] = None
     build_command_hint: Optional[str] = None
     max_build_parallelism: int
+    continuation_enabled: bool
+    max_continuation_revisions: int
+    max_continuation_failed_heads: int
+    max_failed_heads_per_revision: int
+    max_scope_paths: int
+    max_scope_commands: int
     enabled: bool
     last_polled_at: Optional[datetime] = None
     created_at: datetime
@@ -2226,6 +2374,24 @@ class TeamGithubScopeResponse(BaseModel):
 
 class TeamGithubScopeListResponse(BaseModel):
     scopes: List[TeamGithubScopeResponse] = Field(default_factory=list)
+
+
+class TeamGithubContinuationPolicyUpdate(BaseModel):
+    continuation_enabled: bool
+    max_continuation_revisions: int = Field(ge=1)
+    max_continuation_failed_heads: int = Field(ge=1)
+    max_failed_heads_per_revision: int = Field(ge=1)
+    max_scope_paths: int = Field(ge=1)
+    max_scope_commands: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_failed_head_caps(self):
+        if self.max_failed_heads_per_revision > self.max_continuation_failed_heads:
+            raise ValueError(
+                "max_failed_heads_per_revision cannot exceed "
+                "max_continuation_failed_heads"
+            )
+        return self
 
 
 class GithubWorkItemRetryRequest(BaseModel):
@@ -2328,6 +2494,25 @@ class GithubWorkItemResponse(BaseModel):
     escalation_reason: Optional[str] = None
     status_note: Optional[str] = None
     auto_merged_at: Optional[datetime] = None
+    active_scope_revision: int
+    active_scope_summary: Optional[str] = None
+    active_scope_status: Optional[str] = None
+    pending_approval_request_id: Optional[int] = None
+    pending_approval_kind: Optional[str] = None
+    pending_approval_status: Optional[str] = None
+    attempt_phase: str
+    diagnostic_retry_count: int
+    diagnostic_last_verified_sha: Optional[str] = None
+    revision_failed_head_count: Optional[int] = None
+    revision_failed_head_budget: Optional[int] = None
+    revision_approved_at: Optional[datetime] = None
+    revision_delivered_at: Optional[datetime] = None
+    revision_acknowledged_at: Optional[datetime] = None
+    continuation_block_code: Optional[str] = None
+    retry_allowed: bool
+    retry_block_code: Optional[str] = None
+    continuation_nudged_at: Optional[datetime] = None
+    continuation_activated_at: Optional[datetime] = None
     workspace_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -2346,6 +2531,8 @@ class GithubWorkItemContinuationResponse(BaseModel):
     repo_owner: str
     repo_name: str
     dispatch_status: str
+    attempt_phase: str
+    active_scope_revision: int
     approval_round_count: int
     dispatch_nonce: Optional[str] = None
     dispatch_head_ref: Optional[str] = None
@@ -2353,6 +2540,11 @@ class GithubWorkItemContinuationResponse(BaseModel):
     lease_token: Optional[str] = None
     leader_member_id: Optional[int] = None
     status_note: Optional[str] = None
+    active_revision: Optional[GithubScopeRevisionResponse] = None
+    pending_approval: Optional[GithubApprovalRequestResponse] = None
+    pending_revision: Optional[GithubScopeRevisionResponse] = None
+    continuation_block_code: Optional[str] = None
+    continuation_budget: Dict[str, int] = Field(default_factory=dict)
 
 
 class AgentTeamLaunchPlanItem(BaseModel):
@@ -2378,6 +2570,7 @@ class AgentTeamLaunchPlan(BaseModel):
     can_launch: bool
     items: List[AgentTeamLaunchPlanItem] = Field(default_factory=list)
     reuse_count: int = 0
+    adopt_count: int = 0
     spawn_count: int = 0
     skipped_count: int = 0
     blocked_count: int = 0
@@ -2387,6 +2580,7 @@ class AgentTeamLaunchRequest(BaseModel):
     requested_by: Optional[str] = None
     slot_ids: Optional[List[int]] = None
     reuse_existing: bool = True
+    adopt_unbound_sessions: bool = False
     include_disabled: bool = False
     confirm_plan_hash: Optional[str] = None
     skip_plan_confirmation: bool = False
@@ -2403,6 +2597,11 @@ class DispatchStatusReport(BaseModel):
     note: Optional[str] = None
     reporting_slot_id: Optional[int] = None
     lease_token: Optional[str] = None
+    revision: Optional[int] = None
+    dispatch_nonce: Optional[str] = None
+    current_head_sha: Optional[str] = None
+    summary: Optional[str] = None
+    evidence: Optional[Dict[str, Any]] = None
 
 
 class AgentTeamLaunchResultItem(BaseModel):

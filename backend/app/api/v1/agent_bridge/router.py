@@ -2,18 +2,17 @@
 from __future__ import annotations
 
 import logging
-import secrets
-import time
+from datetime import datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.database import AgentTeamPreset, AgentTeamSlot
+from app.models.database import AgentTeamPreset, AgentTeamSlot, MailAgentSession, MailTeamMember
 from app.models.schemas import (
     BridgeAttachmentDeleteResponse,
     BridgeAttachmentListResponse,
@@ -22,19 +21,33 @@ from app.models.schemas import (
     BridgeAttachmentResponse,
 )
 from app.config import settings
+from app.api.v1.deps import require_mail_session_or_operator, require_operator
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
 from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
 from app.services.agent_bridge.spawn import kill_session, spawn_session
+from app.services.bridge_terminal_tokens import (
+    TERMINAL_PROTOCOL_PREFIX,
+    TerminalPurpose,
+    TerminalTokenStore,
+    token_from_protocol_header,
+)
 from app.services.providers import get_provider
-from app.services.providers.base import SpawnCommandOptions
+from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
+from app.services.agent_mail_service import (
+    MCP_HEARTBEAT_TTL_SECONDS,
+    OBSERVED_TTL_SECONDS,
+    MailWakeError,
+    agent_mail_service,
+)
+from app.utils import peer_process
+from app.utils.repo_utils import derive_repo_identity
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_tokens: dict[str, float] = {}
-_TOKEN_TTL = 30
+_terminal_tokens = TerminalTokenStore()
 
 
 class SpawnRequest(BaseModel):
@@ -114,6 +127,152 @@ async def _enrich_team_sessions(
     return enriched
 
 
+async def _project_mail_wake_state(
+    sessions: list[dict[str, Any]],
+    db: AsyncSession,
+) -> list[dict[str, Any]]:
+    now = datetime.utcnow()
+    projected: list[dict[str, Any]] = []
+    for discovered in sessions:
+        pane = dict(discovered)
+        pane.update(
+            mail_member_id=None,
+            mail_member_name=None,
+            mail_repo_id=None,
+            mail_mcp_session_id=None,
+            mail_wake_enabled=None,
+            mail_wake_state="unbound",
+            mail_wake_reason="wake_target_unbound",
+            mail_wake_target=None,
+        )
+        try:
+            pane_pid = int(discovered.get("pid") or 0) or None
+        except (TypeError, ValueError):
+            pane_pid = None
+        if not discovered.get("pane_id") or pane_pid is None:
+            projected.append(pane)
+            continue
+
+        observed_rows = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.source == "observed",
+                    MailAgentSession.pane_id == discovered["pane_id"],
+                    MailAgentSession.provider == discovered.get("provider"),
+                    MailAgentSession.pid == pane_pid,
+                    MailAgentSession.tmux_target == discovered.get("tmux_target"),
+                )
+            )
+        ).scalars().all()
+        if len(observed_rows) != 1:
+            pane["mail_wake_state"] = "ambiguous" if observed_rows else "unbound"
+            pane["mail_wake_reason"] = (
+                "wake_target_ambiguous" if observed_rows else "wake_target_unbound"
+            )
+            projected.append(pane)
+            continue
+
+        observed = observed_rows[0]
+        member = await db.get(MailTeamMember, observed.member_id)
+        if member is None:
+            projected.append(pane)
+            continue
+        pane.update(
+            mail_member_id=member.id,
+            mail_member_name=member.display_name,
+            mail_repo_id=member.repo_id,
+        )
+        if (
+            observed.mailbox_status != "observed"
+            or observed.last_seen_at < now - timedelta(seconds=OBSERVED_TTL_SECONDS)
+        ):
+            pane["mail_wake_state"] = "stale"
+            pane["mail_wake_reason"] = "wake_target_stale"
+            projected.append(pane)
+            continue
+        bound_rows = (
+            await db.execute(
+                select(MailAgentSession).where(
+                    MailAgentSession.member_id == member.id,
+                    MailAgentSession.provider == observed.provider,
+                    MailAgentSession.source == "mcp",
+                    MailAgentSession.capability_token_hash.is_not(None),
+                    MailAgentSession.bound_pane_pid == pane_pid,
+                    MailAgentSession.bound_pane_proc_start.is_not(None),
+                )
+            )
+        ).scalars().all()
+        bindings = [
+            binding
+            for binding in bound_rows
+            if binding.mailbox_status == "connected"
+            and binding.last_seen_at >= now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+            and (
+                (
+                    member.participant_kind == "team_slot"
+                    and binding.team_slot_id is not None
+                    and binding.team_slot_id == observed.team_slot_id
+                    and binding.team_preset_id == observed.team_preset_id
+                )
+                or (
+                    member.participant_kind == "repo"
+                    and binding.team_slot_id is None
+                    and binding.team_preset_id is None
+                    and observed.team_slot_id is None
+                    and observed.team_preset_id is None
+                    and agent_mail_service._same_repo(
+                        binding.cwd, observed.cwd, member.repo_id
+                    )
+                )
+            )
+        ]
+        live_bindings = [
+            binding
+            for binding in bindings
+            if peer_process.pane_is_alive(
+                binding.bound_pane_pid, binding.bound_pane_proc_start
+            ) is True
+        ]
+        if len(live_bindings) != 1:
+            pane["mail_wake_state"] = (
+                "ambiguous" if len(live_bindings) > 1
+                else "stale" if bound_rows
+                else "unbound"
+            )
+            pane["mail_wake_reason"] = (
+                "wake_target_ambiguous" if len(live_bindings) > 1
+                else "wake_target_stale" if bound_rows
+                else "wake_target_unbound"
+            )
+            projected.append(pane)
+            continue
+
+        binding = live_bindings[0]
+        pane["mail_mcp_session_id"] = binding.id
+        pane["mail_wake_enabled"] = bool(binding.wake_enabled)
+        try:
+            target = await agent_mail_service._nudge_session_for_member(
+                db, member.id, now
+            )
+        except MailWakeError as exc:
+            pane["mail_wake_state"] = {
+                "wake_target_ambiguous": "ambiguous",
+                "wake_target_stale": "stale",
+                "wake_opted_out": "opted_out",
+            }.get(exc.code, "unbound")
+            pane["mail_wake_reason"] = exc.code
+        else:
+            if target.id == observed.id and target.pid == pane_pid:
+                pane["mail_wake_state"] = "wakeable"
+                pane["mail_wake_reason"] = None
+                pane["mail_wake_target"] = target.tmux_target
+            else:
+                pane["mail_wake_state"] = "stale"
+                pane["mail_wake_reason"] = "wake_target_stale"
+        projected.append(pane)
+    return projected
+
+
 @router.get("/sessions")
 async def list_sessions(
     provider: str | None = Query(default=None),
@@ -124,6 +283,7 @@ async def list_sessions(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     sessions = await _enrich_team_sessions(sessions, db)
+    sessions = await _project_mail_wake_state(sessions, db)
     return {"sessions": sessions, "count": len(sessions)}
 
 
@@ -136,15 +296,16 @@ def get_session_preview(target: str):
 
 
 @router.get("/token")
-async def get_terminal_token():
-    now = time.time()
-    expired = [token for token, issued_at in _tokens.items() if now - issued_at > _TOKEN_TTL]
-    for token in expired:
-        _tokens.pop(token, None)
-
-    token = secrets.token_urlsafe(32)
-    _tokens[token] = now
-    return {"token": token}
+async def get_terminal_token(
+    response: Response,
+    target: str = Query(min_length=1),
+    purpose: TerminalPurpose = "readonly",
+    x_deck_operator_token: str | None = Header(default=None),
+):
+    if purpose == "interactive":
+        await require_operator(x_deck_operator_token)
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": _terminal_tokens.issue(target, purpose)}
 
 
 def _is_same_origin_host(origin: str, request_host: str) -> bool:
@@ -164,19 +325,15 @@ def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
     return _is_same_origin_host(origin, (websocket.headers.get("host") or "").lower())
 
 
-def _validate_token(token: str) -> bool:
-    issued_at = _tokens.pop(token, None)
-    return issued_at is not None and (time.time() - issued_at) <= _TOKEN_TTL
-
-
 def _require_attachment_access(
     request: Request,
     token: str,
+    target: str,
 ) -> None:
     origin = request.headers.get("origin", "")
     if origin and not _is_same_origin_host(origin, (request.headers.get("host") or "").lower()):
         raise HTTPException(status_code=403, detail="Invalid origin")
-    if not _validate_token(token):
+    if not _terminal_tokens.consume(token, target, "attachment"):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
@@ -184,7 +341,6 @@ def _require_attachment_access(
 async def session_terminal(
     websocket: WebSocket,
     target: str,
-    token: str = "",
     mode: str = "readonly",
 ):
     origin = websocket.headers.get("origin", "")
@@ -192,12 +348,13 @@ async def session_terminal(
         await websocket.close(code=4403, reason="Invalid origin")
         return
 
-    if not _validate_token(token):
+    token = token_from_protocol_header(websocket.headers.get("sec-websocket-protocol", ""))
+    if mode not in ("readonly", "interactive") or not _terminal_tokens.consume(token, target, mode):
         await websocket.close(code=4401, reason="Invalid or expired token")
         return
 
     relay = PtyRelay(target=target, read_only=mode != "interactive")
-    await relay.run(websocket)
+    await relay.run(websocket, subprotocol=f"{TERMINAL_PROTOCOL_PREFIX}{token}")
 
 
 @router.post("/sessions/{target:path}/attachments", response_model=BridgeAttachmentResponse)
@@ -211,7 +368,7 @@ async def upload_session_attachment(
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
     try:
         content = await file.read(settings.bridge_attachment_max_bytes + 1)
         return await agent_bridge_attachment_service.create_attachment(
@@ -234,7 +391,7 @@ async def list_session_attachments(
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
     attachments = await agent_bridge_attachment_service.list_attachments(db, target=target)
     return BridgeAttachmentListResponse(attachments=attachments)
 
@@ -249,9 +406,30 @@ async def paste_session_attachment(
     paste_request: BridgeAttachmentPasteRequest,
     request: Request,
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
+    if principal is not None:
+        matches = (
+            principal.source == "mcp"
+            and principal.tmux_target == target
+            and principal.pane_id is not None
+            and principal.bound_pane_pid is not None
+            and principal.bound_pane_proc_start is not None
+            and principal.pid == principal.bound_pane_pid
+            and peer_process.pane_is_alive(
+                principal.bound_pane_pid, principal.bound_pane_proc_start
+            ) is True
+            and any(
+                pane.get("tmux_target") == target
+                and pane.get("pane_id") == principal.pane_id
+                and str(pane.get("pid")) == str(principal.pid)
+                for pane in discover_agent_sessions()
+            )
+        )
+        if not matches:
+            raise HTTPException(status_code=403, detail="attachment_target_not_owned")
     if paste_request.require_interactive_relay and not is_target_interactive(target):
         raise HTTPException(status_code=409, detail="Terminal relay is read-only or not attached")
     try:
@@ -260,6 +438,7 @@ async def paste_session_attachment(
             target=target,
             attachment_id=attachment_id,
             request=paste_request,
+            send_target=principal.pane_id if principal is not None else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -276,7 +455,7 @@ async def delete_session_attachment(
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
     try:
         return await agent_bridge_attachment_service.delete_attachment(
             db,
@@ -288,7 +467,32 @@ async def delete_session_attachment(
 
 
 @router.post("/sessions")
-def spawn_session_endpoint(request: SpawnRequest):
+def spawn_session_endpoint(
+    request: SpawnRequest,
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
+):
+    if principal is not None:
+        if (
+            not settings.mail_capability_tokens_required
+            or principal.source != "mcp"
+            or principal.mailbox_status != "connected"
+        ):
+            raise HTTPException(status_code=403, detail="authenticated_mcp_session_required")
+        if (
+            request.provider != principal.provider
+            or not principal.cwd
+            or derive_repo_identity(request.directory)["repo_id"]
+            != derive_repo_identity(principal.cwd)["repo_id"]
+            or request.mode != "plain"
+            or request.model_fields_set - {"provider", "directory", "mode"}
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": "Agent sessions may only start a plain session in their own repository without overrides",
+                    "block_code": "operator_spawn_override_required",
+                },
+            )
     try:
         get_provider(request.provider)
         options = SpawnCommandOptions(
@@ -308,7 +512,9 @@ def spawn_session_endpoint(request: SpawnRequest):
             no_alt_screen=request.no_alt_screen,
             dangerously_bypass_approvals_and_sandbox=request.dangerously_bypass_approvals_and_sandbox,
             use_last=request.use_last,
-            platform=request.platform,
+            platform=("openrouter" if request.provider == "pi-cli" and (
+                "platform" not in request.model_fields_set or not request.platform.strip()
+            ) else request.platform),
             aws_region=request.aws_region,
             aws_profile=request.aws_profile,
             bedrock_model=request.bedrock_model,
@@ -322,9 +528,15 @@ def spawn_session_endpoint(request: SpawnRequest):
         )
         return spawn_session(request.provider, options)
     except ValueError as exc:
+        if request.provider == "pi-cli" and isinstance(exc, ProviderLaunchError):
+            raise HTTPException(status_code=400, detail={"message": str(exc), "block_code": exc.block_code}) from exc
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.delete("/sessions/{target}")
-def kill_session_endpoint(target: str, cleanup_worktree: bool = False):
+def kill_session_endpoint(
+    target: str,
+    cleanup_worktree: bool = False,
+    _operator: None = Depends(require_operator),
+):
     return kill_session(session_name=target, cleanup_worktree=cleanup_worktree)

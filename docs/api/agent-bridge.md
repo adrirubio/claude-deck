@@ -32,7 +32,15 @@ GET /api/v1/agent-bridge/sessions?provider={provider_id}
       "team_slot_position": 2,
       "team_slot_role": "planner-reviewer",
       "team_slot_charter": "Review the plan and implementation against release goals.",
-      "team_slot_color": "purple"
+      "team_slot_color": "purple",
+      "mail_member_id": 42,
+      "mail_member_name": "Reviewer",
+      "mail_repo_id": "repo-123",
+      "mail_mcp_session_id": 81,
+      "mail_wake_enabled": true,
+      "mail_wake_state": "wakeable",
+      "mail_wake_reason": null,
+      "mail_wake_target": "repo-1234:0.0"
     }
   ],
   "count": 1
@@ -40,6 +48,8 @@ GET /api/v1/agent-bridge/sessions?provider={provider_id}
 ```
 
 Team fields are present only for sessions launched from Agent Teams. Manual tmux sessions fall back to provider, repo, and tmux metadata with no team slot color.
+
+The `mail_*` values are a redacted, per-pane projection. A member is included only when the discovered pane matches an observed Agent Mail session. `mail_mcp_session_id` is set only for one fresh authenticated MCP session bound to that pane's PID and process start, provider, and member. Wake states are `wakeable`, `opted_out`, `stale`, `ambiguous`, or `unbound`; `mail_wake_reason` gives the corresponding reason code when the pane cannot be woken. `mail_wake_target` is present only when the Agent Mail service confirms that exact pane is currently wakeable. Session listing is read-only: it does not synchronize or update observed sessions. These fields never expose capability tokens or their hashes.
 
 ### Get Preview
 
@@ -52,24 +62,24 @@ Returns a captured pane preview.
 ### Get Terminal Token
 
 ```http
-GET /api/v1/agent-bridge/token
+GET /api/v1/agent-bridge/token?target={target}&purpose=readonly
 ```
 
-Returns a short-lived one-time token for WebSocket terminal access.
+Returns a 30-second, single-use token bound to one exact tmux target and purpose. `purpose=readonly` is available for terminal viewing; `purpose=attachment` is used for attachment routes. `purpose=interactive` requires `X-Deck-Operator-Token` and permits terminal input only for that target. Agent session tokens do not authorize interactive terminal grants. An attachment or read-only token cannot be upgraded by changing the WebSocket query or sending a mode control frame.
 
 ### Attach Terminal
 
 ```http
-WS /api/v1/agent-bridge/sessions/{target}/terminal?token={token}&mode={mode}
+WS /api/v1/agent-bridge/sessions/{target}/terminal?mode={mode}
 ```
 
-`mode` can be `readonly` or `interactive`.
+Send the issued token as the single WebSocket subprotocol `deck-terminal.{token}`, not in the URL. `mode` must match the token's purpose (`readonly` or `interactive`) and the target must match exactly. The browser requests a new, operator-authorized token when switching to interactive mode. Origin validation is an additional browser check, not a substitute for the token; clients without an Origin header still need a valid scoped grant. Do not log WebSocket subprotocol headers.
 
 ### Image Attachments
 
 Use image attachments to upload a screenshot or mockup to the Claude Deck host, then paste a file-path prompt into a live tmux session.
 
-All attachment endpoints require a fresh token from `GET /api/v1/agent-bridge/token` in the `X-Claude-Deck-Terminal-Token` header.
+All attachment endpoints require a fresh token from `GET /api/v1/agent-bridge/token?target={target}&purpose=attachment` in the `X-Claude-Deck-Terminal-Token` header. The paste endpoint also requires an operator token or a current authenticated Agent Mail MCP session bound to that exact live pane. An attachment token alone cannot send input.
 
 ```http
 POST /api/v1/agent-bridge/sessions/{target}/attachments

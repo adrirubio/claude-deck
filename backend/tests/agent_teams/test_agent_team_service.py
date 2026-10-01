@@ -1,10 +1,11 @@
 """Tests for Agent Team preset service behavior."""
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
-from app.models.database import AgentTeamSlot, MailAgentSession, MailTeamMember
+from app.models.database import AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailTeamMember
 from app.models.schemas import (
     AgentTeamCreateFromMailRequest,
     AgentTeamCreateFromBridgeRequest,
@@ -723,7 +724,7 @@ async def test_create_from_agent_bridge_keeps_same_repo_sessions(db, tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_plan_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monkeypatch):
+async def test_plan_launch_flags_unverifiable_same_repo_sessions(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -764,7 +765,10 @@ async def test_plan_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monk
 
     plan = await agent_team_service.plan_launch(db, preset.id)
 
-    assert [item.action for item in plan.items] == ["reuse", "reuse"]
+    assert [item.action for item in plan.items] == ["blocked", "blocked"]
+    assert [item.block_code for item in plan.items] == [
+        "unbound_pane_unverifiable", "unbound_pane_unverifiable"
+    ]
     assert [item.matching_session["tmux_target"] for item in plan.items] == [
         "planner:0.0",
         "implementer:0.0",
@@ -813,11 +817,185 @@ async def test_plan_launch_does_not_reuse_ambiguous_same_repo_sessions(db, tmp_p
 
     plan = await agent_team_service.plan_launch(db, preset.id)
 
-    assert [item.action for item in plan.items] == ["spawn", "spawn"]
+    assert [item.action for item in plan.items] == ["blocked", "blocked"]
+    assert [item.block_code for item in plan.items] == [
+        "unbound_pane_ambiguous", "unbound_pane_ambiguous"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_plan_launch_prefers_existing_same_repo_slot_attachment(db, tmp_path, monkeypatch):
+async def test_partial_plan_does_not_reuse_a_same_repo_sibling_session(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Dispatch team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Generalist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Specialist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "generalist",
+                "tmux_target": "generalist:0.0",
+                "pane_id": "%1",
+                "cwd": str(repo),
+            }
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(slot_ids=[preset.slots[1].id]),
+    )
+
+    assert [item.slot_name for item in plan.items] == ["Specialist"]
+    assert plan.items[0].action == "blocked"
+    assert plan.items[0].block_code == "unbound_pane_ambiguous"
+
+
+@pytest.mark.asyncio
+async def test_partial_plan_refuses_observed_only_slot_attachment(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Dispatch team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Generalist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+                AgentTeamSlotCreate(
+                    display_name="Specialist",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                ),
+            ],
+        ),
+    )
+    generalist_slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    generalist_member = await agent_mail_service.get_or_create_slot_member(db, generalist_slot)
+    db.add(
+        MailAgentSession(
+            member_id=generalist_member.id,
+            source="observed",
+            provider="codex-cli",
+            session_key="tmux:%1",
+            tmux_target="generalist:0.0",
+            pane_id="%1",
+            cwd=str(repo),
+            team_preset_id=preset.id,
+            team_slot_id=generalist_slot.id,
+            mailbox_status="observed",
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "generalist",
+                "tmux_target": "generalist:0.0",
+                "pane_id": "%1",
+                "cwd": str(repo),
+            }
+        ],
+    )
+
+    plan = await agent_team_service.plan_launch(
+        db,
+        preset.id,
+        AgentTeamLaunchRequest(slot_ids=[preset.slots[0].id]),
+    )
+
+    assert plan.items[0].action == "blocked"
+    assert plan.items[0].block_code == "unbound_pane_unverifiable"
+    assert plan.items[0].matching_session["tmux_target"] == "generalist:0.0"
+
+
+@pytest.mark.asyncio
+async def test_plan_does_not_reuse_a_pane_bound_to_another_preset(db, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Target team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Target",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    owner = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Owner team",
+            slots=[
+                AgentTeamSlotCreate(
+                    display_name="Owner",
+                    provider="codex-cli",
+                    repo_path=str(repo),
+                )
+            ],
+        ),
+    )
+    db.add(
+        AgentPaneBinding(
+            pane_pid=4242,
+            pane_proc_start="120913170",
+            slot_id=owner.slots[0].id,
+            preset_id=owner.id,
+            tmux_target="repo:0.0",
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_team_service.discover_agent_sessions",
+        lambda: [
+            {
+                "provider": "codex-cli",
+                "session_name": "repo",
+                "tmux_target": "repo:0.0",
+                "pid": "4242",
+                "cwd": str(repo),
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat",
+        lambda pid: (1, "120913170"),
+    )
+
+    plan = await agent_team_service.plan_launch(db, target.id)
+
+    assert plan.items[0].action == "spawn"
+
+
+@pytest.mark.asyncio
+async def test_plan_launch_does_not_trust_observed_only_slot_attachment(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -893,7 +1071,7 @@ async def test_plan_launch_prefers_existing_same_repo_slot_attachment(db, tmp_pa
 
     plan = await agent_team_service.plan_launch(db, preset.id)
 
-    assert [item.action for item in plan.items] == ["reuse", "reuse"]
+    assert [item.action for item in plan.items] == ["blocked", "blocked"]
     assert [item.matching_session["tmux_target"] for item in plan.items] == [
         "planner:0.0",
         "implementer:0.0",
@@ -901,7 +1079,7 @@ async def test_plan_launch_prefers_existing_same_repo_slot_attachment(db, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monkeypatch):
+async def test_operator_explicitly_adopts_distinct_same_repo_sessions(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -970,14 +1148,21 @@ async def test_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monkeypat
         "app.services.agent_team_service.discover_agent_sessions",
         lambda: discovered_sessions,
     )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat",
+        lambda pid: (1, f"start-{pid}"),
+    )
 
-    plan = await agent_team_service.plan_launch(db, preset.id)
+    plan = await agent_team_service.plan_launch(
+        db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True)
+    )
     assert [item.matching_session["session_key"] for item in plan.items] == ["tmux:%1", "tmux:%2"]
+    assert [item.action for item in plan.items] == ["adopt", "adopt"]
 
     result = await agent_team_service.launch(
         db,
         preset.id,
-        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash, adopt_unbound_sessions=True),
     )
     sessions = (
         await db.execute(
@@ -994,7 +1179,7 @@ async def test_launch_reuses_distinct_same_repo_sessions(db, tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_disabled_same_repo_slot_does_not_consume_reuse_match(db, tmp_path, monkeypatch):
+async def test_disabled_same_repo_slot_does_not_consume_unbound_match(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -1034,7 +1219,7 @@ async def test_disabled_same_repo_slot_does_not_consume_reuse_match(db, tmp_path
         AgentTeamLaunchRequest(include_disabled=True),
     )
 
-    assert [item.action for item in plan.items] == ["skip", "reuse"]
+    assert [item.action for item in plan.items] == ["skip", "blocked"]
     assert plan.items[1].matching_session["tmux_target"] == "repo:0.0"
 
 
@@ -1252,7 +1437,7 @@ async def test_launch_rejects_blocked_plan_without_partial_spawn(db, tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_reuse_tags_only_the_matched_session(db, tmp_path, monkeypatch):
+async def test_adoption_tags_only_the_matched_session(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -1290,25 +1475,31 @@ async def test_reuse_tags_only_the_matched_session(db, tmp_path, monkeypatch):
     selected_session.tmux_target = "repo:0.0"
     await db.commit()
     monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "start-4242")
+    )
+    monkeypatch.setattr(
         "app.services.agent_team_service.discover_agent_sessions",
         lambda: [
             {
                 "provider": "codex-cli",
                 "session_name": "repo",
                 "tmux_target": "repo:0.0",
+                "pid": "4242",
                 "cwd": str(repo),
             }
         ],
     )
 
-    plan = await agent_team_service.plan_launch(db, preset.id)
-    assert plan.items[0].action == "reuse"
+    plan = await agent_team_service.plan_launch(
+        db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True)
+    )
+    assert plan.items[0].action == "adopt"
     assert plan.items[0].matching_session["tmux_target"] == "repo:0.0"
 
     await agent_team_service.launch(
         db,
         preset.id,
-        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash, adopt_unbound_sessions=True),
     )
     await db.refresh(older_session)
     await db.refresh(selected_session)
@@ -1318,7 +1509,7 @@ async def test_reuse_tags_only_the_matched_session(db, tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reuse_does_not_validate_spawn_only_options(db, tmp_path, monkeypatch):
+async def test_adoption_does_not_validate_spawn_only_options(db, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     preset = await agent_team_service.create_preset(
@@ -1342,15 +1533,21 @@ async def test_reuse_does_not_validate_spawn_only_options(db, tmp_path, monkeypa
                 "provider": "codex-cli",
                 "session_name": "repo",
                 "tmux_target": "repo:0.0",
+                "pid": "4242",
                 "cwd": str(repo),
             }
         ],
     )
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "start-4242")
+    )
 
-    plan = await agent_team_service.plan_launch(db, preset.id)
+    plan = await agent_team_service.plan_launch(
+        db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True)
+    )
 
     assert plan.can_launch is True
-    assert plan.items[0].action == "reuse"
+    assert plan.items[0].action == "adopt"
 
 
 @pytest.mark.asyncio
@@ -1877,8 +2074,8 @@ async def test_pane_binding_is_written_before_the_slot_loop_ends(db, tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_launch_writes_a_pane_binding_on_the_reuse_path(db, tmp_path, monkeypatch):
-    """Reuse coerces the discovery pid and updates the existing row."""
+async def test_launch_writes_a_pane_binding_on_the_adoption_path(db, tmp_path, monkeypatch):
+    """Explicit adoption coerces the discovery pid and updates its binding."""
     from sqlalchemy import text
 
     repo = tmp_path / "binding-reuse-repo"
@@ -1913,13 +2110,29 @@ async def test_launch_writes_a_pane_binding_on_the_reuse_path(db, tmp_path, monk
         "app.services.agent_team_service.read_proc_stat", lambda pid: (1, "120913170")
     )
 
-    plan = await agent_team_service.plan_launch(db, preset.id)
-    assert plan.items[0].action == "reuse", plan.items[0].reasons
+    default_plan = await agent_team_service.plan_launch(db, preset.id)
+    assert default_plan.items[0].action == "blocked"
+    assert default_plan.items[0].block_code == "unbound_pane_requires_operator_adoption"
+
+    plan = await agent_team_service.plan_launch(
+        db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True)
+    )
+    assert plan.items[0].action == "adopt", plan.items[0].reasons
+    assert plan.plan_hash != default_plan.plan_hash
+
+    with pytest.raises(PlanConflictError):
+        await agent_team_service.launch(
+            db, preset.id,
+            AgentTeamLaunchRequest(
+                confirm_plan_hash=default_plan.plan_hash,
+                adopt_unbound_sessions=True,
+            ),
+        )
 
     await agent_team_service.launch(
         db,
         preset.id,
-        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash),
+        AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash, adopt_unbound_sessions=True),
     )
     rows = (
         await db.execute(
@@ -1931,13 +2144,104 @@ async def test_launch_writes_a_pane_binding_on_the_reuse_path(db, tmp_path, monk
     assert rows[0][1] == 4242
     assert rows[0][2] == "integer"
 
-    second_plan = await agent_team_service.plan_launch(db, preset.id)
+    second_plan = await agent_team_service.plan_launch(
+        db, preset.id, AgentTeamLaunchRequest(adopt_unbound_sessions=True)
+    )
     await agent_team_service.launch(
         db,
         preset.id,
-        AgentTeamLaunchRequest(confirm_plan_hash=second_plan.plan_hash),
+        AgentTeamLaunchRequest(confirm_plan_hash=second_plan.plan_hash, adopt_unbound_sessions=True),
     )
     second_rows = (
         await db.execute(text("SELECT id, pane_pid FROM agent_pane_bindings"))
     ).all()
     assert second_rows == [(first_id, 4242)]
+
+
+@pytest.mark.asyncio
+async def test_only_live_bound_pane_is_reused_without_operator_adoption(db, tmp_path, monkeypatch):
+    repo = tmp_path / "bound-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Bound team",
+            slots=[AgentTeamSlotCreate(display_name="Leader", provider="codex-cli", repo_path=str(repo))],
+        ),
+    )
+    slot = await db.get(AgentTeamSlot, preset.slots[0].id)
+    member = await agent_mail_service.get_or_create_slot_member(db, slot)
+    db.add_all([
+        MailAgentSession(
+            member_id=member.id, source="mcp", provider="codex-cli",
+            session_key="mcp:leader", tmux_target="leader:0.0", pane_id="%1",
+            pid=4242, cwd=str(repo), team_preset_id=preset.id,
+            team_slot_id=slot.id, mailbox_status="connected",
+            capability_token_hash="test-hash", bound_pane_pid=4242,
+            bound_pane_proc_start="start-4242",
+        ),
+        MailAgentSession(
+            member_id=member.id, source="observed", provider="codex-cli",
+            session_key="tmux:%1", tmux_target="leader:0.0", pane_id="%1",
+            pid=4242, cwd=str(repo), team_preset_id=preset.id,
+            team_slot_id=slot.id, mailbox_status="observed",
+        ),
+        AgentPaneBinding(
+            pane_pid=4242, pane_proc_start="start-4242",
+            slot_id=slot.id, preset_id=preset.id, tmux_target="leader:0.0",
+        ),
+    ])
+    await db.commit()
+    discovered = [{
+        "provider": "codex-cli", "session_name": "leader", "tmux_target": "leader:0.0",
+        "pane_id": "%1", "pid": "4242", "cwd": str(repo),
+    }]
+    monkeypatch.setattr("app.services.agent_team_service.discover_agent_sessions", lambda: discovered)
+    monkeypatch.setattr(agent_mail_service, "_pid_is_running", lambda pid: True)
+    monkeypatch.setattr(
+        "app.services.agent_team_service.read_proc_stat",
+        lambda pid: (1, f"start-{pid}"),
+    )
+
+    plan = await agent_team_service.plan_launch(db, preset.id)
+    assert plan.items[0].action == "reuse"
+    assert plan.adopt_count == 0
+    result = await agent_team_service.launch(
+        db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash)
+    )
+    assert result.items[0].status == "reused"
+
+    duplicate = MailAgentSession(
+        member_id=member.id, source="mcp", provider="codex-cli",
+        session_key="mcp:leader-duplicate", tmux_target="leader:0.0", pane_id="%1",
+        pid=4242, cwd=str(repo), team_preset_id=preset.id,
+        team_slot_id=slot.id, mailbox_status="connected",
+        capability_token_hash="test-hash-2", bound_pane_pid=4242,
+        bound_pane_proc_start="start-4242",
+    )
+    db.add(duplicate)
+    await db.commit()
+    ambiguous = await agent_team_service.plan_launch(db, preset.id)
+    assert ambiguous.items[0].block_code == "unbound_pane_ambiguous"
+    await db.delete(duplicate)
+    await db.commit()
+
+    registered = (
+        await db.execute(select(MailAgentSession).where(MailAgentSession.session_key == "mcp:leader"))
+    ).scalar_one()
+    registered.last_seen_at = datetime.utcnow() - timedelta(seconds=4000)
+    await db.commit()
+    stale = await agent_team_service.plan_launch(db, preset.id)
+    assert stale.items[0].action == "blocked"
+    registered.last_seen_at = datetime.utcnow()
+    await db.commit()
+
+    discovered[0] = {**discovered[0], "pid": "4343"}
+    replaced = await agent_team_service.plan_launch(db, preset.id)
+    assert replaced.items[0].action == "blocked"
+    assert replaced.items[0].block_code == "unbound_pane_requires_operator_adoption"
+    assert replaced.plan_hash != plan.plan_hash
+    with pytest.raises(PlanConflictError):
+        await agent_team_service.launch(
+            db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash)
+        )

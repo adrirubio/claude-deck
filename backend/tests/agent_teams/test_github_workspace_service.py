@@ -5,6 +5,7 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import update
@@ -263,6 +264,86 @@ async def test_release_by_owner_requires_current_owner_and_token(db, tmp_path):
     assert workspace.leased_owner_proc_start is None
     assert workspace.lease_last_owner_contact_at is None
     assert workspace.lease_release_reminded_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("app_auth", [False, True])
+async def test_force_release_clears_lease_when_worktree_directory_is_gone(
+    db, tmp_path, monkeypatch, app_auth
+):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    revoked = []
+    if app_auth:
+        scope.github_auth_mode = "app"
+        scope.github_app_installation_id = 55
+
+        async def revoke(installation_id, owner, repo, **kwargs):
+            revoked.append((installation_id, owner, repo, kwargs["cache_subject"]))
+            return True
+
+        monkeypatch.setattr(
+            "app.services.github_workspace_service.github_app_auth_service."
+            "revoke_cached_repository_token",
+            revoke,
+        )
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(tmp_path / "missing-worktree"),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="acquisition-token",
+        push_token_expires_at=(
+            datetime.utcnow() + timedelta(minutes=30) if app_auth else None
+        ),
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert await GithubWorkspaceService().force_release_acquisition(
+        db,
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        item_id=item.id,
+        expected_leased_at=workspace.leased_at,
+        lease_token=workspace.lease_token,
+    ) is True
+
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
+    assert workspace.lease_token is None
+    assert len(revoked) == int(app_auth)
+
+
+@pytest.mark.asyncio
+async def test_force_release_skips_unavailable_worktree_config(db, tmp_path):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "linked-worktree"
+    subprocess.run(["git", "init", "-b", "master", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=Tester", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "base"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "test-worktree", str(worktree)], check=True, capture_output=True)
+    workspace = GithubWorkspace(
+        scope_id=scope.id,
+        path=str(worktree),
+        kind="worktree",
+        leased_item_id=item.id,
+        leased_at=datetime.utcnow(),
+        lease_token="acquisition-token",
+    )
+    db.add(workspace)
+    await db.commit()
+
+    assert await GithubWorkspaceService().force_release_acquisition(
+        db,
+        workspace_id=workspace.id,
+        scope_id=scope.id,
+        item_id=item.id,
+        expected_leased_at=workspace.leased_at,
+        lease_token=workspace.lease_token,
+    ) is True
+    await db.refresh(workspace)
+    assert workspace.leased_item_id is None
 
 
 @pytest.mark.asyncio
@@ -923,6 +1004,120 @@ def _git(env, *args, cwd=None):
         text=True,
         capture_output=True,
     ).stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pull_state", ["merged", "open"])
+async def test_release_accepts_clean_pushed_pr_head_outside_stale_base(
+    db, tmp_path, monkeypatch, pull_state
+):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
+    repo = tmp_path / "repo"
+    remote = tmp_path / "remote.git"
+    worktree = tmp_path / "worktree"
+    _git(env, "init", "-b", "master", str(repo))
+    _git(env, "config", "user.name", "Tester", cwd=repo)
+    _git(env, "config", "user.email", "tester@example.com", cwd=repo)
+    (repo / "README").write_text("base\n")
+    _git(env, "add", "README", cwd=repo)
+    _git(env, "commit", "-m", "base", cwd=repo)
+    base_sha = _git(env, "rev-parse", "HEAD", cwd=repo).strip()
+    _git(env, "init", "--bare", str(remote))
+    _git(env, "remote", "add", "origin", str(remote), cwd=repo)
+    _git(env, "push", "-u", "origin", "master", cwd=repo)
+    _git(env, "worktree", "add", "-b", "deck/test-attempt", str(worktree), cwd=repo)
+    (worktree / "change.txt").write_text("pushed change\n")
+    _git(env, "add", "change.txt", cwd=worktree)
+    _git(env, "commit", "-m", "change", cwd=worktree)
+    pushed_sha = _git(env, "rev-parse", "HEAD", cwd=worktree).strip()
+    _git(env, "push", "-u", "origin", "deck/test-attempt", cwd=worktree)
+    if pull_state == "merged":
+        _git(env, "merge", "--squash", "deck/test-attempt", cwd=repo)
+        _git(env, "commit", "-m", "squash", cwd=repo)
+        _git(env, "push", "origin", "master", cwd=repo)
+    _git(env, "update-ref", "refs/remotes/origin/master", base_sha, cwd=repo)
+    assert int(_git(env, "rev-list", "--count", "origin/master..HEAD", cwd=worktree)) > 0
+
+    scope, _, item = await _context(db, repo)
+    scope.base_ref = "origin/master"
+    scope.github_auth_mode = "ambient"
+    item.pr_number = 42
+    item.dispatch_head_ref = "deck/test-attempt"
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path=str(worktree), kind="worktree", leased_item_id=item.id
+    )
+    db.add(workspace)
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.github_workspace_service._GIT_ENV",
+        {**env, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": ""},
+    )
+
+    async def get_pull(*_args, **_kwargs):
+        return {
+            "state": "open" if pull_state == "open" else "closed",
+            "merged_at": None if pull_state == "open" else "2026-09-29T08:46:06Z",
+            "head": {
+                "sha": pushed_sha,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": "owner/repo"},
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_client.get_pull", get_pull
+    )
+    service = GithubWorkspaceService()
+    assert await service.release_blocker(scope, workspace, item) is None
+
+    (worktree / "change.txt").write_text("not committed\n")
+    assert "uncommitted" in await service.release_blocker(scope, workspace, item)
+    _git(env, "checkout", "--", "change.txt", cwd=worktree)
+    (worktree / "local.txt").write_text("not pushed\n")
+    _git(env, "add", "local.txt", cwd=worktree)
+    _git(env, "commit", "-m", "local only", cwd=worktree)
+    assert "not the pushed head" in await service.release_blocker(scope, workspace, item)
+
+
+@pytest.mark.asyncio
+async def test_release_refuses_unverifiable_or_unrelated_pr_head(db, tmp_path, monkeypatch):
+    scope, _, item = await _context(db, tmp_path / "repo")
+    item.pr_number = 42
+    item.dispatch_head_ref = "deck/test-attempt"
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path=str(tmp_path / "worktree"), kind="worktree"
+    )
+    runner = FakeGitRunner()
+    runner.statuses[workspace.path] = ""
+    runner.rev_counts[workspace.path] = "2"
+    runner.identities[workspace.path] = ("a" * 40,)
+    service = GithubWorkspaceService(runner=runner)
+
+    async def get_pull(*_args, **_kwargs):
+        raise httpx.ConnectError("unavailable")
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_client.get_pull", get_pull
+    )
+    assert "could not be verified" in await service.release_blocker(scope, workspace, item)
+
+    async def unrelated_pull(*_args, **_kwargs):
+        return {
+            "state": "open",
+            "merged_at": None,
+            "head": {
+                "sha": "a" * 40,
+                "ref": "deck/test-attempt",
+                "repo": {"full_name": "other/repo"},
+            },
+        }
+
+    monkeypatch.setattr(
+        "app.services.github_workspace_service.github_client.get_pull", unrelated_pull
+    )
+    assert "not the pushed head" in await service.release_blocker(scope, workspace, item)
 
 
 @pytest.mark.asyncio

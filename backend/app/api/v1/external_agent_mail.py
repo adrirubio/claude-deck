@@ -116,6 +116,14 @@ async def send_external_agent_mail_broadcast(
     actor: MailExternalActor = Depends(external_actor),
     db: AsyncSession = Depends(get_db),
 ):
+    if request.audience_type == "operator_global":
+        raise HTTPException(status_code=403, detail="operator_global_forbidden")
+    if request.audience_type not in {"team_preset", "repository", "work_item"}:
+        raise HTTPException(status_code=400, detail="broadcast_audience_required")
+    if request.audience_id is None:
+        raise HTTPException(status_code=400, detail="broadcast_audience_id_required")
+    if request.recipient_member_id is not None:
+        raise HTTPException(status_code=400, detail="broadcast_recipient_not_allowed")
     try:
         return await external_agent_mail_service.send_broadcast(db, actor, request)
     except ExternalAgentMailRateLimitError as exc:

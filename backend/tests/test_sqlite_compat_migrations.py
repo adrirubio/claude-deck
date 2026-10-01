@@ -1,15 +1,127 @@
 """SQLite compatibility migration regressions."""
 
+import hashlib
+import json
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+import app.models.database  # noqa: F401
 from app.database import (
+    Base,
     _run_sqlite_compat_migrations,
     _sqlite_agent_team_slots_has_unique_preset_repo_index,
     _sqlite_columns,
     _sqlite_rebuild_agent_team_slots,
 )
+
+
+@pytest.mark.asyncio
+async def test_compat_migrations_repair_misdefined_named_indexes():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("DROP INDEX ix_mail_messages_delivery_key"))
+            await conn.execute(
+                text(
+                    "CREATE INDEX ix_mail_messages_delivery_key "
+                    "ON mail_messages (id)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "DROP INDEX uix_github_approval_requests_pending_work_item"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE INDEX uix_github_approval_requests_pending_work_item "
+                    "ON github_approval_requests (status)"
+                )
+            )
+            await conn.commit()
+
+            await _run_sqlite_compat_migrations(conn)
+
+            mail_index = next(
+                row
+                for row in (
+                    await conn.execute(text("PRAGMA index_list(mail_messages)"))
+                ).all()
+                if row[1] == "ix_mail_messages_delivery_key"
+            )
+            approval_index = next(
+                row
+                for row in (
+                    await conn.execute(
+                        text("PRAGMA index_list(github_approval_requests)")
+                    )
+                ).all()
+                if row[1] == "uix_github_approval_requests_pending_work_item"
+            )
+            assert (mail_index[2], mail_index[4]) == (1, 1)
+            assert (approval_index[2], approval_index[4]) == (1, 1)
+            assert [
+                row[2]
+                for row in (
+                    await conn.execute(
+                        text("PRAGMA index_info(ix_mail_messages_delivery_key)")
+                    )
+                ).all()
+            ] == ["delivery_key"]
+            assert [
+                row[2]
+                for row in (
+                    await conn.execute(
+                        text(
+                            "PRAGMA index_info("
+                            "uix_github_approval_requests_pending_work_item)"
+                        )
+                    )
+                ).all()
+            ] == ["work_item_id"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_migration_refuses_index_repair_over_duplicate_data():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("DROP INDEX ix_mail_messages_delivery_key"))
+            await conn.execute(
+                text(
+                    "CREATE INDEX ix_mail_messages_delivery_key "
+                    "ON mail_messages (delivery_key)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_messages "
+                    "(kind, body_markdown, delivery_key, created_at) "
+                    "VALUES ('message', 'one', 'duplicate', CURRENT_TIMESTAMP), "
+                    "('message', 'two', 'duplicate', CURRENT_TIMESTAMP)"
+                )
+            )
+            await conn.commit()
+
+            with pytest.raises(RuntimeError, match="duplicate constrained rows"):
+                await _run_sqlite_compat_migrations(conn)
+
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT COUNT(*) FROM mail_messages "
+                        "WHERE delivery_key = 'duplicate'"
+                    )
+                )
+            ).scalar_one() == 2
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -39,6 +151,50 @@ async def test_compat_migrations_add_capability_columns_idempotently():
                 await _run_sqlite_compat_migrations(conn)
                 columns = await _sqlite_columns(conn, "mail_agent_sessions")
                 assert expected <= columns
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_migration_backfills_wake_participation_once_without_changing_ids():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text(
+                "CREATE TABLE mail_agent_sessions ("
+                "id INTEGER NOT NULL PRIMARY KEY, member_id INTEGER NOT NULL, "
+                "provider VARCHAR NOT NULL, source VARCHAR NOT NULL, "
+                "session_key VARCHAR NOT NULL, team_preset_id INTEGER, "
+                "team_slot_id INTEGER, mailbox_status VARCHAR NOT NULL, "
+                "last_seen_at DATETIME NOT NULL, created_at DATETIME NOT NULL)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO mail_agent_sessions "
+                "(id, member_id, provider, source, session_key, team_preset_id, "
+                "team_slot_id, mailbox_status, last_seen_at, created_at) VALUES "
+                "(11, 1, 'codex-cli', 'mcp', 'mcp:slot', 2, 3, 'connected', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(12, 1, 'codex-cli', 'mcp', 'mcp:repo', NULL, NULL, 'connected', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(13, 1, 'codex-cli', 'hook', 'hook:slot', 2, 3, 'connected', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(14, 1, 'codex-cli', 'observed', 'tmux:%1', 2, 3, 'observed', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.commit()
+
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+
+            rows = (await conn.execute(text(
+                "SELECT id, session_key, wake_enabled FROM mail_agent_sessions ORDER BY id"
+            ))).all()
+            assert [tuple(row) for row in rows] == [
+                (11, "mcp:slot", 1),
+                (12, "mcp:repo", 0),
+                (13, "hook:slot", 0),
+                (14, "tmux:%1", 0),
+            ]
     finally:
         await engine.dispose()
 
@@ -75,13 +231,445 @@ async def test_compat_migrations_add_pr1_approval_columns_idempotently():
                 "dispatch_head_ref",
                 "dispatch_base_ref",
             }
-            message_columns = {"approval_round", "decision"}
+            message_columns = {"approval_round", "decision", "delivery_key"}
             for _ in range(2):
                 await _run_sqlite_compat_migrations(conn)
                 assert work_item_columns <= await _sqlite_columns(
                     conn, "github_work_items"
                 )
                 assert message_columns <= await _sqlite_columns(conn, "mail_messages")
+            tables = {
+                row[0]
+                for row in (
+                    await conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type = 'table'"
+                        )
+                    )
+                ).all()
+            }
+            assert {
+                "github_approval_requests",
+                "github_attempt_scope_revisions",
+            } <= tables
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_migration_adds_mail_audience_columns_without_changing_history():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "CREATE TABLE mail_messages ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "kind VARCHAR NOT NULL, body_markdown VARCHAR NOT NULL, "
+                    "created_at DATETIME NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE mail_receipts ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "message_id INTEGER NOT NULL, member_id INTEGER NOT NULL, "
+                    "read_at DATETIME, acked_at DATETIME)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_messages "
+                    "(id, kind, body_markdown, created_at) "
+                    "VALUES (7, 'message', 'historical body', '2024-01-02 03:04:05')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_receipts "
+                    "(id, message_id, member_id, read_at, acked_at) "
+                    "VALUES (11, 7, 13, '2024-02-03 04:05:06', NULL)"
+                )
+            )
+            await conn.commit()
+
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+
+            columns = await _sqlite_columns(conn, "mail_messages")
+            assert {"audience_type", "audience_id"} <= columns
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT id, kind, body_markdown, audience_type, audience_id "
+                        "FROM mail_messages WHERE id = 7"
+                    )
+                )
+            ).one() == (7, "message", "historical body", None, None)
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT id, message_id, member_id, read_at, acked_at "
+                        "FROM mail_receipts WHERE id = 11"
+                    )
+                )
+            ).one() == (11, 7, 13, "2024-02-03 04:05:06", None)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_migrations_add_pr2_continuation_columns_idempotently():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "CREATE TABLE team_github_scopes ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "repo_owner VARCHAR NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE github_work_items ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "pr_number INTEGER, retry_count INTEGER NOT NULL, "
+                    "dispatch_nonce VARCHAR, status_note VARCHAR)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE github_attempt_scope_revisions ("
+                    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+                    "work_item_id INTEGER NOT NULL)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO team_github_scopes (id, repo_owner) "
+                    "VALUES (1, 'owner')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO github_work_items "
+                    "(id, pr_number, retry_count, dispatch_nonce, status_note) "
+                    "VALUES (1, 42, 7, '0123456789abcdef', 'preserve me')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO github_attempt_scope_revisions "
+                    "(id, work_item_id) VALUES (1, 1)"
+                )
+            )
+            await conn.commit()
+
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+
+            scope = (
+                await conn.execute(
+                    text(
+                        "SELECT continuation_enabled, max_continuation_revisions, "
+                        "max_continuation_failed_heads, max_failed_heads_per_revision, "
+                        "max_scope_paths, max_scope_commands "
+                        "FROM team_github_scopes WHERE id = 1"
+                    )
+                )
+            ).one()
+            item = (
+                await conn.execute(
+                    text(
+                        "SELECT active_scope_revision, attempt_phase, "
+                        "diagnostic_retry_count, diagnostic_last_verified_sha, "
+                        "continuation_nudged_at, continuation_activated_at, "
+                        "pr_number, retry_count, dispatch_nonce, status_note "
+                        "FROM github_work_items WHERE id = 1"
+                    )
+                )
+            ).one()
+
+            assert tuple(scope) == (0, 6, 8, 2, 32, 16)
+            assert tuple(item) == (
+                0,
+                "implementation",
+                0,
+                None,
+                None,
+                None,
+                42,
+                7,
+                "0123456789abcdef",
+                "preserve me",
+            )
+            assert "submitted_head_sha" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert "submitted_at" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert "cancelled_at" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert "cancellation_reason" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert "recovery_checkpoint_stage" in await _sqlite_columns(
+                conn, "github_attempt_scope_revisions"
+            )
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT recovery_checkpoint_stage "
+                        "FROM github_attempt_scope_revisions WHERE id = 1"
+                    )
+                )
+            ).scalar_one() is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pr1_approval_reconciliation_is_idempotent_and_chooses_no_ambiguous_root():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            statements = [
+                """
+                CREATE TABLE agent_team_presets (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR NOT NULL,
+                    autonomy_enabled BOOLEAN DEFAULT 0 NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE agent_team_slots (
+                    id INTEGER PRIMARY KEY,
+                    preset_id INTEGER NOT NULL,
+                    position INTEGER NOT NULL,
+                    display_name VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    repo_id VARCHAR NOT NULL,
+                    repo_path VARCHAR NOT NULL,
+                    repo_name VARCHAR NOT NULL,
+                    launch_mode VARCHAR DEFAULT 'plain' NOT NULL,
+                    enabled BOOLEAN DEFAULT 1 NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE team_github_scopes (
+                    id INTEGER PRIMARY KEY,
+                    preset_id INTEGER NOT NULL,
+                    repo_owner VARCHAR NOT NULL,
+                    repo_name VARCHAR NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE github_work_items (
+                    id INTEGER PRIMARY KEY,
+                    scope_id INTEGER NOT NULL,
+                    owner_slot_id INTEGER,
+                    dispatch_nonce VARCHAR,
+                    approval_round_count INTEGER DEFAULT 0 NOT NULL,
+                    pr_number INTEGER,
+                    retry_requested_at DATETIME,
+                    status_note VARCHAR,
+                    issue_title VARCHAR,
+                    github_updated_at DATETIME
+                )
+                """,
+                """
+                CREATE TABLE mail_team_members (
+                    id INTEGER PRIMARY KEY,
+                    identity_key VARCHAR,
+                    repo_id VARCHAR NOT NULL,
+                    repo_path VARCHAR NOT NULL,
+                    repo_name VARCHAR NOT NULL,
+                    display_name VARCHAR NOT NULL,
+                    participant_kind VARCHAR DEFAULT 'repo',
+                    team_preset_id INTEGER,
+                    team_slot_id INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE mail_messages (
+                    id INTEGER PRIMARY KEY,
+                    thread_root_id INTEGER,
+                    kind VARCHAR NOT NULL,
+                    sender_member_id INTEGER,
+                    recipient_member_id INTEGER,
+                    payload JSON,
+                    request_status VARCHAR,
+                    body_markdown VARCHAR NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """,
+            ]
+            for statement in statements:
+                await conn.execute(text(statement))
+            await conn.execute(
+                text("INSERT INTO agent_team_presets (id, name) VALUES (1, 'Tizonia')")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO agent_team_slots "
+                    "(id, preset_id, position, display_name, provider, repo_id, "
+                    "repo_path, repo_name) VALUES "
+                    "(1, 1, 0, 'Leader', 'codex-cli', 'repo', '/tmp/repo', 'repo'), "
+                    "(2, 1, 1, 'Owner', 'codex-cli', 'repo', '/tmp/repo', 'repo')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO team_github_scopes "
+                    "(id, preset_id, repo_owner, repo_name) VALUES (1, 1, 'o', 'r')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO github_work_items "
+                    "(id, scope_id, owner_slot_id, dispatch_nonce, approval_round_count, "
+                    "pr_number, retry_requested_at, issue_title, github_updated_at) VALUES "
+                    "(1, 1, 2, 'nonce-1', 1, 101, '2026-08-01', 'one', '2026-08-01'), "
+                    "(2, 1, 2, 'nonce-2', 1, NULL, '2026-08-02', 'two', '2026-08-02'), "
+                    "(3, 1, 2, 'nonce-3', 1, NULL, NULL, 'three', '2026-08-03')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_team_members "
+                    "(id, identity_key, repo_id, repo_path, repo_name, display_name, "
+                    "team_preset_id, team_slot_id, updated_at) VALUES "
+                    "(1, 'slot:old-leader', 'repo', '/tmp/repo', 'repo', "
+                    "'Old Leader', 1, 1, '2026-01-01'), "
+                    "(2, 'slot:old-owner', 'repo', '/tmp/repo', 'repo', "
+                    "'Old Owner', 1, 2, '2026-01-01'), "
+                    "(3, 'slot:leader', 'repo', '/tmp/repo', 'repo', "
+                    "'Leader', 1, 1, '2026-08-01'), "
+                    "(4, 'slot:owner', 'repo', '/tmp/repo', 'repo', "
+                    "'Owner', 1, 2, '2026-08-01')"
+                )
+            )
+            payload_one = (
+                '{"work_item_id":1,"dispatch_nonce":"nonce-1",'
+                '"approval_round":1,"summary":"one"}'
+            )
+            payload_two = (
+                '{"work_item_id":2,"dispatch_nonce":"nonce-2",'
+                '"approval_round":1,"summary":"two"}'
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO mail_messages "
+                    "(id, thread_root_id, kind, sender_member_id, recipient_member_id, payload, "
+                    "request_status, body_markdown) VALUES "
+                    "(9, NULL, 'context_request', 2, 1, :payload_one, 'pending', 'old'), "
+                    "(10, NULL, 'context_request', 4, 3, :payload_one, 'pending', 'one'), "
+                    "(11, 10, 'context_request', 4, 3, :payload_one, 'pending', 'child'), "
+                    "(20, NULL, 'context_request', 4, 3, :payload_two, 'pending', 'two-a'), "
+                    "(21, NULL, 'context_request', 4, 3, :payload_two, 'pending', 'two-b')"
+                ),
+                {"payload_one": payload_one, "payload_two": payload_two},
+            )
+            await conn.commit()
+
+            snapshots = []
+            for migration_run in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                if migration_run == 0:
+                    await conn.execute(
+                        text(
+                            "INSERT INTO mail_messages "
+                            "(id, thread_root_id, kind, sender_member_id, "
+                            "recipient_member_id, payload, request_status, body_markdown) "
+                            "VALUES (30, NULL, 'context_request', 4, 3, :payload, "
+                            "'pending', 'post-upgrade generic question')"
+                        ),
+                        {
+                            "payload": (
+                                '{"work_item_id":3,"dispatch_nonce":"nonce-3",'
+                                '"approval_round":1,"summary":"not approval"}'
+                            )
+                        },
+                    )
+                    await conn.commit()
+                approvals = (
+                    await conn.execute(
+                        text(
+                            "SELECT work_item_id, owner_member_id, leader_member_id, "
+                            "request_message_id, request_fingerprint, status "
+                            "FROM github_approval_requests ORDER BY id"
+                        )
+                    )
+                ).all()
+                messages = (
+                    await conn.execute(
+                        text(
+                            "SELECT id, request_status FROM mail_messages "
+                            "WHERE id IN (9, 10, 11, 20, 21) ORDER BY id"
+                        )
+                    )
+                ).all()
+                items = (
+                    await conn.execute(
+                        text(
+                            "SELECT id, retry_requested_at, status_note, issue_title, "
+                            "github_updated_at FROM github_work_items ORDER BY id"
+                        )
+                    )
+                ).all()
+                snapshots.append((approvals, messages, items))
+
+            assert snapshots[0] == snapshots[1]
+            approvals, messages, items = snapshots[0]
+            expected_fingerprint = hashlib.sha256(
+                json.dumps(
+                    {"plan_metadata": {}, "summary": "one"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
+            assert approvals == [(1, 4, 3, 10, expected_fingerprint, "pending")]
+            assert messages == [
+                (9, "pending"),
+                (10, "pending"),
+                (11, "pending"),
+                (20, "superseded"),
+                (21, "superseded"),
+            ]
+            assert items[0][1:] == (None, None, "one", "2026-08-01")
+            assert items[1][1] == "2026-08-02"
+            assert "submit one fresh approval request" in items[1][2]
+            assert items[2][1:] == (None, None, "three", "2026-08-03")
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT request_status FROM mail_messages WHERE id = 30"
+                    )
+                )
+            ).scalar_one() == "pending"
+
+            indexes = {
+                row[0]
+                for row in (
+                    await conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type = 'index'"
+                        )
+                    )
+                ).all()
+            }
+            assert "ix_mail_messages_delivery_key" in indexes
+            assert "uix_github_approval_requests_pending_work_item" in indexes
     finally:
         await engine.dispose()
 

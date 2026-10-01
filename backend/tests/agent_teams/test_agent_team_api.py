@@ -5,22 +5,54 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 
 from app.database import get_db
+from app.api.v1.agent_teams import _scope_auth_configured
+from app.config import settings
 from app.main import app
 from app.models.database import AgentTeamPreset, GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 
 
+@pytest.mark.parametrize(
+    ("mode", "token", "app_id", "key_path", "bot_login", "expected"),
+    [
+        ("unknown", "", "", "", "", False),
+        ("unknown", "token", "", "", "", True),
+        ("unknown", "token", "123", "", "", False),
+        ("unknown", "token", "", "", "bot", True),
+        ("unknown", "", "123", "/tmp/key.pem", "bot", True),
+        ("ambient", "", "123", "/tmp/key.pem", "bot", False),
+        ("ambient", "token", "", "", "", True),
+        ("app", "token", "", "", "", False),
+        ("app", "", "123", "/tmp/key.pem", "bot", True),
+    ],
+)
+def test_scope_auth_configuration_is_truthful_for_selected_mode(
+    monkeypatch, mode, token, app_id, key_path, bot_login, expected
+):
+    monkeypatch.setattr(settings, "github_token", token)
+    monkeypatch.setattr(settings, "github_app_id", app_id)
+    monkeypatch.setattr(settings, "github_app_private_key_path", key_path)
+    monkeypatch.setattr(settings, "github_app_bot_login", bot_login)
+    assert _scope_auth_configured(SimpleNamespace(github_auth_mode=mode)) is expected
+
+
 @pytest_asyncio.fixture
-async def client(db):
+async def client(db, monkeypatch):
+    monkeypatch.setattr(settings, "operator_token", "agent-team-api-test-operator-token")
     async def _override():
         yield db
 
     app.dependency_overrides[get_db] = _override
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Deck-Operator-Token": "agent-team-api-test-operator-token"},
+    ) as c:
         yield c
     app.dependency_overrides.clear()
 
@@ -169,6 +201,8 @@ async def test_preset_autonomy_and_slot_routing_fields_round_trip(client, monkey
 
 @pytest.mark.asyncio
 async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
+    await db.execute(text("PRAGMA foreign_keys=ON"))
+    assert (await db.execute(text("PRAGMA foreign_keys"))).scalar_one() == 1
     repo = tmp_path / "repo"
     repo.mkdir()
     sync_calls = 0
@@ -210,6 +244,8 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     scope = create_response.json()
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
+    assert scope["github_auth_mode"] == "unknown"
+    assert isinstance(scope["github_poll_token_configured"], bool)
     assert scope["max_verification_retries"] == 3
     assert scope["base_ref"] == "origin/main"
     assert scope["builds_out_of_tree"] is True
@@ -221,6 +257,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     )
     assert list_response.status_code == 200
     assert [item["id"] for item in list_response.json()["scopes"]] == [scope["id"]]
+    assert list_response.json()["scopes"][0]["github_auth_mode"] == "unknown"
 
     update_response = await client.patch(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}",
@@ -299,7 +336,93 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
         f"/api/v1/agent-teams/github-scopes/{scope['id']}"
     )
     assert delete_response.status_code == 204
+    item_id = item.id
+    workspace_id = workspace.id
+    db.expire_all()
+    assert await db.get(GithubWorkItem, item_id) is None
+    assert await db.get(GithubWorkspace, workspace_id) is None
     assert sync_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_github_scope_build_hint_can_be_cleared(client, monkeypatch, tmp_path):
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await client.post(
+        "/api/v1/agent-teams/presets", json={"name": "Scope team", "slots": []}
+    )
+    created = await client.post(
+        f"/api/v1/agent-teams/presets/{preset.json()['id']}/github-scopes",
+        json={
+            "repo_owner": "adrirubio",
+            "repo_name": "snazzyemail",
+            "repo_path": str(repo),
+            "build_command_hint": "meson compile -C {build_dir}",
+        },
+    )
+    assert created.status_code == 200
+    url = f"/api/v1/agent-teams/github-scopes/{created.json()['id']}"
+
+    unchanged = await client.patch(url, json={"max_approval_rounds": 4})
+    assert unchanged.status_code == 200
+    assert unchanged.json()["build_command_hint"] == "meson compile -C {build_dir}"
+
+    cleared = await client.patch(url, json={"build_command_hint": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["build_command_hint"] is None
+
+    restored = await client.patch(url, json={"build_command_hint": "make -j{parallelism}"})
+    assert restored.status_code == 200
+    cleared_empty = await client.patch(url, json={"build_command_hint": ""})
+    assert cleared_empty.status_code == 200
+    assert cleared_empty.json()["build_command_hint"] is None
+
+
+@pytest.mark.asyncio
+async def test_github_scope_noop_identity_edit_allowed_while_active(client, db, monkeypatch, tmp_path):
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    preset = await client.post(
+        "/api/v1/agent-teams/presets", json={"name": "Scope team", "slots": []}
+    )
+    created = await client.post(
+        f"/api/v1/agent-teams/presets/{preset.json()['id']}/github-scopes",
+        json={"repo_owner": "adrirubio", "repo_name": "snazzyemail", "repo_path": str(repo), "base_ref": "origin/main"},
+    )
+    assert created.status_code == 200
+    scope_id = created.json()["id"]
+    db.add(GithubWorkItem(
+        scope_id=scope_id,
+        issue_number=1,
+        issue_title="active",
+        issue_url="https://github.com/adrirubio/snazzyemail/issues/1",
+        github_updated_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    url = f"/api/v1/agent-teams/github-scopes/{scope_id}"
+
+    updated = await client.patch(url, json={
+        "repo_owner": "adrirubio",
+        "repo_name": "snazzyemail",
+        "repo_path": str(repo),
+        "base_ref": "origin/main",
+        "max_approval_rounds": 5,
+    })
+    assert updated.status_code == 200
+    assert updated.json()["max_approval_rounds"] == 5
+    assert updated.json()["base_ref"] == "origin/main"
+
+    blocked = await client.patch(url, json={"base_ref": "origin/release"})
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "scope_identity_in_use"
 
 
 @pytest.mark.asyncio
@@ -497,7 +620,9 @@ async def test_retry_rejected_when_pr_open(client, db):
     )
 
     assert response.status_code == 409
-    assert "865" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["block_code"] == "pr_preserved"
+    assert "865" in detail["message"]
     await db.refresh(item)
     assert item.pr_number == 865
     assert item.dispatch_status == "escalated"
@@ -513,6 +638,8 @@ async def test_retry_allowed_when_no_pr(client, db):
     )
 
     assert response.status_code == 200
+    assert response.json()["retry_allowed"] is False
+    assert response.json()["retry_block_code"] == "not_escalated"
     await db.refresh(item)
     assert item.dispatch_status == "pending"
 
@@ -540,4 +667,6 @@ async def test_retry_endpoint_defers_while_workspace_is_leased(client, db):
     assert item.dispatch_status == "escalated"
     assert item.retry_requested_at is not None
     assert body["retry_requested_at"] is not None
+    assert body["retry_allowed"] is True
+    assert body["retry_block_code"] is None
     assert workspace.leased_item_id == item.id

@@ -4,7 +4,11 @@ import { toast } from 'sonner'
 import { useTerminal } from './useTerminal'
 import { ImageAttachmentDialog } from './ImageAttachmentDialog'
 import { pasteBridgeAttachment, uploadBridgeAttachment } from './api'
+import { ApiHttpError } from '@/lib/api'
+import { clearOperatorToken, getOperatorToken, setOperatorToken } from '@/features/agent-teams/operatorAuth'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Dialog,
   DialogContent,
@@ -82,13 +86,24 @@ export function TerminalView({
   const [draggingImage, setDraggingImage] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [imageAttachment, setImageAttachment] = useState<ImageAttachmentState | null>(null)
+  const [interactiveTokenOpen, setInteractiveTokenOpen] = useState(false)
+  const [interactiveTokenInput, setInteractiveTokenInput] = useState('')
+  const [interactiveTokenError, setInteractiveTokenError] = useState<string | null>(null)
   const slotColor = session?.team_slot_color
   const terminalTheme = useMemo(() => getTeamSlotTerminalTheme(slotColor), [slotColor])
   const { connected, readOnly, setReadOnly, attach, detach, focusTerminal } = useTerminal(
     containerRef,
     wrapperRef,
     terminalTheme,
-    { target, onLeaderNavigate, onLeaderStateChange }
+    {
+      target,
+      onLeaderNavigate,
+      onLeaderStateChange,
+      onRequestModeChange: () => {
+        if (readOnly) void enableInteractive()
+        else handleReadOnly()
+      },
+    }
   )
   const accentClasses = getInstanceAccentClasses(instance?.accent)
   const colorClasses = getTeamSlotColorClasses(slotColor)
@@ -97,7 +112,9 @@ export function TerminalView({
 
   useEffect(() => {
     if (target) {
-      attach(target)
+      void attach(target).catch((error) => {
+        toast.error(error instanceof Error ? error.message : 'Failed to attach terminal')
+      })
     } else {
       detach()
     }
@@ -122,6 +139,42 @@ export function TerminalView({
   const stopShortcutButtonPropagation = useCallback((event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
   }, [])
+
+  async function enableInteractive(candidate?: string) {
+    if (candidate !== undefined && !candidate.trim()) {
+      setInteractiveTokenError('Enter the Deck operator token to continue.')
+      return
+    }
+    const operatorToken = candidate?.trim() || getOperatorToken()
+    if (!operatorToken) {
+      setInteractiveTokenOpen(true)
+      return
+    }
+    try {
+      await setReadOnly(false, operatorToken)
+      if (candidate) setOperatorToken(operatorToken)
+      setInteractiveTokenInput('')
+      setInteractiveTokenError(null)
+      setInteractiveTokenOpen(false)
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 401) {
+        clearOperatorToken()
+        setInteractiveTokenInput('')
+        setInteractiveTokenError('The Deck operator token was rejected. Enter a valid token.')
+        setInteractiveTokenOpen(true)
+      } else {
+        setInteractiveTokenError(error instanceof Error ? error.message : 'Failed to enable interactive mode')
+        setInteractiveTokenOpen(true)
+      }
+    }
+  }
+
+  function handleReadOnly() {
+    void setReadOnly(true).catch((error) => {
+      detach()
+      toast.error(error instanceof Error ? error.message : 'Failed to switch to read-only mode')
+    })
+  }
 
   const openShortcuts = useCallback((event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation()
@@ -195,6 +248,13 @@ export function TerminalView({
       toast.success(submit ? 'Image prompt pasted and submitted' : 'Image prompt pasted')
       closeImageAttachment()
     } catch (error) {
+      if (!getOperatorToken() || (error instanceof ApiHttpError && error.status === 401)) {
+        clearOperatorToken()
+        setInteractiveTokenError(error instanceof ApiHttpError
+          ? 'The Deck operator token was rejected. Enter a valid token.'
+          : 'Enter the Deck operator token to paste into this session.')
+        setInteractiveTokenOpen(true)
+      }
       setImageAttachment((current) => current
         ? {
           ...current,
@@ -246,7 +306,7 @@ export function TerminalView({
                     ? 'bg-primary text-primary-foreground'
                     : 'text-foreground/80 hover:bg-muted hover:text-foreground'
                 )}
-                onClick={() => setReadOnly(true)}
+                onClick={handleReadOnly}
               >
                 Read-only
               </button>
@@ -257,7 +317,7 @@ export function TerminalView({
                     ? 'bg-primary text-primary-foreground'
                     : 'text-foreground/80 hover:bg-muted hover:text-foreground'
                 )}
-                onClick={() => setReadOnly(false)}
+                onClick={() => { void enableInteractive() }}
               >
                 Interactive
               </button>
@@ -302,7 +362,11 @@ export function TerminalView({
                 Detach
               </Button>
             ) : (
-              <Button variant="outline" size="sm" onClick={() => attach(target)}>
+              <Button variant="outline" size="sm" onClick={() => {
+                void attach(target).catch((error) => {
+                  toast.error(error instanceof Error ? error.message : 'Failed to attach terminal')
+                })
+              }}>
                 Attach
               </Button>
             )}
@@ -327,9 +391,35 @@ export function TerminalView({
           onPaste={(submit) => {
             void handleAttachmentPaste(submit)
           }}
-          onSwitchInteractive={() => setReadOnly(false)}
+          onSwitchInteractive={() => { void enableInteractive() }}
         />
       )}
+      <Dialog open={interactiveTokenOpen} onOpenChange={(open) => {
+        setInteractiveTokenOpen(open)
+        if (!open) {
+          setInteractiveTokenInput('')
+          setInteractiveTokenError(null)
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enable interactive terminal</DialogTitle>
+            <DialogDescription>
+              Enter the Deck operator token to send input to this session. Agent session tokens cannot enable interactive mode.
+            </DialogDescription>
+          </DialogHeader>
+          <Label htmlFor="interactive-terminal-token">Operator token</Label>
+          <Input
+            id="interactive-terminal-token"
+            type="password"
+            autoComplete="off"
+            value={interactiveTokenInput}
+            onChange={(event) => setInteractiveTokenInput(event.target.value)}
+          />
+          {interactiveTokenError && <p className="text-sm text-destructive">{interactiveTokenError}</p>}
+          <Button onClick={() => { void enableInteractive(interactiveTokenInput) }}>Enable interactive</Button>
+        </DialogContent>
+      </Dialog>
       <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
         <DialogContent className="sm:max-w-[440px]">
           <DialogHeader>

@@ -118,13 +118,14 @@ class AgentBridgeAttachmentService:
         target: str,
         attachment_id: int,
         request: BridgeAttachmentPasteRequest,
+        send_target: str | None = None,
     ) -> BridgeAttachmentPasteResponse:
         self._require_live_session(target)
         attachment = await self._require_attachment(db, target, attachment_id)
         prompt_text = self._clean_prompt_text(
             f"{request.prefix or ''}{attachment.prompt_text}{request.suffix or ''}"
         )
-        self._send_tmux_prompt(target, prompt_text, submit=request.submit)
+        self._send_tmux_prompt(send_target or target, prompt_text, submit=request.submit)
         return BridgeAttachmentPasteResponse(
             pasted=True,
             submitted=request.submit,

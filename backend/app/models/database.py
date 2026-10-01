@@ -1,6 +1,17 @@
 """SQLAlchemy database models."""
 from datetime import datetime
-from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import (
+    String,
+    Integer,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    JSON,
+    Index,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -229,6 +240,20 @@ class TeamGithubScope(Base):
     max_build_parallelism: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     github_auth_mode: Mapped[str] = mapped_column(String, default="unknown", nullable=False)
     github_app_installation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    continuation_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    max_continuation_revisions: Mapped[int] = mapped_column(
+        Integer, default=6, nullable=False
+    )
+    max_continuation_failed_heads: Mapped[int] = mapped_column(
+        Integer, default=8, nullable=False
+    )
+    max_failed_heads_per_revision: Mapped[int] = mapped_column(
+        Integer, default=2, nullable=False
+    )
+    max_scope_paths: Mapped[int] = mapped_column(Integer, default=32, nullable=False)
+    max_scope_commands: Mapped[int] = mapped_column(Integer, default=16, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -287,6 +312,22 @@ class GithubWorkItem(Base):
     escalation_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     status_note: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_merged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    active_scope_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempt_phase: Mapped[str] = mapped_column(
+        String, default="implementation", nullable=False
+    )
+    diagnostic_retry_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    diagnostic_last_verified_sha: Mapped[str | None] = mapped_column(
+        String, nullable=True
+    )
+    continuation_nudged_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    continuation_activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -431,11 +472,42 @@ class MailAgentSession(Base):
     capability_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     bound_pane_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bound_pane_proc_start: Mapped[str | None] = mapped_column(String, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    wake_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mailbox_status: Mapped[str] = mapped_column(String, default="connected", nullable=False)
     activity: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MailPaneLifecycle(Base):
+    __tablename__ = "mail_pane_lifecycles"
+
+    pane_pid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pane_proc_start: Mapped[str] = mapped_column(String, primary_key=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MailWakeAttempt(Base):
+    """Redacted record of an attempted Agent Mail terminal wake."""
+
+    __tablename__ = "mail_wake_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    member_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    actor_type: Mapped[str] = mapped_column(String, nullable=False)
+    actor_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    correlation_id: Mapped[str] = mapped_column(String, nullable=False)
+    target_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_pane_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pending_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    result: Mapped[str] = mapped_column(String, nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -472,6 +544,8 @@ class MailMessage(Base):
     )
     approval_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     decision: Mapped[str | None] = mapped_column(String, nullable=True)
+    audience_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    audience_id: Mapped[str | None] = mapped_column(String, nullable=True)
     recipient_member_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("mail_team_members.id", ondelete="CASCADE"), index=True, nullable=True
     )
@@ -479,8 +553,18 @@ class MailMessage(Base):
     body_markdown: Mapped[str] = mapped_column(String, nullable=False)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     request_status: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    delivery_key: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_mail_messages_delivery_key",
+            "delivery_key",
+            unique=True,
+            sqlite_where=text("delivery_key IS NOT NULL"),
+        ),
     )
 
 
@@ -502,4 +586,149 @@ class MailReceipt(Base):
 
     __table_args__ = (
         UniqueConstraint("message_id", "member_id", name="uix_mail_receipt_message_member"),
+    )
+
+
+class GithubApprovalRequest(Base):
+    """Normalized authority for a GitHub work-item approval request."""
+
+    __tablename__ = "github_approval_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("github_work_items.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    request_kind: Mapped[str] = mapped_column(String, nullable=False)
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    approval_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    owner_member_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("mail_team_members.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    leader_member_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("mail_team_members.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    request_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("mail_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    decision_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("mail_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    scope_revision_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("github_attempt_scope_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    request_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "uix_github_approval_requests_pending_work_item",
+            "work_item_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+
+class GithubAttemptScopeRevision(Base):
+    """Immutable proposed authority plus lifecycle state for one attempt revision."""
+
+    __tablename__ = "github_attempt_scope_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("github_work_items.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    dispatch_nonce: Mapped[str] = mapped_column(String, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    owner_slot_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("agent_team_slots.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    owner_member_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("mail_team_members.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    phase: Mapped[str] = mapped_column(String, nullable=False)
+    execution_target: Mapped[str] = mapped_column(String, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    allowed_paths: Mapped[list] = mapped_column(JSON, nullable=False)
+    allowed_actions: Mapped[list] = mapped_column(JSON, nullable=False)
+    allowed_commands: Mapped[list] = mapped_column(JSON, nullable=False)
+    prohibited_actions: Mapped[list] = mapped_column(JSON, nullable=False)
+    tool_fallbacks: Mapped[dict] = mapped_column(JSON, nullable=False)
+    baseline_head_sha: Mapped[str] = mapped_column(String, nullable=False)
+    baseline_tree_sha: Mapped[str] = mapped_column(String, nullable=False)
+    originating_escalation_reason: Mapped[str] = mapped_column(String, nullable=False)
+    expected_workspace_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("github_workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    expected_lease_token_hash: Mapped[str] = mapped_column(String, nullable=False)
+    max_failed_heads: Mapped[int] = mapped_column(Integer, nullable=False)
+    failed_head_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_failed_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="proposed", nullable=False)
+    recovery_checkpoint_stage: Mapped[str | None] = mapped_column(String, nullable=True)
+    approval_request_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("github_approval_requests.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    delivery_message_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("mail_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_delivery_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_ack_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    submitted_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "work_item_id",
+            "dispatch_nonce",
+            "revision",
+            name="uix_github_attempt_scope_revision",
+        ),
     )

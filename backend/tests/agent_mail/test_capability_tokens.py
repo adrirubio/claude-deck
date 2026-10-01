@@ -23,6 +23,7 @@ from app.models.database import (
 )
 from app.models.schemas import MailAgentRegisterRequest
 from app.services.agent_mail_service import agent_mail_service
+from app.utils import peer_process
 from app.utils.peer_process import PeerPane
 from app.utils.repo_utils import derive_repo_identity
 
@@ -126,6 +127,38 @@ async def _member(db, repo_id, name):
     await db.commit()
     await db.refresh(member)
     return member
+
+
+async def _slot_session(db, slot, token, *, pane_pid=3000, pane_start="111"):
+    member = MailTeamMember(
+        identity_key=f"slot:liveness:{slot.id}:{token}",
+        repo_id=slot.repo_id,
+        repo_path=slot.repo_path,
+        repo_name=slot.repo_name,
+        display_name=slot.display_name,
+        participant_kind="team_slot",
+        team_preset_id=slot.preset_id,
+        team_slot_id=slot.id,
+    )
+    db.add(member)
+    await db.flush()
+    session = MailAgentSession(
+        member_id=member.id,
+        provider=slot.provider,
+        source="mcp",
+        session_key=f"mcp:liveness:{token}",
+        cwd=slot.repo_path,
+        team_preset_id=slot.preset_id,
+        team_slot_id=slot.id,
+        mailbox_status="connected",
+        last_seen_at=datetime.utcnow(),
+        capability_token_hash=agent_mail_service.hash_capability_token(token),
+        bound_pane_pid=pane_pid,
+        bound_pane_proc_start=pane_start,
+    )
+    db.add(session)
+    await db.commit()
+    return session
 
 
 def test_capability_token_settings_default_to_grace_mode():
@@ -276,7 +309,8 @@ async def test_two_sessions_get_different_tokens(db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_register_route_returns_the_token_once(client, tmp_path):
+async def test_register_route_returns_the_token_once(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     body = {
         "source": "mcp",
         "provider": "claude",
@@ -288,9 +322,94 @@ async def test_register_route_returns_the_token_once(client, tmp_path):
     token = first.json()["capability_token"]
     assert token
 
-    second = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    second = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=body,
+        headers={"X-Deck-Session-Token": token},
+    )
     assert second.status_code == 200
     assert second.json()["capability_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_hashed_rebind_requires_the_existing_token_under_enforcement(
+    client, db, tmp_path, monkeypatch
+):
+    body = {
+        "source": "mcp",
+        "provider": "claude",
+        "cwd": str(tmp_path),
+        "session_key": "mcp:authenticated-rebind",
+    }
+    first = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert first.status_code == 200
+    token = first.json()["capability_token"]
+    session_id = first.json()["session"]["id"]
+    before = await db.get(MailAgentSession, session_id)
+    before_values = (before.member_id, before.cwd, before.pid, before.capability_token_hash)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+
+    missing = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    invalid = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=body,
+        headers={"X-Deck-Session-Token": "wrong-token"},
+    )
+
+    assert missing.status_code == 409
+    assert missing.json()["detail"] == "token_required_for_rebind"
+    assert invalid.status_code == 401
+    assert invalid.json()["detail"] == "session_token_invalid"
+    db.expire_all()
+    after = await db.get(MailAgentSession, session_id)
+    assert (after.member_id, after.cwd, after.pid, after.capability_token_hash) == before_values
+    assert agent_mail_service.hash_capability_token(token) == after.capability_token_hash
+
+
+@pytest.mark.asyncio
+async def test_stale_slot_token_cannot_rebind_the_row_to_another_pane(
+    client, db, tmp_path, pane_resolver, slot, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    db.add(
+        AgentPaneBinding(
+            pane_pid=3000,
+            pane_proc_start="111",
+            slot_id=slot.id,
+            preset_id=slot.preset_id,
+        )
+    )
+    await db.commit()
+    pane_resolver(_pane())
+    body = _body(
+        slot.repo_path,
+        session_key="mcp:slot-rebind",
+        provider=slot.provider,
+        team_slot_id=slot.id,
+        team_preset_id=slot.preset_id,
+    )
+    first = await client.post("/api/v1/agent-mail/agent/register", json=body)
+    assert first.status_code == 200
+    token = first.json()["capability_token"]
+    session_id = first.json()["session"]["id"]
+    slot_id = slot.id
+
+    pane_resolver(_pane(pid=4000, start="222", target="other:0.1"))
+    replay = await client.post(
+        "/api/v1/agent-mail/agent/register",
+        json=body,
+        headers={"X-Deck-Session-Token": token},
+    )
+
+    assert replay.status_code == 401, replay.text
+    assert replay.json()["detail"] == "session_token_stale"
+    db.expire_all()
+    session = await db.get(MailAgentSession, session_id)
+    assert (session.team_slot_id, session.bound_pane_pid, session.bound_pane_proc_start) == (
+        slot_id,
+        3000,
+        "111",
+    )
 
 
 @pytest.mark.asyncio
@@ -574,6 +693,181 @@ async def test_no_pane_ancestor_mints_unbound(client, tmp_path, pane_resolver):
     response = await client.post("/api/v1/agent-mail/agent/register", json=_body(tmp_path))
     assert response.status_code == 200
     assert response.json()["capability_token"]
+
+
+@pytest.mark.asyncio
+async def test_live_slot_session_token_authenticates_under_enforcement(
+    client, db, slot, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    await _slot_session(db, slot, "live-slot-token")
+    observed = []
+    monkeypatch.setattr(
+        peer_process,
+        "pane_is_alive",
+        lambda pane_pid, pane_start: observed.append((pane_pid, pane_start)) or True,
+    )
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": "live-slot-token"},
+    )
+
+    assert response.status_code == 200
+    assert observed == [(3000, "111")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("proc_stat", "token"),
+    [
+        (None, "dead-slot-token"),
+        ((1, "NEW"), "reused-pid-token"),
+    ],
+)
+async def test_dead_or_reused_slot_session_token_is_stale(
+    client, db, slot, monkeypatch, proc_stat, token
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    await _slot_session(db, slot, token)
+    monkeypatch.setattr(peer_process, "read_proc_stat", lambda _pid: proc_stat)
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": token},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
+
+
+@pytest.mark.asyncio
+async def test_unobservable_slot_session_fails_closed(client, db, slot, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    await _slot_session(db, slot, "unobservable-slot-token")
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda _pid, _start: None)
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": "unobservable-slot-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
+
+
+@pytest.mark.asyncio
+async def test_slot_session_without_a_complete_binding_is_stale(
+    client, db, slot, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    await _slot_session(
+        db,
+        slot,
+        "missing-binding-token",
+        pane_pid=None,
+        pane_start=None,
+    )
+    monkeypatch.setattr(
+        peer_process,
+        "pane_is_alive",
+        lambda *_args: pytest.fail("an incomplete binding must not reach /proc"),
+    )
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": "missing-binding-token"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
+
+
+@pytest.mark.asyncio
+async def test_unbound_manual_session_remains_valid_under_enforcement(
+    client, db, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    member = await _member(db, "manual", "manual")
+    token = "manual-session-token"
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            provider="codex-cli",
+            source="mcp",
+            session_key="mcp:manual",
+            cwd=member.repo_path,
+            mailbox_status="connected",
+            last_seen_at=datetime.utcnow(),
+            capability_token_hash=agent_mail_service.hash_capability_token(token),
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        peer_process,
+        "pane_is_alive",
+        lambda *_args: pytest.fail("manual sessions have no role binding to validate"),
+    )
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": token},
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_explicitly_offline_session_token_is_stale(client, db, monkeypatch):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    member = await _member(db, "offline", "offline")
+    token = "offline-session-token"
+    db.add(
+        MailAgentSession(
+            member_id=member.id,
+            provider="codex-cli",
+            source="mcp",
+            session_key="mcp:offline",
+            cwd=member.repo_path,
+            mailbox_status="offline",
+            last_seen_at=datetime.utcnow(),
+            capability_token_hash=agent_mail_service.hash_capability_token(token),
+        )
+    )
+    await db.commit()
+    monkeypatch.setattr(
+        peer_process,
+        "pane_is_alive",
+        lambda *_args: pytest.fail("offline state must refuse before pane liveness"),
+    )
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": token},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "session_token_stale"
+
+
+@pytest.mark.asyncio
+async def test_grace_mode_does_not_apply_slot_liveness_gate(
+    client, db, slot, monkeypatch
+):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    await _slot_session(db, slot, "grace-slot-token")
+    monkeypatch.setattr(
+        peer_process,
+        "pane_is_alive",
+        lambda *_args: pytest.fail("grace mode must retain compatibility"),
+    )
+
+    response = await client.get(
+        "/api/v1/agent-mail/agent/inbox",
+        headers={"X-Deck-Session-Token": "grace-slot-token"},
+    )
+
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio

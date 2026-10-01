@@ -6,6 +6,7 @@ from app.services.providers.claude_code import ClaudeCodeProvider
 from app.services.providers.copilot_cli import CopilotCliProvider
 from app.services.providers.codex_cli import CodexCliProvider
 from app.services.providers.opencode_cli import OpenCodeCliProvider
+from app.services.providers.pi_cli import PiCliProvider
 
 
 _PROVIDERS: dict[str, AgentProvider] = {
@@ -13,6 +14,7 @@ _PROVIDERS: dict[str, AgentProvider] = {
     "codex-cli": CodexCliProvider(),
     "copilot-cli": CopilotCliProvider(),
     "opencode-cli": OpenCodeCliProvider(),
+    "pi-cli": PiCliProvider(),
 }
 
 
