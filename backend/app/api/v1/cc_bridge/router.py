@@ -9,7 +9,11 @@ from pydantic import BaseModel
 from app.services.cc_bridge.discovery import discover_cc_sessions, capture_pane_preview
 from app.services.cc_bridge.pty_relay import PtyRelay
 from app.api.v1.deps import require_operator
-from app.services.bridge_terminal_tokens import TerminalTokenStore, token_from_protocol_header
+from app.services.bridge_terminal_tokens import (
+    TERMINAL_PROTOCOL_PREFIX,
+    TerminalTokenStore,
+    token_from_protocol_header,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +107,7 @@ async def session_terminal(
 
     read_only = mode != "interactive"
     relay = PtyRelay(target=target, read_only=read_only)
-    await relay.run(websocket)
+    await relay.run(websocket, subprotocol=f"{TERMINAL_PROTOCOL_PREFIX}{token}")
 
 
 @router.post("/sessions")

@@ -62,9 +62,9 @@ async def test_interactive_token_requires_operator_and_binds_websocket(namespace
 
     observed = []
 
-    async def fake_run(self, websocket):
+    async def fake_run(self, websocket, *, subprotocol=None):
         observed.append((self.target, self.read_only))
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         await websocket.close()
 
     monkeypatch.setattr(PtyRelay, "run", fake_run)
@@ -75,8 +75,8 @@ async def test_interactive_token_requires_operator_and_binds_websocket(namespace
     )
     assert granted.status_code == 200
     assert granted.headers["cache-control"] == "no-store"
-    with _connect(namespace, "deck:0.0", granted.json()["token"], "interactive"):
-        pass
+    with _connect(namespace, "deck:0.0", granted.json()["token"], "interactive") as websocket:
+        assert websocket.accepted_subprotocol == f"deck-terminal.{granted.json()['token']}"
     assert observed == [("deck:0.0", False)]
 
 
@@ -99,9 +99,9 @@ async def test_interactive_token_refuses_unconfigured_operator_and_missing_targe
 async def test_readonly_grant_cannot_change_mode_target_or_replay(namespace, monkeypatch):
     observed = []
 
-    async def fake_run(self, websocket):
+    async def fake_run(self, websocket, *, subprotocol=None):
         observed.append((self.target, self.read_only))
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         await websocket.close()
 
     monkeypatch.setattr(PtyRelay, "run", fake_run)
@@ -118,8 +118,8 @@ async def test_readonly_grant_cannot_change_mode_target_or_replay(namespace, mon
     assert refused.value.code == 4401
 
     token = (await _issue(namespace)).json()["token"]
-    with _connect(namespace, "deck:0.0", token, "readonly"):
-        pass
+    with _connect(namespace, "deck:0.0", token, "readonly") as websocket:
+        assert websocket.accepted_subprotocol == f"deck-terminal.{token}"
     with pytest.raises(WebSocketDisconnect) as refused:
         with _connect(namespace, "deck:0.0", token, "readonly"):
             pass
@@ -179,3 +179,28 @@ def test_readonly_relay_rejects_mode_control_upgrade():
     assert interactive.read_only is True
     interactive.set_read_only(False)
     assert interactive.read_only is False
+
+
+@pytest.mark.asyncio
+async def test_relay_echoes_validated_websocket_subprotocol_before_starting_pty(monkeypatch):
+    class StopBeforePty(Exception):
+        pass
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.selected_subprotocol = None
+
+        async def accept(self, *, subprotocol=None):
+            self.selected_subprotocol = subprotocol
+
+    def stop_before_pty():
+        raise StopBeforePty
+
+    monkeypatch.setattr("app.services.cc_bridge.pty_relay.pty.openpty", stop_before_pty)
+    websocket = FakeWebSocket()
+    relay = PtyRelay("deck:0.0", read_only=True)
+
+    with pytest.raises(StopBeforePty):
+        await relay.run(websocket, subprotocol="deck-terminal.validated-token")
+
+    assert websocket.selected_subprotocol == "deck-terminal.validated-token"

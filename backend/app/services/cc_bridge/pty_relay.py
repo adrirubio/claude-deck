@@ -91,9 +91,9 @@ class PtyRelay:
     def set_read_only(self, requested: bool) -> None:
         self.read_only = not (self._interactive_granted and requested is False)
 
-    async def run(self, websocket: WebSocket) -> None:
+    async def run(self, websocket: WebSocket, *, subprotocol: str | None = None) -> None:
         """Main relay loop — connect tmux to the WebSocket."""
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
 
         master_fd, slave_fd = pty.openpty()
         self.master_fd = master_fd

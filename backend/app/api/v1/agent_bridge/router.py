@@ -27,6 +27,7 @@ from app.services.agent_bridge.discovery import capture_pane_preview, discover_a
 from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
 from app.services.agent_bridge.spawn import kill_session, spawn_session
 from app.services.bridge_terminal_tokens import (
+    TERMINAL_PROTOCOL_PREFIX,
     TerminalPurpose,
     TerminalTokenStore,
     token_from_protocol_header,
@@ -352,7 +353,7 @@ async def session_terminal(
         return
 
     relay = PtyRelay(target=target, read_only=mode != "interactive")
-    await relay.run(websocket)
+    await relay.run(websocket, subprotocol=f"{TERMINAL_PROTOCOL_PREFIX}{token}")
 
 
 @router.post("/sessions/{target:path}/attachments", response_model=BridgeAttachmentResponse)
