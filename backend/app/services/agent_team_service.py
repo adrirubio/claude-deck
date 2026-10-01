@@ -6,7 +6,7 @@ import json
 import os
 import re
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, or_, select
@@ -38,7 +38,7 @@ from app.models.schemas import (
 from app.services import agent_mail_install_service
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_bridge.spawn import spawn_session
-from app.services.agent_mail_service import agent_mail_service
+from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS, agent_mail_service
 from app.services.providers import get_provider, get_providers
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.providers.launch_contract import (
@@ -458,6 +458,11 @@ class AgentTeamService:
                 slot,
                 matching,
                 install_status,
+                adopt_unbound_sessions=request.adopt_unbound_sessions,
+                force_spawn_with_existing_pane=(
+                    not request.reuse_existing
+                    and any(self._discovered_session_matches_slot(session, slot) for session in discovered)
+                ),
                 unsafe_spawn_reason=(
                     self._resume_last_block_reason(slot.provider)
                     if matching is None and slot.id in unsafe_resume_last_slot_ids
@@ -475,6 +480,7 @@ class AgentTeamService:
             can_launch=not any(item.action == "blocked" for item in items),
             items=items,
             reuse_count=sum(1 for item in items if item.action == "reuse"),
+            adopt_count=sum(1 for item in items if item.action == "adopt"),
             spawn_count=sum(1 for item in items if item.action == "spawn"),
             skipped_count=sum(1 for item in items if item.action == "skip"),
             blocked_count=sum(1 for item in items if item.action == "blocked"),
@@ -511,6 +517,7 @@ class AgentTeamService:
             status="running",
             summary={
                 "reuse_count": plan.reuse_count,
+                "adopt_count": plan.adopt_count,
                 "spawn_count": plan.spawn_count,
                 "skipped_count": plan.skipped_count,
                 "blocked_count": plan.blocked_count,
@@ -561,7 +568,28 @@ class AgentTeamService:
         repo_path_override: str | None = None,
         prompt_override: str | None = None,
     ) -> AgentTeamLaunchResultItem:
-        if plan_item.action == "reuse":
+        if plan_item.action in {"reuse", "adopt"}:
+            matching = plan_item.matching_session or {}
+            pane_pid = matching.get("pid")
+            stat = read_proc_stat(int(pane_pid)) if pane_pid is not None else None
+            if stat is None or stat[1] != matching.get("pane_proc_start"):
+                raise PlanConflictError("The selected pane changed; review a new launch plan")
+            binding = (
+                await db.execute(
+                    select(AgentPaneBinding).where(
+                        AgentPaneBinding.pane_pid == int(pane_pid),
+                        AgentPaneBinding.pane_proc_start == stat[1],
+                    )
+                )
+            ).scalar_one_or_none()
+            if (
+                (plan_item.action == "reuse" and binding is None)
+                or (
+                    binding is not None
+                    and (binding.slot_id != slot.id or binding.preset_id != preset.id)
+                )
+            ):
+                raise PlanConflictError("The selected pane binding changed; review a new launch plan")
             agent_mail_member_id = await self._attach_team_context_to_existing_session(
                 db,
                 slot,
@@ -570,7 +598,7 @@ class AgentTeamService:
             result = AgentTeamLaunchResultItem(
                 slot_id=slot.id,
                 slot_name=slot.display_name,
-                action="reuse",
+                action=plan_item.action,
                 status="reused",
                 provider=slot.provider,
                 repo_path=slot.repo_path,
@@ -578,7 +606,11 @@ class AgentTeamService:
                 tmux_target=plan_item.matching_session.get("tmux_target") if plan_item.matching_session else None,
                 pane_pid=plan_item.matching_session.get("pid") if plan_item.matching_session else None,
                 agent_mail_member_id=agent_mail_member_id,
-                message="A matching wakeable tmux session was reused",
+                message=(
+                    "An unbound pane was explicitly adopted by the operator"
+                    if plan_item.action == "adopt"
+                    else "A bound tmux session was reused"
+                ),
                 warnings=plan_item.warnings,
             )
             await self._write_pane_binding(
@@ -718,6 +750,8 @@ class AgentTeamService:
                 )
             )
         else:
+            if existing.slot_id != slot.id or existing.preset_id != preset.id:
+                raise PlanConflictError("The selected pane belongs to another slot")
             existing.slot_id = slot.id
             existing.preset_id = preset.id
             existing.tmux_target = tmux_target
@@ -751,9 +785,15 @@ class AgentTeamService:
         matching_session: dict[str, Any] | None,
         install_status: Any,
         *,
+        adopt_unbound_sessions: bool = False,
+        force_spawn_with_existing_pane: bool = False,
         unsafe_spawn_reason: str | None = None,
     ) -> AgentTeamLaunchPlanItem:
         warnings = self._slot_launch_warnings(slot.provider, slot.launch_options or {})
+        if force_spawn_with_existing_pane:
+            warnings.append(
+                "Forced fresh spawn ignores an existing same-repository pane; verify it will not duplicate this slot"
+            )
         if not slot.enabled:
             return AgentTeamLaunchPlanItem(
                 slot_id=slot.id,
@@ -785,6 +825,55 @@ class AgentTeamService:
             block_code = block_code or "agent_mail_not_configured"
 
         if block_code is None and matching_session:
+            if matching_session.get("binding_status") == "ambiguous":
+                return AgentTeamLaunchPlanItem(
+                    slot_id=slot.id,
+                    slot_name=slot.display_name,
+                    provider=slot.provider,
+                    repo_id=slot.repo_id,
+                    repo_path=slot.repo_path,
+                    repo_name=slot.repo_name,
+                    action="blocked",
+                    status="blocked",
+                    reasons=["Multiple unbound panes match this slot; stop or isolate them before launching"],
+                    block_code="unbound_pane_ambiguous",
+                    warnings=warnings,
+                )
+            unbound = matching_session.get("binding_status") == "unbound"
+            if unbound and (
+                matching_session.get("pid") is None
+                or matching_session.get("pane_proc_start") is None
+                or matching_session.get("tmux_target") is None
+            ):
+                return AgentTeamLaunchPlanItem(
+                    slot_id=slot.id,
+                    slot_name=slot.display_name,
+                    provider=slot.provider,
+                    repo_id=slot.repo_id,
+                    repo_path=slot.repo_path,
+                    repo_name=slot.repo_name,
+                    action="blocked",
+                    status="blocked",
+                    reasons=["An unbound pane was found, but its process identity cannot be verified"],
+                    matching_session=matching_session,
+                    block_code="unbound_pane_unverifiable",
+                    warnings=warnings,
+                )
+            if unbound and not adopt_unbound_sessions:
+                return AgentTeamLaunchPlanItem(
+                    slot_id=slot.id,
+                    slot_name=slot.display_name,
+                    provider=slot.provider,
+                    repo_id=slot.repo_id,
+                    repo_path=slot.repo_path,
+                    repo_name=slot.repo_name,
+                    action="blocked",
+                    status="blocked",
+                    reasons=["An unbound pane is present; only an operator may explicitly adopt it or force a fresh spawn"],
+                    matching_session=matching_session,
+                    block_code="unbound_pane_requires_operator_adoption",
+                    warnings=warnings,
+                )
             return AgentTeamLaunchPlanItem(
                 slot_id=slot.id,
                 slot_name=slot.display_name,
@@ -792,9 +881,12 @@ class AgentTeamService:
                 repo_id=slot.repo_id,
                 repo_path=slot.repo_path,
                 repo_name=slot.repo_name,
-                action="reuse",
+                action="adopt" if unbound else "reuse",
                 status="ready",
-                reasons=["A matching running session is already available"],
+                reasons=[
+                    "Operator explicitly selected an unbound pane for adoption"
+                    if unbound else "A bound running session is already available"
+                ],
                 matching_session=matching_session,
                 warnings=warnings,
             )
@@ -970,7 +1062,11 @@ class AgentTeamService:
                 pane_bindings,
             )
         ]
-        attached = await self._matching_attached_session(db, slot, eligible, used_matching_sessions)
+        attached = await self._matching_attached_session(
+            db, slot, eligible, used_matching_sessions, pane_bindings
+        )
+        if attached is not None and attached.get("binding_status") == "ambiguous":
+            return attached
         if slot.provider == "pi-cli":
             eligible_panes = await agent_mail_service.nudgeable_sessions_for_slot(db, slot.id)
             if attached is not None and any(
@@ -981,19 +1077,26 @@ class AgentTeamService:
             return None
         if attached is not None:
             return attached
-        named = self._matching_named_session(slot, eligible, used_matching_sessions)
-        if named is not None:
-            return named
-        if requires_disambiguation:
-            return None
-        for session in eligible:
-            match_key = self._matching_session_key(session)
-            if match_key in used_matching_sessions:
-                continue
-            if self._discovered_session_matches_slot(session, slot):
-                used_matching_sessions.add(match_key)
-                return self._matching_session_payload(session)
-        return None
+        candidates = [
+            session for session in eligible
+            if self._matching_session_key(session) not in used_matching_sessions
+            and self._discovered_session_matches_slot(session, slot)
+        ]
+        named = [
+            session for session in candidates if self._session_name_matches_slot(session, slot)
+        ]
+        if len(named) > 1:
+            return {"binding_status": "ambiguous"}
+        if len(named) == 1:
+            selected = named[0]
+        elif requires_disambiguation:
+            return {"binding_status": "ambiguous"} if candidates else None
+        elif len(candidates) == 1:
+            selected = candidates[0]
+        else:
+            return {"binding_status": "ambiguous"} if candidates else None
+        used_matching_sessions.add(self._matching_session_key(selected))
+        return {**self._matching_session_payload(selected), "binding_status": "unbound"}
 
     def _session_owned_by_other_slot(
         self,
@@ -1028,6 +1131,7 @@ class AgentTeamService:
         slot: AgentTeamSlot,
         discovered: list[dict[str, Any]],
         used_matching_sessions: set[str],
+        pane_bindings: list[AgentPaneBinding],
     ) -> dict[str, Any] | None:
         result = await db.execute(
             select(MailAgentSession)
@@ -1039,8 +1143,17 @@ class AgentTeamService:
         )
         attached_sessions = result.scalars().all()
         now = datetime.utcnow()
+        matches: list[tuple[str, dict[str, Any]]] = []
         for attached in attached_sessions:
             if agent_mail_service._effective_status(attached, now) == "offline":
+                continue
+            member = await db.get(MailTeamMember, attached.member_id)
+            if (
+                member is None
+                or member.participant_kind != "team_slot"
+                or member.team_slot_id != slot.id
+                or member.team_preset_id != slot.preset_id
+            ):
                 continue
             for session in discovered:
                 match_key = self._matching_session_key(session)
@@ -1048,27 +1161,51 @@ class AgentTeamService:
                     continue
                 if not self._discovered_session_matches_slot(session, slot):
                     continue
-                if self._discovered_session_matches_registered(session, attached):
-                    used_matching_sessions.add(match_key)
-                    return self._matching_session_payload(session)
-        return None
+                if (
+                    attached.team_preset_id == slot.preset_id
+                    and attached.source == "mcp"
+                    and attached.capability_token_hash is not None
+                    and attached.mailbox_status == "connected"
+                    and attached.closed_at is None
+                    and attached.last_seen_at >= now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+                    and self._discovered_session_matches_registered(session, attached)
+                    and self._session_has_live_slot_binding(
+                        session, attached, slot, pane_bindings
+                    )
+                ):
+                    matches.append((match_key, session))
+        if len(matches) > 1:
+            return {"binding_status": "ambiguous"}
+        if not matches:
+            return None
+        match_key, session = matches[0]
+        used_matching_sessions.add(match_key)
+        return {**self._matching_session_payload(session), "binding_status": "bound"}
 
-    def _matching_named_session(
+    def _session_has_live_slot_binding(
         self,
+        discovered: dict[str, Any],
+        attached: MailAgentSession,
         slot: AgentTeamSlot,
-        discovered: list[dict[str, Any]],
-        used_matching_sessions: set[str],
-    ) -> dict[str, Any] | None:
-        for session in discovered:
-            match_key = self._matching_session_key(session)
-            if match_key in used_matching_sessions:
-                continue
-            if not self._discovered_session_matches_slot(session, slot):
-                continue
-            if self._session_name_matches_slot(session, slot):
-                used_matching_sessions.add(match_key)
-                return self._matching_session_payload(session)
-        return None
+        pane_bindings: list[AgentPaneBinding],
+    ) -> bool:
+        try:
+            pane_pid = int(str(discovered.get("pid")))
+        except (TypeError, ValueError):
+            return False
+        stat = read_proc_stat(pane_pid)
+        if stat is None or attached.bound_pane_pid != pane_pid:
+            return False
+        proc_start = stat[1]
+        if attached.bound_pane_proc_start != proc_start:
+            return False
+        return any(
+            binding.pane_pid == pane_pid
+            and binding.pane_proc_start == proc_start
+            and binding.slot_id == slot.id
+            and binding.preset_id == slot.preset_id
+            for binding in pane_bindings
+        )
 
     def _session_name_matches_slot(self, session: dict[str, Any], slot: AgentTeamSlot) -> bool:
         slot_terms = [slot.display_name, slot.role]
@@ -1116,6 +1253,11 @@ class AgentTeamService:
     def _matching_session_payload(self, session: dict[str, Any]) -> dict[str, Any]:
         pane_id = session.get("pane_id")
         session_key = session.get("session_key") or (f"tmux:{pane_id}" if pane_id else None)
+        try:
+            pane_pid = int(str(session.get("pid")))
+        except (TypeError, ValueError):
+            pane_pid = None
+        stat = read_proc_stat(pane_pid) if pane_pid is not None else None
         return {
             "source": "bridge",
             "provider": session.get("provider"),
@@ -1124,7 +1266,8 @@ class AgentTeamService:
             "tmux_target": session.get("tmux_target"),
             "pane_id": pane_id,
             "cwd": session.get("cwd"),
-            "pid": session.get("pid"),
+            "pid": pane_pid,
+            "pane_proc_start": stat[1] if stat is not None else None,
         }
 
     def _matching_session_key(self, session: dict[str, Any]) -> str:
@@ -1285,7 +1428,7 @@ class AgentTeamService:
                     "matching_session": {
                         key: value
                         for key, value in (item.matching_session or {}).items()
-                        if key in {"source", "provider", "session_key", "session_name", "tmux_target", "cwd"}
+                        if key in {"source", "provider", "session_key", "session_name", "tmux_target", "cwd", "pid", "pane_proc_start", "binding_status"}
                     },
                 }
                 for item in items

@@ -112,9 +112,9 @@ def test_bridge_platform_presence(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bridge, "spawn_session", lambda provider, options: {"platform": options.platform})
     for extra in [{}, {"platform": ""}, {"platform": "   "}, {"platform": "openrouter"}]:
-        response = bridge.spawn_session_endpoint(bridge.SpawnRequest(provider="pi-cli", directory=str(tmp_path), **extra))
+        response = bridge.spawn_session_endpoint(bridge.SpawnRequest(provider="pi-cli", directory=str(tmp_path), **extra), principal=None)
         assert response["platform"] == "openrouter"
-    response = bridge.spawn_session_endpoint(bridge.SpawnRequest(provider="pi-cli", directory=str(tmp_path), platform="anthropic"))
+    response = bridge.spawn_session_endpoint(bridge.SpawnRequest(provider="pi-cli", directory=str(tmp_path), platform="anthropic"), principal=None)
     assert response["platform"] == "anthropic"
 
 

@@ -2504,6 +2504,7 @@ def _require_safe_agent_launch(
         or request.repo_path_override is not None
         or request.include_disabled
         or not request.reuse_existing
+        or request.adopt_unbound_sessions
         or request.skip_plan_confirmation
     ):
         raise HTTPException(

@@ -84,7 +84,8 @@ def test_agent_bridge_spawn_smoke_passes_codex_options(monkeypatch, tmp_path):
             approval_policy="on-request",
             search=True,
             no_alt_screen=True,
-        )
+        ),
+        principal=None,
     )
 
     assert response["provider"] == "codex-cli"
@@ -104,7 +105,8 @@ def test_agent_bridge_spawn_unknown_provider_smoke(tmp_path):
             agent_bridge_api.SpawnRequest(
                 provider="unknown-provider",
                 directory=str(tmp_path),
-            )
+            ),
+            principal=None,
         )
 
     assert exc_info.value.status_code == 400

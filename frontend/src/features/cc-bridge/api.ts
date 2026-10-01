@@ -98,9 +98,10 @@ export function buildTerminalWsUrl(target: string, token: string, mode: 'readonl
   return `${protocol}//${host}/api/v1/${BASE}/sessions/${encodeURIComponent(target)}/terminal?token=${token}&mode=${mode}`
 }
 
-export async function spawnSession(request: SpawnSessionRequest): Promise<SpawnSessionResponse> {
+export async function spawnSession(request: SpawnSessionRequest, operatorToken: string): Promise<SpawnSessionResponse> {
   return apiClient<SpawnSessionResponse>(BASE + '/sessions', {
     method: 'POST',
+    headers: { 'X-Deck-Operator-Token': operatorToken },
     body: JSON.stringify(request),
   })
 }

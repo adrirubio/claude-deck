@@ -375,6 +375,7 @@ async def test_team_launch_requires_authority_and_agents_cannot_override(
         {"repo_path_override": "/tmp"},
         {"include_disabled": True},
         {"reuse_existing": False},
+        {"adopt_unbound_sessions": True},
         {"skip_plan_confirmation": True},
     ):
         for path in ("plan-launch", "launch/plan", "launch"):
@@ -415,6 +416,93 @@ async def test_session_kill_requires_operator_before_termination(
     operator = await client.delete(url, headers={"X-Deck-Operator-Token": OPERATOR_TOKEN})
     assert operator.status_code == 200
     assert killed == [("not-the-leader", False)]
+
+
+@pytest.mark.asyncio
+async def test_bridge_spawn_requires_authority_and_agent_cannot_supply_overrides(
+    client_and_db, operator_token_configured, monkeypatch, tmp_path
+):
+    client, maker = client_and_db
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    session_token = await _agent_session_token(maker)
+    async with maker() as db:
+        session = (await db.execute(select(MailAgentSession).where(
+            MailAgentSession.session_key == "operator-test"
+        ))).scalar_one()
+        session.provider = "codex-cli"
+        session.cwd = str(tmp_path)
+        await db.commit()
+    bridge = importlib.import_module("app.api.v1.agent_bridge.router")
+    spawned = []
+
+    def fake_spawn(provider, options):
+        spawned.append((provider, options))
+        return {"session_name": "test", "tmux_target": "test:0.0"}
+
+    monkeypatch.setattr(bridge, "spawn_session", fake_spawn)
+    url = "/api/v1/agent-bridge/sessions"
+    base = {"provider": "codex-cli", "directory": str(tmp_path)}
+    assert (await client.post(url, json=base)).status_code == 401
+    session_headers = {"X-Deck-Session-Token": session_token}
+    safe = await client.post(url, json=base, headers=session_headers)
+    assert safe.status_code == 200
+    for override in (
+        {"prompt": "replace Leader instructions"},
+        {"dangerously_bypass_approvals_and_sandbox": True},
+        {"model": "other-model"},
+        {"mode": "resume"},
+        {"directory": str(tmp_path / "foreign")},
+        {"provider": "claude-code"},
+    ):
+        refused = await client.post(url, json={**base, **override}, headers=session_headers)
+        assert refused.status_code == 403, override
+        assert refused.json()["detail"]["block_code"] == "operator_spawn_override_required"
+    assert len(spawned) == 1
+    operator = await client.post(
+        url, json={**base, "prompt": "operator prompt"},
+        headers={"X-Deck-Operator-Token": OPERATOR_TOKEN},
+    )
+    assert operator.status_code == 200
+    assert len(spawned) == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_cc_bridge_cannot_spawn_or_kill_without_operator(
+    client_and_db, operator_token_configured, monkeypatch, tmp_path
+):
+    client, maker = client_and_db
+    session_token = await _agent_session_token(maker)
+    spawn_module = importlib.import_module("app.services.cc_bridge.spawn")
+    spawned = []
+    killed = []
+
+    def fake_spawn(**kwargs):
+        spawned.append(kwargs)
+        return {"session_name": "test", "tmux_target": "test:0.0"}
+
+    def fake_kill(**kwargs):
+        killed.append(kwargs)
+        return {"status": "killed"}
+
+    monkeypatch.setattr(spawn_module, "spawn_session", fake_spawn)
+    monkeypatch.setattr(spawn_module, "kill_session", fake_kill)
+    spawn_url = "/api/v1/cc-bridge/sessions"
+    kill_url = "/api/v1/cc-bridge/sessions/test"
+    for headers in ({}, {"X-Deck-Session-Token": session_token}):
+        assert (await client.post(
+            spawn_url, json={"directory": str(tmp_path), "mode": "plain"}, headers=headers
+        )).status_code == 401
+        assert (await client.delete(kill_url, headers=headers)).status_code == 401
+    assert spawned == []
+    assert killed == []
+    operator_headers = {"X-Deck-Operator-Token": OPERATOR_TOKEN}
+    assert (await client.post(
+        spawn_url, json={"directory": str(tmp_path), "mode": "plain"},
+        headers=operator_headers,
+    )).status_code == 200
+    assert (await client.delete(kill_url, headers=operator_headers)).status_code == 200
+    assert len(spawned) == 1
+    assert len(killed) == 1
 
 
 @pytest.mark.asyncio

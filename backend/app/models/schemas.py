@@ -2180,7 +2180,7 @@ class AgentMailSnippets(BaseModel):
 
 # --- Agent Team Presets ---
 
-AgentTeamLaunchAction = Literal["reuse", "spawn", "skip", "blocked"]
+AgentTeamLaunchAction = Literal["reuse", "adopt", "spawn", "skip", "blocked"]
 AgentTeamLaunchStatus = Literal[
     "ready",
     "blocked",
@@ -2570,6 +2570,7 @@ class AgentTeamLaunchPlan(BaseModel):
     can_launch: bool
     items: List[AgentTeamLaunchPlanItem] = Field(default_factory=list)
     reuse_count: int = 0
+    adopt_count: int = 0
     spawn_count: int = 0
     skipped_count: int = 0
     blocked_count: int = 0
@@ -2579,6 +2580,7 @@ class AgentTeamLaunchRequest(BaseModel):
     requested_by: Optional[str] = None
     slot_ids: Optional[List[int]] = None
     reuse_existing: bool = True
+    adopt_unbound_sessions: bool = False
     include_disabled: bool = False
     confirm_plan_hash: Optional[str] = None
     skip_plan_confirmation: bool = False
