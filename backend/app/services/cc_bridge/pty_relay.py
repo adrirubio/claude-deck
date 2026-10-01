@@ -83,9 +83,13 @@ class PtyRelay:
     def __init__(self, target: str, read_only: bool = True):
         self.target = target
         self.read_only = read_only
+        self._interactive_granted = not read_only
         self.master_fd: Optional[int] = None
         self.process: Optional[subprocess.Popen] = None
         self._closed = False
+
+    def set_read_only(self, requested: bool) -> None:
+        self.read_only = not (self._interactive_granted and requested is False)
 
     async def run(self, websocket: WebSocket) -> None:
         """Main relay loop — connect tmux to the WebSocket."""
@@ -168,7 +172,7 @@ class PtyRelay:
                         if ctrl["type"] == "resize":
                             resize_pty(master_fd, ctrl.get("rows", 24), ctrl.get("cols", 80), self.process)
                         elif ctrl["type"] == "mode":
-                            self.read_only = ctrl.get("readOnly", True)
+                            self.set_read_only(ctrl.get("readOnly", True))
                     elif not self.read_only:
                         os.write(master_fd, text.encode())
 

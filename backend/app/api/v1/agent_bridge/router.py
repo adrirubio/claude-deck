@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import logging
-import secrets
-import time
 from datetime import datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,11 +21,16 @@ from app.models.schemas import (
     BridgeAttachmentResponse,
 )
 from app.config import settings
-from app.api.v1.deps import require_operator
+from app.api.v1.deps import require_mail_session_or_operator, require_operator
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 from app.services.agent_bridge.discovery import capture_pane_preview, discover_agent_sessions
 from app.services.agent_bridge.pty_relay import PtyRelay, is_target_interactive
 from app.services.agent_bridge.spawn import kill_session, spawn_session
+from app.services.bridge_terminal_tokens import (
+    TerminalPurpose,
+    TerminalTokenStore,
+    token_from_protocol_header,
+)
 from app.services.providers import get_provider
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.agent_mail_service import (
@@ -42,8 +45,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_tokens: dict[str, float] = {}
-_TOKEN_TTL = 30
+_terminal_tokens = TerminalTokenStore()
 
 
 class SpawnRequest(BaseModel):
@@ -292,15 +294,16 @@ def get_session_preview(target: str):
 
 
 @router.get("/token")
-async def get_terminal_token():
-    now = time.time()
-    expired = [token for token, issued_at in _tokens.items() if now - issued_at > _TOKEN_TTL]
-    for token in expired:
-        _tokens.pop(token, None)
-
-    token = secrets.token_urlsafe(32)
-    _tokens[token] = now
-    return {"token": token}
+async def get_terminal_token(
+    response: Response,
+    target: str = Query(min_length=1),
+    purpose: TerminalPurpose = "readonly",
+    x_deck_operator_token: str | None = Header(default=None),
+):
+    if purpose == "interactive":
+        await require_operator(x_deck_operator_token)
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": _terminal_tokens.issue(target, purpose)}
 
 
 def _is_same_origin_host(origin: str, request_host: str) -> bool:
@@ -320,19 +323,15 @@ def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
     return _is_same_origin_host(origin, (websocket.headers.get("host") or "").lower())
 
 
-def _validate_token(token: str) -> bool:
-    issued_at = _tokens.pop(token, None)
-    return issued_at is not None and (time.time() - issued_at) <= _TOKEN_TTL
-
-
 def _require_attachment_access(
     request: Request,
     token: str,
+    target: str,
 ) -> None:
     origin = request.headers.get("origin", "")
     if origin and not _is_same_origin_host(origin, (request.headers.get("host") or "").lower()):
         raise HTTPException(status_code=403, detail="Invalid origin")
-    if not _validate_token(token):
+    if not _terminal_tokens.consume(token, target, "attachment"):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
@@ -340,7 +339,6 @@ def _require_attachment_access(
 async def session_terminal(
     websocket: WebSocket,
     target: str,
-    token: str = "",
     mode: str = "readonly",
 ):
     origin = websocket.headers.get("origin", "")
@@ -348,7 +346,8 @@ async def session_terminal(
         await websocket.close(code=4403, reason="Invalid origin")
         return
 
-    if not _validate_token(token):
+    token = token_from_protocol_header(websocket.headers.get("sec-websocket-protocol", ""))
+    if mode not in ("readonly", "interactive") or not _terminal_tokens.consume(token, target, mode):
         await websocket.close(code=4401, reason="Invalid or expired token")
         return
 
@@ -367,7 +366,7 @@ async def upload_session_attachment(
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
     try:
         content = await file.read(settings.bridge_attachment_max_bytes + 1)
         return await agent_bridge_attachment_service.create_attachment(
@@ -390,7 +389,7 @@ async def list_session_attachments(
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
     attachments = await agent_bridge_attachment_service.list_attachments(db, target=target)
     return BridgeAttachmentListResponse(attachments=attachments)
 
@@ -405,9 +404,30 @@ async def paste_session_attachment(
     paste_request: BridgeAttachmentPasteRequest,
     request: Request,
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
+    if principal is not None:
+        matches = (
+            principal.source == "mcp"
+            and principal.tmux_target == target
+            and principal.pane_id is not None
+            and principal.bound_pane_pid is not None
+            and principal.bound_pane_proc_start is not None
+            and principal.pid == principal.bound_pane_pid
+            and peer_process.pane_is_alive(
+                principal.bound_pane_pid, principal.bound_pane_proc_start
+            ) is True
+            and any(
+                pane.get("tmux_target") == target
+                and pane.get("pane_id") == principal.pane_id
+                and str(pane.get("pid")) == str(principal.pid)
+                for pane in discover_agent_sessions()
+            )
+        )
+        if not matches:
+            raise HTTPException(status_code=403, detail="attachment_target_not_owned")
     if paste_request.require_interactive_relay and not is_target_interactive(target):
         raise HTTPException(status_code=409, detail="Terminal relay is read-only or not attached")
     try:
@@ -416,6 +436,7 @@ async def paste_session_attachment(
             target=target,
             attachment_id=attachment_id,
             request=paste_request,
+            send_target=principal.pane_id if principal is not None else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -432,7 +453,7 @@ async def delete_session_attachment(
     token: str = Header(default="", alias="X-Claude-Deck-Terminal-Token"),
     db: AsyncSession = Depends(get_db),
 ):
-    _require_attachment_access(request, token)
+    _require_attachment_access(request, token, target)
     try:
         return await agent_bridge_attachment_service.delete_attachment(
             db,

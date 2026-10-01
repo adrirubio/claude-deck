@@ -171,8 +171,10 @@ def _dispatch_request(method: str, path: str, **kwargs) -> dict:
     return _deck_request(method, "agent-teams", path, **kwargs)
 
 
-def _bridge_request_with_token(method: str, path: str, **kwargs) -> dict:
-    token_result = _bridge_request("GET", "/token")
+def _bridge_request_with_token(method: str, path: str, *, target: str, **kwargs) -> dict:
+    token_result = _bridge_request(
+        "GET", f"/token?target={quote(target, safe='')}&purpose=attachment"
+    )
     if not token_result["ok"]:
         return token_result
     token = token_result["data"].get("token")
@@ -780,6 +782,7 @@ def deck_attach_image_to_bridge_session(
         upload = _bridge_request_with_token(
             "POST",
             f"{_bridge_session_path(target)}/attachments",
+            target=target,
             files={"file": (os.path.basename(expanded_path), handle)},
             data=data,
         )
@@ -790,6 +793,7 @@ def deck_attach_image_to_bridge_session(
     paste = _bridge_request_with_token(
         "POST",
         f"{_bridge_session_path(target)}/attachments/{attachment['id']}/paste",
+        target=target,
         json={"submit": submit},
     )
     if not paste["ok"]:
@@ -800,7 +804,9 @@ def deck_attach_image_to_bridge_session(
 @mcp.tool()
 def deck_list_bridge_attachments(target: str) -> dict:
     """List recent image attachments for an Agent Bridge tmux target."""
-    result = _bridge_request_with_token("GET", f"{_bridge_session_path(target)}/attachments")
+    result = _bridge_request_with_token(
+        "GET", f"{_bridge_session_path(target)}/attachments", target=target
+    )
     if not result["ok"]:
         return result
     return {"ok": True, **result["data"]}
@@ -817,6 +823,7 @@ def deck_paste_bridge_attachment(
     result = _bridge_request_with_token(
         "POST",
         f"{_bridge_session_path(target)}/attachments/{attachment_id}/paste",
+        target=target,
         json={"submit": submit},
     )
     if not result["ok"]:

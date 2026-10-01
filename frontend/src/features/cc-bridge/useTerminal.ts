@@ -22,6 +22,7 @@ interface TerminalShortcutOptions {
   target?: string | null
   onLeaderNavigate?: (sourceTarget: string, direction: LeaderNavigationDirection) => void
   onLeaderStateChange?: (sourceTarget: string, active: boolean) => void
+  onRequestModeChange?: () => void
 }
 
 function isLeaderPrefix(event: KeyboardEvent): boolean {
@@ -59,24 +60,20 @@ export function useTerminal(
   const sourceTargetRef = useRef<string | null>(shortcutOptions.target ?? null)
   const onLeaderNavigateRef = useRef(shortcutOptions.onLeaderNavigate)
   const onLeaderStateChangeRef = useRef(shortcutOptions.onLeaderStateChange)
+  const onRequestModeChangeRef = useRef(shortcutOptions.onRequestModeChange)
+  const attachSequenceRef = useRef(0)
   const leaderArmedRef = useRef(false)
   const leaderTimeoutRef = useRef<number | null>(null)
   const [connected, setConnected] = useState(false)
-  const [readOnly, setReadOnly] = useState(true)
+  const [readOnly, setReadOnlyState] = useState(true)
   const readOnlyRef = useRef(true)
 
   useEffect(() => {
     sourceTargetRef.current = shortcutOptions.target ?? null
     onLeaderNavigateRef.current = shortcutOptions.onLeaderNavigate
     onLeaderStateChangeRef.current = shortcutOptions.onLeaderStateChange
-  }, [shortcutOptions.onLeaderNavigate, shortcutOptions.onLeaderStateChange, shortcutOptions.target])
-
-  useEffect(() => {
-    readOnlyRef.current = readOnly
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'mode', readOnly }))
-    }
-  }, [readOnly])
+    onRequestModeChangeRef.current = shortcutOptions.onRequestModeChange
+  }, [shortcutOptions.onLeaderNavigate, shortcutOptions.onLeaderStateChange, shortcutOptions.onRequestModeChange, shortcutOptions.target])
 
   const notifyLeaderState = useCallback((active: boolean) => {
     const sourceTarget = sourceTargetRef.current
@@ -163,7 +160,7 @@ export function useTerminal(
         event.preventDefault()
         event.stopPropagation()
         disarmLeader()
-        setReadOnly((current) => !current)
+        onRequestModeChangeRef.current?.()
         return false
       }
 
@@ -189,32 +186,34 @@ export function useTerminal(
     termRef.current.options.theme = themeRef.current
   }, [terminalTheme])
 
-  const attach = useCallback(async (target: string) => {
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-
+  const attach = useCallback(async (
+    target: string,
+    mode: 'readonly' | 'interactive' = 'readonly',
+    operatorToken?: string,
+  ) => {
+    const sequence = ++attachSequenceRef.current
     initTerminal()
     const term = termRef.current
     if (!term) return
 
-    term.clear()
-
-    const { token } = await fetchTerminalToken()
+    const { token } = await fetchTerminalToken(target, mode, operatorToken)
 
     // Guard against StrictMode race: if the terminal was disposed and replaced
     // during the async token fetch, this attach call is stale — bail out.
-    if (termRef.current !== term) return
+    if (termRef.current !== term || attachSequenceRef.current !== sequence) return
 
-    const mode = readOnlyRef.current ? 'readonly' : 'interactive'
-    const url = buildTerminalWsUrl(target, token, mode)
+    if (wsRef.current) wsRef.current.close()
+    term.clear()
+    readOnlyRef.current = mode === 'readonly'
+    setReadOnlyState(readOnlyRef.current)
+    const url = buildTerminalWsUrl(target, mode)
 
-    const ws = new WebSocket(url)
+    const ws = new WebSocket(url, [`deck-terminal.${token}`])
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
 
     ws.onopen = () => {
+      if (wsRef.current !== ws) return
       setConnected(true)
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit()
@@ -241,11 +240,11 @@ export function useTerminal(
     }
 
     ws.onclose = () => {
-      setConnected(false)
+      if (wsRef.current === ws) setConnected(false)
     }
 
     ws.onerror = () => {
-      setConnected(false)
+      if (wsRef.current === ws) setConnected(false)
     }
 
     const onDataDisposable = term.onData((data) => {
@@ -266,13 +265,22 @@ export function useTerminal(
     }, { once: true })
   }, [initTerminal])
 
+  const setReadOnly = useCallback(async (value: boolean, operatorToken?: string) => {
+    const target = sourceTargetRef.current
+    if (!target) return
+    await attach(target, value ? 'readonly' : 'interactive', operatorToken)
+  }, [attach])
+
   const detach = useCallback(() => {
+    attachSequenceRef.current += 1
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
     }
     disarmLeader()
     setConnected(false)
+    readOnlyRef.current = true
+    setReadOnlyState(true)
     termRef.current?.clear()
     termRef.current?.writeln('\x1b[90mDetached.\x1b[0m')
   }, [disarmLeader])
@@ -308,6 +316,7 @@ export function useTerminal(
 
   useEffect(() => {
     return () => {
+      attachSequenceRef.current += 1
       clearLeaderTimeout()
       if (leaderArmedRef.current) {
         leaderArmedRef.current = false

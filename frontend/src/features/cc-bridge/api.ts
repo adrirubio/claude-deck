@@ -1,4 +1,4 @@
-import { apiClient, buildEndpoint, type ApiError } from '@/lib/api'
+import { ApiHttpError, apiClient, buildEndpoint, type ApiError } from '@/lib/api'
 import { API_BASE_URL } from '@/lib/constants'
 import { getOperatorToken } from '@/features/agent-teams/operatorAuth'
 import type { AgentProviderId } from '@/types/providers'
@@ -35,9 +35,10 @@ function apiErrorMessage(error: ApiError, fallback = 'An error occurred'): strin
 
 async function attachmentRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  target: string,
+  options: RequestInit = {},
 ): Promise<T> {
-  const { token } = await fetchTerminalToken()
+  const { token } = await fetchTerminalToken(target, 'attachment')
   const headers = new Headers(options.headers)
   headers.set('X-Claude-Deck-Terminal-Token', token)
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -49,7 +50,7 @@ async function attachmentRequest<T>(
     const error: ApiError = await response.json().catch(() => ({
       message: `HTTP ${response.status}: ${response.statusText}`,
     }))
-    throw new Error(apiErrorMessage(error))
+    throw new ApiHttpError(apiErrorMessage(error), response.status)
   }
 
   return response.json()
@@ -88,14 +89,22 @@ export async function fetchSessionPreview(target: string): Promise<CCPreviewResp
   return apiClient<CCPreviewResponse>(`${BASE}/sessions/${encodeURIComponent(target)}/preview`)
 }
 
-export async function fetchTerminalToken(): Promise<CCTokenResponse> {
-  return apiClient<CCTokenResponse>(BASE + '/token')
+export async function fetchTerminalToken(
+  target: string,
+  purpose: 'readonly' | 'interactive' | 'attachment',
+  operatorToken?: string,
+): Promise<CCTokenResponse> {
+  return apiClient<CCTokenResponse>(buildEndpoint(BASE + '/token', { target, purpose }), {
+    headers: purpose === 'interactive'
+      ? { 'X-Deck-Operator-Token': operatorToken ?? getOperatorToken() ?? '' }
+      : undefined,
+  })
 }
 
-export function buildTerminalWsUrl(target: string, token: string, mode: 'readonly' | 'interactive' = 'readonly'): string {
+export function buildTerminalWsUrl(target: string, mode: 'readonly' | 'interactive' = 'readonly'): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
-  return `${protocol}//${host}/api/v1/${BASE}/sessions/${encodeURIComponent(target)}/terminal?token=${token}&mode=${mode}`
+  return `${protocol}//${host}/api/v1/${BASE}/sessions/${encodeURIComponent(target)}/terminal?mode=${mode}`
 }
 
 export async function spawnSession(request: SpawnSessionRequest): Promise<SpawnSessionResponse> {
@@ -126,16 +135,18 @@ export async function uploadBridgeAttachment(
   form.append('created_by', 'deck-ui')
   return attachmentRequest<BridgeAttachment>(
     `${BASE}/sessions/${encodeURIComponent(target)}/attachments`,
+    target,
     {
       method: 'POST',
       body: form,
-    }
+    },
   )
 }
 
 export async function listBridgeAttachments(target: string): Promise<BridgeAttachmentListResponse> {
   return attachmentRequest<BridgeAttachmentListResponse>(
-    `${BASE}/sessions/${encodeURIComponent(target)}/attachments`
+    `${BASE}/sessions/${encodeURIComponent(target)}/attachments`,
+    target,
   )
 }
 
@@ -144,15 +155,19 @@ export async function pasteBridgeAttachment(
   attachmentId: number,
   request: BridgeAttachmentPasteRequest
 ): Promise<BridgeAttachmentPasteResponse> {
+  const operatorToken = getOperatorToken()
+  if (!operatorToken) throw new Error('Operator token required to paste into a session')
   return attachmentRequest<BridgeAttachmentPasteResponse>(
     `${BASE}/sessions/${encodeURIComponent(target)}/attachments/${attachmentId}/paste`,
+    target,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'X-Deck-Operator-Token': operatorToken,
       },
       body: JSON.stringify(request),
-    }
+    },
   )
 }
 
@@ -162,6 +177,7 @@ export async function deleteBridgeAttachment(
 ): Promise<BridgeAttachmentDeleteResponse> {
   return attachmentRequest<BridgeAttachmentDeleteResponse>(
     `${BASE}/sessions/${encodeURIComponent(target)}/attachments/${attachmentId}`,
-    { method: 'DELETE' }
+    target,
+    { method: 'DELETE' },
   )
 }

@@ -1,22 +1,21 @@
 """CC Bridge endpoints — session discovery, preview, and terminal WebSocket."""
 import logging
-import secrets
-import time
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, WebSocket, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query, Response, WebSocket
 from pydantic import BaseModel
 
 from app.services.cc_bridge.discovery import discover_cc_sessions, capture_pane_preview
 from app.services.cc_bridge.pty_relay import PtyRelay
+from app.api.v1.deps import require_operator
+from app.services.bridge_terminal_tokens import TerminalTokenStore, token_from_protocol_header
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_tokens: dict[str, float] = {}
-_TOKEN_TTL = 30
+_terminal_tokens = TerminalTokenStore()
 
 
 class SpawnRequest(BaseModel):
@@ -45,16 +44,16 @@ def get_session_preview(target: str):
 
 
 @router.get("/token")
-async def get_terminal_token():
-    """Generate a one-time token for WebSocket authentication."""
-    now = time.time()
-    expired = [t for t, ts in _tokens.items() if now - ts > _TOKEN_TTL]
-    for t in expired:
-        _tokens.pop(t, None)
-
-    token = secrets.token_urlsafe(32)
-    _tokens[token] = now
-    return {"token": token}
+async def get_terminal_token(
+    response: Response,
+    target: str = Query(min_length=1),
+    purpose: Literal["readonly", "interactive"] = "readonly",
+    x_deck_operator_token: str | None = Header(default=None),
+):
+    if purpose == "interactive":
+        await require_operator(x_deck_operator_token)
+    response.headers["Cache-Control"] = "no-store"
+    return {"token": _terminal_tokens.issue(target, purpose)}
 
 
 def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
@@ -85,19 +84,10 @@ def _is_same_origin(origin: str, websocket: WebSocket) -> bool:
     return False
 
 
-def _validate_token(token: str) -> bool:
-    """Validate and consume a one-time token."""
-    issued_at = _tokens.pop(token, None)
-    if issued_at is None:
-        return False
-    return (time.time() - issued_at) <= _TOKEN_TTL
-
-
 @router.websocket("/sessions/{target:path}/terminal")
 async def session_terminal(
     websocket: WebSocket,
     target: str,
-    token: str = "",
     mode: str = "readonly",
 ):
     """Attach to a CC tmux session via WebSocket terminal relay."""
@@ -106,7 +96,8 @@ async def session_terminal(
         await websocket.close(code=4403, reason="Invalid origin")
         return
 
-    if not _validate_token(token):
+    token = token_from_protocol_header(websocket.headers.get("sec-websocket-protocol", ""))
+    if mode not in ("readonly", "interactive") or not _terminal_tokens.consume(token, target, mode):
         await websocket.close(code=4401, reason="Invalid or expired token")
         return
 
