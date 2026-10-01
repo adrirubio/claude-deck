@@ -181,12 +181,21 @@ class PtyRelay:
             except Exception as e:
                 logger.debug(f"Input relay ended: {e}")
 
+        output_task = asyncio.create_task(relay_output())
+        input_task = asyncio.create_task(relay_input())
         try:
-            await asyncio.gather(relay_output(), relay_input())
+            await asyncio.wait(
+                {output_task, input_task}, return_when=asyncio.FIRST_COMPLETED
+            )
         finally:
-            self.close()
+            for task in (output_task, input_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(output_task, input_task, return_exceptions=True)
             loop.remove_reader(master_fd)
-            _active_relays.pop(self.target, None)
+            if _active_relays.get(self.target) is self:
+                _active_relays.pop(self.target, None)
+            await asyncio.to_thread(self.close)
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.close()
 
@@ -215,9 +224,13 @@ class PtyRelay:
 
 async def close_all_relays() -> None:
     """Close all active pty relays. Called on app shutdown."""
-    for relay in list(_active_relays.values()):
-        relay.close()
-    _active_relays.clear()
+    relays = list(_active_relays.values())
+    try:
+        await asyncio.gather(*(asyncio.to_thread(relay.close) for relay in relays))
+    finally:
+        for relay in relays:
+            if _active_relays.get(relay.target) is relay:
+                _active_relays.pop(relay.target, None)
 
 
 def cleanup_orphaned_relays() -> None:
