@@ -97,7 +97,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
             </ol>
             <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
             <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Deck stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>
-            <p><a href="https://github.com/adrirubio/claude-deck/blob/feature/autonomous-github-dispatch/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy operator guide</a>.</p>
+            <p><a href="https://github.com/adrirubio/claude-deck/blob/master/docs/autonomy.md" target="_blank" rel="noreferrer" className="text-primary underline">Read the autonomy operator guide</a>.</p>
           </HelpSection>
         </div>
       </DialogContent>
