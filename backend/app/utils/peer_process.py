@@ -275,11 +275,14 @@ def resolve_peer_pane(
 
 
 def pane_is_alive_strict(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
+    if type(pane_pid) is not int or pane_pid <= 0:
+        return None
+    canonical_pid = int(pane_pid)
     try:
         with open(f"{_PROC_ROOT}/self/stat") as handle:
             handle.read()
         try:
-            with open(f"{_PROC_ROOT}/{pane_pid}/stat") as handle:
+            with open(f"{_PROC_ROOT}/{canonical_pid}/stat") as handle:
                 raw = handle.read()
         except FileNotFoundError:
             return False
