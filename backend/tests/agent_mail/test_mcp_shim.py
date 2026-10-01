@@ -788,7 +788,7 @@ def test_deck_attach_image_to_bridge_session_uploads_and_pastes(monkeypatch, tmp
 
     def fake_bridge_request(method, path, **kwargs):
         requests.append((method, path, kwargs))
-        if (method, path) == ("GET", "/token"):
+        if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": f"token-{len(requests)}"}}
         assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"].startswith("token-")
         if method == "POST" and path == "/sessions/snazzy%3A0.0/attachments":
@@ -831,7 +831,7 @@ def test_deck_list_bridge_attachments_uses_bridge_api(monkeypatch):
 
     def fake_bridge_request(method, path, **kwargs):
         requests.append((method, path, kwargs))
-        if (method, path) == ("GET", "/token"):
+        if (method, path) == ("GET", "/token?target=snazzy%3A0.0&purpose=attachment"):
             return {"ok": True, "data": {"token": "token"}}
         assert kwargs["headers"]["X-Claude-Deck-Terminal-Token"] == "token"
         return {"ok": True, "data": {"attachments": [{"id": 1}]}}

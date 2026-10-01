@@ -12,6 +12,7 @@ import app.models.database  # noqa: F401
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
+from app.api.v1.deps import require_mail_session_or_operator
 from app.models.database import BridgeSessionAttachment
 from app.services.agent_bridge.attachments import agent_bridge_attachment_service
 
@@ -43,6 +44,7 @@ async def client(db):
 
 @pytest.fixture(autouse=True)
 def attachment_boundaries(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "operator_token", "test-operator-secret")
     monkeypatch.setattr(settings, "bridge_attachment_dir", str(tmp_path / "attachments"))
     monkeypatch.setattr(settings, "bridge_attachment_agent_root", None)
     monkeypatch.setattr(settings, "bridge_attachment_max_bytes", 1024)
@@ -61,7 +63,10 @@ def attachment_boundaries(monkeypatch, tmp_path):
 
 
 async def _token(client) -> str:
-    response = await client.get("/api/v1/agent-bridge/token")
+    response = await client.get(
+        "/api/v1/agent-bridge/token",
+        params={"target": "snazzyemail:0.0", "purpose": "attachment"},
+    )
     assert response.status_code == 200
     return response.json()["token"]
 
@@ -106,6 +111,105 @@ async def test_attachment_token_is_required_and_single_use(client):
     assert first.status_code == 200
     assert second.status_code == 401
     assert missing.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_attachment_token_is_bound_to_target_and_cannot_paste_anonymously(client, monkeypatch):
+    token = await _token(client)
+    mismatched = await client.get(
+        "/api/v1/agent-bridge/sessions/other:0.0/attachments",
+        headers={"X-Claude-Deck-Terminal-Token": token},
+    )
+    assert mismatched.status_code == 401
+
+    upload = await client.post(
+        "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        files={"file": ("screen.png", PNG_BYTES, "image/png")},
+    )
+    assert upload.status_code == 200
+    calls = []
+    monkeypatch.setattr(
+        "app.services.agent_bridge.attachments.subprocess.run",
+        lambda args, **_kwargs: calls.append(args),
+    )
+    refused = await client.post(
+        f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{upload.json()['id']}/paste",
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        json={"submit": False},
+    )
+    assert refused.status_code == 401
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_attachment_paste_requires_its_live_bound_pane(client, monkeypatch):
+    upload = await client.post(
+        "/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments",
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        files={"file": ("screen.png", PNG_BYTES, "image/png")},
+    )
+    assert upload.status_code == 200
+    principal = SimpleNamespace(
+        source="mcp",
+        tmux_target="other:0.0",
+        pane_id="%7",
+        pid=31337,
+        bound_pane_pid=31337,
+        bound_pane_proc_start="123",
+    )
+    app.dependency_overrides[require_mail_session_or_operator] = lambda: principal
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", False)
+    monkeypatch.setattr(
+        "app.api.v1.agent_bridge.router.peer_process.pane_is_alive",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        "app.api.v1.agent_bridge.router.discover_agent_sessions",
+        lambda: [{"tmux_target": "snazzyemail:0.0", "pane_id": "%7", "pid": "31337"}],
+    )
+    calls = []
+    monkeypatch.setattr(
+        "app.services.agent_bridge.attachments.subprocess.run",
+        lambda args, **_kwargs: calls.append(args) or SimpleNamespace(returncode=0),
+    )
+    url = f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{upload.json()['id']}/paste"
+    refused = await client.post(
+        url,
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        json={"submit": False},
+    )
+    assert refused.status_code == 403
+    assert calls == []
+
+    principal.tmux_target = "snazzyemail:0.0"
+    principal.pane_id = "%8"
+    wrong_pane = await client.post(
+        url,
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        json={"submit": False},
+    )
+    assert wrong_pane.status_code == 403
+    assert calls == []
+
+    principal.pane_id = "%7"
+    principal.bound_pane_pid = 40404
+    wrong_pid = await client.post(
+        url,
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        json={"submit": False},
+    )
+    assert wrong_pid.status_code == 403
+    assert calls == []
+
+    principal.bound_pane_pid = 31337
+    allowed = await client.post(
+        url,
+        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        json={"submit": False},
+    )
+    assert allowed.status_code == 200
+    assert calls[0][:5] == ["tmux", "send-keys", "-t", "%7", "-l"]
 
 
 @pytest.mark.asyncio
@@ -156,7 +260,10 @@ async def test_paste_attachment_sends_literal_text_then_delayed_enter(client, mo
 
     response = await client.post(
         f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{attachment_id}/paste",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={
+            "X-Claude-Deck-Terminal-Token": await _token(client),
+            "X-Deck-Operator-Token": "test-operator-secret",
+        },
         json={"submit": True, "prefix": "Look: ", "suffix": "\nthanks"},
     )
 
@@ -189,7 +296,10 @@ async def test_paste_attachment_can_require_interactive_relay(client, monkeypatc
 
     response = await client.post(
         f"/api/v1/agent-bridge/sessions/snazzyemail:0.0/attachments/{attachment_id}/paste",
-        headers={"X-Claude-Deck-Terminal-Token": await _token(client)},
+        headers={
+            "X-Claude-Deck-Terminal-Token": await _token(client),
+            "X-Deck-Operator-Token": "test-operator-secret",
+        },
         json={"submit": False, "require_interactive_relay": True},
     )
 
