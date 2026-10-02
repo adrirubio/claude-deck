@@ -102,6 +102,13 @@ def _work_item_response(
         pending_approval_status=(
             pending_approval.status if pending_approval is not None else None
         ),
+        pending_approval_request_message_id=(
+            pending_approval.request_message_id if pending_approval is not None else None
+        ),
+        pending_approval_delivery_status=(
+            ("linked" if pending_approval.request_message_id is not None else "delivery_pending")
+            if pending_approval is not None else None
+        ),
         attempt_phase=item.attempt_phase,
         diagnostic_retry_count=item.diagnostic_retry_count,
         diagnostic_last_verified_sha=item.diagnostic_last_verified_sha,

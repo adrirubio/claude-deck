@@ -53,6 +53,7 @@ from app.models.schemas import (
     DispatchStatusReport,
     GithubActiveContinuationCancelRequest,
     GithubApprovalRequestResponse,
+    GithubInitialApprovalCancelRequest,
     GithubRecoveryCheckpointReleaseRequest,
     GithubContinuationProposalCreate,
     GithubContinuationAckRequest,
@@ -89,6 +90,7 @@ from app.services.github_approval_service import (
     github_approval_service,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
+from app.services.github_initial_approval_recovery import cancel_stranded_initial_approval
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
 from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_app_auth_service import (
@@ -1127,6 +1129,39 @@ async def request_github_work_item_continuation(
 
 
 @router.get(
+    "/github-work-items/{item_id}/approval-requests",
+    response_model=list[GithubApprovalRequestResponse],
+)
+async def list_github_work_item_initial_approvals(
+    item_id: int,
+    response: Response,
+    limit: int = Query(default=50, ge=1, le=200),
+    before_id: int | None = Query(default=None, gt=0),
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    if principal is not None and principal.team_preset_id != scope.preset_id:
+        raise HTTPException(status_code=403, detail="not_team_member")
+    query = select(GithubApprovalRequest).where(
+        GithubApprovalRequest.work_item_id == item_id,
+        GithubApprovalRequest.request_kind == "initial_plan",
+    )
+    if before_id is not None:
+        query = query.where(GithubApprovalRequest.id < before_id)
+    approvals = (
+        await db.execute(query.order_by(GithubApprovalRequest.id.desc()).limit(limit))
+    ).scalars().all()
+    response.headers["Cache-Control"] = "no-store"
+    return [_approval_authority_response(approval) for approval in approvals]
+
+
+@router.get(
     "/github-work-items/{item_id}/scope-revisions",
     response_model=list[GithubScopeRevisionResponse],
 )
@@ -1187,6 +1222,31 @@ async def list_github_work_item_scope_revisions(
         )
         for revision in revisions
     ]
+
+
+@router.post(
+    "/github-work-items/{item_id}/approval-requests/{request_id}/cancel",
+    response_model=GithubApprovalRequestResponse,
+)
+async def cancel_github_work_item_initial_approval(
+    item_id: int,
+    request_id: int,
+    request: GithubInitialApprovalCancelRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        approval = await cancel_stranded_initial_approval(
+            db,
+            work_item_id=item_id,
+            request_id=request_id,
+            dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason,
+        )
+        return _approval_authority_response(approval)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(

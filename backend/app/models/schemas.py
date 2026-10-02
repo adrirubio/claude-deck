@@ -1,7 +1,7 @@
 """Pydantic schemas for API models."""
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class ConfigFile(BaseModel):
@@ -1984,6 +1984,12 @@ class GithubActiveContinuationCancelRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class GithubInitialApprovalCancelRequest(BaseModel):
+    cancel: Literal[True]
+    dispatch_nonce: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class GithubRecoveryCheckpointReleaseRequest(BaseModel):
     release: Literal[True]
     dispatch_nonce: str = Field(min_length=1)
@@ -2007,6 +2013,14 @@ class GithubApprovalRequestResponse(BaseModel):
     created_at: datetime
     decided_at: Optional[datetime] = None
     superseded_at: Optional[datetime] = None
+
+    @computed_field
+    @property
+    def request_delivery_status(self) -> Literal["linked", "delivery_pending", "not_pending"]:
+        """Link presence is transport visibility, not proof of Mail integrity."""
+        if self.status != "pending":
+            return "not_pending"
+        return "linked" if self.request_message_id is not None else "delivery_pending"
 
 
 class MailMessageResponse(BaseModel):
@@ -2500,6 +2514,8 @@ class GithubWorkItemResponse(BaseModel):
     pending_approval_request_id: Optional[int] = None
     pending_approval_kind: Optional[str] = None
     pending_approval_status: Optional[str] = None
+    pending_approval_request_message_id: Optional[int] = None
+    pending_approval_delivery_status: Optional[Literal["linked", "delivery_pending"]] = None
     attempt_phase: str
     diagnostic_retry_count: int
     diagnostic_last_verified_sha: Optional[str] = None
