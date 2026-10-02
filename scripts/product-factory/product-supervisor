@@ -44,11 +44,12 @@ def freeze_product_execution():
    pid=int(path.name);parents[pid]=int(fields[1]);starts[pid]=fields[19];uids[pid]=path.stat().st_uid
   except (OSError,ValueError,IndexError):continue
  roots=set()
- for item in json.loads(launch.read_text()).get('items',[]):
-  target=item.get('tmux_target')
-  if not target:continue
-  result=subprocess.run(['/opt/claude-deck-product/libexec/agent-tmux','display-message','-p','-t',target,'#{pane_pid}'],capture_output=True,text=True,timeout=5,cwd='/tmp')
-  if result.returncode==0 and result.stdout.strip().isdigit():roots.add(int(result.stdout.strip()))
+ targets={i.get('tmux_target') for i in json.loads(launch.read_text()).get('items',[]) if i.get('slot_id') in {1,2,3,4}}
+ # Trusted controller-owned binding rows avoid dependence on a responsive tmux command.
+ with sqlite3.connect('file:/home/deckproductctl/.local/state/claude-deck-product/factory.db?mode=ro',uri=True,timeout=2) as db:
+  rows=db.execute('SELECT pane_pid,pane_proc_start,tmux_target FROM agent_pane_bindings WHERE preset_id=1 AND slot_id IN (1,2,3,4)').fetchall()
+ for pid,start,target in rows:
+  if target in targets and starts.get(pid)==str(start) and uids.get(pid)==1002:roots.add(pid)
  selected=set(roots)
  while True:
   more={p for p,parent in parents.items() if parent in selected and uids.get(p)==1002}
