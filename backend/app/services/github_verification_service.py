@@ -900,6 +900,14 @@ class GithubVerificationService:
         verdict: str,
     ) -> None:
         pr_number = self._pull_number(pull)
+        head_sha = self._head_sha(pull)
+        if (
+            item.pr_number != pr_number
+            or item.verification_head_sha != head_sha
+            or item.verification_started_at is None
+        ):
+            item.verification_head_sha = head_sha
+            item.verification_started_at = datetime.utcnow()
         item.pr_number = pr_number
         item.last_verified_sha = None
         if verdict == "merged":
@@ -1500,6 +1508,19 @@ class GithubVerificationService:
             return
 
         head_sha = self._head_sha(pull)
+        if revision is None and (
+            item.verification_head_sha != head_sha
+            or item.verification_started_at is None
+        ):
+            # Existing rows inherit their last pre-upgrade activity once. A new
+            # observed head gets a full grace period; polling never renews it.
+            if item.verification_head_sha is None:
+                started_at = item.updated_at or item.created_at or datetime.utcnow()
+            else:
+                started_at = datetime.utcnow()
+            item.verification_head_sha = head_sha
+            item.verification_started_at = started_at
+            await db.commit()
         checks = await client.list_check_runs_for_ref(
             scope.repo_owner,
             scope.repo_name,
@@ -1866,7 +1887,7 @@ class GithubVerificationService:
         grace_started_at = (
             revision.submitted_at
             if revision is not None and revision.submitted_at is not None
-            else item.updated_at or item.created_at
+            else item.verification_started_at or item.updated_at or item.created_at
         )
         grace_age = datetime.utcnow() - grace_started_at
         if grace_age < timedelta(seconds=settings.github_check_signal_grace_seconds):
