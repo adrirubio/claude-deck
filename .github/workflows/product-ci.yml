@@ -39,7 +39,7 @@ jobs:
           git config --global user.name 'Product CI'
           git config --global user.email 'product-ci@users.noreply.github.com'
       - name: Run isolated factory regressions
-        run: python -m pytest backend/tests/agent_teams backend/tests/test_sqlite_compat_migrations.py -q --tb=short --disable-warnings
+        run: python -m pytest backend/tests/agent_teams backend/tests/factory backend/tests/test_sqlite_compat_migrations.py -q --tb=short --disable-warnings
 
   frontend:
     name: Product frontend tests and build
