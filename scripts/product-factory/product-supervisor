@@ -1,0 +1,121 @@
+#!/usr/bin/python3
+"""Pause this product factory on recognised safety notices; never retry or change roster."""
+import datetime,json,pathlib,re,sqlite3,subprocess,urllib.request,urllib.error,os,signal
+BASE=pathlib.Path('/opt/claude-deck-product'); OPS=pathlib.Path('/home/deckproductctl/work/operations'); STATE=BASE/'state'; API='http://127.0.0.1:8011/api/v1'
+RULES={'cybersecurity_notice':re.compile(r'this content was flagged for possible cybersecurity risk',re.I),'cyber_authorization_notice':re.compile(r'to get authorized for security work.{0,100}trusted access for cyber',re.I|re.S),'cyber_safety_error':re.compile(r'cyber(?:security)?[_ -](?:safety[_ -])?(?:block(?:ed)?|restriction|content[_ -]filter)|content_policy_violation|safety[_ -]check[_ -]failed',re.I)}
+def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
+def request(method,path,body=None):
+ cfg=dict(l.split('=',1) for l in (BASE/'controller/backend/.env').read_text().splitlines() if '=' in l)
+ req=urllib.request.Request(API+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Content-Type':'application/json','X-Deck-Operator-Token':cfg['OPERATOR_TOKEN']})
+ with urllib.request.urlopen(req,timeout=8) as r:return json.load(r)
+def match(text):
+ for key,pattern in RULES.items():
+  if pattern.search(text):return key
+ return None
+def notice_from_record(record):
+ kind=record.get('type');payload=record.get('payload') or {}
+ if kind=='event_msg' and payload.get('type') in {'error','warning','agent_message'}:return match(str(payload.get('message','')))
+ if kind=='response_item' and payload.get('type')=='message' and payload.get('role')=='assistant':
+  text=' '.join(str(c.get('text','')) for c in payload.get('content',[]) if isinstance(c,dict))
+  for key in ['cybersecurity_notice','cyber_authorization_notice']:
+   if RULES[key].search(text):return key
+  return None
+ # Tool output and user/developer instructions are deliberately excluded.
+ return None
+def save(p,data,mode=0o600):
+ tmp=p.with_suffix(p.suffix+'.tmp');tmp.write_text(json.dumps(data,indent=2)+'\n');tmp.chmod(mode);os.replace(tmp,p)
+def freeze_product_execution():
+ # Stop only descendants of this factory's exact live roster panes. Preserve state.
+ launch=STATE/'launch-result.json'
+ if not launch.exists():return []
+ parents={};starts={};uids={}
+ for path in pathlib.Path('/proc').iterdir():
+  if not path.name.isdigit():continue
+  try:
+   raw=(path/'stat').read_text();fields=raw[raw.rindex(')')+2:].split()
+   pid=int(path.name);parents[pid]=int(fields[1]);starts[pid]=fields[19];uids[pid]=path.stat().st_uid
+  except (OSError,ValueError,IndexError):continue
+ roots=set()
+ for item in json.loads(launch.read_text()).get('items',[]):
+  target=item.get('tmux_target')
+  if not target:continue
+  result=subprocess.run(['/opt/claude-deck-product/libexec/agent-tmux','display-message','-p','-t',target,'#{pane_pid}'],capture_output=True,text=True,timeout=5,cwd='/tmp')
+  if result.returncode==0 and result.stdout.strip().isdigit():roots.add(int(result.stdout.strip()))
+ selected=set(roots)
+ while True:
+  more={p for p,parent in parents.items() if parent in selected and uids.get(p)==1002}
+  if more<=selected:break
+  selected|=more
+ frozen=[]
+ for pid in sorted(selected):
+  if uids.get(pid)!=1002:continue
+  try:os.kill(pid,signal.SIGSTOP);frozen.append({'pid':pid,'proc_start':starts[pid]})
+  except ProcessLookupError:pass
+ return frozen
+def pause(reason,session=None,rule=None):
+ verified=False
+ try:
+  request('PATCH','/agent-teams/presets/1',{'autonomy_enabled':False})
+  verified=not request('GET','/agent-teams/presets/1')['autonomy_enabled']
+ except Exception: pass
+ event={'time_utc':now(),'kind':reason,'classification':'suspected_not_confirmed' if reason=='cybersecurity_block' else 'supervision_failure','notice_rule':rule,'session':session,'preset_id':1,'autonomy_off_verified':verified,'state':'WAITING_FOR_USER','instructions':'Preserve leases, approvals and workspaces. No retry, rephrase, roster/model change or automatic resume. Await the user.'}
+ event['frozen_processes']=freeze_product_execution()
+ incident=STATE/('incident-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S')+'.json');save(incident,event)
+ # No transcript or credential content is exposed through the shared hold file.
+ save(STATE/'HOLD.json',event)
+ save(OPS/'HOLD.json',event,0o644)
+ print(json.dumps(event),flush=True)
+def tick():
+ statefile=STATE/'supervisor-state.json'
+ state=json.loads(statefile.read_text()) if statefile.exists() else {'offsets':{},'last_tick':None}
+ hold=OPS/'HOLD.json'
+ if (STATE/'HOLD.json').exists():
+  if not hold.exists():save(hold,json.loads((STATE/'HOLD.json').read_text()),0o644)
+ if hold.exists():
+  # Reassert the pause until an operator explicitly clears the incident.
+  try:request('PATCH','/agent-teams/presets/1',{'autonomy_enabled':False})
+  except Exception:pass
+  state['last_tick']=now();state['mode']='WAITING_FOR_USER';save(statefile,state);return
+ try:preset=request('GET','/agent-teams/presets/1')
+ except Exception:
+  # A known armed state or an arming marker must fail closed on controller loss.
+  if state.get('autonomy_enabled') or (STATE/'arming-requested').exists():pause('controller_unavailable')
+  state['last_tick']=now();state['mode']='CONTROLLER_UNAVAILABLE';save(statefile,state);return
+ state['autonomy_enabled']=bool(preset['autonomy_enabled'])
+ if state['autonomy_enabled']:
+  try:
+   members=request('GET','/agent-mail/team?sync=true')['members']
+   expected={slot['id'] for slot in preset['slots'] if slot.get('enabled')}
+   connected={m.get('team_slot_id') for m in members if m.get('team_preset_id')==preset['id'] and m.get('status')=='connected'}
+   if not expected<=connected:state['binding_failures']=state.get('binding_failures',0)+1
+   else:state['binding_failures']=0
+   if state['binding_failures']>=3:
+    pause('binding_supervision_unavailable');state['mode']='WAITING_FOR_USER';state['last_tick']=now();save(statefile,state);return
+  except Exception:
+   pause('binding_supervision_unavailable');state['mode']='WAITING_FOR_USER';state['last_tick']=now();save(statefile,state);return
+ # Scan only exact pane targets from this factory's own launch result.
+ launch=STATE/'launch-result.json'
+ if launch.exists():
+  for item in json.loads(launch.read_text()).get('items',[]):
+   target=item.get('tmux_target')
+   if not target or item.get('slot_id') not in {slot['id'] for slot in preset['slots']}:continue
+   result=subprocess.run(['sudo','-H','-u','deckproduct','/opt/claude-deck-product/agent-bin/tmux','capture-pane','-t',target,'-p','-S','-100'],capture_output=True,text=True,timeout=5,cwd='/tmp')
+   if result.returncode==0:
+    for key in ['cybersecurity_notice','cyber_authorization_notice']:
+     if RULES[key].search(result.stdout):
+      pause('cybersecurity_block',session=target,rule=key);state['mode']='WAITING_FOR_USER';state['last_tick']=now();save(statefile,state);return
+ # Agent files belong only to this dedicated product OS user's Codex home.
+ for log in pathlib.Path('/home/deckproduct/.codex/sessions').rglob('*.jsonl'):
+  key=str(log);size=log.stat().st_size;offset=int(state['offsets'].get(key,0))
+  if size<offset:offset=0
+  with log.open(errors='replace') as stream:
+   stream.seek(offset)
+   for line in stream:
+    try:record=json.loads(line)
+    except json.JSONDecodeError:continue
+    found=notice_from_record(record)
+    if found:
+     pause('cybersecurity_block',session=log.stem,rule=found);state['mode']='WAITING_FOR_USER';state['last_tick']=now();state['offsets'][key]=stream.tell() if False else size;save(statefile,state);return
+   state['offsets'][key]=stream.tell()
+ state['last_tick']=now();state['mode']='SUPERVISING' if state['autonomy_enabled'] else 'PREPARED_DISARMED';save(statefile,state)
+if __name__=='__main__':tick()

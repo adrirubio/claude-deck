@@ -1,0 +1,5 @@
+#!/usr/bin/python3
+import os,sys,pwd
+u=pwd.getpwnam('deckproduct')
+env={'HOME':u.pw_dir,'USER':u.pw_name,'LOGNAME':u.pw_name,'PATH':'/opt/claude-deck-product/agent-bin:/opt/claude-deck-product/tools:/usr/bin:/bin','LANG':'C.UTF-8','TERM':os.environ.get('TERM','xterm-256color'),'CLAUDE_DECK_URL':'http://127.0.0.1:8011','CLAUDE_DECK_PROVIDER':'codex-cli'}
+os.execve('/usr/bin/tmux',['tmux','-S','/home/deckproduct/.local/state/claude-deck-product/tmux.sock',*sys.argv[1:]],env)
