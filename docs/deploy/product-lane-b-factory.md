@@ -13,7 +13,7 @@ Prepared 2026-10-02. The operator explicitly authorized completing prerequisites
 - Four separate working directories under `/home/deckproductctl/work/`: coordination, backend, frontend, validation. Dispatch pool: dispatch-1.
 - Leader/backend/frontend: Codex GPT-6.1 Sol (medium/high/high). Validator: Codex GPT-6 Astra high.
 - Single scope and active dispatch; human merge; finite approval/verification rounds. Do not increase concurrency until the first complete cycle is accepted.
-- Shared exclusive heavy-operation lock through `product-heavy`. Agent sandbox permits its checkout and the operations ledger; no Tizonia credentials are copied.
+- Shared exclusive heavy-operation lock through `product-heavy`. Initial Codex workspace-write restrictions were replaced by the explicit temporary bypass decision below; no Tizonia credentials are copied.
 
 The controller needs `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` to resolve sockets and verify peers across the two dedicated UIDs. These permit privileged inspection; agents do not receive them. The GitHub credential is the operator-authorized existing juanrubio login, with its existing account permissions, stored privately in this factory. It is not a narrowly scoped GitHub App installation.
 
@@ -39,3 +39,13 @@ A hold is latched and cannot auto-resume. Await the operator's instructions; do 
 ## Remaining human checkpoints
 
 Human merge stays enabled. Autonomous workers can implement, review and open integration PRs; completed PRs can wait for the operator's return. Pilot task observations and the proceed/reduce/defer decision must be real operator evidence. Promotion and deployment remain separate decisions. Do not invent these prerequisites to keep work moving.
+
+## Temporary harness policy — operator decision, 2026-10-02
+
+The operator explicitly selected `--dangerously-bypass-approvals-and-sandbox` for all four Lane B Codex harnesses and deferred additional confinement. This supersedes the initial workspace-write configuration and its writable-root restrictions. The flag is limited to the dedicated product roster; it is not a global Codex default or a Tizonia roster change.
+
+Root paused intake, obtained normal owner API release of the clean blocked workspace, preserved the conversations, retired old pane bindings, and relaunched distinct resume IDs with the explicit bypass launch option. Actual process arguments must confirm the flag and fresh authenticated wakeable bindings before intake resumes. Existing shared Git branch references remain preserved; reconcile current checkout and fresh dispatch authority instead of carrying forward approval from an earlier attempt.
+
+The existing dedicated OS users, filesystem ownership, pinned controller, protected operator credentials and isolated tmux socket remain. No container, VM, systemd filesystem confinement or additional network boundary was introduced. Agents retain access permitted to their OS account, including the product GitHub login's existing account permissions.
+
+Deck's distinct Leader plan approval, independent exact-head review, human merge, single dispatch and finite budgets remain in effect. The cybersecurity supervisor remains active. This flag does not disable model cybersecurity checks: a recognized notice still pauses/freeze-holds the lane and requires operator instructions. No automatic retries/rephrasing, Pi/OpenRouter switch or safety-hold clearing is authorized.
