@@ -9,7 +9,8 @@ from dataclasses import fields
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -18,8 +19,13 @@ from app.models.database import (
     AgentTeamLaunchItem,
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
+    GithubAttemptScopeRevision,
+    GithubWorkItem,
+    GithubWorkspace,
     MailAgentSession,
     MailTeamMember,
+    TeamGithubScope,
 )
 from app.models.schemas import (
     AgentTeamCreateFromBridgeRequest,
@@ -39,6 +45,7 @@ from app.services import agent_mail_install_service
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.services.agent_bridge.spawn import spawn_session
 from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS, agent_mail_service
+from app.services.github_recovery_gate import configured_recovery_only_attempt
 from app.services.providers import get_provider, get_providers
 from app.services.providers.base import ProviderLaunchError, SpawnCommandOptions
 from app.services.providers.launch_contract import (
@@ -59,6 +66,21 @@ class PlanConflictError(ValueError):
     def __init__(self, message: str, plan: AgentTeamLaunchPlan | None = None):
         super().__init__(message)
         self.plan = plan
+
+
+class TeamDeletionConflictError(ValueError):
+    """A safe refusal shared by direct service callers and the operator API."""
+
+    def __init__(self, blockers: list[dict], block_code: str = "team_in_use"):
+        message = (
+            "Team cannot be deleted while automation or blocking work, approvals, revisions, "
+            "workspace leases, or recovery authority remain. Pause automation and inspect team activity."
+            if block_code == "team_in_use" else
+            "Team deletion cannot verify safe state. Inspect team activity before deleting."
+        )
+        super().__init__(message)
+        self.block_code = block_code
+        self.blockers = blockers
 
 
 _OPTION_FIELDS = {field.name for field in fields(SpawnCommandOptions)}
@@ -135,7 +157,130 @@ class AgentTeamService:
         return await self._preset_response(db, preset)
 
     async def delete_preset(self, db: AsyncSession, preset_id: int) -> None:
-        preset = await self._require_preset(db, preset_id)
+        try:
+            # SQLite is the supported persistence engine. A row lock alone on
+            # another dialect would not serialize inserts into child tables.
+            if db.get_bind().dialect.name != "sqlite":
+                raise TeamDeletionConflictError([], "team_deletion_protection_unavailable")
+            # Reserve the SQLite writer before ANY authoritative guard reads.
+            # Keep it until deletion commits, so competing dispatch/approval/
+            # lease writes either precede the checks or follow the cascade.
+            # A no-op UPDATE also works in an existing SQLAlchemy transaction;
+            # a stale WAL snapshot fails closed instead of being upgraded.
+            with db.no_autoflush:
+                result = await db.execute(
+                    update(AgentTeamPreset)
+                    .where(AgentTeamPreset.id == preset_id)
+                    .values(id=AgentTeamPreset.id)
+                    .execution_options(synchronize_session=False)
+                )
+            if result.rowcount != 1:
+                raise ValueError("Agent team preset not found")
+            await db.flush()
+            preset = (
+                await db.execute(
+                    select(AgentTeamPreset)
+                    .where(AgentTeamPreset.id == preset_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            await self._guard_preset_deletion(db, preset)
+            await self._delete_quiescent_preset(db, preset)
+        except OperationalError as exc:
+            await db.rollback()
+            raise TeamDeletionConflictError([], "team_deletion_state_busy") from exc
+        except Exception:
+            await db.rollback()
+            raise
+
+    async def _guard_preset_deletion(self, db: AsyncSession, preset: AgentTeamPreset) -> None:
+        """Only known terminal authority is deletable; never expose private rows."""
+        preset_id = preset.id
+        scope_ids = select(TeamGithubScope.id).where(TeamGithubScope.preset_id == preset_id)
+        slot_ids = select(AgentTeamSlot.id).where(AgentTeamSlot.preset_id == preset_id)
+        item_ids = select(GithubWorkItem.id).where(
+            or_(
+                GithubWorkItem.scope_id.in_(scope_ids),
+                GithubWorkItem.owner_slot_id.in_(slot_ids),
+                GithubWorkItem.handoff_target_slot_id.in_(slot_ids),
+            )
+        )
+        workspace_ids = select(GithubWorkspace.id).where(GithubWorkspace.scope_id.in_(scope_ids))
+        work_href = f"/api/v1/agent-teams/presets/{preset_id}/github-work-items"
+        blockers = []
+        if preset.autonomy_enabled:
+            blockers.append({"kind": "automation", "id": preset_id, "scope_id": None,
+                             "href": f"/api/v1/agent-teams/presets/{preset_id}"})
+
+        # The existing scope-deletion predicate includes queued, review,
+        # escalated and failed work. Only merged/completed are known safe.
+        items = (await db.execute(
+            select(GithubWorkItem.id, GithubWorkItem.scope_id)
+            .where(GithubWorkItem.id.in_(item_ids),
+                   GithubWorkItem.dispatch_status.not_in(("merged", "completed")))
+            .order_by(GithubWorkItem.id).limit(25)
+        )).all()
+        blockers.extend({"kind": "work_item", "id": row.id, "scope_id": row.scope_id,
+                         "href": work_href} for row in items)
+
+        # Residual identity is authority too, even without a leased item FK.
+        workspaces = (await db.execute(
+            select(GithubWorkspace.id, GithubWorkspace.scope_id).where(
+                or_(GithubWorkspace.scope_id.in_(scope_ids),
+                    GithubWorkspace.leased_item_id.in_(item_ids)),
+                or_(GithubWorkspace.leased_item_id.is_not(None),
+                    GithubWorkspace.lease_token.is_not(None),
+                    GithubWorkspace.leased_owner_pid.is_not(None),
+                    GithubWorkspace.leased_owner_proc_start.is_not(None),
+                    GithubWorkspace.push_token_expires_at.is_not(None),
+                    and_(GithubWorkspace.leased_at.is_not(None),
+                         GithubWorkspace.released_at.is_(None))),
+            ).order_by(GithubWorkspace.id).limit(25)
+        )).all()
+        blockers.extend({"kind": "workspace", "id": row.id, "scope_id": row.scope_id,
+                         "href": f"/api/v1/agent-teams/github-scopes/{row.scope_id}/workspaces"}
+                        for row in workspaces)
+
+        approvals = (await db.execute(
+            select(GithubApprovalRequest.id).where(
+                GithubApprovalRequest.work_item_id.in_(item_ids),
+                GithubApprovalRequest.status.not_in(("approved", "rejected", "superseded", "expired")),
+            ).order_by(GithubApprovalRequest.id).limit(25)
+        )).scalars().all()
+        blockers.extend({"kind": "approval", "id": approval_id, "scope_id": None,
+                         "href": work_href} for approval_id in approvals)
+        revisions = (await db.execute(
+            select(GithubAttemptScopeRevision.id, GithubAttemptScopeRevision.work_item_id).where(
+                or_(GithubAttemptScopeRevision.work_item_id.in_(item_ids),
+                    GithubAttemptScopeRevision.owner_slot_id.in_(slot_ids),
+                    GithubAttemptScopeRevision.expected_workspace_id.in_(workspace_ids)),
+                GithubAttemptScopeRevision.status.not_in(
+                    ("completed", "exhausted", "rejected", "superseded", "expired")
+                ),
+            ).order_by(GithubAttemptScopeRevision.id).limit(25)
+        )).all()
+        blockers.extend({"kind": "revision", "id": row.id, "scope_id": None,
+                         "href": f"/api/v1/agent-teams/github-work-items/{row.work_item_id}/scope-revisions"}
+                        for row in revisions)
+        try:
+            recovery = configured_recovery_only_attempt()
+        except ValueError:
+            raise TeamDeletionConflictError([], "team_deletion_protection_unavailable") from None
+        if recovery is not None:
+            affected = (await db.execute(
+                select(TeamGithubScope.id).where(
+                    TeamGithubScope.id.in_(scope_ids), TeamGithubScope.id == recovery.scope_id
+                )
+            )).scalar_one_or_none()
+            if affected is not None:
+                # Do not disclose the protected recovery target or identity.
+                blockers.append({"kind": "recovery", "id": preset_id, "scope_id": None,
+                                 "href": "/api/v1/agent-teams/github-recovery-gate/active"})
+        if blockers:
+            raise TeamDeletionConflictError(blockers)
+
+    async def _delete_quiescent_preset(self, db: AsyncSession, preset: AgentTeamPreset) -> None:
+        preset_id = preset.id
         slots = await self._slots_for_preset(db, preset_id)
         slot_ids = [slot.id for slot in slots]
         session_condition = MailAgentSession.team_preset_id == preset_id
