@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 15
     env:
       PYTHONPATH: ${{ github.workspace }}/backend
-      DATABASE_URL: sqlite+aiosqlite:///:memory:
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
     steps:
       - uses: actions/checkout@v6
         with:
