@@ -1984,6 +1984,12 @@ class GithubActiveContinuationCancelRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class GithubInitialApprovalCancelRequest(BaseModel):
+    cancel: Literal[True]
+    dispatch_nonce: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 class GithubRecoveryCheckpointReleaseRequest(BaseModel):
     release: Literal[True]
     dispatch_nonce: str = Field(min_length=1)
