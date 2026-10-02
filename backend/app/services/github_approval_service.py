@@ -1455,7 +1455,9 @@ class GithubApprovalService:
         authenticated_owner_member_id: int,
         summary: str,
         plan_metadata: dict | None = None,
+        commit: bool = True,
     ) -> tuple[GithubApprovalRequest, bool]:
+        """Create authority; callers may compose its Mail delivery before commit."""
         if not summary.strip():
             raise GithubApprovalError("approval_summary_required", status_code=400)
         if item.dispatch_nonce is None:
@@ -1467,6 +1469,25 @@ class GithubApprovalService:
         owner, leader = await self._current_participants(db, item)
         if owner.id != authenticated_owner_member_id:
             raise GithubApprovalError("not_item_owner", status_code=403)
+
+        if not commit:
+            # Serialize the composing API before looking up pending/terminal
+            # authority, including an already-linked replay. This also starts
+            # SQLite's outer write transaction before any Mail savepoint.
+            claim = await db.execute(
+                update(GithubWorkItem)
+                .where(
+                    GithubWorkItem.id == item.id,
+                    GithubWorkItem.dispatch_nonce == item.dispatch_nonce,
+                    GithubWorkItem.approval_round_count == item.approval_round_count,
+                    GithubWorkItem.owner_slot_id == owner.team_slot_id,
+                    GithubWorkItem.dispatch_status != "escalated",
+                )
+                .values(updated_at=GithubWorkItem.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            if claim.rowcount != 1:
+                raise GithubApprovalError("stale_approval_context")
 
         request_fingerprint = self.initial_request_fingerprint(
             summary=summary,
@@ -1567,8 +1588,11 @@ class GithubApprovalService:
         request = GithubApprovalRequest(work_item_id=work_item_id, **identity)
         db.add(request)
         try:
-            await db.commit()
-            await db.refresh(request)
+            if commit:
+                await db.commit()
+                await db.refresh(request)
+            else:
+                await db.flush()
             return request, True
         except IntegrityError:
             await db.rollback()
