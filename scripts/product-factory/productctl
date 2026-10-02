@@ -42,9 +42,11 @@ elif args.command=='pause':
 elif args.command=='arm':
  if not args.confirm:sys.exit('Use --confirm only after the operator chooses to start Lane B autonomy.')
  s=status()
- if s['hold']:sys.exit('Lane held; no automatic resume. Await user instructions.')
+ if s['hold'] or (STATE/'HOLD.json').exists():sys.exit('Lane held; no automatic resume. Await user instructions.')
+ if s['repo']!='juanrubio/claude-deck' or s['merge_policy']!='human' or s['concurrency']!=1:sys.exit('Recorded repository, human merge and concurrency one policy required.')
  if not s['github_poll_credential_configured']:sys.exit('Choose/configure product GitHub credentials before arming.')
  sup=json.loads((STATE/'supervisor-state.json').read_text());last=datetime.datetime.fromisoformat(sup['last_tick']);age=(datetime.datetime.now(datetime.timezone.utc)-last).total_seconds()
+ if sup.get('mode')!='PREPARED_DISARMED' or sup.get('autonomy_enabled'):sys.exit('Supervisor must confirm prepared/disarmed state before arming.')
  if age>30:sys.exit('Supervisor is stale; arming refused.')
  queue=json.loads((WORK/'operations/queue.json').read_text())
  if not queue['gates']['packet_accepted']:sys.exit('Packet review acceptance required before autonomous implementation.')
@@ -52,7 +54,11 @@ elif args.command=='arm':
  expected={x['id'] for x in api('GET','/agent-teams/presets/1')['slots']}
  bound={m.get('team_slot_id') for m in members if m.get('team_preset_id')==1 and m.get('wake_state')=='wakeable'}
  if not expected<=bound:sys.exit('Every product slot must have a verified wakeable binding before arming.')
+ scope=api('GET','/agent-teams/presets/1/github-scopes')['scopes'][0]
+ if scope['id']!=1 or scope['base_ref']!='origin/feature/software-delivery-product-reposition' or scope['max_auto_merges_per_day']!=0 or scope['max_approval_rounds']!=3 or scope['max_verification_retries']!=2 or scope['continuation_enabled']:sys.exit('Scope differs from the accepted bootstrap policy.')
+ if queue['repo']!='juanrubio/claude-deck' or queue['integration']!='feature/software-delivery-product-reposition':sys.exit('Ledger destination mismatch.')
  # Initial stage admits only the first backend task; later gates are checked by B1.
+ if set(queue['eligible_dispatch_issues'])!={5}:sys.exit('Initial queue must contain only deletion-guard issue #5.')
  if not queue['eligible_dispatch_issues']:sys.exit('No accepted eligible dispatch issue in the ledger.')
  (STATE/'arming-requested').write_text(stamp()+'\n')
  api('PATCH','/agent-teams/github-scopes/1',{'enabled':True});api('PATCH','/agent-teams/presets/1',{'autonomy_enabled':True})

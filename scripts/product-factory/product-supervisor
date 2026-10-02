@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Pause this product factory on recognised safety notices; never retry or change roster."""
-import datetime,json,pathlib,re,sqlite3,subprocess,urllib.request,urllib.error,os,signal
+import datetime,json,pathlib,re,sqlite3,subprocess,urllib.request,urllib.error,os,signal,tempfile
 BASE=pathlib.Path('/opt/claude-deck-product'); OPS=pathlib.Path('/home/deckproductctl/work/operations'); STATE=BASE/'state'; API='http://127.0.0.1:8011/api/v1'
 RULES={'cybersecurity_notice':re.compile(r'this content was flagged for possible cybersecurity risk',re.I),'cyber_authorization_notice':re.compile(r'to get authorized for security work.{0,100}trusted access for cyber',re.I|re.S),'cyber_safety_error':re.compile(r'cyber(?:security)?[_ -](?:safety[_ -])?(?:block(?:ed)?|restriction|content[_ -]filter)|content_policy_violation|safety[_ -]check[_ -]failed',re.I)}
 def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -23,7 +23,15 @@ def notice_from_record(record):
  # Tool output and user/developer instructions are deliberately excluded.
  return None
 def save(p,data,mode=0o600):
- tmp=p.with_suffix(p.suffix+'.tmp');tmp.write_text(json.dumps(data,indent=2)+'\n');tmp.chmod(mode);os.replace(tmp,p)
+ # Stage only in root-owned private state; replace destination symlinks atomically.
+ fd,name=tempfile.mkstemp(prefix='.supervisor-',dir=STATE)
+ try:
+  os.fchmod(fd,mode)
+  with os.fdopen(fd,'w') as f:f.write(json.dumps(data,indent=2)+'\n');f.flush();os.fsync(f.fileno())
+  os.replace(name,p)
+ finally:
+  try:os.unlink(name)
+  except FileNotFoundError:pass
 def freeze_product_execution():
  # Stop only descendants of this factory's exact live roster panes. Preserve state.
  launch=STATE/'launch-result.json'
@@ -49,8 +57,11 @@ def freeze_product_execution():
  frozen=[]
  for pid in sorted(selected):
   if uids.get(pid)!=1002:continue
-  try:os.kill(pid,signal.SIGSTOP);frozen.append({'pid':pid,'proc_start':starts[pid]})
-  except ProcessLookupError:pass
+  try:
+   raw=pathlib.Path(f'/proc/{pid}/stat').read_text();current=raw[raw.rindex(')')+2:].split()[19]
+   if current!=starts[pid]:continue
+   os.kill(pid,signal.SIGSTOP);frozen.append({'pid':pid,'proc_start':starts[pid]})
+  except (OSError,IndexError,ValueError):pass
  return frozen
 def pause(reason,session=None,rule=None):
  verified=False
@@ -59,7 +70,11 @@ def pause(reason,session=None,rule=None):
   verified=not request('GET','/agent-teams/presets/1')['autonomy_enabled']
  except Exception: pass
  event={'time_utc':now(),'kind':reason,'classification':'suspected_not_confirmed' if reason=='cybersecurity_block' else 'supervision_failure','notice_rule':rule,'session':session,'preset_id':1,'autonomy_off_verified':verified,'state':'WAITING_FOR_USER','instructions':'Preserve leases, approvals and workspaces. No retry, rephrase, roster/model change or automatic resume. Await the user.'}
- event['frozen_processes']=freeze_product_execution()
+ # Latch the private/shared hold before any fallible process inspection.
+ save(STATE/'HOLD.json',event)
+ save(OPS/'HOLD.json',event,0o644)
+ try:event['frozen_processes']=freeze_product_execution()
+ except Exception as exc:event['freeze_error']=type(exc).__name__
  incident=STATE/('incident-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S')+'.json');save(incident,event)
  # No transcript or credential content is exposed through the shared hold file.
  save(STATE/'HOLD.json',event)
