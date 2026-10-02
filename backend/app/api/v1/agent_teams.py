@@ -1836,6 +1836,7 @@ async def claim_github_work_item_continuation(
             else None
         ),
         continuation_block_code=continuation_block_code,
+        review_rework_guidance=github_dispatch_service.review_rework_guidance(item),
         continuation_budget={
             "max_revisions": scope.max_continuation_revisions,
             "used_revisions": int(revision_count),
