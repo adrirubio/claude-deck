@@ -11,14 +11,14 @@ Deploy four product harness sessions first, coordinated through a dedicated Clau
 | Decision | Required behavior |
 | --- | --- |
 | Start order | Product lane first. Soak preparation and live intake wait for a separate start decision. Product work does not require soak completion. |
-| Product tracking | [#404](https://github.com/adrirubio/claude-deck/issues/404), label `lane:product-reposition`. |
+| Product tracking | [#404](https://github.com/juanrubio/claude-deck/issues/3), label `lane:product-reposition`. |
 | Soak tracking | [#403](https://github.com/adrirubio/claude-deck/issues/403), label `lane:tizonia-v1-soak`. |
 | Product integration | All product implementation and packet reconciliation PRs target `feature/software-delivery-product-reposition` on `juanrubio/claude-deck`. Task branches start from its current tip. |
-| Integration baseline | The product integration branch was created from `ac9252242fcf436c3ea9997add5d32416cad2cd1`, the master merge of [PR #399](https://github.com/adrirubio/claude-deck/pull/399), merged 2026-10-01T19:20:30Z. This satisfies G00. |
+| Integration baseline | The fork product integration branch was created from `ac9252242fcf436c3ea9997add5d32416cad2cd1`, the master merge of [PR #399](https://github.com/adrirubio/claude-deck/pull/399), merged 2026-10-01T19:20:30Z. This satisfies G00. |
 | Product promotion | A separately reviewed promotion PR to `master` follows accepted milestone evidence and an explicit promotion decision. Integration merges do not deploy either runtime. |
 | Deferred hardening | #356, #389 and #390 remain outside both active queues under `autonomy-hardening`; #356 is also `deferred`. |
 
-This plan supersedes older packet instructions that target individual product PRs at `master` or say G00 is still open. [#410](https://github.com/adrirubio/claude-deck/issues/410) owns reconciliation of the remaining packet, source assumptions and contracts. The milestone and acceptance requirements in the packet continue to apply.
+This plan supersedes older packet instructions that target individual product PRs at `master` or say G00 is still open. [#410](https://github.com/juanrubio/claude-deck/issues/4) owns reconciliation of the remaining packet, source assumptions and contracts. The milestone and acceptance requirements in the packet continue to apply.
 
 The Tizonia source plan is `docs/deploy/tizonia-v1-post-merge-soak-plan.md` in the `claude-deck-master-promotion` worktree. Its deployment, arming, human merge, checkpoint and exit gates govern Lane A when that lane starts.
 
@@ -153,3 +153,13 @@ After a harness or controller restart, reconcile issue/PR state, exact owner/Lea
 - [ ] Obtain explicit operator enablement; enable automatic integration only after exact-head review enforcement is accepted.
 
 Writing this document does not complete these checks. Session deployment, controller configuration and live operation remain future actions.
+
+## Execution supervision and cybersecurity blocks
+
+The user requested supervision of Lane B once autonomy is enabled, with reference to [Codex issue #43203](https://github.com/openai/codex/issues/43203). That issue reports a suspected false positive; it does not establish the cause or a general diagnosis.
+
+A dedicated supervisor must watch Lane B controller state, exact bound panes and structured Codex error/assistant events. A suspected cybersecurity safety block pauses product autonomy immediately and writes a redacted incident with UTC time, slot/session, work item, PR/head SHA when known, notice classification and execution state. Preserve approvals, workspaces, leases and prior evidence. A stopped dispatcher does not necessarily stop an already executing owner; the roster instructions also require a hold before subsequent work.
+
+After a hold, wait for the user's instructions. Do not automatically retry, rephrase the blocked task, switch models, replace the roster, cancel authority or force-release a workspace. The user may direct a reviewed change from Codex/GPT to Pi/OpenRouter; preserve the same authorized scope, isolation, dependency and review gates, and verify new session bindings before any resume. Resume requires a new explicit user instruction.
+
+The supervisor uses recognisable notices and structured events; it cannot prove that every silent interruption was a cybersecurity block or that every reported block was a false positive. Controller health failures and unresolvable supervision evidence also hold new intake for review. Private logs stay local; public evidence excludes prompts, message bodies and credentials.
