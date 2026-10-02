@@ -378,6 +378,13 @@ def _work_item_response(
         pending_approval_status=(
             pending_approval.status if pending_approval is not None else None
         ),
+        pending_approval_request_message_id=(
+            pending_approval.request_message_id if pending_approval is not None else None
+        ),
+        pending_approval_delivery_status=(
+            ("linked" if pending_approval.request_message_id is not None else "delivery_pending")
+            if pending_approval is not None else None
+        ),
         attempt_phase=item.attempt_phase,
         diagnostic_retry_count=item.diagnostic_retry_count,
         diagnostic_last_verified_sha=item.diagnostic_last_verified_sha,
@@ -1356,6 +1363,39 @@ async def request_github_work_item_continuation(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="github_snapshot_failed") from exc
+
+
+@router.get(
+    "/github-work-items/{item_id}/approval-requests",
+    response_model=list[GithubApprovalRequestResponse],
+)
+async def list_github_work_item_initial_approvals(
+    item_id: int,
+    response: Response,
+    limit: int = Query(default=50, ge=1, le=200),
+    before_id: int | None = Query(default=None, gt=0),
+    principal: MailAgentSession | None = Depends(require_mail_session_or_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await db.get(GithubWorkItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="work_item_not_found")
+    scope = await db.get(TeamGithubScope, item.scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="scope_not_found")
+    if principal is not None and principal.team_preset_id != scope.preset_id:
+        raise HTTPException(status_code=403, detail="not_team_member")
+    query = select(GithubApprovalRequest).where(
+        GithubApprovalRequest.work_item_id == item_id,
+        GithubApprovalRequest.request_kind == "initial_plan",
+    )
+    if before_id is not None:
+        query = query.where(GithubApprovalRequest.id < before_id)
+    approvals = (
+        await db.execute(query.order_by(GithubApprovalRequest.id.desc()).limit(limit))
+    ).scalars().all()
+    response.headers["Cache-Control"] = "no-store"
+    return [_approval_authority_response(approval) for approval in approvals]
 
 
 @router.get(
