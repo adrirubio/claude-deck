@@ -295,6 +295,8 @@ class GithubWorkItem(Base):
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_verified_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    verification_head_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    verification_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ack_received_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_nudge_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

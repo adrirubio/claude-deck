@@ -913,3 +913,29 @@ async def test_rebuild_agent_team_slots_removes_legacy_same_repo_unique_constrai
             assert count == 2
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_compat_adds_verification_clock_columns_without_changing_rows():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("ALTER TABLE github_work_items DROP COLUMN verification_head_sha"))
+            await conn.execute(text("ALTER TABLE github_work_items DROP COLUMN verification_started_at"))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, "
+                "issue_url, github_updated_at, dispatch_status, issue_type, retry_count, "
+                "approval_round_count, active_scope_revision, attempt_phase, diagnostic_retry_count, "
+                "created_at, updated_at) VALUES (1, 1, 5, 'guard', 'url', CURRENT_TIMESTAMP, "
+                "'verifying', 'code', 0, 1, 0, 'implementation', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+                columns = await _sqlite_columns(conn, "github_work_items")
+                assert {"verification_head_sha", "verification_started_at"} <= columns
+                row = (await conn.execute(text(
+                    "SELECT dispatch_status, verification_head_sha, verification_started_at "
+                    "FROM github_work_items WHERE id = 1"))).one()
+                assert tuple(row) == ("verifying", None, None)
+    finally:
+        await engine.dispose()
