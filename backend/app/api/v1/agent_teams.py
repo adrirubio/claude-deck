@@ -53,6 +53,7 @@ from app.models.schemas import (
     DispatchStatusReport,
     GithubActiveContinuationCancelRequest,
     GithubApprovalRequestResponse,
+    GithubInitialApprovalCancelRequest,
     GithubRecoveryCheckpointReleaseRequest,
     GithubContinuationProposalCreate,
     GithubContinuationAckRequest,
@@ -89,6 +90,7 @@ from app.services.github_approval_service import (
     github_approval_service,
 )
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
+from app.services.github_initial_approval_recovery import cancel_stranded_initial_approval
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
 from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_app_auth_service import (
@@ -1187,6 +1189,31 @@ async def list_github_work_item_scope_revisions(
         )
         for revision in revisions
     ]
+
+
+@router.post(
+    "/github-work-items/{item_id}/approval-requests/{request_id}/cancel",
+    response_model=GithubApprovalRequestResponse,
+)
+async def cancel_github_work_item_initial_approval(
+    item_id: int,
+    request_id: int,
+    request: GithubInitialApprovalCancelRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        approval = await cancel_stranded_initial_approval(
+            db,
+            work_item_id=item_id,
+            request_id=request_id,
+            dispatch_nonce=request.dispatch_nonce,
+            reason=request.reason,
+        )
+        return _approval_authority_response(approval)
+    except GithubApprovalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(
