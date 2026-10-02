@@ -1,13 +1,17 @@
 """Database setup with SQLAlchemy async."""
 import hashlib
 import json
+import logging
 
 from sqlalchemy import event
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -20,13 +24,13 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
     future=True,
+    hide_parameters=True,
 )
 
 
-# For SQLite: enable WAL so readers don't block writers (and vice versa).
-# Without this, writes can stall
-# concurrent chart/page reads and can surface "database is locked" under
-# load. WAL is a one-time pragma that persists in the DB header.
+# WAL permits readers and a writer to overlap. SQLite still has one writer;
+# stale read snapshots may need rollback before a write can succeed. A busy
+# timeout alone does not recover that condition. WAL persists in the DB header.
 if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragma(dbapi_conn, _):
@@ -53,6 +57,27 @@ async def get_db() -> AsyncSession:
         try:
             yield session
             await session.commit()
+        except OperationalError as exc:
+            # Do not format the exception: SQLAlchemy includes the SQL and,
+            # without hide_parameters, potentially secret bound parameters.
+            statement_operation = (exc.statement or "").lstrip().split(None, 1)
+            operation = statement_operation[0].upper() if statement_operation else "UNKNOWN"
+            if operation not in {
+                "SELECT", "INSERT", "UPDATE", "DELETE", "BEGIN", "COMMIT",
+                "ROLLBACK", "SAVEPOINT", "RELEASE", "PRAGMA", "ALTER",
+                "CREATE", "DROP",
+            }:
+                operation = "OTHER"
+            logger.warning(
+                "database_operation_failed dialect=%s sqlite_code=%s "
+                "sqlite_name=%s operation=%s",
+                engine.dialect.name,
+                getattr(exc.orig, "sqlite_errorcode", None),
+                getattr(exc.orig, "sqlite_errorname", None),
+                operation,
+            )
+            await session.rollback()
+            raise
         except Exception:
             await session.rollback()
             raise
