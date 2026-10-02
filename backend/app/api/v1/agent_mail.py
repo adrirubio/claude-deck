@@ -1,7 +1,9 @@
 """Agent Mail endpoints: team roster, messages, agent registration, hooks, install."""
+import asyncio
 import hmac
 import logging
 import os
+import sqlite3
 from datetime import datetime
 from typing import Any, Optional
 
@@ -9,11 +11,13 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import (
     close_mail_session,
     mail_session,
+    require_current_mail_session,
     require_mail_session,
     require_operator,
     resolve_request_pane,
@@ -64,6 +68,7 @@ from app.services.github_approval_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_INITIAL_APPROVAL_MAX_ATTEMPTS = 2
 
 
 def _approval_response(request) -> GithubApprovalRequestResponse:
@@ -243,16 +248,13 @@ async def send_operator_global_broadcast(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post(
-    "/approval-requests",
-    response_model=GithubApprovalRequestResponse,
-)
-async def request_work_item_approval(
+async def _persist_initial_approval(
     request: MailApprovalRequestCreate,
-    session: MailAgentSession = Depends(require_mail_session),
-    db: AsyncSession = Depends(get_db),
-):
-    item = await db.get(GithubWorkItem, request.work_item_id)
+    session: MailAgentSession,
+    db: AsyncSession,
+) -> GithubApprovalRequestResponse:
+    """Commit authority, Mail and linkage together, before any external wake."""
+    item = await db.get(GithubWorkItem, request.work_item_id, populate_existing=True)
     if item is None:
         raise HTTPException(status_code=404, detail="work_item_not_found")
     if item.dispatch_nonce != request.dispatch_nonce:
@@ -264,6 +266,7 @@ async def request_work_item_approval(
             authenticated_owner_member_id=session.member_id,
             summary=request.summary,
             plan_metadata=request.plan_metadata,
+            commit=False,
         )
         request_delivery_key = f"github-approval:{approval.id}:request"
         if approval.request_message_id is not None:
@@ -278,8 +281,28 @@ async def request_work_item_approval(
             ):
                 raise GithubApprovalError("approval_request_link_mismatch")
         if approval.status != "pending":
+            await db.commit()
             return _approval_response(approval)
         if approval.request_message_id is None:
+            # A legacy pending row may already be durable. Establish an outer
+            # write transaction before Mail's SAVEPOINT, and recheck the attempt.
+            guard = await db.execute(
+                update(GithubWorkItem)
+                .where(
+                    GithubWorkItem.id == item.id,
+                    GithubWorkItem.dispatch_nonce == approval.dispatch_nonce,
+                    GithubWorkItem.approval_round_count == approval.approval_round,
+                    GithubWorkItem.owner_slot_id == session.team_slot_id,
+                    GithubWorkItem.dispatch_status != "escalated",
+                )
+                .values(updated_at=GithubWorkItem.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            if guard.rowcount != 1:
+                raise GithubApprovalError("stale_approval_context")
+            await db.refresh(approval)
+            if approval.status != "pending":
+                raise GithubApprovalError("request_not_pending")
             message = await agent_mail_service.send_message(
                 db,
                 MailMessageCreate(
@@ -301,6 +324,7 @@ async def request_work_item_approval(
                 authenticated_sender_member_id=session.member_id,
                 delivery_key=request_delivery_key,
                 auto_nudge=False,
+                commit=False,
             )
             link_result = await db.execute(
                 update(GithubApprovalRequest)
@@ -312,7 +336,6 @@ async def request_work_item_approval(
                 .values(request_message_id=message.id)
                 .execution_options(synchronize_session=False)
             )
-            await db.commit()
             await db.refresh(approval)
             if link_result.rowcount != 1 and not (
                 approval.status == "pending"
@@ -328,17 +351,90 @@ async def request_work_item_approval(
             if approval.status in {"approved", "rejected"}:
                 return _approval_response(approval)
             raise GithubApprovalError("request_not_pending")
-        await agent_mail_service.auto_nudge_members(
-            db,
-            {approval.leader_member_id},
-        )
-        return _approval_response(approval)
+        response = _approval_response(approval)
+        await db.commit()
+        return response
     except GithubApprovalError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailAuthorityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailDeliveryIntegrityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+def _is_sqlite_busy(db: AsyncSession, exc: OperationalError) -> bool:
+    if db.get_bind().dialect.name != "sqlite":
+        return False
+    code = getattr(exc.orig, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return (code & 0xFF) == sqlite3.SQLITE_BUSY
+    # Older Python/driver combinations do not supply extended error codes.
+    return (
+        isinstance(exc.orig, sqlite3.OperationalError)
+        and str(exc.orig) == "database is locked"
+    )
+
+
+@router.post(
+    "/approval-requests",
+    response_model=GithubApprovalRequestResponse,
+)
+async def request_work_item_approval(
+    request: MailApprovalRequestCreate,
+    session: MailAgentSession = Depends(require_mail_session),
+    db: AsyncSession = Depends(get_db),
+):
+    session_id = session.id
+    # Allow one fresh-transaction retry; never an unbounded repair loop.
+    for attempt in range(1, _INITIAL_APPROVAL_MAX_ATTEMPTS + 1):
+        try:
+            current_session = await db.get(
+                MailAgentSession, session_id, populate_existing=True
+            )
+            if current_session is None:
+                raise HTTPException(status_code=401, detail="session_token_invalid")
+            require_current_mail_session(current_session)
+            response = await _persist_initial_approval(request, current_session, db)
+            break
+        except OperationalError as exc:
+            retryable = _is_sqlite_busy(db, exc)
+            await db.rollback()
+            if not retryable:
+                raise
+            logger.warning(
+                "initial_approval_sqlite_busy work_item_id=%s attempt=%s "
+                "sqlite_code=%s sqlite_name=%s",
+                request.work_item_id,
+                attempt,
+                getattr(exc.orig, "sqlite_errorcode", None),
+                getattr(exc.orig, "sqlite_errorname", None),
+            )
+            if attempt == _INITIAL_APPROVAL_MAX_ATTEMPTS:
+                raise HTTPException(
+                    status_code=503,
+                    detail="approval_database_busy",
+                    headers={"Retry-After": "1"},
+                ) from exc
+            await asyncio.sleep(0.1)
+        except Exception:
+            await db.rollback()
+            raise
+
+    if response.status == "pending":
+        try:
+            await agent_mail_service.auto_nudge_members(
+                db, {response.leader_member_id}
+            )
+        except Exception as exc:
+            # The message is durable. A best-effort wake is not a submission
+            # failure and must never cause a database transaction to be replayed.
+            await db.rollback()
+            logger.warning(
+                "initial_approval_wake_failed work_item_id=%s request_id=%s "
+                "error_type=%s",
+                response.work_item_id, response.id, type(exc).__name__,
+            )
+    return response
 
 
 @router.post("/decisions", response_model=MailMessageResponse)
