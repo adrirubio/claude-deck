@@ -110,7 +110,7 @@ from app.services.github_verification_service import (
     ContinuationCompletionError,
     github_verification_service,
 )
-from app.services.agent_team_service import PlanConflictError, agent_team_service
+from app.services.agent_team_service import PlanConflictError, TeamDeletionConflictError, agent_team_service
 from app.services.providers.base import ProviderLaunchError
 
 router = APIRouter()
@@ -1862,6 +1862,11 @@ async def delete_preset(
         await agent_team_service.delete_preset(db, preset_id)
         await _sync_github_jobs(db)
         return Response(status_code=204)
+    except TeamDeletionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "block_code": exc.block_code, "blockers": exc.blockers},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
