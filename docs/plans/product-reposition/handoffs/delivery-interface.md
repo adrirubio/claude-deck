@@ -8,7 +8,7 @@ Read the [experience specification](../experience-spec.md) and [architecture con
 
 ## Start conditions
 
-Start only after the autonomy feature has been merged into `master` ([G00](../implementation-plan.md#autonomy-merge-gate)), including fixture-based screen development. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
+G00 is complete. Start P02 only after exact-head packet acceptance and independently reviewed P06 baseline, including fixture-based screen development. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
 
 After G00, develop screens against P01 fixtures while its backend implementation proceeds. Integrate the real API before milestone acceptance. Own the initial Harnesses index; P03 extends it only after the pilot checkpoint. M1a must not depend on the new operations/readiness/catalog API.
 
@@ -50,7 +50,7 @@ Do not infer native page support through `!isCodex` or a positive capability fla
 
 Basic detail loading does not require an operator token. Protected history asks for the existing per-tab operator credential only when requested. Reuse the established credential helper and explicit header contract.
 
-Verify launch/retry client signatures against merged master. Browser actions use operator credentials while the server preserves legitimate constrained agent paths. Do not introduce another token store or cookie login. Record credential prompts and interruptions in the pilot.
+Verify launch/retry client signatures against the recorded autonomy baseline and current fork integration tip. Browser actions use operator credentials while the server preserves legitimate constrained agent paths. Do not introduce another token store or cookie login. Record credential prompts and interruptions in the pilot.
 
 Agent decisions, operator remedies, and human PR review remain distinct. A pending Leader request gets a waiting state and context link; it never becomes a browser approval action.
 
@@ -102,4 +102,4 @@ Report routes and aliases, affected compatibility entries, API fixtures consumed
 
 ## Agent start instruction
 
-> Start P02 for M1a only after autonomy has been merged into master, including fixture-based development. Branch from updated `feature/software-delivery-product-reposition`. Build delivery views, a thin Harnesses index, and static native adapter guards without a P03 dependency. Preserve authority, nonterminal escalation, safe context links, and older-page browsing. Provide functional/browser evidence and the pilot UI before handing Harnesses ownership to P03.
+> Start P02 for M1a after accepted packet reconciliation and independently reviewed P06 baseline, including fixture-based development; consume the acknowledged exact P01 fixture version. Branch from updated `feature/software-delivery-product-reposition`. Build delivery views, a thin Harnesses index, and static native adapter guards without a P03 dependency. Preserve authority, nonterminal escalation, safe context links, and older-page browsing. Provide functional/browser evidence and the pilot UI before handing Harnesses ownership to P03.

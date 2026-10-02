@@ -8,7 +8,7 @@ Read the [architecture contracts](../architecture-contracts.md) and [experience 
 
 ## Start conditions
 
-Start only after the autonomy feature has been merged into `master` ([G00](../implementation-plan.md#autonomy-merge-gate)). Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
+G00 is complete. Start only after accepted packet reconciliation and this package's milestone/assignment gates. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
 
 M1b must be accepted and its contracts stable, with the earlier pilot disposition recorded. The team-deletion guard must be integrated. Preserve the audited operator/agent authorization distinctions, and complete this package's creation/import/duplication guards before exposing wizard writes.
 

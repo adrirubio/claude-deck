@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-02.
 
-**Status:** Deployment proposal. The user has selected product repositioning as the first lane to start. This document does not launch sessions, deploy a backend, enable autonomy or authorize automatic merges.
+**Status:** Product prerequisites authorized; intake is not armed. The user has selected product repositioning as the first lane to start. This document does not launch sessions, deploy a backend, enable autonomy or authorize automatic merges.
 
 Deploy four product harness sessions first, coordinated through a dedicated Claude Deck instance, authenticated Agent Mail and GitHub. Preserve the Tizonia runtime and roster. Add two soak preparation sessions when the user chooses to start that lane. Both lanes are designed to operate independently and eventually concurrently, with their own coordinators and one shared host resource limit.
 
@@ -11,14 +11,14 @@ Deploy four product harness sessions first, coordinated through a dedicated Clau
 | Decision | Required behavior |
 | --- | --- |
 | Start order | Product lane first. Soak preparation and live intake wait for a separate start decision. Product work does not require soak completion. |
-| Product tracking | [#404](https://github.com/juanrubio/claude-deck/issues/3), label `lane:product-reposition`. |
+| Product tracking | [#3](https://github.com/juanrubio/claude-deck/issues/3), label `lane:product-reposition`. |
 | Soak tracking | [#403](https://github.com/adrirubio/claude-deck/issues/403), label `lane:tizonia-v1-soak`. |
 | Product integration | All product implementation and packet reconciliation PRs target `feature/software-delivery-product-reposition` on `juanrubio/claude-deck`. Task branches start from its current tip. |
 | Integration baseline | The fork product integration branch was created from `ac9252242fcf436c3ea9997add5d32416cad2cd1`, the master merge of [PR #399](https://github.com/adrirubio/claude-deck/pull/399), merged 2026-10-01T19:20:30Z. This satisfies G00. |
 | Product promotion | A separately reviewed promotion PR to `master` follows accepted milestone evidence and an explicit promotion decision. Integration merges do not deploy either runtime. |
 | Deferred hardening | #356, #389 and #390 remain outside both active queues under `autonomy-hardening`; #356 is also `deferred`. |
 
-This plan supersedes older packet instructions that target individual product PRs at `master` or say G00 is still open. [#410](https://github.com/juanrubio/claude-deck/issues/4) owns reconciliation of the remaining packet, source assumptions and contracts. The milestone and acceptance requirements in the packet continue to apply.
+This plan supersedes older packet instructions that target individual product PRs at `master` or say G00 is still open. [#4](https://github.com/juanrubio/claude-deck/issues/4) owns reconciliation of the remaining packet, source assumptions and contracts. The milestone and acceptance requirements in the packet continue to apply.
 
 The Tizonia source plan is `docs/deploy/tizonia-v1-post-merge-soak-plan.md` in the `claude-deck-master-promotion` worktree. Its deployment, arming, human merge, checkpoint and exit gates govern Lane A when that lane starts.
 
@@ -28,10 +28,10 @@ The assignments below are recommendations, subject to model availability in the 
 
 | Session | Start | Harness and model | Reasoning | Responsibility |
 | --- | --- | --- | --- | --- |
-| B1 Product Leader | First | Codex, GPT-6.1 Sol | Medium; high for authority or integration decisions | Own #404 and #410, ready queue, plan approvals, shared-file schedule, integration decisions and release ledger. |
-| B2 Product backend | First | Codex, GPT-6.1 Sol | High | Own #411 deletion guard, then #412 P01 and later assigned backend work. |
-| B3 Product frontend | First | Codex, GPT-6.1 Sol | High | Own #413 P02, contracts consumed by the UI, fixtures, adapters and delivery views. |
-| B4 Product validation | First | Codex, GPT-6 Astra | High | Own #417 P06, pre-change baseline, independent PR review and combined milestone evidence. |
+| B1 Product Leader | First | Codex, GPT-6.1 Sol | Medium; high for authority or integration decisions | Own #3 and #4, ready queue, plan approvals, shared-file schedule, integration decisions and release ledger. |
+| B2 Product backend | First | Codex, GPT-6.1 Sol | High | Own #5 deletion guard, then #6 P01 and later assigned backend work. |
+| B3 Product frontend | First | Codex, GPT-6.1 Sol | High | Own #7 P02, contracts consumed by the UI, fixtures, adapters and delivery views. |
+| B4 Product validation | First | Codex, GPT-6 Astra | High | Own #11 P06, pre-change baseline, independent PR review and combined milestone evidence. |
 | A1 Soak coordinator and reviewer | When Lane A starts | Codex, GPT-6 Astra | High | Own #403, read-only reconciliation, operational evidence review and checkpoints. |
 | A2 Soak engineer | When Lane A starts | Codex, GPT-6.1 Sol | High | Own #405 migration/rollback preparation and #406 backlog preflight implementation. |
 
@@ -60,7 +60,7 @@ claude-deck-soak-preflight/        A2 branch from approved release pin, created 
 <existing-live-checkout>/         Dedicated pinned Tizonia backend
 ```
 
-Preserve uncommitted edits in the existing `claude-deck-product-reposition` documentation worktree. Do not reset or rebase it, and do not use its older code as the implementation base. Reconcile its documentation through #410 and make the accepted packet available to the new task worktrees.
+Preserve uncommitted edits in the existing `claude-deck-product-reposition` documentation worktree. Do not reset or rebase it, and do not use its older code as the implementation base. Reconcile its documentation through #4 and make the accepted packet available to the new task worktrees.
 
 Use a dedicated product Deck instance on a recorded reviewed release SHA, initially the PR #399 release candidate subject to setup review. Do not run the coordinator from an implementation branch, hot reload it as agents edit code, or replace its code when a product PR merges. Restarting or upgrading this controller is a separate recorded operation.
 
@@ -111,12 +111,12 @@ Start with one active product dispatch to prove session binding, wake isolation,
 
 | Stage | Assignments | Completion or start gate |
 | --- | --- | --- |
-| Bootstrap | B1 reconciles #410; B4 captures P06 baseline; B2/B3 inspect contracts | Accepted packet and recorded baseline before P02 UI changes. No product setup touches the Tizonia runtime. |
-| M1a implementation | B2 sequences #411 deletion guard and #412 P01; B3 builds #413 P02 against agreed fixtures; B4 validates | P01/P02 integration, V33 deletion evidence and required P06 cases. Assign shared backend files sequentially. |
+| Bootstrap | B1 reconciles #4; B4 captures P06 baseline; B2/B3 inspect contracts | Accepted packet and recorded baseline before P02 UI changes. No product setup touches the Tizonia runtime. |
+| M1a implementation | B2 sequences #5 deletion guard and #6 P01; B3 builds #7 P02 against agreed fixtures; B4 validates | P01/P02 integration, V33 deletion evidence and required P06 cases. Assign shared backend files sequentially. |
 | Pilot checkpoint | B4 reports baseline/after task measurements; B1 assembles decision packet | Operator records proceed, named reductions or defer. No agent invents human observations or accepts the decision on the operator's behalf. |
-| M1b | Assign #414 P03 after the recorded pilot decision | Operations/readiness and accepted M1b evidence. Transfer Harnesses file ownership from P02 explicitly. |
-| M2 | Assign #415 P04 | Accepted M1b, mutation/deletion prerequisites, explicit authority migration and setup evidence. |
-| M3 | Assign #416 P05 | Integrated P04 authority/guards and accepted audit/outcome evidence. |
+| M1b | Assign #8 P03 after the recorded pilot decision | Operations/readiness and accepted M1b evidence. Transfer Harnesses file ownership from P02 explicitly. |
+| M2 | Assign #9 P04 | Accepted M1b, mutation/deletion prerequisites, explicit authority migration and setup evidence. |
+| M3 | Assign #10 P05 | Integrated P04 authority/guards and accepted audit/outcome evidence. |
 | Promotion | B1 prepares a reviewed integration-to-master promotion | Explicit promotion decision and accepted release evidence. No automatic deployment. |
 
 P06 continues throughout. Existing UI issues #364–#366 belong to Lane B for reconciliation of already-landed fixes and remaining criteria. Avoid duplicate implementation. The functional packet and handoffs own detailed acceptance cases; this document owns agent deployment and coordination.
@@ -133,7 +133,7 @@ When an issue needs intervention, leave a specific blocker with the required dec
 
 ## Resource scheduling and recovery
 
-Permit only one memory-heavy local operation across both lanes: full backend suites, frontend production builds, browser fixtures, Tizonia compilation or packaging. The coordinator records the holder, command category and UTC start/end times in the resource ledger. When Lane A starts, its coordinator and B1 share this ledger. Make acquisition exclusive; if no enforceable shared lock/controller exists, serialize heavy operations through the coordinator rather than relying on advisory messages alone.
+Permit only one memory-heavy local operation across both lanes: full backend suites, frontend production builds, browser fixtures, Tizonia compilation or packaging. Use `product-heavy` for each full suite, browser fixture or production build; exit 75 means wait for the shared lock. The coordinator records the holder, command category and UTC start/end times in the resource ledger. When Lane A starts, its coordinator and B1 share this ledger. Make acquisition exclusive; if no enforceable shared lock/controller exists, serialize heavy operations through the coordinator rather than relying on advisory messages alone.
 
 Hosted CI is preferred for Tizonia builds. Local Tizonia compilation requires an enforceable memory limit and initially `-j1`, as specified by the soak plan. Agent count does not imply build concurrency.
 
@@ -142,7 +142,7 @@ After a harness or controller restart, reconcile issue/PR state, exact owner/Lea
 ## Product startup checklist
 
 - [ ] Operator records the product-only start scope; Lane A remains scheduled for later.
-- [ ] Preserve the dirty packet and reconcile #410 against PR #399 and the product integration tip.
+- [ ] Preserve the dirty packet and reconcile #4 against PR #399 and the product integration tip.
 - [ ] Prepare the pinned product controller, dedicated state/ports/credentials, isolation boundary and rollback procedure.
 - [ ] Create B1–B4 task/review worktrees and record each issue, base SHA, model and owner.
 - [ ] Configure one product scope, integration base ref, finite budgets, initial human merge and verified routing.
@@ -152,7 +152,7 @@ After a harness or controller restart, reconcile issue/PR state, exact owner/Lea
 - [ ] Record the shared-file schedule, resource lock, dependency ledger and restart procedure.
 - [ ] Obtain explicit operator enablement; enable automatic integration only after exact-head review enforcement is accepted.
 
-Writing this document does not complete these checks. Session deployment, controller configuration and live operation remain future actions.
+Writing this document does not complete these checks. Current bindings and prerequisite evidence are recorded in the reconciliation ledger. Unverified checklist items remain open; intake needs the root operator arming instruction.
 
 ## Execution supervision and cybersecurity blocks
 

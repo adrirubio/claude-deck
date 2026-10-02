@@ -10,7 +10,7 @@ The soak record establishes why policy changes and outcome claims need durable e
 
 ## Start conditions
 
-Start only after the autonomy feature has been merged into `master` ([G00](../implementation-plan.md#autonomy-merge-gate)). Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
+G00 is complete. Start only after accepted packet reconciliation and this package's milestone/assignment gates. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
 
 P04 authority and mutation authorization coverage must be integrated. Rebase after its model/migration changes. Preserve the current cancellation accounting, diagnostic restoration, and workspace release behavior.
 
@@ -129,4 +129,4 @@ Provide event kinds, actor derivation rules, the safe-field allowlist, retention
 
 ## Agent start instruction
 
-> Start P05 only after autonomy has been merged into master, explicit roles are integrated, and operator guards are complete. Branch from updated `feature/software-delivery-product-reposition` and target the PR at `feature/software-delivery-product-reposition`. Add a transactional observation ledger with retained historical context and evidence-based delivery metrics through existing mutation services. Preserve recovery semantics, distinguish terminal status from proven delivery or human review, and validate deletion, attribution, uncertain outcomes, and missing coverage.
+> Start P05 only after accepted M2, integrated explicit roles, and complete operator guards. Branch from updated `feature/software-delivery-product-reposition` and target the PR at `feature/software-delivery-product-reposition`. Add a transactional observation ledger with retained historical context and evidence-based delivery metrics through existing mutation services. Preserve recovery semantics, distinguish terminal status from proven delivery or human review, and validate deletion, attribution, uncertain outcomes, and missing coverage.

@@ -6,7 +6,7 @@ The repositioning introduces a delivery read model and a new interface over the 
 
 All new endpoints and fields below are proposed implementation contracts. Existing behavior is anchored to the reference commit in the [packet index](README.md).
 
-Implement these contracts only after the autonomy feature has been merged into `master`. Use the updated `master` as the implementation base and reconcile the proposed contracts with the merged autonomy code before editing.
+G00 is satisfied by the recorded PR #399 merge. Implement these contracts only after exact-head packet acceptance and the applicable assignment gates. Use the current fork `feature/software-delivery-product-reposition` tip as the implementation base and reconcile the proposed contracts with the merged autonomy code before editing.
 
 ## Data ownership
 
@@ -194,6 +194,31 @@ For a verified offline owner or Leader, expose a link to that team's launch plan
 
 Build external issue and PR links from validated GitHub identities and numeric IDs. The client builds internal routes from stable IDs. Loading a Mail link only reveals context through the existing read contract; it does not send a message or check an agent's inbox.
 
+### Wire contract and fixture freeze
+
+Schema v1 uses the following envelopes. These are planned API contracts, not existing endpoints. B2 freezes typed schemas and versioned JSON with B3 acknowledgement and B4 review before P02 consumes them. The Overview example above remains authoritative.
+
+| Response | Required shape |
+| --- | --- |
+| Work list | `{schema_version: 1, generated_at, filters, total, has_more, next_cursor, counts, items}`; `filters` includes nullable team/scope/provider and category; `items` is an array of the safe work projections defined above. Counts use the complete selected category/filter set before pagination. |
+| Work detail | `{schema_version: 1, generated_at, work_item}`; `work_item` uses the same projection/allowlist as the list, with no richer private legacy payload. |
+| Repository list | `{schema_version: 1, generated_at, filters, total, has_more, next_cursor, repositories}`; each row is one scope, never merged by repository name. |
+| Repository detail | `{schema_version: 1, generated_at, repository}`; the same scope summary plus polling interval and last poll observation. Work is fetched separately with `scope_id`, preserving pagination. |
+
+`schema_version` is an integer; IDs are positive integers; timestamps are UTC ISO-8601 strings, with null only for unobserved optional events. Empty arrays are `[]`; absent optional associations are explicit null. `next_cursor` is null exactly when `has_more` is false. `total` counts matching rows/scopes, not distinct repository names. An absent known item/scope returns 404 rather than an empty detail.
+
+The nested safe `item` allowlist is `id`, `scope_id`, `issue_number`, `issue_title`, `issue_type`, `dispatch_status`, `attempt_phase`, `pr_number`, `retry_count`, `approval_round_count`, `diagnostic_retry_count`, `active_scope_revision`, `active_scope_status`, `pending_approval_kind`, `pending_approval_status`, `created_at`, `updated_at`, `github_updated_at`, and `last_verified_sha` only when tied to the displayed PR. Optional values are explicit null; unknown state strings remain raw state with category `unknown`. Issue titles are treated as untrusted display text; no HTML, commands or raw URL are executed. External links use the enclosing validated repository identity. The safe `policy` allowlist is `merge_policy`, `max_verification_retries`, `max_approval_rounds`, and `continuation_enabled`; source meanings stay unchanged. Any additional field requires a reviewed contract change before fixture freeze. Workspace association is nullable `{id, state}` with `state` `leased`, `released`, or `unknown`, never a path or token.
+
+A repository projection includes `scope_id`, `team: {id, name}`, validated `github: {owner, name}`, `team_automation_enabled`, `scope_enabled`, `configured_enabled`, the documented `intake`, `poll: {interval_seconds, last_polled_at, freshness}`, and `overlap: {state, other_scope_ids}`. Poll freshness is `fresh`, `stale`, `never_polled`, `suspended`, or `unknown`. Overlap state is `none`, `warning`, or `unknown`; compute against all local enabled scopes sharing the validated repository, before team/provider filters. Project only safe other scope IDs. This warns about independent dispatch authorities and does not arbitrate them.
+
+Work association objects use stable IDs: nullable `owner: {slot_id, member_id, name, configured_provider, provider_label}` and `approver: {slot_id, member_id, source}`. Missing member/runtime values are null and do not establish a bound session. `approver.source` is `first_enabled_slot` at the current baseline, `explicit_assignment` only after P04 exists, or `unknown`. `session` describes the owner's verified association; the approver can have a separate `approver_session` with the same fields. Association objects carry `state`, nullable `observed_provider`, and nullable typed `bridge_target: {team_id, slot_id, member_id, session_id}`. Only a verified bound association supplies a concrete session ID. Offline/ambiguous/unknown associations never select a guessed terminal.
+
+Each projection includes safe `links` hints: nullable `mail: {team_id, slot_id, member_id}`, nullable `launch_plan: {team_id, slot_id}`, and nullable verified `bridge_target`. The frontend builds routes from stable IDs after reconciling existing route support; hints are not commands or raw host URLs. Supply slot launch hints only for a verified offline actor. Opening a hint never launches, sends Mail, changes receipts, claims continuation or releases a workspace. No P03 endpoint is needed by M1a.
+
+`actions` is an array of `{name, state, block_code, reason, required_actor}` for existing remedies: `retry`, `resume_attempt`, `escalate_attempt`, `cancel_continuation_request`, `cancel_active_revision`, or `release_recovery_checkpoint`. State is `eligible`, `blocked`, or `unknown`; required actor is `leader`, `owner`, `operator`, or `unknown`. Emit eligibility only from existing authoritative predicates; otherwise unknown. `waiting.reason_code`, intake reasons and action block codes use an explicit versioned mapping to bounded summaries. Unrecognized persisted codes map to `unknown` with a generic explanation, never raw private text. B2 records the accepted mapping and every nullable field in fixtures; no client infers permission from a label.
+
+New factory read errors use `detail: {code, message}`; validation errors are normalized to this shape for the new router, preserving 422 semantics. Codes are `invalid_filter`, `invalid_cursor`, `resource_not_found`, and `projection_failed` for 422 filter/combinations, 422 malformed/version/filter-mismatched cursors, 404 absent selected resources, and 500 database/projection failures respectively. Legacy remedy errors retain their existing string or `{block_code, message}` payloads and protected routes. The client preserves those errors without converting failures into zero counts. Fixtures cover 404/422 reads and separately 401/403/409 protected remedies; this new contract does not rewrite legacy APIs.
+
 ### Errors and performance
 
 Preserve existing actionable error detail codes. New read errors use a structured detail containing `code` and `message`. A database or projection failure produces an error state, not zero counts.
@@ -202,7 +227,7 @@ Bulk-load work-item authority and associations. Query counts must remain bounded
 
 ## Operator authorization prerequisite
 
-This matrix was checked against `301e37c1e53e822a47a9572dc592e866df77f763`, including route dependencies and internal actor checks. Paths are under `/api/v1/agent-teams`. Reconcile it with the eventual merged `master` and record the resulting matrix and browser client signatures before implementation.
+The original matrix was checked against `301e37c1e53e822a47a9572dc592e866df77f763`; bootstrap reconciliation checks the same route families against `ac9252242fcf436c3ea9997add5d32416cad2cd1`. See the [current server/client reconciliation](reconciliation-ledger.md#authority-and-browser-contracts) for signatures, cancellation and owner release. Paths are under `/api/v1/agent-teams`. Reconcile it with the recorded merged autonomy baseline and current fork integration tip and record the resulting matrix and browser client signatures before implementation.
 
 | Route family | Audited authorization | Reposition requirement |
 | --- | --- | --- |
@@ -230,7 +255,7 @@ After G00, observational delivery work can proceed while remaining guards are co
 
 At the audited snapshot, `delete_preset` is operator protected but lacks an in-use-state check before reassigning Mail sessions and cascading team records. Scope deletion already rejects leases and work in pending, dispatched, verifying, review, escalated, or failed states. Do not describe team deletion as guarded merely because it requires an operator.
 
-The release owner/coordinator must land a focused guard in M0 or as a post-G00 prerequisite before M1a acceptance. Require team automation disabled and check every scope using at least the existing scope-deletion predicate, plus pending approvals and nonterminal revisions. A leased workspace or in-use record returns a structured `409` before any session reassignment or delete. Check and delete in one transaction with concurrency protection so dispatch, approval, or lease acquisition cannot slip between them. Test all API/service entry points, rollback, and races. No force-delete bypass or silent stopping/releasing of work is introduced.
+B2 owns fork #5 as the carried post-G00 prerequisite before #6 admission and M1a acceptance. Require team automation disabled and check every scope using at least the existing scope-deletion predicate, plus pending approvals and nonterminal revisions. A leased workspace or in-use record returns a structured `409` before any session reassignment or delete. Check and delete in one transaction with concurrency protection so dispatch, approval, or lease acquisition cannot slip between them. Test all API/service entry points, rollback, and races. No force-delete bypass or silent stopping/releasing of work is introduced.
 
 This is stricter than the Leader-edit quiescence rule: a queued or escalated item still blocks deletion under the existing scope rule. A safe error identifies the blocking records and existing inspection/remedy links. Only genuinely deletable teams exercise P05's retained-history path.
 

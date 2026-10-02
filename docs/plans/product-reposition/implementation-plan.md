@@ -2,44 +2,33 @@
 
 **Execution baseline, 2026-10-02:** G00 passed through upstream PR #399 / `ac9252242fcf436c3ea9997add5d32416cad2cd1`. Product work starts first in the fork `juanrubio/claude-deck`, from and targeting `feature/software-delivery-product-reposition`. Follow the agent deployment plan and startup gates. Earlier release snapshots and M0 readiness tables are historical evidence; this decision supersedes their pending-G00 or master-target instructions.
 
-Follow **M0 → M1a → pilot checkpoint → M1b → M2 → M3**. Complete the autonomy release first, then pilot delivery observation before investing in the full harness catalog. Guided configuration and explicit authority follow; durable accountability and measured outcomes come last.
+Follow **M0 → M1a → pilot checkpoint → M1b → M2 → M3**. With the autonomy release complete, pilot delivery observation before investing in the full harness catalog. Guided configuration and explicit authority follow; durable accountability and measured outcomes come last.
 
 Use the [product brief](product-brief.md), [experience specification](experience-spec.md), and [architecture contracts](architecture-contracts.md) as the shared requirements. This plan assigns ownership and integration order rather than replacing those contracts.
 
 ## Autonomy merge gate
 
-**G00:** The autonomy feature from `feature/autonomous-github-dispatch` must be merged into `master` before any reposition implementation begins. This prerequisite covers all packages P01–P06, including fixture-based development and implementation validation. Documentation planning can continue before the merge.
-
-Before assigning packages or creating implementation branches, the coordinator records the autonomy merge PR or commit and the resulting `master` SHA. A soak-evidence pass or this documentation packet alone does not satisfy G00. The autonomy release follows its existing release requirements.
+**G00 is satisfied:** upstream PR #399 merged 2026-10-01T19:20:30Z as `ac9252242fcf436c3ea9997add5d32416cad2cd1`. Product implementation uses the fork integration branch, subject to the packet, baseline, owner-bound dispatch and distinct Leader approval gates.
 
 ## M0 autonomy release
 
-M0 makes the existing integration-to-master work visible and accountable. It is not a reposition implementation package and does not relax G00.
+M0 completed with the actual PR #399 merge above. Historical pre-merge planning, audited candidate `301e37c1e53e822a47a9572dc592e866df77f763`, and observed master `96954a6a07d3b376ea9cd32341ce18dd6f6f9328` remain preserved in source snapshot commit `86a0f4702ef40f3f88bc5e1f53b26803ee7a0881`. Their pending owner/date/release assertions no longer schedule product work.
 
-| Planning field | State as of 2026-10-01 |
+| Current record | Disposition |
 | --- | --- |
-| Proposed accountable owner | Leader, in the release-approver role; owner acceptance is pending |
-| Coordinator responsibility | Obtain owner acceptance, track release evidence and blockers, and record the actual merge |
-| Audited candidate for reconciliation | `301e37c1e53e822a47a9572dc592e866df77f763`; a later candidate requires a recorded delta review |
-| Observed master | `96954a6a07d3b376ea9cd32341ce18dd6f6f9328`; G00 not satisfied at this check |
-| Expected completion | Unscheduled; the accepted owner must record a candidate-review date and expected merge date after sizing outstanding work |
-| Readiness disposition | Pending combined-candidate release evidence and approval; the historical soak-evidence pass is insufficient |
+| Autonomy release / G00 | Complete through upstream PR #399 and full merge SHA above |
+| Product integration base / controller pin | `ac9252242fcf436c3ea9997add5d32416cad2cd1`; no runtime upgrade authorized |
+| Packet reconciliation | B1 owns fork #4 / PR #15; exact-head B4 acceptance pending |
+| Carried deletion prerequisite | B2 owns fork #5; V33 blocks M1a acceptance, with #5 before #6 in this factory |
+| P06 baseline | B4 owns fork #11; accepted baseline precedes #7 UI edits |
+| Intake arming | Root operator instruction pending; no readiness label or scope enablement |
+| Pilot / promotion / deployment | Separate operator decisions; human merge remains policy |
 
-Owner acceptance and the target date remain open planning items, not assumed commitments. The coordinator resolves them before scheduling downstream implementation.
-
-The owner tracks these exit requirements against the [soak release gates](../../deploy/attempt-recovery-soak-log-2026-09-29.md) and [rollout procedure](../../deploy/attempt-recovery-rollout.md):
-
-1. Record the exact integration candidate, current master base, and prospective merge tree. Review the combined candidate and any delta since prior reviews.
-2. Run the affected combined suites on that candidate/merge tree, record commands and results, and obtain UI acceptance for the same candidate.
-3. Preserve the soak's documented exceptions, failed historical checks, and unexercised fixes. Confirm #361, #362, and #381 are deployed before any future autonomous replay; this conditional replay requirement does not authorize a deployment or live run.
-4. Track the missing team-deletion guard with a named implementer and state/race evidence. Prefer landing it in M0; if it remains at the merge, carry it as a focused post-G00 prerequisite that blocks M1a acceptance.
-5. Record the release approval, actual merge PR/commit, and resulting `master` SHA. Green CI, a draft PR, and integration deployment alone do not satisfy this step.
-
-Existing autonomy release work uses its existing ownership and authorization. P06 does not start fixture preparation or implementation validation before G00 to help with M0. After the merge, P06 verifies the release record and the carried prerequisites.
+Historical release/soak evidence is not a product live replay result. Product agents do not access the other lane's runtime or resources. The [reconciliation ledger](reconciliation-ledger.md) records outstanding product gates without reopening M0 or claiming unavailable evidence.
 
 ## Integration procedure
 
-After G00 is satisfied, create implementation branches from the updated `feature/software-delivery-product-reposition` tip in isolated worktrees. Record the autonomy merge evidence and `master` base SHA in each PR. Reconcile the merged code with the audited integration snapshot `301e37c1e53e822a47a9572dc592e866df77f763`, especially the authorization matrix, browser signatures, deletion guards, and retry/launch semantics. The documentation worktree's older code is not the implementation base.
+After G00 is satisfied, create implementation branches from the updated `feature/software-delivery-product-reposition` tip in isolated worktrees. Record the autonomy merge evidence and product integration base SHA in each PR. Reconcile the merged code with the audited integration snapshot `301e37c1e53e822a47a9572dc592e866df77f763`, especially the authorization matrix, browser signatures, deletion guards, and retry/launch semantics. The documentation worktree's older code is not the implementation base.
 
 Use fixture databases, temporary repositories, mocked GitHub/provider operations, and isolated tmux sockets for tests that need processes. Do not copy the running host's `.env`, database, credentials, or live attempt state into these worktrees.
 
@@ -135,7 +124,7 @@ P06 records the existing-interface task baseline after G00 and before M1a UI cha
 
 Run V31 against M1a before starting P03 implementation. P06 reports baseline/after task results, participants and implementer involvement, correctness, navigation/time, credential prompts, defects, and unavailable observations. Record needs that actually justify M1b, M2, and M3.
 
-The coordinator records one disposition: proceed with the proposed scope, proceed with named reductions, or defer remaining work while fixing identified problems. A missing comparison is recorded as unavailable and cannot support a user-benefit claim; any decision to continue for known internal needs must state that basis explicitly.
+The coordinator records the operator's explicit disposition: proceed with the proposed scope, proceed with named reductions, or defer remaining work while fixing identified problems. A missing comparison is recorded as unavailable and cannot support a user-benefit claim; any decision to continue for known internal needs must state that basis explicitly.
 
 Seek at least two independent operators for broader usability claims. If only the maintainer or implementers participate, label the result internal usability evidence. Do not infer external demand or general onboarding success from it. Lack of external participants does not automatically block the user's factory improvements or required audit safeguards. Reorder/narrow optional presentation and metrics only through a documented dependency update.
 
@@ -235,7 +224,7 @@ Do not run agents with concurrent write ownership of these files. After G00, P01
 
 ## Required validation
 
-Each agent runs focused tests for its behavior and the affected existing regressions. Backend examples assume the project's test interpreter is active:
+Use `product-heavy` for every full suite, browser fixture or production build; exit 75 means wait for the shared lock. Each agent runs focused tests for its behavior and the affected existing regressions. Backend examples assume the project's test interpreter is active:
 
 ```bash
 cd backend
@@ -255,11 +244,11 @@ P03 changes to the Pi extension also require that integration's typecheck, tests
 
 The coordinator runs the affected combined suites once per merged milestone. Repeat checks when an integration change or failure warrants it. Broad runtime tests against the running factory are outside the isolated implementation checks.
 
-P06 separately runs the operator-task protocol in its handoff. Functional acceptance, internal usability observations, independent operator evidence, and an observed first-reviewable-PR time are different evidence. Record participants and implementer involvement, task/environment identity, measurements, coverage, and the coordinator's checkpoint disposition. Do not infer general user benefit from green tests or a maintainer's self-measurement.
+P06 separately runs the operator-task protocol in its handoff. Functional acceptance, internal usability observations, independent operator evidence, and an observed first-reviewable-PR time are different evidence. Record participants and implementer involvement, task/environment identity, measurements, coverage, and the operator's checkpoint disposition recorded by the coordinator. Do not infer general user benefit from green tests or a maintainer's self-measurement.
 
 ## Review and handoff format
 
-Each PR describes the concrete user behavior, the API or authority contract it affects, preserved compatibility, and relevant validation. Include the autonomy merge evidence, `master` base SHA, changed paths, acceptance case IDs, commands and results, and remaining limitations.
+Each PR describes the concrete user behavior, the API or authority contract it affects, preserved compatibility, and relevant validation. Include the autonomy merge evidence, product integration base SHA, changed paths, acceptance case IDs, commands and results, and remaining limitations.
 
 Screenshots and browser observations identify their fixture or deployed environment. Do not describe fixture behavior as a live production result.
 
@@ -268,7 +257,7 @@ The completing agent hands back:
 ```text
 Package:
 Autonomy merge evidence:
-Master base and PR or commit:
+Product integration base and PR or commit:
 Delivered behavior:
 Changed paths:
 Acceptance cases and checks:

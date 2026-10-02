@@ -8,7 +8,7 @@ Read the [product brief](../product-brief.md), [experience specification](../exp
 
 ## Start conditions
 
-Start only after the autonomy feature has been merged into `master` ([G00](../implementation-plan.md#autonomy-merge-gate)). Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
+G00 is complete. Start only after accepted packet reconciliation and this package's milestone/assignment gates. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA.
 
 Start only after M1a is accepted and the pilot checkpoint records a disposition to proceed with this scope. Use the merged provider adapters and preserve their launch contracts. This package does not run alongside initial P01/P02 development or delay the delivery pilot.
 

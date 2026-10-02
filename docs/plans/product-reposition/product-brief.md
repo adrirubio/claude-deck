@@ -8,9 +8,9 @@ The initial promise is observation and intervention around bounded agent attempt
 
 ## Timing and implementation base
 
-The repositioning is follow-on work after the autonomy feature has been merged into `master`. Start implementation packages P01–P06 only after that merge, including fixture-based UI development and implementation validation.
+G00 is complete through the recorded PR #399 merge. Start packages under the accepted packet and milestone gates; P06 baseline precedes all P02 UI edits, including fixture-based development.
 
-Use the updated `master` as the implementation base and PR target. The autonomy feature branch remains the analysis reference. The coordinator records the actual merge evidence and reconciles this packet with the merged code before assigning implementation work.
+Use the current `feature/software-delivery-product-reposition` tip on `juanrubio/claude-deck` as the implementation base and PR target. The autonomy feature branch remains the analysis reference. The coordinator records the actual merge evidence and reconciles this packet with the merged code before assigning implementation work.
 
 ## Product direction
 
@@ -92,7 +92,7 @@ The UI must distinguish a configured launch environment, checked credentials, an
 
 | Milestone | Product result | Included work |
 | --- | --- | --- |
-| M0 | Autonomy completes its existing release process and merges into `master` | Accountable release coordination, combined-tip review/tests, UI acceptance, recorded merge evidence |
+| M0 | Complete: autonomy PR #399 merged as `ac9252242fcf436c3ea9997add5d32416cad2cd1` | Recorded actual merge; historical evidence retained in source snapshot |
 | M1a | Existing factory operators can observe delivery across teams and retain access to native configuration | Delivery reads, Overview, Work, repositories, details, navigation, a thin Harnesses index, native adapter guards |
 | Pilot checkpoint | Evidence determines whether and why to continue the remaining programme | Baseline comparison, participant provenance, observed needs, defects, and claim limits |
 | M1b | Operators can inspect each harness's operational support and readiness coherently | P03 operations contract, bounded readiness, full Harnesses cards and native surface catalog |
@@ -128,6 +128,6 @@ For M1a, current status counts are valid metrics. `Finished` means terminal trac
 
 ## Product claims and release limits
 
-The recorded soak-evidence gate passed with documented exceptions and operator interventions. The record explicitly reserves integration-to-master clearance. Autonomy must complete its release requirements and merge into `master` before reposition implementation starts. Position the product around bounded autonomy, visible review, and recoverable execution.
+The recorded soak-evidence gate passed with documented exceptions and operator interventions. The record explicitly reserves integration-to-master clearance. Autonomy completed G00 through PR #399; product work now follows packet, baseline and assignment gates. Position the product around bounded autonomy, visible review, and recoverable execution.
 
 The repositioning should make the operator's responsibility easier to understand: agent plan approval, operator remedies, and human PR review are distinct acts. Display them with the actor that actually performed them.

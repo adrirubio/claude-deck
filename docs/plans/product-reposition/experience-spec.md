@@ -6,7 +6,7 @@ The delivery interface will make work, repository policies, and intervention eas
 
 This is the target experience for the milestones in the [product brief](product-brief.md). Routes introduced here are planned.
 
-Begin this experience implementation only after the autonomy feature has been merged into `master`, as required by the [implementation start gate](README.md#implementation-start-gate). Develop against the autonomy implementation on the updated `master`.
+G00 is complete. Begin this experience implementation after accepted packet reconciliation and independently reviewed P06 baseline, as required by the [implementation start gate](README.md#implementation-start-gate). Develop against the autonomy implementation on the current fork `feature/software-delivery-product-reposition` tip.
 
 ## Primary navigation
 

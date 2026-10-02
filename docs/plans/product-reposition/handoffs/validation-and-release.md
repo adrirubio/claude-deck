@@ -8,9 +8,9 @@ Use the [product requirements](../product-brief.md), [experience specification](
 
 ## Start conditions
 
-Start P06 implementation validation and fixture preparation only after the autonomy feature has been merged into `master` ([G00](../implementation-plan.md#autonomy-merge-gate)). Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA. P06 then runs alongside each milestone.
+G00 is complete. P06 standing prerequisite baseline and independent review are authorized; implementation validation follows the package gates. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA. P06 then runs alongside each milestone.
 
-M0's existing release owner supplies its combined-candidate review/test/UI evidence and actual merge record. P06 verifies that record after G00; it does not begin early to perform the autonomy release. Reconcile the pinned integration snapshot and route matrix with merged master, including any carried team-deletion prerequisite.
+M0's existing release owner supplies its combined-candidate review/test/UI evidence and actual merge record. P06 verifies that record after G00; it does not begin early to perform the autonomy release. Reconcile the pinned integration snapshot and route matrix with the recorded autonomy baseline and current fork integration tip, including any carried team-deletion prerequisite.
 
 ## Test environment
 
@@ -61,7 +61,7 @@ Record task scripts, fixture/repository state, code SHA, provider mix, participa
 
 Fixture tasks measure navigation, interpretation, and setup behavior. They cannot establish live delivery time, autonomous reliability, or a first reviewable PR. Any actual pilot requiring live or paid execution follows its existing separate authorization and runbook; until observed, those measurements are `unavailable` with a reason. The ordinary fixture suite remains isolated from the running factory.
 
-V31 owns the baseline/M1a comparison and checkpoint. The coordinator records proceed, proceed with named reductions, or defer, with needs justifying M1b/M2/M3, defects, participant limits, and allowed claims. Missing comparisons remain unavailable; any continuation for known internal needs must state that basis. No silent external-demand pass is permitted.
+V31 owns the baseline/M1a comparison and checkpoint. The operator decides proceed, proceed with named reductions, or defer; the coordinator records that decision, with needs justifying M1b/M2/M3, defects, participant limits, and allowed claims. Missing comparisons remain unavailable; any continuation for known internal needs must state that basis. No silent external-demand pass is permitted.
 
 V32 repeats applicable tasks after M2 and records first-PR evidence or its absence. Broader onboarding or first-PR claims wait for corresponding observations even when functional acceptance is green. Cookie/session login is a separate evaluation if measured token friction warrants it.
 
@@ -105,7 +105,7 @@ V36 distinguishes active collisions from disabled prospective overlaps and diffe
 
 | Case | Required observation | Owner |
 | --- | --- | --- |
-| V31 | Baseline and M1a task comparison records correctness, time/navigation, credential prompts, interventions, participant provenance, sample size, missing observations, justified next scope, and coordinator disposition before P03 starts | P06 |
+| V31 | Baseline and M1a task comparison records correctness, time/navigation, credential prompts, interventions, participant provenance, sample size, missing observations, justified next scope, and operator disposition recorded by the coordinator before P03 starts | P06 |
 
 Functional M1a acceptance is separate from V31's evidence and claim limits. No live or paid run is implied by this checkpoint.
 

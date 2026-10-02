@@ -8,7 +8,7 @@ Read the [product brief](../product-brief.md), [experience specification](../exp
 
 ## Start conditions
 
-Start only after the autonomy feature has been merged into `master` ([G00](../implementation-plan.md#autonomy-merge-gate)). Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA. Reconcile against the audited integration snapshot `301e37c1e53e822a47a9572dc592e866df77f763`; the documentation worktree's older source is not the implementation baseline.
+G00 is complete. Start only after accepted packet reconciliation and this package's milestone/assignment gates. Branch from updated `feature/software-delivery-product-reposition` and record the autonomy merge evidence and base SHA. Reconcile against the audited integration snapshot `301e37c1e53e822a47a9572dc592e866df77f763`; the documentation worktree's older source is not the implementation baseline.
 
 After G00, this package can start before any further mutation hardening. Its endpoints perform observations only. It does not change dispatch, budgets, approval decisions, leases, or scheduler behavior.
 
@@ -89,4 +89,4 @@ P02 should receive the fixtures as soon as the schemas settle. Complete the pack
 
 ## Agent start instruction
 
-> Start P01 for M1a only after autonomy has been merged into master. Branch from updated `feature/software-delivery-product-reposition` and reconcile the audited source. Build allowlisted aggregate reads with truthful escalation, intake, and overlap projections. Keep dispatch and mutation behavior intact, with no P03 dependency. Deliver fixtures, focused tests, and the acceptance evidence listed here.
+> Start P01 for M1a after accepted packet reconciliation, integrated #5 and owner-bound dispatch with distinct Leader approval. Branch from updated `feature/software-delivery-product-reposition` and reconcile the audited source. Build allowlisted aggregate reads with truthful escalation, intake, and overlap projections. Keep dispatch and mutation behavior intact, with no P03 dependency. Deliver fixtures, focused tests, and the acceptance evidence listed here.

@@ -18,11 +18,11 @@ These internal planning documents live under `docs/plans/` and are excluded from
 
 ## Implementation start gate
 
-Reposition implementation starts only after the autonomy feature from `feature/autonomous-github-dispatch` has been merged into `master`. This prerequisite applies to all packages P01–P06, including fixture-based development and implementation validation. Documentation planning can continue while implementation waits.
+G00 is complete: upstream PR #399 merged 2026-10-01T19:20:30Z as `ac9252242fcf436c3ea9997add5d32416cad2cd1`. The fork integration branch starts at that release. M0's prior pending disposition is historical evidence, not a new product gate.
 
-Before assigning implementation packages, the coordinator records the autonomy merge PR or commit and the resulting `master` SHA. Create implementation branches from updated `feature/software-delivery-product-reposition` on `juanrubio/claude-deck` and target product PRs there. The feature branch and reference commit above are analysis evidence.
+Before assigning implementation, B1 reconciles this packet with that baseline and obtains B4 independent acceptance of the exact bootstrap PR head. Branch from the current fork `feature/software-delivery-product-reposition` tip and target PRs there. Record the product integration base SHA. P06 baseline acceptance precedes P02 UI edits. Scope/dispatch arming requires the root operator's separate instruction; packet acceptance alone does not arm intake.
 
-[M0](implementation-plan.md#m0-autonomy-release) tracks the existing autonomy release, its accountable owner, readiness evidence, and scheduling status. It does not allow reposition work to start on the integration branch.
+See the [reconciliation ledger](reconciliation-ledger.md) for source preservation, current authority/client signatures, dependencies, contract freeze requirements and evidence still missing.
 
 ## Reading order
 
@@ -55,7 +55,7 @@ Follow **M0 → M1a → pilot checkpoint → M1b → M2 → M3**. After G00, ass
 
 Review the delivery pilot before starting P03 in M1b. Record whether to continue, narrow, or defer the remaining scope. P04 follows accepted M1b; P05 follows the authority changes. Internal operator benefit can justify this work, including audit needs, without claiming external demand. Broader usability and adoption claims need independent evidence.
 
-Before creating an implementation branch, inspect the updated `master` tip and compare it with the reference commit. Reconcile changes to operator guards, approval attribution, cancellation, and workspace release. The merged autonomy implementation takes precedence over assumptions in this snapshot.
+Before creating an implementation branch, inspect the current fork product integration tip and compare it with the reference commit. Reconcile changes to operator guards, approval attribution, cancellation, and workspace release. The merged autonomy implementation takes precedence over assumptions in this snapshot.
 
 After G00, delivery reads can proceed independently of remaining mutation prerequisites. Use the [audited authorization matrix](architecture-contracts.md#operator-authorization-prerequisite): most policy mutations are already operator protected, retry and launch retain constrained agent access, and team creation/import/duplication still need an explicit M2 authorization change. A team-deletion state guard is required before M1a acceptance.
 
@@ -84,7 +84,7 @@ The revision does not add an ORM timestamp listener, a slot-position uniqueness 
 
 ## Source register
 
-The original packet used `07df206905e0b86e06d5fe9bcda8d93e409d1055`; this worktree's code still reflects that older baseline. The independent review used integration `a9b563a`. This revision checks the fixed integration snapshot `301e37c1e53e822a47a9572dc592e866df77f763`, including later authorization/client fixes. None of those snapshots substitutes for the eventual merged `master`.
+The original packet used `07df206905e0b86e06d5fe9bcda8d93e409d1055`; that statement described the original documentation worktree, not this fork checkout. Current bootstrap code is pinned to `ac9252242fcf436c3ea9997add5d32416cad2cd1`. The independent review used integration `a9b563a`. This revision checks the fixed integration snapshot `301e37c1e53e822a47a9572dc592e866df77f763`, including later authorization/client fixes. None of those snapshots substitutes for the recorded merged autonomy baseline and current fork integration tip.
 
 Source links below locate files in the checkout. To inspect the audited version, use `git show 301e37c1e53e822a47a9572dc592e866df77f763:<path>` with the repository-relative path. Planned behavior is identified explicitly in the other documents.
 
@@ -109,4 +109,4 @@ Source links below locate files in the checkout. To inspect the audited version,
 
 ## Completion evidence
 
-An implementation handoff is complete when its acceptance criteria pass, its changes are reviewable against `master`, and the agent reports the autonomy merge evidence, base SHA, changed paths, checks, limitations, and next dependency. Report fixture validation and live observations separately. A documentation packet, green fixture tests, or the recorded soak-evidence pass does not establish that a future live replay has passed.
+An implementation handoff is complete when its acceptance criteria pass, its changes are reviewable against the product integration base, and the agent reports the autonomy merge evidence, base SHA, changed paths, checks, limitations, and next dependency. Report fixture validation and live observations separately. A documentation packet, green fixture tests, or the recorded soak-evidence pass does not establish that a future live replay has passed.
