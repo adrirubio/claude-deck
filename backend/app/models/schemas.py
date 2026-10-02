@@ -2560,6 +2560,7 @@ class GithubWorkItemContinuationResponse(BaseModel):
     pending_approval: Optional[GithubApprovalRequestResponse] = None
     pending_revision: Optional[GithubScopeRevisionResponse] = None
     continuation_block_code: Optional[str] = None
+    review_rework_guidance: Optional[str] = None
     continuation_budget: Dict[str, int] = Field(default_factory=dict)
 
 
