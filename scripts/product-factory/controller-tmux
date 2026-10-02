@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/sudo -n -u deckproduct /opt/claude-deck-product/libexec/agent-tmux "$@"

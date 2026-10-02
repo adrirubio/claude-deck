@@ -1,0 +1,5 @@
+[Unit]
+Description=Hold Lane B if the supervision guard fails
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -c "import runpy; m=runpy.run_path('/opt/claude-deck-product/libexec/product-supervisor'); m['pause']('supervisor_failure')"

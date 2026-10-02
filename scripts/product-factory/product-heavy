@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+[ "$#" -gt 0 ] || { echo 'Usage: product-heavy COMMAND [ARGS...]' >&2; exit 2; }
+exec /usr/bin/flock --nonblock --conflict-exit-code 75 /home/deckproductctl/work/operations/locks/host-heavy.lock "$@"

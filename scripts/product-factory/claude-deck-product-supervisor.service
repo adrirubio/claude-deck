@@ -1,0 +1,8 @@
+[Unit]
+Description=Lane B cybersecurity and controller supervision guard
+After=claude-deck-product.service
+OnFailure=claude-deck-product-supervisor-failure.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/claude-deck-product/libexec/product-supervisor
+UMask=0077
