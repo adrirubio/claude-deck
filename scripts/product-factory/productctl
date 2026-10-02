@@ -54,7 +54,9 @@ elif args.command=='arm':
  expected={x['id'] for x in api('GET','/agent-teams/presets/1')['slots']}
  bound={m.get('team_slot_id') for m in members if m.get('team_preset_id')==1 and m.get('wake_state')=='wakeable'}
  if not expected<=bound:sys.exit('Every product slot must have a verified wakeable binding before arming.')
- scope=api('GET','/agent-teams/presets/1/github-scopes')['scopes'][0]
+ scopes=api('GET','/agent-teams/presets/1/github-scopes')['scopes']
+ if len(scopes)!=1:sys.exit('Exactly one product scope is required before arming.')
+ scope=scopes[0]
  if scope['id']!=1 or scope['base_ref']!='origin/feature/software-delivery-product-reposition' or scope['max_auto_merges_per_day']!=0 or scope['max_approval_rounds']!=3 or scope['max_verification_retries']!=2 or scope['continuation_enabled']:sys.exit('Scope differs from the accepted bootstrap policy.')
  if queue['repo']!='juanrubio/claude-deck' or queue['integration']!='feature/software-delivery-product-reposition':sys.exit('Ledger destination mismatch.')
  # Initial stage admits only the first backend task; later gates are checked by B1.

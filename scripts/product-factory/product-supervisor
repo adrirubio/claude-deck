@@ -126,9 +126,16 @@ def tick():
   if size<offset:offset=0
   with log.open(errors='replace') as stream:
    stream.seek(offset)
-   for line in stream:
+   while True:
+    start=stream.tell();line=stream.readline()
+    if not line:break
+    if not line.endswith('\n'):
+     stream.seek(start);break
     try:record=json.loads(line)
-    except json.JSONDecodeError:continue
+    except json.JSONDecodeError:
+     if state['autonomy_enabled']:
+      pause('unreadable_supervision_record',session=log.stem);state['mode']='WAITING_FOR_USER';state['last_tick']=now();save(statefile,state);return
+     continue
     found=notice_from_record(record)
     if found:
      pause('cybersecurity_block',session=log.stem,rule=found);state['mode']='WAITING_FOR_USER';state['last_tick']=now();state['offsets'][key]=stream.tell() if False else size;save(statefile,state);return
