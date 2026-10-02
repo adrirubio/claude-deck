@@ -1595,6 +1595,8 @@ async def test_owner_claims_persisted_continuation_with_no_store(
     assert body["workspace_path"] == workspace.path
     assert body["lease_token"] == "lease-secret"
     assert body["leader_member_id"] == leader_member.id
+    assert "ORDINARY PR REVIEW CORRECTIONS" in body["review_rework_guidance"]
+    assert "not approval" in body["review_rework_guidance"]
     assert "lease-secret" not in item.status_note if item.status_note else True
     await db.refresh(workspace)
     assert workspace.leased_owner_pid == 4321

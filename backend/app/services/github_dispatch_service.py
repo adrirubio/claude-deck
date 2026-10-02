@@ -1323,6 +1323,51 @@ class GithubDispatchService:
         )
         return enabled[0] if enabled else None
 
+    @staticmethod
+    def review_rework_guidance(item: GithubWorkItem | None = None) -> str:
+        """Explain the review loop without issuing or extending approval."""
+        if item is not None and getattr(item, "dispatch_status", None) not in {
+            "pending", "dispatched", "verifying", "ready_for_review",
+            "awaiting_human_review",
+        }:
+            return (
+                "This attempt is stopped, terminal or in an unrecognized state. "
+                "Do not make ordinary review corrections under its old approval "
+                "or lease. Escalated attempts require supported recovery; terminal "
+                "attempts require a separately authorized new attempt. This guidance "
+                "does not grant approval, retry or release authority. Respect "
+                "operator pauses and safety holds."
+            )
+        if item is not None and (
+            item.active_scope_revision > 0 or item.attempt_phase != "implementation"
+        ):
+            return (
+                "This attempt uses a scoped or diagnostic continuation. Follow its "
+                "current approved revision, paths, commands and finite budgets. A "
+                "completed revision does not authorize another head; use supported "
+                "continuation recovery if additional work is needed. This guidance "
+                "does not grant approval. Respect operator pauses and safety holds."
+            )
+        return (
+            "ORDINARY PR REVIEW CORRECTIONS: For an initial implementation attempt "
+            "(active_scope_revision=0) that is nonterminal and not escalated, "
+            "changes within the still-approved initial "
+            "plan continue on the same issue branch and PR. Before working, reconcile "
+            "the current owner binding, dispatch nonce, workspace lease, normalized "
+            "plan approval and owner acknowledgement; stop if any is stale, revoked "
+            "or missing, or an operator pause or safety hold is active. "
+            "ready_for_review records CI readiness, not completion of the approved "
+            "plan. continuation_disabled applies to escalated recovery and does not "
+            "by itself revoke an initial plan. Do not manufacture an escalation, "
+            "request a recovery continuation, change policy or reset/release the "
+            "attempt merely to fix in-scope review findings. Scope expansion needs "
+            "a supported new approval; this guidance is not approval. Push normally "
+            "to the existing PR, send its new full SHA to the independent reviewer, "
+            "and require fresh review and hosted CI for that SHA. Do not submit "
+            "a second PR-open report for an already tracked PR. Preserve the "
+            "configured merge policy."
+        )
+
     def _leader_ack_instruction(
         self,
         leader: AgentTeamSlot | None,
@@ -1346,6 +1391,8 @@ class GithubDispatchService:
             "plan and call `deck_request_work_item_approval` again with the same work "
             "item and nonce. Do not report `revision_requested`."
         )
+        if item is not None and item.issue_type == "code":
+            report += "\n\n" + self.review_rework_guidance(item)
         if leader_member is not None:
             return (
                 "- Submit the short plan for Leader approval using "
@@ -1388,6 +1435,13 @@ class GithubDispatchService:
             "- Only retry when ALL blockers are resolved (never on a single blocker for a "
             "multi-blocker issue). Do not retry the same dependent twice for one event. If "
             "a dependency is ambiguous, leave it escalated for a human."
+            "\n\nPR REVIEW LOOP (leader duty):\n"
+            "- Route independent review findings back to the current owner and "
+            "reconcile whether they fit the approved plan before requesting "
+            "recovery authority.\n- " + self.review_rework_guidance() + "\n"
+            "- Track review disposition by full PR head SHA. A changed head needs "
+            "fresh independent review and CI; an older acceptance or ready state "
+            "does not accept it."
         )
 
     async def _send_dispatch_brief_to_slot(

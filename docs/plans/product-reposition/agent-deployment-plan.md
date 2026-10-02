@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-02.
 
-**Status:** Product prerequisites authorized; intake is not armed. The user has selected product repositioning as the first lane to start. This document does not launch sessions, deploy a backend, enable autonomy or authorize automatic merges.
+**Status:** Product lane started first and is now paused for the review workflow repairs recorded below. This document does not launch sessions, deploy a backend, enable autonomy or authorize automatic merges.
 
 Deploy four product harness sessions first, coordinated through a dedicated Claude Deck instance, authenticated Agent Mail and GitHub. Preserve the Tizonia runtime and roster. Add two soak preparation sessions when the user chooses to start that lane. Both lanes are designed to operate independently and eventually concurrently, with their own coordinators and one shared host resource limit.
 
@@ -102,6 +102,47 @@ The coordination cycle is:
 4. B4 independently reviews the diff and reproduces the relevant checks in isolated fixtures. Findings return to the implementer; every changed head is reviewed again.
 5. The merge controller checks required hosted checks and independent review for that same head before integrating it. B1 records the merged SHA and updates dependencies.
 6. B4 validates the combined integration SHA against the milestone cases. B1 records acceptance or a concrete blocker before advancing the queue.
+
+### Ordinary PR review corrections
+
+B1 routes B4's findings to the current implementation owner and checks that the
+corrections fit the approved plan. For a nonterminal, non-escalated initial
+implementation attempt with `active_scope_revision=0`, opening a PR or reaching
+`ready_for_review` does not end the initial plan. The owner continues on the same
+issue branch and PR after reconciling owner binding, dispatch nonce, workspace
+lease, normalized approval and owner acknowledgement. Missing, revoked or stale
+authority, an operator pause or a safety hold stops work.
+
+`continuation_disabled` concerns escalated recovery. It does not by itself revoke
+an initial plan. Do not manufacture an escalation, request recovery, retry,
+release the workspace or change policy solely to make in-scope review corrections.
+Do not submit a second `pr_opened` report for an already tracked PR. Work outside
+the approved plan needs supported new approval. Scoped or diagnostic continuations
+retain their approved paths, commands, completion rules and finite budgets.
+
+After each push, the owner sends B4 the new full head SHA. B4 reviews that head;
+B1 reconciles the review disposition and actual hosted checks for the same SHA.
+Old review acceptance and CI readiness do not accept a changed head. The current
+human merge policy remains in force. Owner-context `review_rework_guidance`
+explains this workflow and does not grant approval.
+
+### Factory repair gate, 2026-10-02
+
+Lane B is paused while upstream [#425](https://github.com/adrirubio/claude-deck/issues/425)
+and [#426](https://github.com/adrirubio/claude-deck/issues/426) repair changed-head
+verification under human merge policy and the ordinary review instructions.
+Fork [#26](https://github.com/juanrubio/claude-deck/issues/26) owns their integration
+backport and controller deployment. These issues carry `factory-maintenance` and
+must not receive the product dispatch-ready label.
+
+Preserve the current PR, partial edits, initial approval and owner lease during
+this pause. Resume requires accepted fixes, checks for their exact heads and a
+recorded, reviewed controller deployment that preserves the verification-clock
+fix and accepted P01 fixtures. An integration merge alone does not deploy the
+controller. The root operator reconciles authority and live bindings, clears the
+repair pause and explicitly resumes; B1 then routes the outstanding P02 findings
+through the ordinary review loop. Milestone, pilot and promotion gates remain in
+force.
 
 B4's continuing P06 assignment must not hold a dispatched implementation lease indefinitely. Run validation/review as a standing coordination role, with bounded review tasks and separately recorded acceptance results. Documentation/design work follows its own reviewed disposition; do not create dummy code PRs to satisfy dispatch bookkeeping.
 

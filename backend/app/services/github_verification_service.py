@@ -1643,6 +1643,72 @@ class GithubVerificationService:
                 f"PR #{item.pr_number} was closed without being merged.",
             )
             return
+        if item.issue_type == "code" and scope.merge_policy == "human":
+            current_head = self._head_sha(pull)
+            if not current_head or current_head != item.last_verified_sha:
+                scoped_completion = item.active_scope_revision > 0
+                note = (
+                    "The PR head changed after scoped completion; request a new "
+                    "approved continuation before verifying the changed head."
+                    if scoped_completion
+                    else "The PR head changed since review readiness; verifying "
+                    "the current head before requesting fresh human review."
+                )
+                notice_context = (
+                    item.dispatch_nonce, item.owner_slot_id, item.pr_number,
+                    item.active_scope_revision,
+                )
+                claimed = await db.execute(
+                    update(GithubWorkItem)
+                    .where(
+                        GithubWorkItem.id == item.id,
+                        GithubWorkItem.scope_id == scope.id,
+                        GithubWorkItem.dispatch_status == item.dispatch_status,
+                        GithubWorkItem.dispatch_status.in_(
+                            ("ready_for_review", "awaiting_human_review")
+                        ),
+                        GithubWorkItem.dispatch_nonce == item.dispatch_nonce,
+                        GithubWorkItem.owner_slot_id == item.owner_slot_id,
+                        GithubWorkItem.pr_number == item.pr_number,
+                        GithubWorkItem.active_scope_revision == item.active_scope_revision,
+                        GithubWorkItem.last_verified_sha == item.last_verified_sha,
+                        exists(select(TeamGithubScope.id).where(
+                            TeamGithubScope.id == scope.id,
+                            TeamGithubScope.merge_policy == "human",
+                        )),
+                    )
+                    .values(
+                        dispatch_status="escalated" if scoped_completion else "verifying",
+                        escalation_reason="plan_blocked" if scoped_completion else None,
+                        status_note=note,
+                        updated_at=datetime.utcnow(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if claimed.rowcount != 1:
+                    await db.rollback()
+                    await db.refresh(item)
+                    return
+                await db.commit()
+                await db.refresh(item)
+                if scoped_completion and item.dispatch_status == "escalated" and (
+                    item.dispatch_nonce, item.owner_slot_id, item.pr_number,
+                    item.active_scope_revision,
+                ) == notice_context:
+                    await github_dispatch_service.notify_owner(
+                        db, item,
+                        subject="Changed PR head requires scoped approval",
+                        body_markdown=note,
+                        payload={
+                            "kind": "github_review_head_requires_continuation",
+                            "work_item_id": item.id,
+                            "pr_number": item.pr_number,
+                            "scope_revision": notice_context[3],
+                            "head_sha": current_head,
+                        },
+                    )
+                    await db.commit()
+            return
         if item.issue_type == "design" or scope.merge_policy != "auto":
             return
         if item.status_note and item.status_note.startswith(_HUMAN_MERGE_NOTE_PREFIXES):
@@ -2053,12 +2119,16 @@ class GithubVerificationService:
     ) -> None:
         body = (
             f"Code PR #{item.pr_number} is ready for human review for "
-            f"issue #{item.issue_number}: {item.issue_title}"
+            f"issue #{item.issue_number}: {item.issue_title}\n\n"
+            f"Verified head: {item.last_verified_sha or 'unknown'}. "
+            "CI readiness does not establish independent review acceptance.\n\n"
+            + github_dispatch_service.review_rework_guidance(item)
         )
         payload = {
             "kind": "github_dispatch_code_pr_ready",
             "work_item_id": item.id,
             "pr_number": item.pr_number,
+            "verified_head_sha": item.last_verified_sha,
         }
         if fallback_note:
             body = f"{body}\n\nAuto-merge fell back to human merge: {fallback_note}"

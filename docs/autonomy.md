@@ -16,6 +16,34 @@ Deck polls GitHub every 60 seconds by default. The Activity table refreshes ever
 
 Deck does not run the build command. The optional build settings are instructions in the owner's brief. An out-of-tree build directory may include `{issue_number}`. The command hint may include `{build_dir}` and `{parallelism}`. The parallelism value also tells the agent to cap build jobs.
 
+## Ordinary review corrections
+
+An initial implementation plan remains the basis for work while its normalized
+approval and owner acknowledgement remain valid. Opening a PR or reaching
+`ready_for_review` does not end that plan. The Leader sends review findings back
+to the current owner. The owner can correct findings within that same plan on
+the existing branch and PR after reconciling owner identity, dispatch nonce,
+workspace lease and approval evidence. Operator pauses and safety holds stop
+work. Missing or stale authority must be resolved before edits.
+
+`continuation_disabled` describes recovery of an escalated attempt. It does not
+by itself prohibit ordinary corrections under an existing initial approval.
+Do not escalate, retry, release the workspace, change recovery policy or request
+a continuation just to make in-scope review corrections. Do not send a second
+`pr_opened` report for an already tracked PR.
+
+Every pushed head needs independent review and hosted CI for its full SHA.
+Previous review acceptance and CI readiness apply to the previous head. Preserve
+the configured merge policy; human policy still requires human merge. The owner
+context returned by `deck_get_work_item_context` includes `review_rework_guidance`;
+that text explains the workflow and does not grant approval.
+
+This rule applies to nonterminal, non-escalated initial implementation attempts
+with `active_scope_revision=0`. Scoped and diagnostic continuations retain their
+approved paths, commands and finite budgets. Completing one does not grant
+authority for another head. Work outside the approved plan requires a supported
+new approval.
+
 ## Recovery and operator token
 
 An escalated issue with an open PR may be continued within a bounded scope revision. The owner proposes a plan, allowed files, and allowed commands; the Leader approves; the owner continues in the same workspace. A failed head is a pushed PR commit whose GitHub checks fail. The policy caps revisions and failed heads so recovery cannot loop indefinitely. A checkpoint hold pauses the Leader's decision or owner's acknowledgement until an operator releases it.
