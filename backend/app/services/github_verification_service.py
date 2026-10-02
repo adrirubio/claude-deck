@@ -2119,12 +2119,16 @@ class GithubVerificationService:
     ) -> None:
         body = (
             f"Code PR #{item.pr_number} is ready for human review for "
-            f"issue #{item.issue_number}: {item.issue_title}"
+            f"issue #{item.issue_number}: {item.issue_title}\n\n"
+            f"Verified head: {item.last_verified_sha or 'unknown'}. "
+            "CI readiness does not establish independent review acceptance.\n\n"
+            + github_dispatch_service.review_rework_guidance(item)
         )
         payload = {
             "kind": "github_dispatch_code_pr_ready",
             "work_item_id": item.id,
             "pr_number": item.pr_number,
+            "verified_head_sha": item.last_verified_sha,
         }
         if fallback_note:
             body = f"{body}\n\nAuto-merge fell back to human merge: {fallback_note}"
