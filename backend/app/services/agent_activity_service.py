@@ -12,6 +12,7 @@ import os
 import pwd
 import sqlite3
 import stat
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -78,7 +79,18 @@ def _rollout_path(home: Path, session_id: str, cwd: str) -> Path | None:
     return None
 
 
-def _native_state(path: Path, session_id: str, cwd: str, now: datetime
+def _process_started_at(start: str) -> datetime:
+    # Sample boot clock first, wall clock second, and add a kernel tick. This
+    # is a conservative upper boundary: inherited events must never start work
+    # in a newly resumed process just because its conversation UUID is the same.
+    boot_seconds = time.clock_gettime(time.CLOCK_BOOTTIME)
+    wall = datetime.now(timezone.utc)
+    ticks_per_second = os.sysconf("SC_CLK_TCK")
+    return wall - timedelta(seconds=boot_seconds - int(start) / ticks_per_second) + timedelta(
+        seconds=1 / ticks_per_second)
+
+
+def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_at: datetime
                   ) -> tuple[str, str, datetime | None]:
     with path.open("rb") as stream:
         metadata = json.loads(stream.readline(65_536))
@@ -110,6 +122,9 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime
             return "unknown", "observation_invalid", None
         if observed_at is not None and timestamp < observed_at:
             return "unknown", "observation_invalid", None
+        if timestamp < started_at:
+            state, reason = "unknown", "native_event_before_process"
+            continue
         if event == "task_started":
             state, reason = "working", "native_turn_started"
         elif event == "task_complete":
@@ -162,7 +177,7 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         path = _rollout_path(_codex_home(pid), session_id, cwd)
         if path is None:
             return result("unknown", "native_log_unavailable")
-        state, reason, observed_at = _native_state(path, session_id, cwd, now)
+        state, reason, observed_at = _native_state(path, session_id, cwd, now, _process_started_at(start))
         process_state, current_start = _process(pid)
         if current_start != start:
             return result("unknown", "binding_changed")
@@ -173,12 +188,13 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         return result("unknown", "observation_unavailable")
 
 
-async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityResponse:
+async def _team_inputs(db: AsyncSession, preset_id: int):
     slots = list((await db.scalars(select(AgentTeamSlot).where(
-        AgentTeamSlot.preset_id == preset_id))).all())
+        AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))).all())
     members = list((await db.scalars(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
-            MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()))).all())
+            MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).execution_options(
+                populate_existing=True))).all())
     current_member = {}
     for member in members:
         current_member.setdefault(member.team_slot_id, member.id)
@@ -193,18 +209,30 @@ async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityRes
         & (MailPaneLifecycle.pane_proc_start == AgentPaneBinding.pane_proc_start),
     ).where(AgentPaneBinding.preset_id == preset_id,
             MailAgentSession.source == "mcp", MailAgentSession.closed_at.is_(None),
-            MailPaneLifecycle.retired_at.is_(None)))).all()
+            MailAgentSession.mailbox_status == "connected",
+            MailAgentSession.capability_token_hash.is_not(None),
+            MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))).all()
     bindings: dict[int, set[tuple[int, str, str, str]]] = {}
     for binding, session in rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
             bindings.setdefault(binding.slot_id, set()).add((
                 binding.pane_pid, binding.pane_proc_start, session.provider, session.cwd))
+    return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
+               sorted((pid, start, cwd) for pid, start, provider, cwd in
+                bindings.get(slot.id, set()) if provider == slot.provider)) for slot in slots]
+
+
+async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityResponse:
+    inputs = await _team_inputs(db, preset_id)
     now = datetime.now(timezone.utc)
-    inputs = [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
-               [(pid, start, cwd) for pid, start, provider, cwd in
-                bindings.get(slot.id, set()) if provider == slot.provider]) for slot in slots]
     observations = await asyncio.to_thread(
         lambda: [_observe(slot_id, provider, session_id, candidates, now)
                  for slot_id, provider, session_id, candidates in inputs])
+    current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
+    for entry, observation in zip(inputs, observations):
+        if current.get(entry[0]) != entry:
+            observation.state = "unknown"
+            observation.reason = "binding_changed"
+            observation.observed_at = None
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)

@@ -74,6 +74,8 @@ start the pulse.
 Human review and merge gates show **Your review or merge is needed**, explain why
 the team is waiting and link to the PR. The activity summary counts items needing
 your action and can filter them. Leader approvals are labeled separately. Under
+operator recovery checkpoints or stranded initial approvals, the action remains
+visible for the operator instead of being labeled as a Leader decision. Under
 automatic merge policy, a review-ready item needs your action only when Deck has
 explicitly fallen back to human merge. Passing checks do not prove independent
 review acceptance. Check the current PR head and review evidence before merging.
@@ -88,7 +90,7 @@ able to read the corresponding Codex state database and native rollout log.
 The read-only `GET /api/v1/agent-teams/presets/{preset_id}/activity` endpoint
 returns only slot, state, reason and timestamps. It does not expose transcript
 content, credentials, native IDs or filesystem paths. It checks process start
-identity, session metadata and repository path, and reads a bounded log tail
+identity, current process lifetime, session metadata and repository path, and reads a bounded log tail
 outside the event loop. No activity is inferred from terminal text or Mail prose.
 
 The UI polls the selected team every five seconds while the page is visible.

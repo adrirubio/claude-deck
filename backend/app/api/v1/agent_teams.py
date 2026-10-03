@@ -310,6 +310,7 @@ def _work_item_response(
         pending_approval=pending_approval is not None,
     )
     current_revision = active_revision or pending_revision
+    checkpoint_revision = pending_revision or active_revision
     if not scope.continuation_enabled:
         continuation_block_code = "continuation_disabled"
     elif pending_approval is not None:
@@ -381,6 +382,12 @@ def _work_item_response(
         ),
         pending_approval_status=(
             pending_approval.status if pending_approval is not None else None
+        ),
+        recovery_checkpoint_stage=(
+            checkpoint_revision.recovery_checkpoint_stage
+            if checkpoint_revision is not None
+            and checkpoint_revision.status in {"proposed", "approved"}
+            and item.dispatch_status == "escalated" else None
         ),
         pending_approval_request_message_id=(
             pending_approval.request_message_id if pending_approval is not None else None

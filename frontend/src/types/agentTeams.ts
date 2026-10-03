@@ -356,6 +356,7 @@ export interface GithubWorkItem {
   pending_approval_request_id?: number | null
   pending_approval_kind?: string | null
   pending_approval_status?: string | null
+  recovery_checkpoint_stage?: string | null
   attempt_phase: GithubAttemptPhase
   diagnostic_retry_count: number
   diagnostic_last_verified_sha?: string | null

@@ -7,7 +7,14 @@ type Snapshot = { presetId: number; expiresAt: number; slots: AgentActivityObser
 /** One shared poll per selected team. A cached working state never lives forever. */
 export function useAgentActivity(presetId: number | null) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [snapshotSelection, setSnapshotSelection] = useState(presetId)
   const [now, setNow] = useState(() => performance.now())
+  // Reset during selection reconciliation, before committing a new view. This
+  // also invalidates A's cache for an A -> B -> A switch before B replies.
+  if (snapshotSelection !== presetId) {
+    setSnapshotSelection(presetId)
+    setSnapshot(null)
+  }
 
   useEffect(() => {
     if (presetId === null) return
@@ -56,9 +63,9 @@ export function useAgentActivity(presetId: number | null) {
   }, [presetId])
 
   return useMemo(() => {
-    if (!snapshot || snapshot.presetId !== presetId || now >= snapshot.expiresAt) {
+    if (snapshotSelection !== presetId || !snapshot || snapshot.presetId !== presetId || now >= snapshot.expiresAt) {
       return new Map<number, AgentActivityObservation>()
     }
     return new Map(snapshot.slots.map((slot) => [slot.slot_id, slot]))
-  }, [now, presetId, snapshot])
+  }, [now, presetId, snapshot, snapshotSelection])
 }
