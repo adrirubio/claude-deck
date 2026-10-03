@@ -13,6 +13,7 @@ import pwd
 import sqlite3
 import stat
 import time
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
@@ -63,8 +64,8 @@ def _rollout_path(home: Path, session_id: str, cwd: str) -> Path | None:
         if not database.is_file():
             continue
         try:
-            with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True,
-                                 timeout=0.1) as connection:
+            with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True,
+                                         timeout=0.1)) as connection:
                 row = connection.execute(
                     "SELECT rollout_path, cwd FROM threads WHERE id = ? LIMIT 1",
                     (session_id,),
@@ -142,7 +143,7 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
 
 
 def _observe(slot_id: int, provider: str, session_id: str | None,
-             candidates: list[tuple[int, str, str]], now: datetime
+             candidates: list[tuple[int, str, str]], duplicate_identity: bool, now: datetime
              ) -> AgentActivityObservation:
     def result(state: str, reason: str, observed_at: datetime | None = None):
         return AgentActivityObservation(slot_id=slot_id, state=state, reason=reason,
@@ -167,6 +168,8 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             return result("stopped", "process_stopped")
         if provider != "codex-cli":
             return result("unknown", "provider_unsupported")
+        if duplicate_identity:
+            return result("unknown", "duplicate_native_identity")
         if not session_id or str(UUID(session_id)) != session_id:
             return result("unknown", "session_identity_unavailable")
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
@@ -191,6 +194,15 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
 async def _team_inputs(db: AsyncSession, preset_id: int):
     slots = list((await db.scalars(select(AgentTeamSlot).where(
         AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))).all())
+    # A rollout identifies a conversation, not its writer PID. Conservatively
+    # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
+    # so another harness cannot supply a false Working event for this owner.
+    native_identity_counts: dict[str, int] = {}
+    for options in await db.scalars(select(AgentTeamSlot.launch_options).where(
+            AgentTeamSlot.provider == "codex-cli")):
+        session_id = (options or {}).get("session_id")
+        if isinstance(session_id, str):
+            native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
     members = list((await db.scalars(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
             MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).execution_options(
@@ -219,15 +231,17 @@ async def _team_inputs(db: AsyncSession, preset_id: int):
                 binding.pane_pid, binding.pane_proc_start, session.provider, session.cwd))
     return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
                sorted((pid, start, cwd) for pid, start, provider, cwd in
-                bindings.get(slot.id, set()) if provider == slot.provider)) for slot in slots]
+                bindings.get(slot.id, set()) if provider == slot.provider),
+               native_identity_counts.get(str((slot.launch_options or {}).get("session_id")), 0) > 1)
+            for slot in slots]
 
 
 async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityResponse:
     inputs = await _team_inputs(db, preset_id)
     now = datetime.now(timezone.utc)
     observations = await asyncio.to_thread(
-        lambda: [_observe(slot_id, provider, session_id, candidates, now)
-                 for slot_id, provider, session_id, candidates in inputs])
+        lambda: [_observe(slot_id, provider, session_id, candidates, duplicate_identity, now)
+                 for slot_id, provider, session_id, candidates, duplicate_identity in inputs])
     current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
     for entry, observation in zip(inputs, observations):
         if current.get(entry[0]) != entry:

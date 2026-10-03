@@ -73,7 +73,7 @@ start the pulse.
 
 Human review and merge gates show **Your review or merge is needed**, explain why
 the team is waiting and link to the PR. The activity summary counts items needing
-your action and can filter them. Leader approvals are labeled separately. Under
+your action and can filter them. Leader approvals are labeled separately. For
 operator recovery checkpoints or stranded initial approvals, the action remains
 visible for the operator instead of being labeled as a Leader decision. Under
 automatic merge policy, a review-ready item needs your action only when Deck has
@@ -86,6 +86,9 @@ The initial adapter supports Codex CLI sessions with an explicit resume UUID and
 an authenticated current process binding. Other providers and fresh sessions
 without a pinned native identity show Activity unknown. The controller must be
 able to read the corresponding Codex state database and native rollout log.
+Each Codex slot must have a distinct UUID across Deck presets. Reused UUIDs show
+Activity unknown, including reuse in disabled slots, because the shared log cannot
+distinguish which harness supplied an event.
 
 The read-only `GET /api/v1/agent-teams/presets/{preset_id}/activity` endpoint
 returns only slot, state, reason and timestamps. It does not expose transcript
