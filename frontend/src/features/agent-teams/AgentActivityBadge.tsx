@@ -13,6 +13,7 @@ const reasons: Record<string, string> = {
   provider_unsupported: 'This harness does not yet have a native activity adapter.',
   no_current_binding: 'No authenticated current session binding is available.',
   ambiguous_binding: 'More than one current session matches this slot.',
+  duplicate_native_identity: 'More than one Deck slot is configured to resume this native conversation. Per-agent activity cannot be distinguished.',
   session_identity_unavailable: 'An explicit native session identity is required to observe activity.',
   session_mismatch: 'The running process and native session identity do not match.',
   binding_changed: 'The session binding changed during observation.',
