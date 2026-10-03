@@ -91,6 +91,8 @@ import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
 import { AutonomyPanel, OperatorTokenDialog } from './AutonomyPanel'
+import { AgentActivityBadge } from './AgentActivityBadge'
+import { useAgentActivity } from './useAgentActivity'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 
 type PresetDialogState = 'new' | 'from-mail' | 'from-bridge' | null
@@ -826,6 +828,7 @@ export function AgentTeamsPage() {
     [presets, selectedPresetId]
   )
   const { name, setName, description, setDescription } = usePresetForm(selectedPreset)
+  const agentActivity = useAgentActivity(selectedPresetId)
 
   const loadPresets = useCallback(async () => {
     setLoading(true)
@@ -1404,6 +1407,7 @@ export function AgentTeamsPage() {
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold">{slot.display_name}</p>
+                            <AgentActivityBadge activity={agentActivity.get(slot.id)} />
                             {isLeader && <Badge variant="outline" title="First enabled slot by roster position; approves plans and takes issues without another owner match.">Leader for autonomous dispatch</Badge>}
                             <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
                               {slot.enabled ? 'Enabled' : 'Disabled'}
@@ -1493,6 +1497,7 @@ export function AgentTeamsPage() {
                   <AutonomyPanel
                     key={selectedPreset.id}
                     preset={selectedPreset}
+                    agentActivity={agentActivity}
                     scopes={autonomyDataPresetId === selectedPreset.id ? githubScopes : []}
                     workItems={autonomyDataPresetId === selectedPreset.id ? githubWorkItems : []}
                     loading={autonomyLoading || autonomyDataPresetId !== selectedPreset.id}

@@ -32,6 +32,7 @@ import {
 import { MODAL_SIZES } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 import type {
+  AgentActivityObservation,
   AgentTeamPreset,
   AgentTeamSlot,
   GithubRecoveryGate,
@@ -45,6 +46,8 @@ import type {
   TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
+import { AgentActivityBadge } from './AgentActivityBadge'
+import { workItemAttention, workItemStatusLabel } from './workItemAttention'
 import {
   abandonGithubWorkItem, cancelGithubActiveRevision, fetchGithubRecoveryGate,
   fetchGithubRecoveryGateActive,
@@ -749,6 +752,8 @@ function ContinuationPolicyDialog({
 
 function WorkItemDialog({
   item,
+  scope,
+  ownerActivity,
   ownerName,
   handoffTargetName,
   onOpenChange,
@@ -761,6 +766,8 @@ function WorkItemDialog({
   onOperate,
 }: {
   item: GithubWorkItem | null
+  scope?: TeamGithubScope
+  ownerActivity?: AgentActivityObservation
   ownerName?: string
   handoffTargetName?: string
   onOpenChange: (open: boolean) => void
@@ -804,6 +811,7 @@ function WorkItemDialog({
       ])
     : null
   const open = item !== null
+  const attention = item ? workItemAttention(item, scope) : null
 
   const loadRevisions = useCallback((targetItemId: number) => {
     const requestId = ++revisionRequestIdRef.current
@@ -912,6 +920,21 @@ function WorkItemDialog({
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
+              {attention && (
+                <section className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-4" aria-label="Your action needed">
+                  <h3 className="font-medium">{attention.label}</h3>
+                  <p className="mt-2 text-sm">{attention.reason}</p>
+                  {item.last_verified_sha && (
+                    <p className="mt-2 text-xs text-muted-foreground">Last head verified by Deck: <code>{item.last_verified_sha.slice(0, 12)}</code>. Check the current PR head and review evidence before merging.</p>
+                  )}
+                  {prUrl(item) ? (
+                    <a href={prUrl(item)!} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 font-medium text-primary">
+                      <GitPullRequest className="h-4 w-4" />
+                      {attention.linkLabel} #{item.pr_number}
+                    </a>
+                  ) : <p className="mt-2 text-sm">No PR is linked. Inspect the issue and recovery details below.</p>}
+                </section>
+              )}
               {item.dispatch_status === 'escalated' && (
                 <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
                   <div className="flex items-center gap-2 font-medium text-destructive">
@@ -941,11 +964,14 @@ function WorkItemDialog({
                 <dl className="grid gap-0 text-sm">
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Status</dt>
-                    <dd>{readableCode(item.dispatch_status)}</dd>
+                    <dd>{workItemStatusLabel(item, scope)}</dd>
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Owner</dt>
-                    <dd>{ownerName ?? 'Unassigned'} ({routeMethodLabel(item.routing_method)})</dd>
+                    <dd className="space-y-2">
+                      <p>{ownerName ?? 'Unassigned'} ({routeMethodLabel(item.routing_method)})</p>
+                      {item.owner_slot_id && <AgentActivityBadge activity={ownerActivity} />}
+                    </dd>
                   </div>
                   <div className="grid grid-cols-[150px_1fr] border-b p-3">
                     <dt className="text-muted-foreground">Retries</dt>
@@ -1167,6 +1193,7 @@ function WorkItemDialog({
 
 export function AutonomyPanel({
   preset,
+  agentActivity,
   scopes,
   workItems,
   loading,
@@ -1184,6 +1211,7 @@ export function AutonomyPanel({
   onCancelContinuationRequest,
 }: {
   preset: AgentTeamPreset
+  agentActivity?: ReadonlyMap<number, AgentActivityObservation>
   scopes: TeamGithubScope[]
   workItems: GithubWorkItem[]
   loading: boolean
@@ -1260,6 +1288,8 @@ export function AutonomyPanel({
     [preset.slots]
   )
   const scopeCount = scopes.length
+  const scopeById = useMemo(() => new Map(scopes.map((scope) => [scope.id, scope])), [scopes])
+  const actionCount = useMemo(() => workItems.filter((item) => workItemAttention(item, scopeById.get(item.scope_id))).length, [scopeById, workItems])
   const repoOptions = useMemo(
     () => [...new Set([
       ...scopes.map((scope) => `${scope.repo_owner}/${scope.repo_name}`),
@@ -1274,12 +1304,12 @@ export function AutonomyPanel({
   }, [repoFilter, repoOptions])
   const visibleItems = useMemo(() => workItems.filter((item) => {
     if (repoFilter !== 'all' && `${item.repo_owner}/${item.repo_name}` !== repoFilter) return false
-    if (statusFilter === 'attention') return item.dispatch_status === 'escalated' || item.dispatch_status === 'failed'
+    if (statusFilter === 'attention') return workItemAttention(item, scopeById.get(item.scope_id)) !== null
     if (statusFilter === 'active') return ['pending', 'dispatched', 'verifying'].includes(item.dispatch_status)
     if (statusFilter === 'review') return ['awaiting_human_review', 'ready_for_review'].includes(item.dispatch_status)
     if (statusFilter === 'finished') return ['merged', 'completed'].includes(item.dispatch_status)
     return true
-  }), [repoFilter, statusFilter, workItems])
+  }), [repoFilter, scopeById, statusFilter, workItems])
   const detailItem = useMemo(
     () => workItems.find((item) => item.id === detailItemId) ?? null,
     [detailItemId, workItems]
@@ -1630,11 +1660,21 @@ export function AutonomyPanel({
           </span>
         </CardHeader>
         <CardContent className="min-w-0">
+          {actionCount > 0 && !loading && (
+            <section className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm" aria-label="Operator actions">
+              <div>
+                <p className="font-medium">{actionCount} {actionCount === 1 ? 'item needs' : 'items need'} your action</p>
+                <p className="mt-1 text-muted-foreground">Open the highlighted item to see what the team is waiting for.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => { setStatusFilter('attention'); setRepoFilter('all') }}>Show items needing your action</Button>
+            </section>
+          )}
           <section className="mb-3 rounded-lg border p-3 text-sm">
             <Button variant="link" className="h-auto p-0 font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
             {showActivityHelp && <ul id="autonomy-activity-help" className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
               <li>Queued: waiting for an owner or prerequisite. Dispatched: the owner is planning or implementing. Verifying: Deck is watching the PR&apos;s GitHub checks.</li>
-              <li>Needs review: a human should review or merge. Escalated or failed: Deck stopped; open the issue for the reason and remedies. Merged or completed: finished.</li>
+              <li>Your action needed: review or merge a PR under human policy, or inspect a stopped attempt. Leader approval and automatic merge waiting are shown separately. Merged or completed: finished.</li>
+              <li>A gentle pulse means the owner&apos;s current harness reports working. Idle means its turn ended; Stopped means the process stopped; Activity unknown means work cannot be confirmed. These labels stay steady. Owner activity is shared across that owner&apos;s issues, not proof of work on this specific item.</li>
               <li>Implementation is the product change. Diagnostic investigates failed checks within an approved recovery revision; it cannot promote the product PR.</li>
               <li>Label match means an area label chose the owner. Classified means slot expertise chose one. Leader fallback means no owner matched and the Leader took the issue.</li>
             </ul>}
@@ -1656,7 +1696,7 @@ export function AutonomyPanel({
                 <SelectTrigger id="activity-status-filter"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="attention">Needs attention</SelectItem>
+                  <SelectItem value="attention">Needs your action</SelectItem>
                   <SelectItem value="active">In progress</SelectItem>
                   <SelectItem value="review">Needs review</SelectItem>
                   <SelectItem value="finished">Finished</SelectItem>
@@ -1697,6 +1737,7 @@ export function AutonomyPanel({
                       : undefined
                     const pendingLabel = pendingReasonLabel(item, owner?.display_name)
                     const pullUrl = prUrl(item)
+                    const attention = workItemAttention(item, scopeById.get(item.scope_id))
                     return (
                       <tr key={item.id} className="border-b last:border-0">
                         <td className="min-w-[280px] px-3 py-3">
@@ -1724,9 +1765,10 @@ export function AutonomyPanel({
                           )}
                         </td>
                         <td className="px-3 py-3">
-                          <Badge variant="outline" className={statusBadgeClass(item.dispatch_status)} title={statusHelp(item.dispatch_status)}>
-                            {item.dispatch_status.replaceAll('_', ' ')}
+                          <Badge variant="outline" className={attention ? 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300' : statusBadgeClass(item.dispatch_status)} title={attention?.reason ?? statusHelp(item.dispatch_status)}>
+                            {workItemStatusLabel(item, scopeById.get(item.scope_id))}
                           </Badge>
+                          {attention && <p className="mt-1 max-w-xs text-xs text-muted-foreground">{attention.reason}</p>}
                           {pendingLabel && <p className="mt-1 text-xs text-muted-foreground">{pendingLabel}</p>}
                           {item.handoff_state && (
                             <p className="mt-1 text-xs text-sky-400">
@@ -1750,6 +1792,7 @@ export function AutonomyPanel({
                         </td>
                         <td className="px-3 py-3">
                           <span>{owner?.display_name ?? 'Unassigned'}</span>
+                          {owner && <div className="mt-2"><AgentActivityBadge activity={agentActivity?.get(owner.id)} /></div>}
                           <p className="mt-1 text-xs text-muted-foreground" title={routeMethodHelp(item.routing_method)}>{routeMethodLabel(item.routing_method)}</p>
                         </td>
                         <td className="px-3 py-3">
@@ -1762,7 +1805,7 @@ export function AutonomyPanel({
                               className="inline-flex items-center gap-1 text-primary"
                             >
                               <GitPullRequest className="h-3.5 w-3.5" />
-                              #{item.pr_number}
+                              {attention ? `${attention.linkLabel} #${item.pr_number}` : `#${item.pr_number}`}
                             </a>
                           ) : (
                             <span className="text-muted-foreground">—</span>
@@ -1838,6 +1881,8 @@ export function AutonomyPanel({
       <WorkItemDialog
         key={detailItem?.id ?? 'closed'}
         item={detailItem}
+        scope={detailItem ? scopeById.get(detailItem.scope_id) : undefined}
+        ownerActivity={detailItem?.owner_slot_id ? agentActivity?.get(detailItem.owner_slot_id) : undefined}
         ownerName={detailItem?.owner_slot_id ? slotById.get(detailItem.owner_slot_id)?.display_name : undefined}
         handoffTargetName={
           detailItem?.handoff_target_slot_id

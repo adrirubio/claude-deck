@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Native work only: a slow halo pulse keeps status text fully readable. */
+@keyframes agent-working-halo {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0.05); }
+  50% { box-shadow: 0 0 0 3px hsl(var(--primary) / 0.16); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .agent-working-pulse { animation: agent-working-halo 3s ease-in-out infinite; }
+}
+
 @layer base {
   :root {
     /* Backgrounds - Clean white */
