@@ -2528,6 +2528,7 @@ class GithubWorkItemResponse(BaseModel):
     pending_approval_request_id: Optional[int] = None
     pending_approval_kind: Optional[str] = None
     pending_approval_status: Optional[str] = None
+    recovery_checkpoint_stage: Optional[str] = None
     pending_approval_request_message_id: Optional[int] = None
     pending_approval_delivery_status: Optional[Literal["linked", "delivery_pending"]] = None
     attempt_phase: str

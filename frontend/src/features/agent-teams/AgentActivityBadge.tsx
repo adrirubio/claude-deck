@@ -7,6 +7,7 @@ const reasons: Record<string, string> = {
   native_turn_completed: 'The current harness reported that its turn finished. It can still be waiting for review, a merge or another instruction.',
   native_turn_interrupted: 'The harness reported an interrupted turn or an error.',
   native_event_stale: 'No recent native progress event. Working activity can no longer be confirmed.',
+  native_event_before_process: 'The native events belong to an earlier process. Current activity cannot be confirmed.',
   process_stopped: 'The bound process is suspended, stopped or has exited.',
   process_ended: 'The bound process has ended.',
   provider_unsupported: 'This harness does not yet have a native activity adapter.',
