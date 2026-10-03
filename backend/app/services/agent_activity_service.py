@@ -31,6 +31,15 @@ _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
 
 
+def _canonical_session_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(UUID(value))
+    except ValueError:
+        return None
+
+
 def _process(pid: int) -> tuple[str, str]:
     fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
     return fields[0], fields[19]  # state and kernel process start, not PID alone
@@ -170,7 +179,7 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
             return result("unknown", "duplicate_native_identity")
-        if not session_id or str(UUID(session_id)) != session_id:
+        if not session_id or _canonical_session_id(session_id) != session_id:
             return result("unknown", "session_identity_unavailable")
         argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
         # The running executable must be Codex and explicitly resume this UUID.
@@ -200,8 +209,8 @@ async def _team_inputs(db: AsyncSession, preset_id: int):
     native_identity_counts: dict[str, int] = {}
     for options in await db.scalars(select(AgentTeamSlot.launch_options).where(
             AgentTeamSlot.provider == "codex-cli")):
-        session_id = (options or {}).get("session_id")
-        if isinstance(session_id, str):
+        session_id = _canonical_session_id((options or {}).get("session_id"))
+        if session_id is not None:
             native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
     members = list((await db.scalars(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
@@ -232,7 +241,7 @@ async def _team_inputs(db: AsyncSession, preset_id: int):
     return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
                sorted((pid, start, cwd) for pid, start, provider, cwd in
                 bindings.get(slot.id, set()) if provider == slot.provider),
-               native_identity_counts.get(str((slot.launch_options or {}).get("session_id")), 0) > 1)
+               native_identity_counts.get(_canonical_session_id((slot.launch_options or {}).get("session_id")) or "", 0) > 1)
             for slot in slots]
 
 
