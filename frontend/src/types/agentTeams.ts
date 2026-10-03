@@ -309,6 +309,20 @@ export interface GithubScopeRevision {
   approval_request?: GithubApprovalRequest | null
 }
 
+export interface AgentActivityObservation {
+  slot_id: number
+  state: 'working' | 'idle' | 'stopped' | 'unknown'
+  reason: string
+  observed_at: string | null
+}
+
+export interface AgentTeamActivityResponse {
+  preset_id: number
+  checked_at: string
+  valid_until: string
+  slots: AgentActivityObservation[]
+}
+
 export interface GithubWorkItem {
   id: number
   scope_id: number
