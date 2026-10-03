@@ -187,7 +187,7 @@ describe('AutonomyPanel', () => {
     const user = userEvent.setup()
     render(<AutonomyPanel {...panelProps()} />)
     const row = screen.getByRole('row', { name: /#821 — Fix playback/ })
-    expect(within(row).getByText('escalated')).toHaveAttribute('title', expect.stringContaining('Needs attention'))
+    expect(within(row).getByText('Your intervention is needed')).toHaveAttribute('title', expect.stringContaining('Deck stopped this attempt'))
     await user.click(screen.getByRole('button', { name: 'Recovery policy for example/project' }))
     expect(screen.getByText(/A failed head is a pushed PR commit whose checks fail/)).toBeInTheDocument()
     expect(screen.getByText('Scope revisions allowed across one attempt.')).toBeInTheDocument()
