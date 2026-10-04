@@ -163,6 +163,55 @@ describe('shared catalog observation identity',()=>{
   await act(async()=>{await vi.advanceTimersByTimeAsync(60_000)})
   expect(requests).toHaveLength(2);expect(screen.getAllByText('ready')).toHaveLength(2)
  })
+ it('settles a stalled read at its deadline, retries and rejects the retired response despite ignored abort',async()=>{
+  vi.useFakeTimers();const old=deferred<Response>();let calls=0;let signal:AbortSignal|undefined
+  fixtureFetch((_path,_query,options)=>{if(++calls===1){signal=options?.signal as AbortSignal;return old.promise}return jsonResponse(scenarios.read_only_config)})
+  updateNativeMetadata(statuses);renderRoute(<>{probe('codex-cli')}{probe('codex-cli')}</>);await settle()
+  const first=refreshProviderOperations('codex-cli');let settled=false;void first.then(()=>{settled=true})
+  await act(async()=>{await vi.advanceTimersByTimeAsync(9_999)})
+  expect(settled).toBe(false);expect(signal?.aborted).toBe(false);expect(screen.getAllByText('loading')).toHaveLength(2);expect(calls).toBe(1)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1);await first})
+  expect(settled).toBe(true);expect(signal?.aborted).toBe(true);expect(screen.getAllByText('error')).toHaveLength(2);expect(nativeAccess('codex-cli','config')).toBeNull()
+  await act(async()=>refreshProviderOperations('codex-cli'));expect(calls).toBe(2);expect(nativeAccess('codex-cli','config')).toBe('read_only')
+  await act(async()=>old.resolve(jsonResponse(catalogs['codex-cli'])));await settle()
+  expect(nativeAccess('codex-cli','config')).toBe('read_only');expect(screen.getAllByText('ready')).toHaveLength(2)
+ })
+ it('automatically retries retired stalled reads without overlapping a logical flight',async()=>{
+  vi.useFakeTimers();let calls=0;const signals:AbortSignal[]=[]
+  fixtureFetch((_path,_query,options)=>{calls++;signals.push(options?.signal as AbortSignal);return calls<3?new Promise<Response>(()=>undefined):jsonResponse(catalogs['codex-cli'])})
+  renderRoute(<>{probe('codex-cli')}{probe('codex-cli')}</>);await settle()
+  await act(async()=>{await vi.advanceTimersByTimeAsync(10_000)});expect(screen.getAllByText('error')).toHaveLength(2);expect(signals[0].aborted).toBe(true)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(60_000)});expect(calls).toBe(2);expect(screen.getAllByText('loading')).toHaveLength(2)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(10_000)});expect(signals[1].aborted).toBe(true);expect(screen.getAllByText('error')).toHaveLength(2)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(60_000)});expect(calls).toBe(3);expect(screen.getAllByText('ready')).toHaveLength(2)
+ })
+ it('rejects an overdue response when suspension prevented the deadline timer from running',async()=>{
+  vi.useFakeTimers();const pending=deferred<Response>();let calls=0;let signal:AbortSignal|undefined
+  fixtureFetch((_path,_query,options)=>{if(++calls===1){signal=options?.signal as AbortSignal;return pending.promise}return jsonResponse(catalogs['codex-cli'])})
+  updateNativeMetadata(statuses);renderRoute(probe('codex-cli'));await settle();const flight=refreshProviderOperations('codex-cli')
+  vi.setSystemTime(Date.now()+10_001)
+  await act(async()=>{pending.resolve(jsonResponse(catalogs['codex-cli']));await flight});await settle()
+  expect(signal?.aborted).toBe(true);expect(screen.getByText('error')).toBeInTheDocument();expect(nativeAccess('codex-cli','config')).toBeNull()
+  await act(async()=>refreshProviderOperations('codex-cli'));expect(calls).toBe(2);expect(screen.getByText('ready')).toBeInTheDocument()
+ })
+ it('a refresh retires an overdue flight before starting recovery even if its timer was suspended',async()=>{
+  vi.useFakeTimers();const old=deferred<Response>();let calls=0;let signal:AbortSignal|undefined
+  fixtureFetch((_path,_query,options)=>{if(++calls===1){signal=options?.signal as AbortSignal;return old.promise}return jsonResponse(scenarios.adapter_mismatch)})
+  updateNativeMetadata(statuses);const first=refreshProviderOperations('codex-cli');vi.setSystemTime(Date.now()+10_001)
+  await refreshProviderOperations('codex-cli');await first;expect(signal?.aborted).toBe(true);expect(calls).toBe(2)
+  old.resolve(jsonResponse(catalogs['codex-cli']));await settle();expect(nativeAccess('codex-cli','config')).toBeNull()
+ })
+ it('revokes retained dirty editor input at a stalled refresh deadline and never remounts from its late response',async()=>{
+  vi.useFakeTimers();const pending=deferred<Response>();let calls=0;let signal:AbortSignal|undefined
+  const {requests}=fixtureFetch((path,_query,options)=>{if(path.endsWith('/operations')&&++calls===2){signal=options?.signal as AbortSignal;return pending.promise}return answer(path)})
+  native();await settle();fireEvent.change(screen.getByRole('textbox',{name:'Unsaved setting'}),{target:{value:'Unsaved deadline edit'}})
+  let flight!:Promise<void>;act(()=>{flight=refreshProviderOperations('codex-cli')})
+  await act(async()=>{await vi.advanceTimersByTimeAsync(9_999)});expect(screen.getByRole('textbox',{name:'Unsaved setting'})).toHaveValue('Unsaved deadline edit')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1);await flight});expect(signal?.aborted).toBe(true);expect(screen.queryByRole('textbox',{name:'Unsaved setting'})).toBeNull()
+  const before=requests.length;await expect(apiClient('codex-config',{method:'PATCH'})).rejects.toThrow(/unavailable/);expect(requests).toHaveLength(before)
+  await act(async()=>pending.resolve(jsonResponse(catalogs['codex-cli'])));await settle();expect(screen.queryByText(/Mounted/)).toBeNull()
+  await act(async()=>refreshProviderOperations('codex-cli'));await settle();expect(screen.getByRole('textbox',{name:'Unsaved setting'})).toHaveValue('')
+ })
  it('does not let an invalidated late response reinstall permissions',async()=>{
   const old=deferred<Response>();let calls=0;fixtureFetch(()=>++calls===1?old.promise:jsonResponse(scenarios.adapter_mismatch))
   updateNativeMetadata(statuses)

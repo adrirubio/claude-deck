@@ -20,9 +20,10 @@ import type {
 } from '@/types/providers'
 
 const POLL_INTERVAL_MS = 60_000
+const CATALOG_REQUEST_DEADLINE_MS = 10_000
 
 type CatalogState = { state: 'idle' | 'loading' | 'ready' | 'error'; catalog: ProviderOperations | null; refreshing: boolean }
-type CatalogEntry = { snapshot: CatalogState; updated: number; flight?: Promise<void>; expiryTimer?: ReturnType<typeof setTimeout> }
+type CatalogEntry = { snapshot: CatalogState; updated: number; flight?: Promise<void>; deadline?: number; retire?: () => void; expiryTimer?: ReturnType<typeof setTimeout> }
 const emptyCatalog: CatalogState = { state: 'idle', catalog: null, refreshing: false }
 const catalogs = new Map<AgentProviderId, CatalogEntry>()
 const catalogListeners = new Set<() => void>()
@@ -59,14 +60,17 @@ export function isProviderOperations(value: unknown, provider: AgentProviderId):
 }
 
 export function resetProviderOperations() {
-  for (const entry of catalogs.values()) clearTimeout(entry.expiryTimer)
+  const entries = [...catalogs.values()]
+  catalogs.clear() // Retire generations before aborting; late responses cannot reinstall.
+  for (const entry of entries) { clearTimeout(entry.expiryTimer); entry.retire?.() }
   clearNativeCatalogs()
-  catalogs.clear()
   notifyCatalog()
 }
 
 export function refreshProviderOperations(provider: AgentProviderId, force = true): Promise<void> {
   const current = catalogs.get(provider)
+  // Wall-clock checks cover suspended tabs whose deadline timer has not run.
+  if (current?.flight && Date.now() >= (current.deadline ?? 0)) current.retire?.()
   if (current?.flight) return current.flight
   if (!force && current?.snapshot.state === 'ready' && Date.now() - current.updated < POLL_INTERVAL_MS) return Promise.resolve()
   // Preserve unsaved editor state during healthy revalidation. Only an actual
@@ -86,26 +90,49 @@ export function refreshProviderOperations(provider: AgentProviderId, force = tru
     }, Math.max(1, entry.updated + POLL_INTERVAL_MS - Date.now()))
   }
   if (retain) expire()
+  const controller = new AbortController()
+  entry.deadline = Date.now() + CATALOG_REQUEST_DEADLINE_MS
+  let active = true
+  let settled = false
+  let resolveFlight!: () => void
+  const flight = new Promise<void>(resolve => { resolveFlight = resolve })
+  entry.flight = flight
+  const finish = () => {
+    if (settled) return
+    settled = true
+    clearTimeout(deadlineTimer)
+    entry.retire = undefined
+    if (catalogs.get(provider) === entry) { entry.flight = undefined; notifyCatalog() }
+    resolveFlight()
+  }
+  const retire = () => {
+    active = false // Abort is best effort; logical retirement rejects ignored/late aborts.
+    controller.abort()
+    clearTimeout(entry.expiryTimer)
+    if (catalogs.get(provider) === entry) {
+      updateNativeCatalog(provider)
+      entry.updated = Date.now()
+      entry.snapshot = { state: 'error', catalog: null, refreshing: false }
+    }
+    finish()
+  }
+  entry.retire = retire
+  const deadlineTimer = setTimeout(retire, CATALOG_REQUEST_DEADLINE_MS)
   notifyCatalog()
-  entry.flight = apiClient<unknown>(`providers/${provider}/operations`).then(value => {
-    if (catalogs.get(provider) !== entry) return // An invalidated flight cannot reinstall permissions.
+  void apiClient<unknown>(`providers/${provider}/operations`, { signal: controller.signal }).then(value => {
+    if (!active || catalogs.get(provider) !== entry) return
+    // A timer may be throttled: never give an overdue response a new receipt TTL.
+    if (Date.now() >= (entry.deadline ?? 0)) { retire(); return }
     if (!isProviderOperations(value, provider)) throw new Error('Invalid operating catalog')
     entry.updated = Date.now()
     updateNativeCatalog(provider, value) // Publish guards before children can mount/fetch.
     entry.snapshot = { state: 'ready', catalog: value, refreshing: false }
+    active = false
     expire()
   }).catch(() => {
-    if (catalogs.get(provider) !== entry) return
-    updateNativeCatalog(provider)
-    clearTimeout(entry.expiryTimer)
-    entry.updated = Date.now()
-    entry.snapshot = { state: 'error', catalog: null, refreshing: false }
-  }).finally(() => {
-    if (catalogs.get(provider) !== entry) return
-    entry.flight = undefined
-    notifyCatalog()
-  })
-  return entry.flight
+    if (active && catalogs.get(provider) === entry) retire()
+  }).finally(finish)
+  return flight
 }
 
 export function useProviderOperations(provider?: AgentProviderId) {
@@ -116,7 +143,12 @@ export function useProviderOperations(provider?: AgentProviderId) {
   const state = useSyncExternalStore(subscribeCatalog, snapshot, snapshot)
   useEffect(() => {
     if (!provider) return
-    const onVisible = () => { if (document.visibilityState === 'visible') notifyCatalog() }
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const current = catalogs.get(provider)
+      if (current?.flight && Date.now() >= (current.deadline ?? 0)) current.retire?.()
+      notifyCatalog()
+    }
     document.addEventListener('visibilitychange', onVisible)
     let timer: ReturnType<typeof setTimeout> | undefined
     if (state.state === 'idle') void refreshProviderOperations(provider, false)
