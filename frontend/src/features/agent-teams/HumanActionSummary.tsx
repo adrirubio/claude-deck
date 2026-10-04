@@ -9,6 +9,7 @@ type HumanAction = {
   source: 'leader' | 'dispatch'; last_assessed_at: string | null
   prerequisite_issue_numbers: number[]; evidence_issue_numbers: number[]
   pr_observed_at?: string | null
+  gate_reason?: string
 }
 type Summary = { preset_id: number; observation_expires_at: string; coverage_complete: boolean; actions: HumanAction[] }
 const kinds: Record<string, string> = {
@@ -49,7 +50,9 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
           timeout = setTimeout(() => abort.abort(), 10000)
         })
         const next = await Promise.race([apiClient<Summary>(`agent-teams/presets/${presetId}/human-actions`, { signal:abort.signal, cache:'no-store' }), deadline])
-        if (next.preset_id !== presetId || !Array.isArray(next.actions)) throw new Error('Invalid human-action response')
+        if (next.preset_id !== presetId || !Array.isArray(next.actions) || !next.actions.every((a) => a &&
+          Number.isSafeInteger(a.issue_number) && a.issue_number>0 && typeof a.repo==='string' &&
+          Array.isArray(a.prerequisite_issue_numbers) && Array.isArray(a.evidence_issue_numbers))) throw new Error('Invalid human-action response')
         if (active && request===serial.current) { setData(next); setUnavailable(false) }
       } catch {
         if (active && request===serial.current) setUnavailable(true)
@@ -90,7 +93,8 @@ export function HumanActionSummary({ presetId, onInspectAutonomy }: { presetId: 
     </div>
     {actions.length>0 && <ul className="mt-3 space-y-3">{actions.map((action) => <li key={`${action.scope_id}-${action.issue_number}-${action.kind}-${action.pull_request_number ?? ''}`} className="rounded border bg-background p-3">
       <p className="font-medium">{states[historical ? 'historical' : action.state] ?? states.historical}</p>
-      <p className="mt-1">{kinds[action.kind] ?? 'Review the reported gate'}{action.pull_request_number ? ` — PR #${action.pull_request_number}` : ` — issue #${action.issue_number}`}</p>
+      <p className="mt-1">{action.kind==='milestone_acceptance' && ['m1a_acceptance','m1b_acceptance'].includes(action.gate_reason ?? '')
+        ? `${action.gate_reason==='m1a_acceptance' ? 'M1a' : 'M1b'} acceptance` : kinds[action.kind] ?? 'Review the reported gate'}{action.pull_request_number ? ` — PR #${action.pull_request_number}` : ` — issue #${action.issue_number}`}</p>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
         {action.pull_request_number && <a className="underline" href={`https://github.com/${action.repo}/pull/${action.pull_request_number}`} target="_blank" rel="noreferrer">Open PR #{action.pull_request_number}</a>}
         <a className="underline" href={`https://github.com/${action.repo}/issues/${action.issue_number}`} target="_blank" rel="noreferrer">Open issue #{action.issue_number}</a>

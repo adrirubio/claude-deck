@@ -93,6 +93,7 @@ class GithubOperatorAttentionService:
                                  "expected_head_sha":None, "prerequisite_issue_numbers":[]}]
                 for action in reported:
                     actions.append({**action, "scope_id":scope.id, "repo":summary["repo"], "issue_number":entry.issue_number,
+                        "gate_reason":entry.reason,
                         "source":"leader", "assessment_current":current, "assessment_status":summary["status"],
                         "last_assessed_at":summary["last_assessed_at"], "evidence_issue_numbers":entry.evidence_issue_numbers,
                         "state":action["readiness"] if current else "historical"})
