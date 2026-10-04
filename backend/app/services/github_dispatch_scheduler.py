@@ -19,6 +19,7 @@ from app.models.database import (
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_approval_service import github_approval_service
 from app.services.github_client import GithubClient, github_client
+from app.services.github_coordination_service import github_coordination_service
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_recovery_gate import (
     GithubRecoveryOnlyAttempt,
@@ -139,10 +140,11 @@ class GithubDispatchScheduler:
         if self.recovery_only_attempt is not None:
             await self._run_recovery_only(db, scopes, client=client)
             return
-        for scope in scopes:
-            if not await self._scope_remains_autonomous(db, scope.id):
+        # Rollback in an isolated stage expires every ORM object in the session.
+        for scope_id in [scope.id for scope in scopes]:
+            if not await self._scope_remains_autonomous(db, scope_id):
                 continue
-            scope, _slots = await self._reload_scope_context(db, scope.id)
+            scope, _slots = await self._reload_scope_context(db, scope_id)
             await self.watcher.poll_scope(db, scope, client)
             await db.commit()
             if not await self._scope_remains_autonomous(db, scope.id):
@@ -189,6 +191,15 @@ class GithubDispatchScheduler:
             scope, _slots = await self._reload_scope_context(db, scope.id)
             await self.dispatch.remind_held_leases(db, scope)
             await db.commit()
+            # Backlog assessment is advisory and cannot wedge verification/recovery.
+            if await self._scope_remains_autonomous(db, scope.id):
+                coordination_scope_id = scope.id
+                try:
+                    await github_coordination_service.reconcile(db, coordination_scope_id, client)
+                except Exception as error:
+                    await db.rollback()
+                    logger.warning("backlog_coordination_failed scope=%s error_type=%s",
+                                   coordination_scope_id, type(error).__name__)
 
     async def _run_recovery_only(
         self,
