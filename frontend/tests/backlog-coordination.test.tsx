@@ -133,4 +133,16 @@ describe('Leader backlog coordination', () => {
     expect(screen.queryByText('No eligible implementation work')).toBeNull()
     expect(screen.getByText('Previous assessment — not current eligibility')).toBeTruthy()
   })
+  it('keeps relative assessment age advancing during failed polling', async () => {
+    vi.useFakeTimers()
+    const now = Date.now()
+    vi.mocked(apiClient).mockResolvedValueOnce({ ...summary, last_assessed_at: new Date(now).toISOString(),
+      observation_expires_at: new Date(now + 120000).toISOString() })
+      .mockRejectedValue(new Error('fixture offline'))
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(240000) })
+    expect(screen.getByText(/\(4 minutes ago\)/)).toBeTruthy()
+    expect(screen.getByText('Coordination status is unavailable')).toBeTruthy()
+  })
 })

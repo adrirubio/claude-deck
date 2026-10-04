@@ -117,6 +117,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       if (request === serial.current && (timedOut || !abort.signal.aborted)) setError('Unable to refresh coordination. Any retained assessment is historical.')
     } finally {
       clearTimeout(timeout)
+      if (request === serial.current) setClock(Date.now())
     }
   }, [path, scopeId])
   useEffect(() => {
