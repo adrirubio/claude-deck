@@ -574,6 +574,34 @@ async def test_fresh_read_is_read_only_and_tokens_are_principal_only(db, team):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["poll", "correction"])
+async def test_fresh_read_uses_post_http_assessment_not_obsolete_summary(db, team, change):
+    first = await fresh_report(db, team)
+    await service.assess(db, team.scope_id, team.leader, first, team.client)
+    correction = await fresh_report(db, team, eligible=False)
+    original = team.client.get_issues_by_number
+    async def concurrent_change(*args):
+        team.client.get_issues_by_number = original
+        if change == "poll":
+            team.client.issues[8]["updated_at"] = "2026-10-04T14:00:00Z"
+            await service.reconcile(db, team.scope_id, team.client)
+        else:
+            await service.assess(db, team.scope_id, team.leader, correction, team.client)
+        return await original(*args)
+    team.client.get_issues_by_number = concurrent_change
+    read = await service.request(db, team.scope_id, principal=team.leader, client=team.client)
+    if change == "poll":
+        assert not read["assessment_current"] and read["eligible_count"] is None
+        assert read["status"] == "awaiting_assessment"
+        assert read["observations"][1]["github_updated_at"] == "2026-10-04T14:00:00Z"
+    else:
+        assert read["assessment_current"] and read["eligible_count"] == 0
+        assert read["entries"][1]["reason"] == "pilot_decision"
+    signed = report(SimpleNamespace(**read), eligible=False).model_copy(update={"snapshot_token": read["snapshot_token"]})
+    await service.assess(db, team.scope_id, team.leader, signed, team.client)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["issue", "workspace", "policy", "session", "secret", "sequence", "expired"])
 async def test_signed_read_rejects_changed_context(db, team, monkeypatch, change):
     receipt = await fresh_report(db, team)

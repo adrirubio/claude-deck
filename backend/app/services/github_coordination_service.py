@@ -726,6 +726,9 @@ class GithubCoordinationService:
         except (TimeoutError, OSError, HTTPError):
             raise CoordinationError("backlog_unavailable") from None
         public, fingerprint, leader, authority = await self._context(db, scope_id, numbers, issues)
+        # HTTP can overlap a poll or a signed correction. Rebuild all historical
+        # assessment fields from the post-read row before attaching its challenge.
+        result = await self.summary(db, scope_id)
         row = await self.state(db, scope_id)
         if (row is None or not row.enabled or row.policy_revision != policy_revision
             or principal_id != leader.id or not await db.scalar(select(authority))):
