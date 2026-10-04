@@ -12,6 +12,20 @@ def test_mcp_shim_imports_without_app_package_dependency():
     assert callable(shim.deck_whoami)
 
 
+def test_backlog_assessment_forwards_optional_private_snapshot_token(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+
+    posted = []
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs: posted.append(
+        (method, path, kwargs)) or {"ok": True})
+    shim.deck_report_backlog_assessment(1, 2, 0, [], "fixture-private-read")
+    shim.deck_report_backlog_assessment(1, 2, 3, [])
+    assert posted[0] == ("POST", "/github-scopes/1/coordination-assessments", {"json": {
+        "generation": 2, "request_sequence": 0, "entries": [], "snapshot_token": "fixture-private-read"}})
+    assert posted[1][2]["json"]["snapshot_token"] is None
+
+
 def test_ensure_registered_refreshes_cached_member(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
