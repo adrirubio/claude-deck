@@ -1,4 +1,4 @@
-// Isolated P01 fixture UI checks. Run only through product-heavy.
+// Isolated P01/P03 fixture UI checks. Run only through product-heavy.
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -14,6 +14,8 @@ const [overview, work, detail, repos, repo] = await Promise.all(
     fixtures,
   ),
 );
+const operationFixtures = JSON.parse(await fs.readFile("tests/fixtures/provider-operations/v1/catalog.json"));
+const operationManifest = JSON.parse(await fs.readFile("tests/fixtures/provider-operations/v1/manifest.json"));
 const providers = [
   "claude-code",
   "codex-cli",
@@ -33,6 +35,7 @@ const providers = [
     sessions: true,
   },
   capability_matrix: {
+    ...operationFixtures.providers[id].native_capabilities,
     config: { state: "write_capable" },
     plugins: { state: "write_capable" },
     usage: { state: "supported" },
@@ -72,6 +75,7 @@ function respond(req) {
     path: key,
     method: req.method,
     query: Object.fromEntries(url.searchParams),
+    page: new URL(req.headers.referer ?? "/", "http://fixture.test").pathname + new URL(req.headers.referer ?? "/", "http://fixture.test").search,
   });
   assert.equal(req.method, "GET", "Fixture browser must never mutate");
   if (key === "factory/overview") return overview.normal.response;
@@ -140,6 +144,11 @@ function respond(req) {
       stderr: "",
       raw_stdout: "",
     };
+  if (/^providers\/[^/]+\/operations$/.test(key)) {
+    const scenario = new URL(req.headers.referer ?? "/", "http://fixture.test").searchParams.get("fixture_catalog");
+    if (scenario === "catalog_error") return operationFixtures.errors.catalog_unavailable;
+    return operationFixtures.scenarios[scenario] ?? operationFixtures.providers[key.split("/")[1]];
+  }
   if (key === "providers") return { providers, count: 5 };
   if (key === "status")
     return {
@@ -154,6 +163,14 @@ function respond(req) {
     };
   if (key === "projects") return { projects: [], count: 0 };
   if (key === "agent-teams/presets") return { presets: [preset] };
+  // Synthetic unknown/empty observations for existing Teams read surfaces.
+  if (/^agent-teams\/presets\/\d+\/activity$/.test(key)) return {
+    preset_id: 1, checked_at: stamp, valid_until: new Date(Date.now() + 60_000).toISOString(),
+    slots: [1, 2].map(slot_id => ({slot_id, state: "unknown", reason: "Synthetic fixture has no live activity evidence.", observed_at: null})),
+  };
+  if (/^agent-teams\/presets\/\d+\/human-actions$/.test(key)) return {
+    preset_id: 1, observation_expires_at: new Date(Date.now() + 60_000).toISOString(), coverage_complete: false, actions: [],
+  };
   if (/agent-teams\/presets\/\d+\/github-scopes/.test(key))
     return { scopes: [] };
   if (/agent-teams\/presets\/\d+\/github-work-items/.test(key))
@@ -180,7 +197,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.url.startsWith("/api/v1/")) {
       const data = respond(req);
-      res.writeHead(data ? 200 : 404, { "Content-Type": "application/json" });
+      res.writeHead(data?.status === 503 ? 503 : data ? 200 : 404, { "Content-Type": "application/json" });
       res.end(JSON.stringify(data ?? { detail: "No fixture for endpoint" }));
       return;
     }
@@ -289,6 +306,8 @@ try {
     keyboard = [],
     navigation = [],
     retryConfirmations = [];
+  for (const theme of ["light", "dark"]) {
+    const {identifier} = await send("Page.addScriptToEvaluateOnNewDocument", {source: `localStorage.setItem("theme", "${theme}")`});
   for (const width of [360, 768, 1280]) {
     await send("Emulation.setDeviceMetricsOverride", {
       width,
@@ -304,6 +323,11 @@ try {
       ["repository", "/repositories/1", "Same-label overlap"],
       ["harnesses", "/harnesses", "Harnesses"],
       ["native-codex", "/harnesses/codex-cli/config", "Codex Config"],
+      ["catalog-error", "/harnesses/codex-cli/config?fixture_catalog=catalog_error", "Native page unavailable"],
+      ["adapter-mismatch", "/harnesses/codex-cli/config?fixture_catalog=adapter_mismatch", "Native page unavailable"],
+      ["read-only-config", "/harnesses/codex-cli/config?fixture_catalog=read_only_config", "Native settings are read-only"],
+      ["unknown-config", "/harnesses/codex-cli/config?fixture_catalog=unknown_config", "Native page unavailable"],
+      ["legacy-mismatch", "/config?fixture_catalog=adapter_mismatch", "Native page unavailable"],
       [
         "unsupported",
         "/harnesses/opencode-cli/config",
@@ -315,6 +339,7 @@ try {
         "Review selected slot launch",
       ],
     ]) {
+      if (name === "legacy-mismatch") await evaluate('localStorage.setItem("claude-deck:selected-provider", "codex-cli")');
       await send("Page.navigate", { url: `http://127.0.0.1:${port}${route}` });
       for (let i = 0; i < 100; i++) {
         if (
@@ -332,6 +357,16 @@ try {
         `${name} did not render`,
       );
       await sleep(100);
+      if (["catalog-error", "adapter-mismatch", "read-only-config", "unknown-config", "legacy-mismatch"].includes(name)) {
+        const pageRequests = requests.filter(r => r.page === route);
+        assert(pageRequests.some(r => r.path === "providers/codex-cli/operations"), `${name} did not read required catalog`);
+        assert(!pageRequests.some(r => /^(codex-config|config|mcp|plugins)(\/|$)|^providers\/codex-cli\/(doctor|features|mcp|plugins)/.test(r.path)), `${name} leaked native API calls`);
+      }
+      if (name === "harnesses") {
+        for (let i=0; i<100 && !(await evaluate('document.querySelectorAll("dl").length === 5 && [...document.querySelectorAll("dd")].filter(x => x.textContent === "Configured for launch").length === 5')); i++) await sleep(50);
+        assert(await evaluate('[...document.querySelectorAll("dd")].filter(x => x.textContent === "Configured for launch").length === 5'), "Harness cards lost separate configuration readiness");
+        assert(await evaluate('[...document.querySelectorAll("dd")].filter(x => x.textContent.includes("Credentials not checked")).length === 5'), "Harness cards claimed credentials");
+      }
       if (name === "retry-confirmation") {
         // Synthetic cached credential; confirmation/cancellation must remain GET-only.
         await evaluate(`sessionStorage.setItem("claude-deck.agent-teams.operator-token", "fixture-only");
@@ -355,16 +390,16 @@ try {
         captureBeyondViewport: false,
       });
       await fs.writeFile(
-        path.join(evidence, `${name}-${width}.png`),
+        path.join(evidence, `${name}-${theme}-${width}.png`),
         Buffer.from(shot.data, "base64"),
       );
-      observations.push({ name, route, ...layout });
+      observations.push({ theme, name, route, ...layout });
       if (name === "retry-confirmation") {
         await evaluate('[...document.querySelectorAll("[role=alertdialog] button")].find(b=>b.textContent==="Cancel").click()');
         await sleep(100);
         assert(!(await evaluate('Boolean(document.querySelector("[role=alertdialog]"))')), "Retry cancellation left confirmation open");
         assert.equal(requests.filter((r) => r.method !== "GET").length, 0);
-        retryConfirmations.push({ width, cached_credential: true, cancelled: true, mutations: 0 });
+        retryConfirmations.push({ theme, width, cached_credential: true, cancelled: true, mutations: 0 });
         await evaluate('sessionStorage.removeItem("claude-deck.agent-teams.operator-token")');
       }
       if (name === "work") {
@@ -430,7 +465,7 @@ try {
           captureBeyondViewport: false,
         });
         await fs.writeFile(
-          path.join(evidence, `work-return-${width}.png`),
+          path.join(evidence, `work-return-${theme}-${width}.png`),
           Buffer.from(returned.data, "base64"),
         );
       }
@@ -475,7 +510,7 @@ try {
           `Keyboard launch review did not request operator authorization: ${JSON.stringify(prompt)}`,
         );
         keyboard.push({
-          width,
+          theme, width,
           case: "offline launch review via Enter",
           token_prompt: true,
           launch: false,
@@ -492,11 +527,14 @@ try {
       }
     }
   }
+    await send("Page.removeScriptToEvaluateOnNewDocument", {identifier});
+  }
+  assert.equal(unknown.length, 0, "Unaccounted fixture API requests");
   assert.equal(errors.length, 0, "Browser runtime exceptions");
   assert.equal(requests.filter((r) => r.method !== "GET").length, 0);
   assert(
     !requests.some((r) =>
-      /operations|native_surfaces|inbox|ack|claim/.test(r.path),
+      /native_surfaces|inbox|ack|claim/.test(r.path),
     ),
   );
   const head = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -511,6 +549,10 @@ try {
         fixture_review: "59c8cc9855e1a98f7d28e16abef88171c7da69ca",
         manifest_sha256:
           "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706",
+        operations_source_accepted: "66cd16329d5a01e9d96694513bd8e1544843fbf7",
+        operations_schema_version: operationFixtures.schema_version,
+        operations_catalog_sha256: operationManifest.catalog_sha256,
+        operations_manifest_sha256: "0ac33401f6a36ce92c1264884fec87d5999a105f8fb4520f74ca18ea4b1d3173",
         observations,
         keyboard,
         navigation,

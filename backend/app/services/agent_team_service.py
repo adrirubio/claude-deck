@@ -1082,41 +1082,9 @@ class AgentTeamService:
         )
 
     def _agent_mail_ready_reason(self, provider: str, install_status: Any) -> str | None:
-        if provider == "pi-cli":
-            return None if getattr(install_status, "pi_mail_ready", False) else (
-                getattr(install_status, "pi_mail_reason", None) or "Pi Agent Mail extension is not ready"
-            )
-        if provider == "claude-code":
-            if not install_status.claude_code_mcp_installed:
-                return "Claude Code Agent Mail MCP is not installed"
-            if install_status.claude_code_hooks_missing:
-                return "Claude Code Agent Mail hooks are missing"
-            return None
-        if provider == "codex-cli":
-            if not install_status.codex_cli_available:
-                return "Codex CLI is not available on this machine"
-            if not install_status.codex_mcp_installed:
-                return "Codex Agent Mail MCP is not installed"
-            if install_status.codex_hooks_missing:
-                return "Codex Agent Mail hooks are missing"
-            return None
-        if provider == "copilot-cli":
-            if not getattr(install_status, "copilot_cli_available", False):
-                return "GitHub Copilot CLI is not available on this machine"
-            if not getattr(install_status, "copilot_mcp_installed", False):
-                return "GitHub Copilot CLI Agent Mail MCP is not installed"
-            if getattr(install_status, "copilot_hooks_missing", []):
-                return "GitHub Copilot CLI Agent Mail hooks are missing"
-            return None
-        if provider == "opencode-cli":
-            if not getattr(install_status, "opencode_cli_available", False):
-                return "OpenCode CLI is not available on this machine"
-            if not getattr(install_status, "opencode_mcp_installed", False):
-                return "OpenCode Agent Mail MCP is not installed"
-            if getattr(install_status, "opencode_plugin_events_missing", []):
-                return "OpenCode Agent Mail plugin is missing or incomplete"
-            return None
-        return None
+        from app.services.provider_readiness_service import agent_mail_ready_reason
+
+        return agent_mail_ready_reason(provider, install_status)
 
     def _unsafe_resume_last_slot_ids(self, slots: list[AgentTeamSlot]) -> set[int]:
         groups: dict[tuple[str, str], list[AgentTeamSlot]] = {}

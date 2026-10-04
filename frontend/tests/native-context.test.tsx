@@ -15,7 +15,11 @@ import {
   assertNativeAction,
   assertBrowserNativeRequest,
   updateNativeMetadata,
+  updateNativeCatalog,
 } from "../src/features/native-settings/surfaceRegistry";
+import { resetProviderOperations } from "../src/hooks/useProviders";
+import catalogs from "./fixtures/provider-operations/v1/catalog.json";
+import type { ProviderOperations } from "../src/types/providers";
 import { apiClient } from "../src/lib/api";
 import { BridgeEntry, MailEntry } from "../src/features/factory/ContextPages";
 import { verifiedBridgeSession } from "../src/features/factory/contextLinks";
@@ -25,6 +29,7 @@ import adapters from "./fixtures/factory/native-adapters.json";
 import { resetFactoryReads } from "../src/features/factory/reads";
 import {
   fixtureFetch,
+  operationsFixtureResponse,
   jsonResponse,
   renderRoute,
   settle,
@@ -72,6 +77,7 @@ const statuses = [
   installed: true,
   capabilities: { config: true, plugins: true, usage: true },
   capability_matrix: {
+    ...catalogs.providers[id as keyof typeof catalogs.providers].native_capabilities,
     config: { state: "write_capable" },
     plugins: { state: "write_capable" },
     usage: { state: "supported" },
@@ -79,7 +85,9 @@ const statuses = [
 })) as AgentProviderStatus[];
 beforeEach(() => {
   resetFactoryReads();
-  updateNativeMetadata([]);
+  resetProviderOperations();
+  updateNativeMetadata(statuses);
+  for (const p of statuses) updateNativeCatalog(p.id, catalogs.providers[p.id] as ProviderOperations);
   localStorage.clear();
   window.history.replaceState({}, "", "/");
 });
@@ -116,8 +124,8 @@ describe("native adapters", () => {
   it.each(["copilot-cli", "opencode-cli", "pi-cli"])(
     "blocks Claude fallthrough for %s with positive capabilities",
     async (id) => {
-      const { requests } = fixtureFetch(() =>
-        jsonResponse({ providers: statuses }),
+      const { requests } = fixtureFetch((path) =>
+        operationsFixtureResponse(path) ?? jsonResponse({ providers: statuses }),
       );
       renderRoute(
         <ProviderProvider>
@@ -135,9 +143,9 @@ describe("native adapters", () => {
   it("prepares canonical Codex context before first editor request without changing saved preference", async () => {
     localStorage.setItem("claude-deck:selected-provider", "pi-cli");
     const { requests } = fixtureFetch((path) =>
-      path === "providers"
+      operationsFixtureResponse(path) ?? (path === "providers"
         ? jsonResponse({ providers: statuses })
-        : jsonResponse({}),
+        : jsonResponse({})),
     );
     renderRoute(
       <ProviderProvider>
@@ -156,8 +164,8 @@ describe("native adapters", () => {
   });
   it("guards compatibility entries and prevents writable editor mounting for read-only access", async () => {
     localStorage.setItem("claude-deck:selected-provider", "opencode-cli");
-    const { requests } = fixtureFetch(() =>
-      jsonResponse({ providers: statuses }),
+    const { requests } = fixtureFetch((path) =>
+      operationsFixtureResponse(path) ?? jsonResponse({ providers: statuses }),
     );
     renderRoute(
       <ProviderProvider>
@@ -170,8 +178,9 @@ describe("native adapters", () => {
     expect(requests).toHaveLength(1);
     cleanup();
     localStorage.setItem("claude-deck:selected-provider", "codex-cli");
-    fixtureFetch(() =>
-      jsonResponse({
+    resetProviderOperations();
+    fixtureFetch((path) =>
+      operationsFixtureResponse(path) ?? jsonResponse({
         providers: statuses.map((p) =>
           p.id === "codex-cli"
             ? { ...p, capability_matrix: { config: { state: "read_only" } } }
@@ -252,8 +261,9 @@ describe("context navigation", () => {
     expect(requests[0].method).toBe("GET");
   });
   it("keeps ambiguous/offline context filtered without selecting a terminal", async () => {
-    fixtureFetch(() =>
-      jsonResponse({
+    resetProviderOperations();
+    fixtureFetch((path) =>
+      operationsFixtureResponse(path) ?? jsonResponse({
         sessions: [
           session,
           { ...session, tmux_target: "ambiguous:0.0" },

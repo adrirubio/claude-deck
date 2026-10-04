@@ -2,6 +2,13 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { render, act } from "@testing-library/react";
 import { vi } from "vitest";
 import type { ReactNode } from "react";
+import catalog from "../fixtures/provider-operations/v1/catalog.json";
+export function operationsFixtureResponse(path: string) {
+  const match = /^providers\/([^/]+)\/operations$/.exec(path);
+  if (!match) return undefined;
+  const value = catalog.providers[match[1] as keyof typeof catalog.providers];
+  return jsonResponse(value ?? { detail: "Unknown fixture provider" }, value ? 200 : 404);
+}
 export function renderRoute(
   element: ReactNode,
   path = "/work",

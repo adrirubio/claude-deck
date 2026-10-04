@@ -24,6 +24,7 @@ import { PlanDetailPage } from "@/features/plans/PlanDetailPage";
 import { ContextPage } from "@/features/context/ContextPage";
 import { UsagePage } from "@/features/usage/UsagePage";
 import type { AgentProviderId } from "@/types/providers";
+import { useProviderOperations } from "@/hooks/useProviders";
 import { nativeAdapter, nativeAccess } from "./surfaceRegistry";
 const pages = {
   summary: DashboardPage,
@@ -58,9 +59,12 @@ export function NativeRoute({
   const surface = legacySurface ?? params.surface ?? "summary";
   const metadata = context.providers.find((p) => p.id === provider);
   const entry = nativeAdapter(provider, surface);
-  const access = nativeAccess(provider, surface, metadata);
-  const Page = pages[surface as keyof typeof pages];
+  const Page = Object.hasOwn(pages, surface) ? pages[surface as keyof typeof pages] : undefined;
+  const catalog = useProviderOperations(entry && Page && metadata && !context.loading && !context.error ? metadata.id : undefined);
+  const access = nativeAccess(provider, surface, metadata, catalog.catalog ?? undefined);
   if (context.loading) return <p role="status">Loading harness registry…</p>;
+  if (entry && Page && metadata && !context.error && (catalog.state === "idle" || catalog.state === "loading"))
+    return <p role="status">Loading required operating catalog…</p>;
   if (!entry || !Page || !access || context.error || !metadata)
     return (
       <section className="space-y-3">
@@ -71,6 +75,7 @@ export function NativeRoute({
           editor.
         </p>
         {context.error && <p role="alert">{context.error}</p>}
+        {catalog.state === "error" && <p role="alert">Operating catalog unavailable. Native pages require a valid current catalog.</p>}
         <Link className="text-primary underline" to="/harnesses">
           Open Harnesses
         </Link>
@@ -96,6 +101,7 @@ export function NativeRoute({
     );
   return (
     <NativeProviderScope
+      key={`${provider}/${surface}`}
       providerId={provider as AgentProviderId}
       onSelect={(id) => navigate(`/harnesses/${id}/${surface}`)}
     >
