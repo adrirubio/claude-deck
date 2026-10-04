@@ -447,11 +447,13 @@ try {
         await supplementalShot("sidebar-focus", theme, width);
         if (width >= 768) {
           await focusByTab('button[aria-label="Collapse sidebar"]');
-          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          for (let i = 0; i < 20 && !(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))')); i++) await sleep(50);
           assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))'));
           assert.equal(await evaluate('document.querySelectorAll(\'nav[aria-label="Main navigation"] a[aria-label]\').length'), 8);
           await supplementalShot("sidebar-collapsed", theme, width);
-          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          for (let i = 0; i < 20 && !(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))')); i++) await sleep(50);
           assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))'));
         }
         navigationPolish.push({ theme, width, case: "harness destination and sidebar natural focus", primary, sidebar, shiftTabReturns: true });
