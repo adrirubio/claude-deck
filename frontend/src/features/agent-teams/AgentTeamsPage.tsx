@@ -91,6 +91,7 @@ import type { MailMemberResponse } from '@/types/agentMail'
 import { AgentTeamsHelpDialog } from './AgentTeamsHelpDialog'
 import { ProviderLaunchOptionsFields } from '@/features/providers/ProviderLaunchOptionsFields'
 import { AutonomyPanel, OperatorTokenDialog } from './AutonomyPanel'
+import { HumanActionSummary } from './HumanActionSummary'
 import { AgentActivityBadge } from './AgentActivityBadge'
 import { useAgentActivity } from './useAgentActivity'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
@@ -1358,6 +1359,7 @@ export function AgentTeamsPage() {
                 </div>
               </div>
 
+              <HumanActionSummary key={selectedPreset.id} presetId={selectedPreset.id} onInspectAutonomy={() => setAutonomyTab('autonomy')} />
               <Tabs value={autonomyTab} onValueChange={(value) => setAutonomyTab(value as 'roster' | 'autonomy')} className="border-t pt-5">
                 <TabsList>
                   <TabsTrigger value="roster">Roster</TabsTrigger>

@@ -6,6 +6,26 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 IssueNumber = Annotated[int, Field(gt=0, strict=True)]
 
 
+class CoordinationHumanAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["review_pr", "merge_pr", "pilot_decision", "milestone_acceptance", "provide_evidence", "scope_clarification"]
+    readiness: Literal["requested", "waiting_for_prerequisites"]
+    pull_request_number: IssueNumber | None = None
+    expected_head_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    prerequisite_issue_numbers: list[IssueNumber] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def references(self):
+        if len(set(self.prerequisite_issue_numbers)) != len(self.prerequisite_issue_numbers):
+            raise ValueError("Prerequisite references must be unique")
+        if self.kind in {"review_pr", "merge_pr"}:
+            if self.pull_request_number is None or self.expected_head_sha is None:
+                raise ValueError("PR actions require a PR number and exact expected head")
+        elif self.pull_request_number is not None or self.expected_head_sha is not None:
+            raise ValueError("Only PR actions accept PR identity fields")
+        return self
+
+
 class CoordinationPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int = Field(ge=0, strict=True)
@@ -39,6 +59,7 @@ class CoordinationDisposition(BaseModel):
     ]
     required_actor: Literal["leader", "operator", "owner", "reviewer", "none"]
     evidence_issue_numbers: list[IssueNumber] = Field(min_length=1, max_length=32)
+    human_actions: list[CoordinationHumanAction] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
     def evidence(self):
@@ -59,3 +80,13 @@ class CoordinationAssessment(BaseModel):
     request_sequence: int = Field(ge=0, strict=True)
     snapshot_token: str | None = Field(default=None, min_length=1, max_length=2048)
     entries: list[CoordinationDisposition] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def bounded_human_actions(self):
+        actions = [(entry.issue_number, action) for entry in self.entries for action in entry.human_actions]
+        if len(actions) > 16 or len({a.pull_request_number for _, a in actions if a.pull_request_number}) > 8:
+            raise ValueError("At most 16 human actions and eight PRs per assessment")
+        keys = [(a.kind, a.pull_request_number or issue) for issue, a in actions]
+        if len(set(keys)) != len(keys):
+            raise ValueError("Human actions must be unique")
+        return self

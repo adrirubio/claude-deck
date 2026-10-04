@@ -25,6 +25,7 @@ from app.services.github_dispatch_service import github_dispatch_service
 class Client:
     def __init__(self):
         self.calls = 0
+        self.pulls = {}
         self.issues = {n: {"number": n, "state": "open", "updated_at": "2026-10-04T10:00:00Z",
                           "repository_url": "https://api.github.com/repos/o/r", "labels": []}
                        for n in [7, 8]}
@@ -32,6 +33,10 @@ class Client:
     async def get_issues_by_number(self, owner, repo, numbers):
         self.calls += 1
         return {n: self.issues[n] for n in numbers if n in self.issues}
+
+    async def get_pull(self, owner, repo, number):
+        return self.pulls.get(number, {"number":number, "state":"open", "merged":False, "draft":False,
+            "head":{"sha":"a"*40}, "base":{"repo":{"full_name":f"{owner}/{repo}"}}})
 
 
 def report(row, *, eligible=True):
@@ -46,6 +51,8 @@ def report(row, *, eligible=True):
 
 @pytest_asyncio.fixture
 async def team(db, monkeypatch):
+    from app.services.github_operator_attention_service import github_operator_attention_service
+    monkeypatch.setattr(github_operator_attention_service, "_pr_cache", {})
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     monkeypatch.setattr(settings, "github_coordination_hold_paths", [])
     monkeypatch.setattr(settings, "github_recovery_only_attempt", "")
@@ -719,3 +726,109 @@ async def test_signed_publication_survives_benign_poll_but_rejects_write_boundar
         await service.assess(db, team.scope_id, team.leader, receipt, team.client)
     await db.rollback()
     assert (await service.state(db, team.scope_id)).assessment_revision == 1
+
+
+async def human_report(db, team):
+    receipt = await fresh_report(db, team, eligible=False)
+    data = receipt.model_dump()
+    data["entries"][1]["human_actions"] = [
+        {"kind":"review_pr", "readiness":"requested", "pull_request_number":38, "expected_head_sha":"a"*40},
+        {"kind":"pilot_decision", "readiness":"waiting_for_prerequisites", "prerequisite_issue_numbers":[7]}]
+    return CoordinationAssessment.model_validate(data)
+
+
+@pytest.mark.asyncio
+async def test_standing_pr_and_future_gate_are_reported_without_dispatch_or_quota(db, team):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    receipt = await human_report(db, team)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    before = ((await service.state(db, team.scope_id)).version, (await service.state(db, team.scope_id)).last_assessed_at)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    assert before == ((await service.state(db, team.scope_id)).version, (await service.state(db, team.scope_id)).last_assessed_at)
+    summary = await attention.summary(db, team.preset.id, team.client)
+    pr = next(a for a in summary["actions"] if a["pull_request_number"]==38)
+    gate = next(a for a in summary["actions"] if a["kind"]=="pilot_decision")
+    assert pr["state"]=="requested" and pr["pr_observed_at"]
+    assert gate["state"]=="waiting_for_prerequisites" and gate["prerequisite_issue_numbers"]==[7]
+    assert await db.scalar(select(func.count()).select_from(GithubWorkItem))==1
+    assert (await service.state(db, team.scope_id)).daily_requests==0
+    assert (await service.state(db, team.scope_id)).request_sequence==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["head", "closed", "repo", "missing", "draft", "prerequisite"])
+async def test_human_pr_report_refuses_changed_identity_or_unassigned_evidence(db, team, change):
+    receipt = await human_report(db, team)
+    pull = await team.client.get_pull("o","r",38)
+    if change=="head": pull["head"]["sha"]="b"*40
+    elif change=="closed": pull["state"]="closed";pull["merged"]=True
+    elif change=="repo": pull["base"]["repo"]["full_name"]="other/repo"
+    elif change=="missing": pull={}
+    elif change=="draft":
+        pull["draft"]=True
+        receipt.entries[1].human_actions[0].kind="merge_pr"
+    else: receipt.entries[1].human_actions[1].prerequisite_issue_numbers=[99]
+    team.client.pulls[38]=pull
+    with pytest.raises(CoordinationError):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    assert (await service.state(db, team.scope_id)).assessment_revision==0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["head", "closed", "unavailable", "off", "hold", "correction"])
+async def test_attention_downgrades_changed_pr_or_local_authority_during_http(db, team, monkeypatch, tmp_path, change):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    await service.assess(db, team.scope_id, team.leader, await human_report(db, team), team.client)
+    attention._pr_cache.clear()
+    original = team.client.get_pull
+    async def changed_pull(*args):
+        pull = await original(*args)
+        if args[-1]!=38: return pull
+        if change=="head": pull["head"]["sha"]="b"*40
+        elif change=="closed": pull["state"]="closed";pull["merged"]=True
+        elif change=="unavailable": raise OSError("fixture private error")
+        elif change=="off": team.preset.autonomy_enabled=False;await db.commit()
+        elif change=="hold":
+            marker=tmp_path/'HOLD.json';marker.write_text('{}')
+            monkeypatch.setattr(settings,"github_coordination_hold_paths",[str(marker)])
+        else:
+            await db.execute(update(GithubBacklogCoordination).where(GithubBacklogCoordination.scope_id==team.scope_id).values(
+                version=GithubBacklogCoordination.version+1, assessment_revision=GithubBacklogCoordination.assessment_revision+1))
+            await db.commit()
+        return pull
+    team.client.get_pull=changed_pull
+    summary = await attention.summary(db, team.preset.id, team.client)
+    pr = next(a for a in summary["actions"] if a["pull_request_number"]==38)
+    assert pr["state"] == {"head":"head_changed","closed":"resolved","unavailable":"pr_unavailable"}.get(change,"historical")
+    if change!="closed": assert not summary["coverage_complete"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_replay_and_operator_gate_do_not_invent_pr_readiness(db, team):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    receipt = report(row, eligible=False)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    row = await service.state(db, team.scope_id)
+    assert all("human_actions" not in entry for entry in row.assessments)
+    before=(row.version,row.last_assessed_at,row.assessment_revision)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    row = await service.state(db, team.scope_id)
+    assert (row.version,row.last_assessed_at,row.assessment_revision)==before
+    summary = await attention.summary(db, team.preset.id, team.client)
+    gate=next(a for a in summary["actions"] if a["issue_number"]==8)
+    assert gate["state"]=="waiting_for_prerequisites" and gate["pull_request_number"] is None
+
+
+@pytest.mark.asyncio
+async def test_attention_does_not_replace_pending_leader_approval_or_auto_merge(db, team):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    team.approval.status="pending";await db.commit()
+    assert not (await attention.summary(db, team.preset.id, team.client))["actions"]
+    team.approval.status="approved"
+    scope=await service.scope(db,team.scope_id);scope.merge_policy="auto";await db.commit()
+    assert not (await attention.summary(db, team.preset.id, team.client))["actions"]
+    team.item.status_note="Auto-merge blocked: independent review unavailable";await db.commit()
+    actions=(await attention.summary(db, team.preset.id, team.client))["actions"]
+    assert len(actions)==1 and actions[0]["kind"]=="review_pr"
