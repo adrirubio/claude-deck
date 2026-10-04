@@ -38,6 +38,7 @@ from app.models.database import (
     TeamGithubScope,
 )
 from app.models.schemas import (
+    AgentTeamActivityResponse,
     AgentTeamCreateFromBridgeRequest,
     AgentTeamCreateFromMailRequest,
     AgentTeamLaunchPlan,
@@ -84,6 +85,7 @@ from app.services.agent_mail_service import (
     MailDeliveryIntegrityError,
     agent_mail_service,
 )
+from app.services.agent_activity_service import observe_team
 from app.services.github_approval_service import (
     CONTINUABLE_ESCALATIONS,
     GithubApprovalError,
@@ -1657,6 +1659,16 @@ async def get_preset(preset_id: int, db: AsyncSession = Depends(get_db)):
         return await agent_team_service.get_preset(db, preset_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/presets/{preset_id}/activity", response_model=AgentTeamActivityResponse)
+async def get_team_activity(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+    try:
+        await agent_team_service.get_preset(db, preset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    response.headers["Cache-Control"] = "no-store"
+    return await observe_team(db, preset_id)
 
 
 @router.patch("/presets/{preset_id}", response_model=AgentTeamPresetResponse)

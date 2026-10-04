@@ -54,6 +54,67 @@ By default, launch only includes enabled slots and only reuses wakeable sessions
 
 For same-repo Codex or Copilot teams, prefer fresh sessions (`plain`) or explicit `resume` session ids per slot. Do not use Codex `resume --last` or Copilot `--continue` for more than one slot in the same repo: each slot can resume the same conversation and lose the role-specific team boundary.
 
+## Agent Activity and Your Actions
+
+The roster and work-item owner show activity for the owner's current harness.
+This is separate from the issue's delivery status:
+
+| Label | Meaning | Appearance |
+| --- | --- | --- |
+| Working | A native turn started and has recent native progress. | Gentle halo pulse; text stays readable. |
+| Idle | The native turn finished or was interrupted. The harness can still be running. | Steady. |
+| Stopped | The bound process ended or was suspended. | Steady. |
+| Activity unknown | The binding, provider, log access or fresh observation cannot confirm activity. | Steady. |
+
+The pulse respects the system's reduced-motion preference. Activity is shared
+across an owner's issues; it does not prove which specific issue is being worked
+on. A dispatched issue, an enabled autonomy switch and a running harness do not
+start the pulse.
+
+Human review and merge gates show **Your review or merge is needed**, explain why
+the team is waiting and link to the PR. The activity summary counts items needing
+your action and can filter them. Leader approvals are labeled separately. For
+operator recovery checkpoints or stranded initial approvals, the action remains
+visible for the operator instead of being labeled as a Leader decision. Under
+automatic merge policy, a review-ready item needs your action only when Deck has
+explicitly fallen back to human merge. Passing checks do not prove independent
+review acceptance. Check the current PR head and review evidence before merging.
+
+### Observation limits
+
+The initial adapter supports Codex CLI sessions with an explicit resume UUID and
+an authenticated current process binding. Other providers and fresh sessions
+without a pinned native identity show Activity unknown. The controller must be
+able to read the corresponding Codex state database and native rollout log.
+Each Codex slot must have a distinct UUID across Deck presets. Reused UUIDs show
+Activity unknown, including reuse in disabled slots, because the shared log cannot
+distinguish which harness supplied an event.
+
+The read-only `GET /api/v1/agent-teams/presets/{preset_id}/activity` endpoint
+returns only slot, state, reason and timestamps. It does not expose transcript
+content, credentials, native IDs or filesystem paths. It checks process start
+identity, current process lifetime, session metadata and repository path, and reads a bounded log tail
+outside the event loop. No activity is inferred from terminal text or Mail prose.
+
+The UI polls the selected team every five seconds while the page is visible.
+Responses expire after fifteen seconds; request failure, hidden pages and team
+switches clear the pulse. A working native event older than three minutes becomes
+unknown, including long work that produces no native progress events. A completed
+turn can remain Idle while the same process and identity are still current.
+
+### Deployment with separate controller and agent users
+
+If the controller cannot read the runtime user's Codex history, labels remain
+steady at Activity unknown. Before enabling observations, arrange read access to
+the dedicated runtime's native state database, SQLite WAL/SHM files and rollout
+logs, with directory traversal access. New files must inherit the same access.
+Grant read access only for that dedicated runtime; do not make home directories
+or histories world-readable. This PR does not change live filesystem permissions.
+
+For custom `CODEX_HOME` or `HOME`, the process environment must be readable by the
+controller. When it is not readable, the adapter uses the process owner's default
+Codex home and returns unknown if it cannot find and validate the exact session.
+
 ## External Local Agents
 
 Local external agents can use the JSON API:
