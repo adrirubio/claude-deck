@@ -1,5 +1,5 @@
 import { MemoryRouter, Routes, Route, useNavigate } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   fireEvent,
@@ -13,6 +13,7 @@ import { AgentTeamsPage } from "../src/features/agent-teams/AgentTeamsPage";
 import {
   fetchAgentTeamPresets,
   fetchTeamGithubScopes,
+  fetchGithubWorkItems,
   launchAgentTeam,
   planAgentTeamLaunch,
 } from "../src/features/agent-teams/api";
@@ -25,6 +26,7 @@ import type {
   AgentTeamLaunchPlan,
   AgentTeamLaunchResult,
   AgentTeamPreset,
+  GithubWorkItem,
 } from "../src/types/agentTeams";
 
 vi.mock("../src/features/agent-teams/api", async (importOriginal) => {
@@ -34,10 +36,15 @@ vi.mock("../src/features/agent-teams/api", async (importOriginal) => {
     ...actual,
     fetchAgentTeamPresets: vi.fn(),
     fetchTeamGithubScopes: vi.fn().mockResolvedValue({ scopes: [] }),
+    fetchGithubWorkItems: vi.fn().mockResolvedValue({ items: [] }),
+    fetchGithubRecoveryGateActive: vi.fn().mockResolvedValue({ active: false }),
+    fetchAgentTeamActivity: vi.fn().mockImplementation(async (presetId: number) => ({ preset_id: presetId, slots: [], valid_until: new Date(Date.now() + 15000).toISOString() })),
     planAgentTeamLaunch: vi.fn(),
     launchAgentTeam: vi.fn(),
   };
 });
+
+vi.mock("../src/features/agent-teams/BacklogCoordination", () => ({ BacklogCoordination: () => null }));
 
 vi.mock("../src/hooks/useProviders", async (importOriginal) => {
   const actual =
@@ -124,8 +131,122 @@ beforeEach(() => {
   vi.mocked(fetchTeamGithubScopes)
     .mockReset()
     .mockResolvedValue({ scopes: [] });
+  vi.mocked(fetchGithubWorkItems).mockReset().mockResolvedValue({ items: [] });
   vi.mocked(planAgentTeamLaunch).mockResolvedValue(plan);
   vi.mocked(launchAgentTeam).mockResolvedValue(result);
+});
+
+describe("Autonomy refresh and recurring polling", () => {
+  const retained: GithubWorkItem = {
+    id: 91, scope_id: 2, repo_owner: "synthetic", repo_name: "retained",
+    issue_number: 91, issue_title: "Retained synthetic issue", issue_url: "https://example.test/issues/91",
+    issue_type: "code", dispatch_status: "merged", approval_round_count: 1, retry_count: 0,
+    active_scope_revision: 0, attempt_phase: "implementation", diagnostic_retry_count: 0,
+    retry_allowed: false, created_at: timestamp, updated_at: timestamp, github_updated_at: timestamp,
+  };
+  const visible = Object.getOwnPropertyDescriptor(document, "visibilityState");
+  const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+  const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+  const renderAutonomy = () => render(<MemoryRouter initialEntries={["/teams/1?tab=autonomy"]}><Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes></MemoryRouter>);
+  const panel = () => within(screen.getByRole("tabpanel"));
+  const refresh = () => panel().getByRole("button", { name: "Refresh", exact: true });
+  const freshness = () => panel().getByText(/Table (updated|not refreshed yet)/).textContent;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-04T12:00:00Z"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    if (visible) Object.defineProperty(document, "visibilityState", visible);
+    else delete (document as unknown as { visibilityState?: string }).visibilityState;
+  });
+
+  it("shows unknown freshness until successful load, leaves background refresh quiet, and retains prior data/time on failure", async () => {
+    let initial!: (value: { items: GithubWorkItem[] }) => void;
+    vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { initial = resolve; }));
+    renderAutonomy(); await flush();
+    expect(freshness()).toContain("Table not refreshed yet");
+    await act(async () => initial({ items: [retained] }));
+    const loaded = freshness();
+    expect(loaded).toContain("Table updated");
+    let background!: (value: { items: GithubWorkItem[] }) => void;
+    vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { background = resolve; }));
+    await advance(5000);
+    expect(refresh()).toBeEnabled();
+    expect(refresh().querySelector("svg")).not.toHaveClass("animate-spin");
+    expect(freshness()).toBe(loaded);
+    await act(async () => background({ items: [retained] }));
+    const updated = freshness();
+    expect(updated).not.toBe(loaded);
+    vi.mocked(fetchGithubWorkItems).mockRejectedValueOnce(new Error("Synthetic failed refresh"));
+    await advance(5000);
+    expect(freshness()).toBe(updated);
+    expect(panel().getByRole("alert")).toHaveTextContent("Synthetic failed refresh");
+    expect(panel().getByRole("row", { name: /Retained synthetic issue/ })).toBeInTheDocument();
+  });
+
+  it("spins only an explicit manual Refresh while its request is pending", async () => {
+    renderAutonomy(); await flush();
+    let manual!: (value: { items: [] }) => void;
+    vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { manual = resolve; }));
+    fireEvent.click(refresh()); await flush();
+    expect(refresh()).toBeDisabled();
+    expect(refresh().querySelector("svg")).toHaveClass("animate-spin");
+    await act(async () => manual({ items: [] }));
+    expect(refresh()).toBeEnabled();
+    expect(refresh().querySelector("svg")).not.toHaveClass("animate-spin");
+  });
+
+  it("keeps a pending manual spinner when a newer background poll finishes first", async () => {
+    renderAutonomy(); await flush();
+    let manual!: (value: { items: [] }) => void;
+    vi.mocked(fetchGithubWorkItems).mockImplementationOnce(() => new Promise(resolve => { manual = resolve; }));
+    fireEvent.click(refresh()); await flush();
+    await advance(5000);
+    expect(refresh()).toBeDisabled();
+    expect(refresh().querySelector("svg")).toHaveClass("animate-spin");
+    await act(async () => manual({ items: [] }));
+    expect(refresh()).toBeEnabled();
+    expect(refresh().querySelector("svg")).not.toHaveClass("animate-spin");
+  });
+
+  it("stops recurring scope/work-item polls on hidden document, Roster, and unmount", async () => {
+    const view = renderAutonomy(); await flush();
+    const counts = () => [vi.mocked(fetchTeamGithubScopes).mock.calls.length, vi.mocked(fetchGithubWorkItems).mock.calls.length];
+    const initial = counts();
+    await advance(5000); expect(counts()).toEqual(initial.map(n => n + 1));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    const hidden = counts(); await advance(10000); expect(counts()).toEqual(hidden);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await advance(5000); expect(counts()).toEqual(hidden.map(n => n + 1));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Roster" }), { button: 0, ctrlKey: false }); await flush();
+    expect(screen.getByRole("tab", { name: "Roster" })).toHaveAttribute("data-state", "active");
+    const roster = counts(); await advance(15000); expect(counts()).toEqual(roster);
+    view.unmount(); await advance(15000); expect(counts()).toEqual(roster);
+  });
+
+  it("ignores the old team's delayed autonomy response after the current team is loaded", async () => {
+    const team2 = { ...preset, id: 2, name: "Second autonomy team", slots: preset.slots.map(slot => ({ ...slot, preset_id: 2 })) };
+    vi.mocked(fetchAgentTeamPresets).mockResolvedValue({ presets: [preset, team2] });
+    let oldTeam!: (value: { items: GithubWorkItem[] }) => void;
+    vi.mocked(fetchGithubWorkItems).mockImplementation(id => id === 1
+      ? new Promise(resolve => { oldTeam = resolve; })
+      : Promise.resolve({ items: [{ ...retained, id: 92, issue_number: 92, issue_title: "Current Team2 synthetic issue" }] }));
+    function Navigation() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate("/teams/2?tab=autonomy")}>Open second autonomy team</button>;
+    }
+    render(<MemoryRouter initialEntries={["/teams/1?tab=autonomy"]}><Navigation /><Routes><Route path="/teams/:teamId" element={<AgentTeamsPage />} /></Routes></MemoryRouter>);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Open second autonomy team" })); await flush();
+    expect(panel().getByRole("row", { name: /Current Team2 synthetic issue/ })).toBeInTheDocument();
+    const currentFreshness = freshness();
+    await act(async () => oldTeam({ items: [retained] }));
+    expect(panel().queryByRole("row", { name: /Retained synthetic issue/ })).not.toBeInTheDocument();
+    expect(panel().getByRole("row", { name: /Current Team2 synthetic issue/ })).toBeInTheDocument();
+    expect(freshness()).toBe(currentFreshness);
+  });
 });
 
 describe("AgentTeamsPage launch authorization", () => {

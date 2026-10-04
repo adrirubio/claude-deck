@@ -1,7 +1,7 @@
 import { StrictMode, useState } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { AutonomyPanel } from '../src/features/agent-teams/AutonomyPanel'
 import { clearOperatorToken, setOperatorToken } from '../src/features/agent-teams/operatorAuth'
 import { ApiHttpError } from '../src/lib/api'
@@ -13,6 +13,20 @@ vi.mock('../src/features/agent-teams/BacklogCoordination', () => ({ BacklogCoord
 vi.mock('../src/features/agent-teams/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/features/agent-teams/api')>()
   return { ...actual, fetchGithubRecoveryGateActive: vi.fn().mockResolvedValue({ active: false }) }
+})
+
+// JSDOM lacks the browser methods used by Radix's real Select interaction.
+const browserMethods = ['hasPointerCapture', 'scrollIntoView'] as const
+const descriptors = browserMethods.map(name => Object.getOwnPropertyDescriptor(HTMLElement.prototype, name))
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, 'hasPointerCapture', { configurable: true, value: () => false })
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: () => undefined })
+})
+afterAll(() => {
+  browserMethods.forEach((name, index) => {
+    if (descriptors[index]) Object.defineProperty(HTMLElement.prototype, name, descriptors[index]!)
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name]
+  })
 })
 
 const preset: AgentTeamPreset = {
@@ -114,6 +128,64 @@ function panelProps(overrides: Partial<Parameters<typeof AutonomyPanel>[0]> = {}
 }
 
 describe('AutonomyPanel', () => {
+  it('explains the operator token across protected settings and first-run actions', () => {
+    render(<AutonomyPanel {...panelProps({ scopes: [], workItems: [] })} />)
+    expect(screen.getByText('Needed for protected settings, launch, autonomy, and recovery actions')).toBeInTheDocument()
+    expect(screen.getByText(/The operator token protects roster and watched-repo settings/)).toHaveTextContent('separate from the GitHub polling token')
+    expect(screen.queryByText(/only needed for protected recovery|needed only for protected recovery/i)).not.toBeInTheDocument()
+  })
+
+  it('intersects repo and status filters, shows no matches, and resets to all rows', async () => {
+    const user = userEvent.setup()
+    const otherScope = { ...scope, id: 3, repo_name: 'other' }
+    const items = [
+      { ...workItem, id: 1, issue_number: 101, dispatch_status: 'pending' as const },
+      { ...workItem, id: 2, issue_number: 102, dispatch_status: 'merged' as const },
+      { ...workItem, id: 3, issue_number: 103, scope_id: 3, repo_name: 'other', dispatch_status: 'merged' as const },
+    ]
+    render(<AutonomyPanel {...panelProps({ scopes: [scope, otherScope], workItems: items })} />)
+    const choose = async (label: string, option: string) => {
+      await user.click(screen.getByRole('combobox', { name: label }))
+      await user.click(screen.getByRole('option', { name: option, exact: true }))
+    }
+    await choose('Repo', 'example/project')
+    await choose('Status', 'Finished')
+    expect(screen.getAllByRole('row')).toHaveLength(2)
+    expect(screen.getByRole('row', { name: /#102/ })).toBeInTheDocument()
+    await choose('Repo', 'example/other')
+    await choose('Status', 'In progress')
+    expect(screen.getByText('No work items match these filters.')).toBeInTheDocument()
+    await choose('Repo', 'All repos')
+    await choose('Status', 'All statuses')
+    expect(screen.getAllByRole('row')).toHaveLength(4)
+  })
+
+  it('resets a removed repo filter and preserves readable attention and waiting distinctions', async () => {
+    const user = userEvent.setup()
+    const autoScope = { ...scope, id: 3, repo_name: 'auto', merge_policy: 'auto' as const }
+    const items = [
+      { ...workItem, id: 1, issue_number: 101, dispatch_status: 'ready_for_review' as const, pr_number: 201 },
+      { ...workItem, id: 2, issue_number: 102, dispatch_status: 'pending' as const, pending_approval_status: 'pending' as const },
+      { ...workItem, id: 3, issue_number: 103, scope_id: 3, repo_name: 'auto', dispatch_status: 'ready_for_review' as const, pr_number: 203 },
+      { ...workItem, id: 4, issue_number: 104, escalation_reason: 'approval_rounds_exhausted', retry_block_code: 'owner_still_active', retry_count: 2, diagnostic_retry_count: 1 },
+    ]
+    const props = panelProps({ scopes: [scope, autoScope], workItems: items })
+    const view = render(<AutonomyPanel {...props} />)
+    expect(within(screen.getByRole('row', { name: /#101/ })).getByText('Your review or merge is needed')).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: /#102/ })).getByText('Waiting for Leader approval')).toBeInTheDocument()
+    expect(within(screen.getByRole('row', { name: /#103/ })).getByText('Waiting for automatic merge')).toBeInTheDocument()
+    const stopped = within(screen.getByRole('row', { name: /#104/ }))
+    expect(stopped.getByText('Approval rounds exhausted')).toBeInTheDocument()
+    expect(stopped.getByText('Retry blocked: owner still active')).toBeInTheDocument()
+    expect(stopped.getByText('Retries 2 · diagnostics 1')).toBeInTheDocument()
+    expect(stopped.queryByRole('link', { name: /pull request/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Show items needing your action' }))
+    expect(screen.getAllByRole('row')).toHaveLength(3)
+    await user.click(screen.getByRole('combobox', { name: 'Repo' }))
+    await user.click(screen.getByRole('option', { name: 'example/project', exact: true }))
+    view.rerender(<AutonomyPanel {...props} scopes={[autoScope]} workItems={[items[2]]} />)
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Repo' })).toHaveTextContent('All repos'))
+  })
   it('distinguishes a missing polling token from unresolved dispatch mode after a poll', () => {
     const view = render(<AutonomyPanel {...panelProps({ scopes: [{ ...scope, github_auth_mode: 'unknown', github_poll_token_configured: false }], workItems: [] })} />)
     expect(screen.getByText('Polling token not set')).toHaveAttribute('title', expect.stringContaining('backend/.env'))

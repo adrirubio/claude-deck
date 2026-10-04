@@ -93,7 +93,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
               <li>Add a watched repo with an existing primary checkout under your home directory.</li>
               <li>The first enabled Roster slot is the Leader; launch it before enabling autonomy. The Role text does not select it.</li>
               <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>
-              <li>Watch Activity. An operator token is needed only for protected recovery actions.</li>
+              <li>Watch Activity. The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</li>
             </ol>
             <p>Design-labeled issues follow the human-review design pipeline. Code auto-merge depends on each repo&apos;s merge policy.</p>
             <p>Issues move from queued to dispatched, verifying, and human review or merge. Escalation means Deck stopped and needs attention. Recovery lets an owner continue an escalated issue with an open PR after a Leader-approved, bounded scope revision.</p>

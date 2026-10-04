@@ -785,6 +785,7 @@ export function AgentTeamsPage() {
   const [autonomyLoadError, setAutonomyLoadError] = useState<string | null>(null)
   const [autonomyDataPresetId, setAutonomyDataPresetId] = useState<number | null>(null)
   const autonomyRequestIdRef = useRef(0)
+  const autonomyManualRequestIdRef = useRef<number | null>(null)
   const autonomyDataPresetIdRef = useRef<number | null>(null)
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenInput, setTokenInput] = useState('')
@@ -912,8 +913,15 @@ export function AgentTeamsPage() {
   const loadAutonomy = useCallback(async (presetId: number, showLoading = false, manual = false) => {
     const requestId = autonomyRequestIdRef.current + 1
     autonomyRequestIdRef.current = requestId
-    if (showLoading) setAutonomyLoading(true)
-    if (manual) setAutonomyRefreshing(true)
+    if (showLoading) {
+      setAutonomyLoading(true)
+      autonomyManualRequestIdRef.current = null
+      setAutonomyRefreshing(false)
+    }
+    if (manual) {
+      autonomyManualRequestIdRef.current = requestId
+      setAutonomyRefreshing(true)
+    }
     try {
       const [scopeResponse, workItemResponse] = await Promise.all([
         fetchTeamGithubScopes(presetId),
@@ -943,6 +951,9 @@ export function AgentTeamsPage() {
     } finally {
       if (autonomyRequestIdRef.current === requestId) {
         setAutonomyLoading(false)
+      }
+      if (autonomyManualRequestIdRef.current === requestId) {
+        autonomyManualRequestIdRef.current = null
         setAutonomyRefreshing(false)
       }
     }
@@ -995,6 +1006,7 @@ export function AgentTeamsPage() {
       cancelled = true
       window.clearInterval(interval)
       autonomyRequestIdRef.current += 1
+      autonomyManualRequestIdRef.current = null
     }
   }, [autonomyTab, loadAutonomy, selectedPresetId])
 

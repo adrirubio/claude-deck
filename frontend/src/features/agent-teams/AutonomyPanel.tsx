@@ -405,10 +405,12 @@ function ScopeDialog({
   state,
   onOpenChange,
   onSave,
+  onReturnFocus,
 }: {
   state: ScopeDialogState
   onOpenChange: (state: ScopeDialogState) => void
   onSave: (scope: TeamGithubScopeInput | TeamGithubScopeUpdate) => Promise<void>
+  onReturnFocus: () => void
 }) {
   const [form, setForm] = useState<TeamGithubScopeInput>(emptyScope)
   const [numberInputs, setNumberInputs] = useState<Record<ScopeNumberKey, string>>({
@@ -476,7 +478,7 @@ function ScopeDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => onOpenChange(next ? state : null)}>
-      <DialogContent className={MODAL_SIZES.SM}>
+      <DialogContent className={MODAL_SIZES.SM} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus() }}>
         <DialogHeader>
           <DialogTitle>{state?.mode === 'edit' ? 'Edit watched repo' : 'Add watched repo'}</DialogTitle>
           <DialogDescription>
@@ -823,6 +825,7 @@ function WorkItemDialog({
   onRequestOperatorToken,
   slots,
   onOperate,
+  onReturnFocus,
 }: {
   item: GithubWorkItem | null
   scope?: TeamGithubScope
@@ -830,6 +833,7 @@ function WorkItemDialog({
   ownerName?: string
   handoffTargetName?: string
   onOpenChange: (open: boolean) => void
+  onReturnFocus: () => void
   onRetry: (item: GithubWorkItem) => void
   onFetchScopeRevisions: (itemId: number) => Promise<GithubScopeRevision[]>
   onFetchWorkspaces: (scopeId: number) => Promise<{ workspaces: GithubWorkspace[] }>
@@ -969,7 +973,7 @@ function WorkItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={cn(MODAL_SIZES.LG, 'overflow-y-auto')}>
+      <DialogContent className={cn(MODAL_SIZES.LG, 'overflow-y-auto break-words [&_dd]:min-w-0 [&_dd]:[overflow-wrap:anywhere]')} onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus() }}>
         {item && (
           <>
             <DialogHeader>
@@ -1021,30 +1025,30 @@ function WorkItemDialog({
               )}
               <div className="rounded-lg border">
                 <dl className="grid gap-0 text-sm">
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Status</dt>
                     <dd>{workItemStatusLabel(item, scope)}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Owner</dt>
                     <dd className="space-y-2">
                       <p>{ownerName ?? 'Unassigned'} ({routeMethodLabel(item.routing_method)})</p>
                       {item.owner_slot_id && <AgentActivityBadge activity={ownerActivity} />}
                     </dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Retries</dt>
                     <dd>implementation checks {item.retry_count} · diagnostic heads {item.diagnostic_retry_count}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Attempt</dt>
                     <dd>{phaseLabel(item.attempt_phase)} · revision {item.active_scope_revision}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] border-b p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] border-b p-3">
                     <dt className="text-muted-foreground">Workspace</dt>
                     <dd className="truncate">{item.workspace_path ?? 'None leased'}</dd>
                   </div>
-                  <div className="grid grid-cols-[150px_1fr] p-3">
+                  <div className="grid grid-cols-1 gap-1 sm:grid-cols-[150px_minmax(0,1fr)] p-3">
                     <dt className="text-muted-foreground">PR</dt>
                     <dd>{item.pr_number ? `#${item.pr_number}` : 'None yet'}</dd>
                   </div>
@@ -1299,6 +1303,9 @@ export function AutonomyPanel({
   const [scopeToRemove, setScopeToRemove] = useState<TeamGithubScope | null>(null)
   const [scopeRemovalPending, setScopeRemovalPending] = useState(false)
   const removeTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const scopeTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const detailTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const enableTriggerRef = useRef<HTMLButtonElement | null>(null)
   const addRepoButtonRef = useRef<HTMLButtonElement | null>(null)
   const [policyDialog, setPolicyDialog] = useState<PolicyDialogState>(null)
   const [detailItemId, setDetailItemId] = useState<number | null>(null)
@@ -1593,6 +1600,7 @@ export function AutonomyPanel({
               {preset.autonomy_enabled ? 'Enabled' : 'Disabled'}
             </Label>
             <Switch
+              ref={enableTriggerRef}
               id="autonomy-enabled"
               aria-label="Enable autonomous GitHub dispatch"
               checked={preset.autonomy_enabled}
@@ -1619,13 +1627,13 @@ export function AutonomyPanel({
             {operatorTokenStored ? 'Clear operator token' : 'Set operator token'}
           </Button>
           <span className="self-center text-xs text-muted-foreground">
-            {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected recovery actions'}
+            {operatorTokenStored ? 'Token set for this tab' : 'Needed for protected settings, launch, autonomy, and recovery actions'}
           </span>
           <Button variant="outline" onClick={() => { void onRefresh(); void checkGateStatus() }} disabled={refreshing}>
             <RefreshCw className={cn('mr-2 h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
           </Button>
-          <Button ref={addRepoButtonRef} onClick={() => setScopeDialog({ mode: 'add' })}>
+          <Button ref={addRepoButtonRef} onClick={(event) => { scopeTriggerRef.current = event.currentTarget; setScopeDialog({ mode: 'add' }) }}>
             <Plus className="mr-2 h-4 w-4" />
             Add repo
           </Button>
@@ -1648,7 +1656,7 @@ export function AutonomyPanel({
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
               <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>
-            <p className="mt-2">An operator token is only needed for protected recovery actions.</p>
+            <p className="mt-2">The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</p>
           </div>
         )}
         {scopes.map((scope) => (
@@ -1693,7 +1701,7 @@ export function AutonomyPanel({
                     <Settings2 className="mr-2 h-4 w-4" />
                     Recovery policy
                   </Button>
-                  <Button variant="outline" size="sm" aria-label={`Edit ${scope.repo_owner}/${scope.repo_name}`} onClick={() => setScopeDialog({ mode: 'edit', scope })}>
+                  <Button variant="outline" size="sm" aria-label={`Edit ${scope.repo_owner}/${scope.repo_name}`} onClick={(event) => { scopeTriggerRef.current = event.currentTarget; setScopeDialog({ mode: 'edit', scope }) }}>
                     <Pencil className="mr-2 h-4 w-4" />
                     Edit
                   </Button>
@@ -1710,12 +1718,12 @@ export function AutonomyPanel({
       </div>
 
       <Card className="min-w-0">
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+        <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
             <CardTitle>Activity</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">Recent GitHub issues across this team&apos;s watched repos.</p>
           </div>
-          <span className="text-xs text-muted-foreground sm:shrink-0">
+          <span className="min-w-0 text-xs text-muted-foreground">
             {lastRefreshedAt ? `Table updated ${lastRefreshedAt.toLocaleTimeString()}` : 'Table not refreshed yet'} · table every 5s · GitHub poll every 60s by default
           </span>
         </CardHeader>
@@ -1726,11 +1734,11 @@ export function AutonomyPanel({
                 <p className="font-medium">{actionCount} {actionCount === 1 ? 'item needs' : 'items need'} your action</p>
                 <p className="mt-1 text-muted-foreground">Open the highlighted item to see what the team is waiting for.</p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => { setStatusFilter('attention'); setRepoFilter('all') }}>Show items needing your action</Button>
+              <Button variant="outline" size="sm" className="h-auto max-w-full whitespace-normal text-left" onClick={() => { setStatusFilter('attention'); setRepoFilter('all') }}>Show items needing your action</Button>
             </section>
           )}
           <section className="mb-3 rounded-lg border p-3 text-sm">
-            <Button variant="link" className="h-auto p-0 font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
+            <Button variant="link" className="h-auto max-w-full whitespace-normal p-0 text-left font-medium" aria-expanded={showActivityHelp} aria-controls="autonomy-activity-help" onClick={() => setShowActivityHelp((current) => !current)}>What do statuses, phases, and routes mean?</Button>
             {showActivityHelp && <ul id="autonomy-activity-help" className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
               <li>Queued: waiting for an owner or prerequisite. Dispatched: the owner is planning or implementing. Verifying: Deck is watching the PR&apos;s GitHub checks.</li>
               <li>Your action needed: review or merge a PR under human policy, or inspect a stopped attempt. Leader approval and automatic merge waiting are shown separately. Merged or completed: finished.</li>
@@ -1894,7 +1902,7 @@ export function AutonomyPanel({
                                 Retry blocked: {recoveryBlockLabel(item.retry_block_code)}
                               </span>
                             )}
-                            <Button variant="outline" size="sm" aria-label={`View issue #${item.issue_number} details`} onClick={() => setDetailItemId(item.id)}>
+                            <Button variant="outline" size="sm" aria-label={`View issue #${item.issue_number} details`} onClick={(event) => { detailTriggerRef.current = event.currentTarget; setDetailItemId(item.id) }}>
                               <Eye className="mr-2 h-4 w-4" />
                               View
                             </Button>
@@ -1910,7 +1918,7 @@ export function AutonomyPanel({
         </CardContent>
       </Card>
 
-      <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} />
+      <ScopeDialog state={scopeDialog} onOpenChange={setScopeDialog} onSave={saveScope} onReturnFocus={() => (scopeTriggerRef.current?.isConnected ? scopeTriggerRef.current : addRepoButtonRef.current)?.focus()} />
       <AlertDialog open={scopeToRemove !== null} onOpenChange={(open) => { if (!open && !scopeRemovalPending) setScopeToRemove(null) }}>
         <AlertDialogContent onCloseAutoFocus={(event) => {
           event.preventDefault()
@@ -1950,6 +1958,7 @@ export function AutonomyPanel({
             : undefined
         }
         onOpenChange={(open) => setDetailItemId(open ? detailItemId : null)}
+        onReturnFocus={() => (detailTriggerRef.current?.isConnected ? detailTriggerRef.current : addRepoButtonRef.current)?.focus()}
         onRetry={setRetryTarget}
         onFetchScopeRevisions={fetchRevisions}
         onFetchWorkspaces={(scopeId) => withOperatorToken((token) => fetchGithubWorkspaces(scopeId, token))}
@@ -1984,7 +1993,7 @@ export function AutonomyPanel({
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={enableConfirmOpen} onOpenChange={setEnableConfirmOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={(event) => { event.preventDefault(); enableTriggerRef.current?.focus() }}>
           <AlertDialogHeader>
             <AlertDialogTitle>Enable autonomous dispatch?</AlertDialogTitle>
             <AlertDialogDescription>
