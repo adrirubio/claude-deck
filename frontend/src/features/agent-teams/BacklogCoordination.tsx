@@ -13,6 +13,12 @@ type Entry = {
   required_actor: string
   evidence_issue_numbers: number[]
 }
+type Observation = {
+  issue_number: number
+  github_state: string
+  work_status: string | null
+  pr_number: number | null
+}
 type Summary = {
   scope_id: number
   repo: string
@@ -33,6 +39,12 @@ type Summary = {
   eligible_count: number | null
   entries: Entry[]
   assessment_current: boolean
+  observations?: Observation[]
+  autonomy_enabled?: boolean
+  notifications_remaining?: number
+  notification_cap_reason?: 'daily' | 'snapshot' | null
+  notification_budget_resets_at?: string | null
+  assessment_age_seconds?: number | null
 }
 type Policy = Pick<Summary, 'enabled' | 'issue_numbers' | 'fallback_seconds' | 'max_daily_requests'>
 
@@ -164,6 +176,9 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
   }
   const expired = !Number.isFinite(expiresAt) || clock >= expiresAt
   const current = Boolean(data?.assessment_current && !error && !expired && data.scope_id === scopeId)
+  const assessedAt = timestamp(data?.last_assessed_at)
+  const assessmentAge = Number.isFinite(assessedAt) ? Math.max(0, Math.floor((clock - assessedAt) / 60000)) : null
+  const observations = data?.observations ?? []
   const heading = error ? 'Coordination status is unavailable' : current
     ? data?.eligible_count === 0 ? 'No eligible implementation work' : `${data?.eligible_count} ${data?.eligible_count === 1 ? 'item' : 'items'} assessed as eligible`
     : data?.assessment_current && expired ? statuses.stale
@@ -179,17 +194,40 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
     {data && <>
       <p className="mt-2 text-muted-foreground">
         Last observed: {date(data.last_polled_at)} · Last Leader assessment: {date(data.last_assessed_at)}
+        {assessmentAge !== null && ` (${assessmentAge < 1 ? 'less than a minute' : `${assessmentAge} minutes`} ago)`}
       </p>
       <p className="mt-1 text-muted-foreground">
         Last observed execution: {data.active_implementations ?? 'unknown'}/{data.execution_limit} · Available workspaces: {data.available_workspaces ?? 'unknown'} · Leased: {data.leased_workspaces ?? 'unknown'}
       </p>
-      <p className="mt-1 text-muted-foreground">Coordination notifications today: {data.requests_today}/{data.max_daily_requests}. Limits do not change implementation or retry budgets.</p>
+      <p className="mt-1 text-muted-foreground">Coordination notifications today: {data.requests_today}/{data.max_daily_requests} · Remaining: {data.notifications_remaining ?? Math.max(0, data.max_daily_requests - data.requests_today)}. Limits do not change implementation or retry budgets.</p>
+      {data.notification_cap_reason && <div role="status" className="mt-2 rounded border p-2">
+        <p>{data.notification_cap_reason === 'daily'
+          ? `Daily notification limit reached. Budget resets: ${date(data.notification_budget_resets_at ?? null)}.`
+          : 'The notification limit for this unchanged snapshot is reached. New backlog changes can trigger another notification within the daily budget.'}</p>
+        <p className="mt-1 text-muted-foreground">{['hold', 'hold_unavailable', 'recovery_only'].includes(data.status)
+          ? 'Coordination is paused by its safety or recovery gate. Assessment publication remains paused.'
+          : data.autonomy_enabled
+            ? 'Notification limits do not pause autonomy, dispatch or team Mail. The active Leader can refresh its assessment when coordination is available.'
+            : 'Autonomy is off. Assessment publication remains paused.'}</p>
+        {!current && <p className="mt-1 text-muted-foreground">The retained assessment is historical. A notification limit alone does not require a human decision.</p>}
+      </div>}
+      {observations.length > 0 && <div className="mt-3">
+        <p className="font-medium">{expired || error || !['assessed', 'awaiting_assessment', 'coordination_capped'].includes(data.status)
+          ? 'Previous observed states' : 'Latest observed issue and tracking states'}</p>
+        <p className="text-muted-foreground">Observed state does not establish eligibility or milestone acceptance.</p>
+        <ul className="mt-2 space-y-1">{observations.map((observation) => <li key={observation.issue_number}>
+          <a className="underline" href={`https://github.com/${data.repo}/issues/${observation.issue_number}`} target="_blank" rel="noreferrer">#{observation.issue_number}</a>
+          {' · GitHub: '}{observation.github_state}{' · Tracking: '}{observation.work_status ?? 'no tracked attempt'}
+          {observation.pr_number !== null && ` · PR #${observation.pr_number}`}
+        </li>)}</ul>
+      </div>}
       {data.entries.length > 0 && <div className="mt-3">
         <p className="font-medium">{current ? 'Leader dispositions and next actions' : 'Previous assessment — not current eligibility'}</p>
         <ul className="mt-2 space-y-2">{data.entries.map((entry) => <li key={entry.issue_number}>
           <a className="underline" href={`https://github.com/${data.repo}/issues/${entry.issue_number}`} target="_blank" rel="noreferrer">#{entry.issue_number}</a>
           {' · '}{reasons[entry.reason] ?? 'Needs reconciliation'}{' · '}
-          {entry.required_actor === 'none' ? 'No action required' : `Next actor: ${entry.required_actor}`}
+          {entry.required_actor === 'none' ? (current ? 'No action required' : 'Previous assessment: no action required')
+            : `${current ? 'Next' : 'Previous'} actor: ${entry.required_actor}`}
           <span className="ml-2 text-muted-foreground">Evidence: {entry.evidence_issue_numbers.map((n) => `#${n}`).join(', ')}</span>
         </li>)}</ul>
       </div>}

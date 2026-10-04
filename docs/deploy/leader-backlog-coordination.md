@@ -93,6 +93,35 @@ in the snapshot. Owner reconnects, disconnects and binding changes trigger a new
 assessment within the debounce and daily quota. Routine heartbeat timestamps do
 not create a new generation or reset limits.
 
+Issue #436 separates notification limits from assessment publication. While an
+unanswered request is within its fallback interval and still belongs to the
+current Leader, snapshot changes advance that request's generation. They retain
+its Mail ID, sequence, counters and actual notification time. Churn cannot extend
+the fallback indefinitely. Once the fallback expires, a bounded retry can send
+another notification within the existing quotas.
+
+An active authenticated Leader can also publish without another notification.
+Immediately before publication, call `deck_get_backlog_coordination(scope_id)`
+and pass its private `snapshot_token`, generation and request sequence to
+`deck_report_backlog_assessment`. The sequence can be zero before the first
+notification. The token expires after five minutes and binds the current Leader,
+policy, assessment revision and freshly observed snapshot. Keep it within the
+authenticated tool exchange; do not copy it into Mail, logs or review receipts.
+Publication performs another bounded GitHub read and checks current authority.
+Changes to the snapshot, policy, session or notification sequence require a new
+read. Restart invalidates outstanding tokens. An exact accepted replay does not
+refresh the timestamp; a correction requires a fresh token. Omitting the token
+retains the legacy request-bound protocol. An invalid supplied token never falls
+back to that protocol.
+
+Notification caps do not stop dispatch, team Mail or signed publication. OFF,
+HOLD, scoped recovery and all existing authority checks still stop publication.
+The card shows the cap reason, remaining daily budget and UTC reset time beside
+assessment age. Latest observed GitHub and tracking states appear separately from
+historical Leader dispositions. A current assessment remains current when the
+notification allowance is exhausted, until its normal freshness or authority
+checks invalidate it.
+
 Only `dispatched` and `verifying` count against execution concurrency. Review
 readiness can still retain a workspace lease; spare execution capacity and spare
 workspaces are different observations. Coordination never changes the native
@@ -122,3 +151,7 @@ mechanism; existing dispatch/approval/lease rows are not migrated or rewritten.
 Install the reviewed MCP shim and refresh the harness MCP connection during the
 maintenance pause so the Leader has the two new coordination tools before
 enabling the scope policy.
+For #436, refresh the Leader connection again so its assessment tool exposes the
+optional `snapshot_token` argument. The compatibility migration adds policy and
+assessment revisions plus an accepted-token digest. It preserves existing Mail
+linkage, counters, assessments and all dispatch authority.

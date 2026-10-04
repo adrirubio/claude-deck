@@ -1116,7 +1116,10 @@ def deck_get_backlog_coordination(scope_id: int) -> dict:
     """Current Leader: read the assigned backlog, observations and request version.
 
     Reconcile reviewed dependency/milestone gates and already-landed fixes even for
-    issues without a dispatch-ready label. This tool grants no implementation authority.
+    issues without a dispatch-ready label. While ON, this read returns a short-lived
+    snapshot_token for publishing a current assessment without another notification.
+    Read again immediately before reporting; keep the token private. OFF/HOLD reads
+    grant no publication challenge. This tool grants no implementation authority.
     """
     registered = _ensure_registered()
     if not registered["ok"]:
@@ -1127,6 +1130,7 @@ def deck_get_backlog_coordination(scope_id: int) -> dict:
 @mcp.tool()
 def deck_report_backlog_assessment(
     scope_id: int, generation: int, request_sequence: int, entries: list[dict],
+    snapshot_token: str | None = None,
 ) -> dict:
     """Current Leader: submit one advisory disposition per assigned issue.
 
@@ -1138,6 +1142,12 @@ def deck_report_backlog_assessment(
     (leader, operator, owner, reviewer, none); evidence_issue_numbers (assigned
     positive issue numbers, at least one). Unknown/out-of-scope evidence is refused.
 
+    Pass snapshot_token from a fresh deck_get_backlog_coordination read to publish
+    while already working, even when notification quota is exhausted or no request
+    has been sent (request_sequence may be zero). This spends no notification quota.
+    A changed or expired read requires a fresh read; never reuse it for a correction.
+    Omitting the token retains the legacy one-assessment-per-notification protocol.
+
     Assessments do not approve implementation, add dispatch labels, release leases,
     change policy or satisfy human merge/milestone gates. Stale requests, OFF/HOLD
     and a changed Leader binding are refused. Use the existing authorized admission
@@ -1148,7 +1158,7 @@ def deck_report_backlog_assessment(
         return registered
     return _dispatch_request("POST", f"/github-scopes/{scope_id}/coordination-assessments",
                              json={"generation": generation, "request_sequence": request_sequence,
-                                   "entries": entries})
+                                   "entries": entries, "snapshot_token": snapshot_token})
 
 
 if __name__ == "__main__":

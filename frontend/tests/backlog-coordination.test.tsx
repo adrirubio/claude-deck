@@ -22,6 +22,37 @@ beforeEach(() => { vi.mocked(apiClient).mockReset(); vi.mocked(apiClient).mockRe
 afterEach(() => vi.useRealTimers())
 
 describe('Leader backlog coordination', () => {
+  it('keeps current eligibility visible at the daily notification cap', async () => {
+    vi.mocked(apiClient).mockResolvedValue({ ...summary, requests_today: 12,
+      notifications_remaining: 0, notification_cap_reason: 'daily', autonomy_enabled: true,
+      notification_budget_resets_at: '2026-10-05T00:00:00Z' })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText('No eligible implementation work')).toBeTruthy()
+    expect(screen.getByText(/Daily notification limit reached. Budget resets:/)).toBeTruthy()
+    expect(screen.getByText(/Remaining: 0/)).toBeTruthy()
+    expect(screen.getByText(/Notification limits do not pause autonomy/)).toBeTruthy()
+    expect(screen.queryByText('Previous assessment — not current eligibility')).toBeNull()
+  })
+  it('separates fresh merged observations from historical actors at the cap', async () => {
+    vi.mocked(apiClient).mockResolvedValue({ ...summary, status: 'coordination_capped',
+      assessment_current: false, eligible_count: null, notification_cap_reason: 'snapshot',
+      autonomy_enabled: true, observations: [{ issue_number: 7, github_state: 'closed', work_status: 'merged', pr_number: 25 }] })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText('Coordination notification limit reached')).toBeTruthy()
+    expect(screen.getByText('Latest observed issue and tracking states')).toBeTruthy()
+    expect(screen.getByText(/GitHub: closed · Tracking: merged · PR #25/)).toBeTruthy()
+    expect(screen.getAllByText(/Previous actor: operator/)).toHaveLength(2)
+    expect(screen.queryByText(/Next actor:/)).toBeNull()
+    expect(screen.getByText(/notification limit alone does not require a human decision/)).toBeTruthy()
+  })
+  it('preserves HOLD publication guidance even with exhausted notifications', async () => {
+    vi.mocked(apiClient).mockResolvedValue({ ...summary, status: 'hold', assessment_current: false,
+      notification_cap_reason: 'daily', autonomy_enabled: true })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText('Coordination is paused by a safety hold')).toBeTruthy()
+    expect(screen.getByText(/Assessment publication remains paused/)).toBeTruthy()
+    expect(screen.queryByText(/The active Leader can refresh its assessment/)).toBeNull()
+  })
   it('shows why no implementation is eligible, capacity and the required actor', async () => {
     render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
     expect(await screen.findByText('No eligible implementation work')).toBeTruthy()

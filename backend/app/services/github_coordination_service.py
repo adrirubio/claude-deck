@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import json
 import logging
+import secrets
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+from httpx import HTTPError
 from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +36,37 @@ logger = logging.getLogger(__name__)
 _BOOT_ID = uuid4().hex
 _MAX_SNAPSHOT_REQUESTS = 3
 _MAX_CONTEXT_ROWS = 64
+_READ_SECRET = secrets.token_bytes(32)
+_READ_TTL_SECONDS = 300
+
+
+def _read_token(claims: dict) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).decode()
+    return payload + "." + hmac.new(_READ_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _read_claims(token: str) -> dict:
+    try:
+        if len(token) > 2048:
+            raise ValueError()
+        payload, signature = token.split(".")
+        expected = hmac.new(_READ_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError()
+        claims = json.loads(base64.b64decode(payload, altchars=b"-_", validate=True))
+        integer_keys = ("scope", "leader", "policy", "revision", "generation", "sequence", "expires")
+        if (not isinstance(claims, dict)
+            or set(claims) != {*integer_keys, "fingerprint", "nonce"}
+            or any(type(claims[k]) is not int or claims[k] < 0 for k in integer_keys)
+            or not isinstance(claims["fingerprint"], str) or len(claims["fingerprint"]) != 64
+            or not isinstance(claims["nonce"], str) or len(claims["nonce"]) != 32):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        raise CoordinationError("coordination_read_invalid") from None
+    now = time.time()
+    if not now < claims["expires"] <= now + _READ_TTL_SECONDS + 1:
+        raise CoordinationError("coordination_read_expired")
+    return claims
 
 
 class CoordinationError(ValueError):
@@ -129,6 +165,7 @@ class GithubCoordinationService:
                 GithubBacklogCoordination.version == policy.expected_version,
             ).values(
                 **values, version=policy.expected_version + 1,
+                policy_revision=GithubBacklogCoordination.policy_revision + 1,
                 snapshot_hash=None, error_code=None,
             ).execution_options(synchronize_session=False))
             if result.rowcount != 1:
@@ -401,18 +438,31 @@ class GithubCoordinationService:
         now = datetime.utcnow()
         changed = row.snapshot_hash != fingerprint
         generation = row.generation + int(changed)
-        requests = 0 if changed else row.snapshot_requests
+        # One pending Mail asks the Leader to read the latest request. Intermediate
+        # snapshots can supersede that request without buying another wake-up.
+        pending = (row.message_id is not None and row.leader_session_id == leader.id
+                   and row.assessed_sequence != row.request_sequence
+                   and row.last_requested_at is not None
+                   and (now - row.last_requested_at).total_seconds() < row.fallback_seconds)
+        requests = row.snapshot_requests if pending else (0 if changed else row.snapshot_requests)
         day = now.strftime("%Y-%m-%d")
         daily = row.daily_requests if row.budget_day == day else 0
-        needs_current_request = changed or row.requested_generation != generation
+        assessed_current = (not changed and row.assessed_generation == generation
+                            and row.assessed_sequence == row.request_sequence and row.last_assessed_at)
+        needs_current_request = (changed or row.requested_generation != generation) and not assessed_current
         delay = 60 if needs_current_request else row.fallback_seconds
-        due = row.last_requested_at is None or (now - row.last_requested_at).total_seconds() >= delay
+        anchor = row.last_requested_at
+        if assessed_current and (anchor is None or row.last_assessed_at > anchor):
+            anchor = row.last_assessed_at
+        due = anchor is None or (now - anchor).total_seconds() >= delay
         capped = daily >= row.max_daily_requests or requests >= _MAX_SNAPSHOT_REQUESTS
-        want_request = due and not capped
+        want_request = due and not capped and not pending
         values = dict(snapshot=public, snapshot_hash=fingerprint, generation=generation,
                       snapshot_requests=requests, last_polled_at=now, version=version + 1,
                       budget_day=day, daily_requests=daily,
                       error_code="coordination_capped" if capped and due else None)
+        if pending and changed:
+            values["requested_generation"] = generation
         if want_request:
             # Resolve the actual opted-in wake target before spending a persisted quota.
             try:
@@ -448,6 +498,9 @@ class GithubCoordinationService:
                     "then inspect the assigned GitHub issues and reviewed dependency/milestone packet. "
                     "Reconcile already-landed fixes before assigning new implementation. Submit exactly "
                     "one evidenced disposition per assigned issue using deck_report_backlog_assessment. "
+                    "Read again immediately before publishing and pass its private snapshot_token. "
+                    "A pending notification can cover newer generations; use the fresh read, not this "
+                    "Mail's original payload. Current authenticated publication spends no notification quota. "
                     "The assessment is advisory: it is not approval or permission to change labels, "
                     "release a lease, merge a PR or satisfy a milestone. Use your existing authorized "
                     "workflow to admit independent eligible work only after verifying scope, all gates, "
@@ -487,11 +540,22 @@ class GithubCoordinationService:
 
     async def assess(self, db, scope_id, principal, report: CoordinationAssessment, client=None):
         row = await self.state(db, scope_id)
-        if row is None or not row.enabled or row.message_id is None:
+        if row is None or not row.enabled:
             raise CoordinationError("coordination_not_requested")
         version, numbers = row.version, list(row.issue_numbers)
-        if (report.generation != row.generation or report.generation != row.requested_generation
-            or report.request_sequence != row.request_sequence):
+        principal_id = principal.id
+        signed = report.snapshot_token is not None
+        claims = _read_claims(report.snapshot_token) if signed else None
+        if signed:
+            if (claims["scope"] != scope_id or claims["leader"] != principal_id
+                or claims["policy"] != row.policy_revision
+                or claims["generation"] != report.generation
+                or claims["sequence"] != report.request_sequence):
+                raise CoordinationError("coordination_read_changed")
+        elif (row.message_id is None or report.request_sequence == 0):
+            raise CoordinationError("coordination_not_requested")
+        elif (report.generation != row.generation or report.generation != row.requested_generation
+              or report.request_sequence != row.request_sequence):
             raise CoordinationError("coordination_request_changed")
         if len(report.entries) != len(numbers) or {e.issue_number for e in report.entries} != set(numbers):
             raise CoordinationError("complete_assessment_required", 422)
@@ -503,15 +567,24 @@ class GithubCoordinationService:
         if not await db.scalar(select(_autonomous(scope_id))):
             raise CoordinationError("autonomy_off")
         leader = await self.require_leader(db, scope_id, principal)
-        if leader.id != row.leader_session_id:
+        if not signed and leader.id != row.leader_session_id:
             raise CoordinationError("coordination_leader_changed")
         await db.commit()
         issues = await self._issues(scope, numbers, client or github_client)
         public, fingerprint, leader, authority = await self._context(db, scope_id, numbers, issues)
         row = await self.state(db, scope_id)
-        if (row is None or not row.enabled or row.version != version
-            or row.snapshot_hash != fingerprint or row.leader_session_id != leader.id
-            or principal.id != leader.id):
+        if row is None or not row.enabled or principal_id != leader.id:
+            raise CoordinationError("coordination_snapshot_changed")
+        generation = row.generation + int(row.snapshot_hash != fingerprint) if signed else report.generation
+        if signed:
+            # Ordinary polls may update version while preserving this exact read.
+            # Configuration, publication, request and authority changes may not.
+            _read_claims(report.snapshot_token)  # Recheck expiry after bounded HTTP.
+            if (row.policy_revision != claims["policy"] or fingerprint != claims["fingerprint"]
+                or generation != claims["generation"] or row.request_sequence != claims["sequence"]):
+                raise CoordinationError("coordination_read_changed")
+        elif (row.version != version or row.snapshot_hash != fingerprint
+              or row.leader_session_id != leader.id):
             raise CoordinationError("coordination_snapshot_changed")
         observed = {i["issue_number"]: i for i in public["issues"]}
         for entry in report.entries:
@@ -524,22 +597,44 @@ class GithubCoordinationService:
             ):
                 raise CoordinationError("implementation_not_available")
         entries = [e.model_dump() for e in sorted(report.entries, key=lambda e: e.issue_number)]
-        if (row.assessed_generation == report.generation
-            and row.assessed_sequence == report.request_sequence):
+        token_hash = hashlib.sha256(report.snapshot_token.encode()).hexdigest() if signed else None
+        replay = (row.assessed_generation == generation and row.assessed_sequence == report.request_sequence)
+        if signed and row.assessment_revision != claims["revision"]:
+            if (row.assessment_revision != claims["revision"] + 1 or not replay
+                or row.last_assessment_token_hash != token_hash or row.assessments != entries):
+                raise CoordinationError("coordination_read_changed")
+            if not await db.scalar(select(authority)):
+                raise CoordinationError("coordination_snapshot_changed")
+            return  # Only the exact accepted challenge/payload is an idempotent retry.
+        if not signed and replay:
             if row.assessments != entries:
                 raise CoordinationError("coordination_already_assessed")
-            return  # A replay never changes authority, freshness or any counter.
-        if hold_code():
-            raise CoordinationError("hold")
+            if not await db.scalar(select(authority)):
+                raise CoordinationError("coordination_snapshot_changed")
+            return
+        if code := hold_code():
+            raise CoordinationError(code)
+        version = row.version
+        revision = row.assessment_revision
+        values = dict(assessments=entries, assessed_generation=generation,
+                      assessed_sequence=report.request_sequence, last_assessed_at=datetime.utcnow(),
+                      assessment_revision=revision + 1, last_assessment_token_hash=token_hash,
+                      error_code=None, version=version + 1)
+        if signed:
+            values.update(snapshot=public, snapshot_hash=fingerprint, generation=generation,
+                          leader_session_id=leader.id, last_polled_at=datetime.utcnow())
         result = await db.execute(update(GithubBacklogCoordination).where(
             GithubBacklogCoordination.scope_id == scope_id,
             GithubBacklogCoordination.version == version,
+            GithubBacklogCoordination.assessment_revision == revision,
+            GithubBacklogCoordination.policy_revision == row.policy_revision,
             GithubBacklogCoordination.enabled.is_(True), authority,
-        ).values(assessments=entries, assessed_generation=report.generation,
-                 assessed_sequence=report.request_sequence, last_assessed_at=datetime.utcnow(),
-                 error_code=None, version=version + 1).execution_options(synchronize_session=False))
+        ).values(**values).execution_options(synchronize_session=False))
         if result.rowcount != 1:
             raise CoordinationError("coordination_snapshot_changed")
+        if code := hold_code():
+            await db.rollback()
+            raise CoordinationError(code)
         await db.commit()
 
     async def summary(self, db, scope_id):
@@ -553,7 +648,7 @@ class GithubCoordinationService:
             if code:
                 status = code
             elif status != "paused":
-                if row.error_code:
+                if row.error_code and row.error_code != "coordination_capped":
                     status = row.error_code
                 elif not row.last_polled_at:
                     status = "unknown"
@@ -577,6 +672,13 @@ class GithubCoordinationService:
                     except CoordinationError as error:
                         status = error.code
         current = status == "assessed"
+        now = datetime.utcnow()
+        daily = row.daily_requests if row and row.budget_day == now.strftime("%Y-%m-%d") else 0
+        cap_reason = ("daily" if row and daily >= row.max_daily_requests else
+                      "snapshot" if row and row.snapshot_requests >= _MAX_SNAPSHOT_REQUESTS else None)
+        # A notification-only limit cannot invalidate a current signed assessment.
+        if not current and cap_reason and status == "awaiting_assessment":
+            status = "coordination_capped"
         snapshot = row.snapshot or {} if row else {}
         entries = row.assessments if row else []
         return {
@@ -585,7 +687,12 @@ class GithubCoordinationService:
             "issue_numbers": row.issue_numbers if row else [],
             "fallback_seconds": row.fallback_seconds if row else 1800,
             "max_daily_requests": row.max_daily_requests if row else 12,
-            "requests_today": row.daily_requests if row and row.budget_day == datetime.utcnow().strftime("%Y-%m-%d") else 0,
+            "requests_today": daily,
+            "notifications_remaining": max(0, row.max_daily_requests - daily) if row else 0,
+            "notification_cap_reason": cap_reason,
+            "notification_budget_resets_at": (now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)).isoformat() + "Z",
+            "assessment_age_seconds": max(0, int((now - row.last_assessed_at).total_seconds())) if row and row.last_assessed_at else None,
+            "autonomy_enabled": bool(scope.enabled and preset.autonomy_enabled),
             "status": status, "last_polled_at": row.last_polled_at if row else None,
             "observation_expires_at": (row.last_polled_at + timedelta(
                 seconds=max(120, settings.github_dispatch_interval_seconds * 2),
@@ -597,14 +704,48 @@ class GithubCoordinationService:
             "leased_workspaces": snapshot.get("leased_workspaces"),
             "eligible_count": sum(e["disposition"] == "eligible" for e in entries) if current else None,
             "entries": entries, "assessment_current": current,
+            "observations": snapshot.get("issues", []),
         }
 
-    async def request(self, db, scope_id):
+    async def request(self, db, scope_id, *, principal=None, client=None):
         result = await self.summary(db, scope_id)
         row = await self.state(db, scope_id)
         result.update(generation=row.generation if row else 0,
                       request_sequence=row.request_sequence if row else 0,
                       observations=(row.snapshot or {}).get("issues", []) if row else [])
+        if (principal is None or row is None or not row.enabled or hold_code()
+            or not await db.scalar(select(_autonomous(scope_id)))):
+            return result  # Operator/OFF/HOLD reads never mint a publication token.
+        policy_revision, numbers = row.policy_revision, list(row.issue_numbers)
+        principal_id = principal.id
+        scope = await self.scope(db, scope_id)
+        await self.require_leader(db, scope_id, principal)
+        await db.commit()
+        try:
+            issues = await self._issues(scope, numbers, client or github_client)
+        except (TimeoutError, OSError, HTTPError):
+            raise CoordinationError("backlog_unavailable") from None
+        public, fingerprint, leader, authority = await self._context(db, scope_id, numbers, issues)
+        row = await self.state(db, scope_id)
+        if (row is None or not row.enabled or row.policy_revision != policy_revision
+            or principal_id != leader.id or not await db.scalar(select(authority))):
+            raise CoordinationError("coordination_snapshot_changed")
+        if code := hold_code():
+            raise CoordinationError(code)
+        generation = row.generation + int(row.snapshot_hash != fingerprint)
+        result.update(generation=generation, request_sequence=row.request_sequence,
+                      observations=public["issues"], version=row.version,
+                      active_implementations=public["active_implementations"],
+                      available_workspaces=public["available_workspaces"],
+                      leased_workspaces=public["leased_workspaces"])
+        if row.snapshot_hash != fingerprint:
+            result.update(assessment_current=False, eligible_count=None)
+        result["snapshot_token"] = _read_token({
+            "scope": scope_id, "leader": leader.id, "policy": row.policy_revision,
+            "revision": row.assessment_revision, "fingerprint": fingerprint,
+            "generation": generation, "sequence": row.request_sequence,
+            "expires": int(time.time()) + _READ_TTL_SECONDS, "nonce": uuid4().hex,
+        })
         return result
 
 

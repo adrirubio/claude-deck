@@ -186,16 +186,25 @@ async def test_fresh_github_change_refuses_old_assessment(db, team):
 
 
 @pytest.mark.asyncio
-async def test_changed_snapshot_debounces_then_sends_new_request(db, team):
+async def test_changed_snapshot_coalesces_pending_mail_until_anchored_fallback(db, team):
     await service.reconcile(db, team.scope_id, team.client)
     team.client.issues[8]["updated_at"] = "2026-10-04T11:00:00Z"
     await service.reconcile(db, team.scope_id, team.client)
     row = await service.state(db, team.scope_id)
-    assert row.generation == 2 and row.requested_generation == 1
+    assert row.generation == 2 and row.requested_generation == 2
+    first = (row.message_id, row.request_sequence, row.last_requested_at, row.daily_requests, row.snapshot_requests)
     row.last_requested_at -= timedelta(seconds=61); await db.commit()
     await service.reconcile(db, team.scope_id, team.client)
     row = await service.state(db, team.scope_id)
-    assert row.requested_generation == 2 and row.daily_requests == 2
+    assert row.requested_generation == 2 and row.daily_requests == 1
+    assert (row.message_id, row.request_sequence, row.daily_requests, row.snapshot_requests) == (first[0], first[1], first[3], first[4])
+    assert row.last_requested_at == first[2] - timedelta(seconds=61)
+    # Snapshot churn never pushes the retry deadline out.
+    team.client.issues[8]["updated_at"] = "2026-10-04T12:00:00Z"
+    row.last_requested_at -= timedelta(hours=1); await db.commit()
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.requested_generation == 3 and row.daily_requests == 2 and row.request_sequence == 2
 
 
 @pytest.mark.asyncio
@@ -398,9 +407,16 @@ async def test_api_requires_operator_for_policy_and_exact_leader_for_receipt(db,
             result = await client.post(path + "-assessments", json=payload, headers=leader_headers)
             assert result.status_code == 200, result.text
             assert result.json()["eligible_count"] == 1
+            fresh = await client.get(path + "-request", headers=leader_headers)
+            assert fresh.status_code == 200 and fresh.json()["snapshot_token"]
+            signed = {**payload, "generation": fresh.json()["generation"],
+                "request_sequence": fresh.json()["request_sequence"], "snapshot_token": fresh.json()["snapshot_token"]}
+            assert (await client.post(path + "-assessments", json=signed, headers=leader_headers)).status_code == 200
+            signed["snapshot_token"] = "x" * 2049
+            assert (await client.post(path + "-assessments", json=signed, headers=leader_headers)).status_code == 422
             public = await client.get(path)
             assert public.headers["cache-control"] == "no-store"
-            for private in ("fixture-nonce", "fixture-lease", "fixture-session-token", "snapshot_hash", "leader_session_id"):
+            for private in ("fixture-nonce", "fixture-lease", "fixture-session-token", "snapshot_hash", "leader_session_id", "snapshot_token", "last_assessment_token_hash"):
                 assert private not in public.text
     finally:
         app.dependency_overrides.pop(get_db, None)
@@ -449,6 +465,7 @@ async def test_owner_reconnect_reopens_capped_snapshot_with_debounce_and_daily_q
         await service.reconcile(db, team.scope_id, team.client)
     row = await service.state(db, team.scope_id)
     assert row.error_code == "coordination_capped" and row.daily_requests == 3
+    await service.assess(db, team.scope_id, team.leader, report(row), team.client)
     # A genuine readiness change creates a generation, with the same daily budget.
     row.last_requested_at = datetime.utcnow(); await db.commit()
     await connected_owner(db, team)
@@ -485,3 +502,172 @@ async def test_owner_availability_changes_invalidate_but_heartbeat_does_not(db, 
     row = await service.state(db, team.scope_id)
     assert row.generation == (1 if change == "heartbeat" else 2)
     assert row.daily_requests == 1
+
+
+async def fresh_report(db, team, *, eligible=True):
+    read = await service.request(db, team.scope_id, principal=team.leader, client=team.client)
+    return report(SimpleNamespace(**read), eligible=eligible).model_copy(update={"snapshot_token":read["snapshot_token"]})
+
+
+@pytest.mark.asyncio
+async def test_active_leader_publishes_without_notification_and_correction_needs_fresh_read(db, team):
+    receipt = await fresh_report(db, team)
+    assert receipt.request_sequence == 0
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    row = await service.state(db, team.scope_id)
+    before = (row.version, row.last_assessed_at, row.assessment_revision, row.daily_requests, row.snapshot_requests)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    row = await service.state(db, team.scope_id)
+    assert (row.version, row.last_assessed_at, row.assessment_revision, row.daily_requests, row.snapshot_requests) == before
+    changed = receipt.model_copy(update={"entries":report(row, eligible=False).entries})
+    with pytest.raises(CoordinationError, match="coordination_read_changed"):
+        await service.assess(db, team.scope_id, team.leader, changed, team.client)
+    correction = await fresh_report(db, team, eligible=False)
+    await service.assess(db, team.scope_id, team.leader, correction, team.client)
+    assert (await service.summary(db, team.scope_id))["eligible_count"] == 0
+    assert (await service.state(db, team.scope_id)).assessment_revision == 2
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.request_sequence == 0 and row.daily_requests == 0 and row.snapshot_requests == 0
+    assert await db.scalar(select(func.count()).select_from(MailMessage)) == 0
+    assert team.wake.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_does_not_block_signed_publication_or_hide_current_assessment(db, team):
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    await service.configure(db, team.scope_id, CoordinationPolicy(expected_version=row.version,
+        enabled=True, issue_numbers=[7,8], max_daily_requests=1))
+    team.client.issues[7].update(state="closed", updated_at="2026-10-04T13:00:00Z")
+    team.item.dispatch_status = "merged"; team.lease.leased_item_id = None; team.lease.lease_token = None
+    await db.commit()
+    await service.reconcile(db, team.scope_id, team.client)
+    receipt = await fresh_report(db, team, eligible=False)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.daily_requests == 1 and row.request_sequence == 1 and row.snapshot_requests == 1
+    summary = await service.summary(db, team.scope_id)
+    assert summary["assessment_current"] and summary["status"] == "assessed"
+    assert summary["notification_cap_reason"] == "daily" and summary["notifications_remaining"] == 0
+    assert summary["observations"][0]["github_state"] == "closed"
+    assert summary["observations"][0]["work_status"] == "merged"
+    assert summary["notification_budget_resets_at"].endswith("T00:00:00Z")
+    assert summary["assessment_age_seconds"] >= 0
+    await service.reconcile(db, team.scope_id, team.client)
+    assert (await service.summary(db, team.scope_id))["assessment_current"]
+    assert await db.scalar(select(func.count()).select_from(MailMessage)) == 1
+
+
+@pytest.mark.asyncio
+async def test_fresh_read_is_read_only_and_tokens_are_principal_only(db, team):
+    row = await service.state(db, team.scope_id)
+    version = row.version
+    assert "snapshot_token" not in await service.request(db, team.scope_id, client=team.client)
+    read = await service.request(db, team.scope_id, principal=team.leader, client=team.client)
+    assert read["snapshot_token"]
+    row = await service.state(db, team.scope_id)
+    assert row.version == version and row.generation == 0 and row.daily_requests == 0
+    assert "snapshot_token" not in await service.summary(db, team.scope_id)
+    team.preset.autonomy_enabled = False; await db.commit()
+    assert "snapshot_token" not in await service.request(db, team.scope_id, principal=team.leader, client=team.client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["issue", "workspace", "policy", "session", "secret", "sequence", "expired"])
+async def test_signed_read_rejects_changed_context(db, team, monkeypatch, change):
+    receipt = await fresh_report(db, team)
+    if change == "issue":
+        team.client.issues[8]["updated_at"] = "2026-10-04T14:00:00Z"
+    elif change == "workspace":
+        team.free.dispatchable = False; await db.commit()
+    elif change == "policy":
+        row = await service.state(db, team.scope_id)
+        await service.configure(db, team.scope_id, CoordinationPolicy(expected_version=row.version,
+            enabled=True, issue_numbers=[7,8], fallback_seconds=3600))
+    elif change == "session":
+        team.leader.bound_pane_proc_start = "next-start"; await db.commit()
+    elif change == "secret":
+        monkeypatch.setattr("app.services.github_coordination_service._READ_SECRET", b"next-process-secret")
+    elif change == "sequence":
+        await service.reconcile(db, team.scope_id, team.client)
+    else:
+        from app.services.github_coordination_service import time
+        current = time.time()
+        monkeypatch.setattr(time, "time", lambda:current + 301)
+    with pytest.raises(CoordinationError, match="coordination_read_(changed|invalid|expired)"):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    assert (await service.state(db, team.scope_id)).assessment_revision == 0
+
+
+@pytest.mark.asyncio
+async def test_signed_expiry_is_checked_again_after_http(db, team, monkeypatch):
+    receipt = await fresh_report(db, team)
+    from app.services.github_coordination_service import time
+    current = time.time()
+    original = team.client.get_issues_by_number
+    async def late_read(*args):
+        result = await original(*args)
+        monkeypatch.setattr(time, "time", lambda:current + 301)
+        return result
+    team.client.get_issues_by_number = late_read
+    with pytest.raises(CoordinationError, match="coordination_read_expired"):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate", ["off", "hold"])
+async def test_signed_publication_rechecks_pause_gates_after_http(db, team, monkeypatch, tmp_path, gate):
+    receipt = await fresh_report(db, team)
+    marker = tmp_path / "hold.json"
+    monkeypatch.setattr(settings, "github_coordination_hold_paths", [str(marker)])
+    original = team.client.get_issues_by_number
+    async def paused_read(*args):
+        result = await original(*args)
+        if gate == "off":
+            team.preset.autonomy_enabled = False
+            await db.commit()
+        else:
+            marker.write_text("{}")
+        return result
+    team.client.get_issues_by_number = paused_read
+    with pytest.raises(CoordinationError):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    assert (await service.state(db, team.scope_id)).assessment_revision == 0
+
+
+@pytest.mark.asyncio
+async def test_invalid_supplied_token_never_uses_legacy_path(db, team):
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    receipt = report(row).model_copy(update={"snapshot_token":"invalid"})
+    with pytest.raises(CoordinationError, match="coordination_read_invalid"):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    assert not (await service.state(db, team.scope_id)).assessments
+
+
+@pytest.mark.asyncio
+async def test_only_the_accepted_challenge_can_replay_after_revision_advances(db, team):
+    first, other = await fresh_report(db, team), await fresh_report(db, team)
+    await service.assess(db, team.scope_id, team.leader, first, team.client)
+    with pytest.raises(CoordinationError, match="coordination_read_changed"):
+        await service.assess(db, team.scope_id, team.leader, other, team.client)
+
+
+@pytest.mark.asyncio
+async def test_signed_publication_survives_benign_poll_but_rejects_write_boundary_race(db, team, monkeypatch):
+    await service.reconcile(db, team.scope_id, team.client)
+    receipt = await fresh_report(db, team)
+    await service.reconcile(db, team.scope_id, team.client)
+    await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    receipt = await fresh_report(db, team)
+    original = service._context
+    async def changed_context(*args):
+        result = await original(*args)
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id==team.item.id).values(dispatch_status="verifying"))
+        return result
+    monkeypatch.setattr(service, "_context", changed_context)
+    with pytest.raises(CoordinationError, match="coordination_snapshot_changed"):
+        await service.assess(db, team.scope_id, team.leader, receipt, team.client)
+    await db.rollback()
+    assert (await service.state(db, team.scope_id)).assessment_revision == 1
