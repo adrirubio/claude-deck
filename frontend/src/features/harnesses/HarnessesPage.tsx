@@ -6,7 +6,7 @@ import { surfaceRegistry, nativeAccess } from "@/features/native-settings/surfac
 import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus } from "@/types/providers";
 
 function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentProviderStatus }) {
-  const { state, catalog, refresh } = useProviderOperations(id);
+  const { state, catalog, refresh, refreshing } = useProviderOperations(id);
   const readiness = catalog?.readiness;
   return (
     <article className="min-w-0 space-y-3 rounded-lg border bg-card p-4 break-words">
@@ -26,7 +26,7 @@ function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentPr
         <div><dt className="font-medium">Session</dt><dd>{readiness?.session.state ?? "unknown"} · {readiness?.session.reason ?? "No team slot selected; a generic provider card cannot establish a worker binding."}</dd></div>
       </dl>
       {readiness && <p className="text-xs text-muted-foreground">Observation: {readiness.probe_state} · {new Date(readiness.observed_at).toLocaleString()}. {readiness.probe_state === "pending" ? "Local checks are still pending." : readiness.probe_state === "failed" ? "Local checks could not complete; uncertain results remain unknown." : "Local configuration checks do not contact a model."}</p>}
-      <button type="button" className="text-primary underline" onClick={() => { void refresh() }} disabled={state === "loading"}>Refresh observations</button>
+      <button type="button" className="text-primary underline" onClick={() => { void refresh() }} disabled={refreshing}>Refresh observations</button>
       {catalog && <details>
         <summary className="cursor-pointer">Operations and conditions</summary>
         <ul className="space-y-3 pt-2 text-sm">

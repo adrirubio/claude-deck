@@ -21,9 +21,10 @@ import type {
 
 const POLL_INTERVAL_MS = 60_000
 
-type CatalogState = { state: 'idle' | 'loading' | 'ready' | 'error'; catalog: ProviderOperations | null }
-const emptyCatalog: CatalogState = { state: 'idle', catalog: null }
-const catalogs = new Map<AgentProviderId, { snapshot: CatalogState; updated: number; flight?: Promise<void> }>()
+type CatalogState = { state: 'idle' | 'loading' | 'ready' | 'error'; catalog: ProviderOperations | null; refreshing: boolean }
+type CatalogEntry = { snapshot: CatalogState; updated: number; flight?: Promise<void>; expiryTimer?: ReturnType<typeof setTimeout> }
+const emptyCatalog: CatalogState = { state: 'idle', catalog: null, refreshing: false }
+const catalogs = new Map<AgentProviderId, CatalogEntry>()
 const catalogListeners = new Set<() => void>()
 const subscribeCatalog = (listener: () => void) => { catalogListeners.add(listener); return () => { catalogListeners.delete(listener) } }
 const notifyCatalog = () => catalogListeners.forEach(listener => listener())
@@ -58,6 +59,7 @@ export function isProviderOperations(value: unknown, provider: AgentProviderId):
 }
 
 export function resetProviderOperations() {
+  for (const entry of catalogs.values()) clearTimeout(entry.expiryTimer)
   clearNativeCatalogs()
   catalogs.clear()
   notifyCatalog()
@@ -67,22 +69,39 @@ export function refreshProviderOperations(provider: AgentProviderId, force = tru
   const current = catalogs.get(provider)
   if (current?.flight) return current.flight
   if (!force && current?.snapshot.state === 'ready' && Date.now() - current.updated < POLL_INTERVAL_MS) return Promise.resolve()
-  const entry: { snapshot: CatalogState; updated: number; flight?: Promise<void> } = { snapshot: { state: 'loading', catalog: null }, updated: 0 }
+  // Preserve unsaved editor state during healthy revalidation. Only an actual
+  // still-valid catalog can be retained; errors and expiry revoke it outright.
+  const retain = current?.snapshot.state === 'ready' && Date.now() - current.updated < POLL_INTERVAL_MS
+  const entry: CatalogEntry = {
+    snapshot: retain ? { ...current.snapshot, refreshing: true } : { state: 'loading', catalog: null, refreshing: true },
+    updated: retain ? current.updated : 0,
+  }
+  clearTimeout(current?.expiryTimer)
   catalogs.set(provider, entry)
-  updateNativeCatalog(provider) // Pending/failed required reads expose no old permissions.
+  if (!retain) updateNativeCatalog(provider)
+  const expire = () => {
+    clearTimeout(entry.expiryTimer)
+    entry.expiryTimer = setTimeout(() => {
+      if (catalogs.get(provider) === entry) notifyCatalog()
+    }, Math.max(1, entry.updated + POLL_INTERVAL_MS - Date.now()))
+  }
+  if (retain) expire()
   notifyCatalog()
   entry.flight = apiClient<unknown>(`providers/${provider}/operations`).then(value => {
     if (catalogs.get(provider) !== entry) return // An invalidated flight cannot reinstall permissions.
     if (!isProviderOperations(value, provider)) throw new Error('Invalid operating catalog')
+    entry.updated = Date.now()
     updateNativeCatalog(provider, value) // Publish guards before children can mount/fetch.
-    entry.snapshot = { state: 'ready', catalog: value }
+    entry.snapshot = { state: 'ready', catalog: value, refreshing: false }
+    expire()
   }).catch(() => {
     if (catalogs.get(provider) !== entry) return
     updateNativeCatalog(provider)
-    entry.snapshot = { state: 'error', catalog: null }
+    clearTimeout(entry.expiryTimer)
+    entry.updated = Date.now()
+    entry.snapshot = { state: 'error', catalog: null, refreshing: false }
   }).finally(() => {
     if (catalogs.get(provider) !== entry) return
-    entry.updated = Date.now()
     entry.flight = undefined
     notifyCatalog()
   })
@@ -97,10 +116,20 @@ export function useProviderOperations(provider?: AgentProviderId) {
   const state = useSyncExternalStore(subscribeCatalog, snapshot, snapshot)
   useEffect(() => {
     if (!provider) return
-    void refreshProviderOperations(provider, false)
-    const timer = setInterval(() => { void refreshProviderOperations(provider) }, POLL_INTERVAL_MS)
-    return () => clearInterval(timer)
-  }, [provider])
+    const onVisible = () => { if (document.visibilityState === 'visible') notifyCatalog() }
+    document.addEventListener('visibilitychange', onVisible)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (state.state === 'idle') void refreshProviderOperations(provider, false)
+    else if (state.state === 'error') timer = setTimeout(() => { void refreshProviderOperations(provider) }, POLL_INTERVAL_MS)
+    else if (state.state === 'ready' && !state.refreshing) {
+      const updated = catalogs.get(provider)?.updated ?? 0
+      timer = setTimeout(() => {
+        const current = catalogs.get(provider)
+        if (current && Date.now() - current.updated >= POLL_INTERVAL_MS - 5_000) void refreshProviderOperations(provider)
+      }, Math.max(1, updated + POLL_INTERVAL_MS - 5_000 - Date.now()))
+    }
+    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible) }
+  }, [provider, state])
   const refresh = useCallback(() => provider ? refreshProviderOperations(provider) : Promise.resolve(), [provider])
   return { ...state, refresh }
 }

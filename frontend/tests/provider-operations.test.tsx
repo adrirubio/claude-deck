@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { render, act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
@@ -14,8 +14,9 @@ import { fixtureFetch, jsonResponse, operationsFixtureResponse, renderRoute, set
 
 vi.mock('../src/features/config/ConfigViewerPage', () => ({ ConfigViewerPage: function Editor() {
   const { selectedProviderId } = useProviderContext()
+  const [setting,setSetting] = useState('')
   useEffect(() => { void apiClient(selectedProviderId === 'codex-cli' ? 'codex-config' : 'config').catch(() => undefined) }, [selectedProviderId])
-  return <p>Mounted {selectedProviderId} editor</p>
+  return <><p>Mounted {selectedProviderId} editor</p><input aria-label="Unsaved setting" value={setting} onChange={e=>setSetting(e.target.value)}/></>
 } }))
 vi.mock('../src/features/dashboard/DashboardPage', () => ({ DashboardPage: () => <p>Mounted summary</p> }))
 vi.mock('../src/features/plans/PlanDetailPage', () => ({ PlanDetailPage: () => <p>Mounted plan</p> }))
@@ -38,7 +39,7 @@ function native(path = '/harnesses/codex-cli/config', route = '/harnesses/:provi
 function probe(id: AgentProviderId) { function Probe() { const c = useProviderOperations(id); return <p>{c.state}</p> } return <Probe/> }
 function deferred<T>() { let resolve!: (value:T)=>void; const promise=new Promise<T>(r=>{resolve=r}); return {promise,resolve} }
 beforeEach(() => { resetProviderOperations(); updateNativeMetadata([]); localStorage.clear(); window.history.replaceState({}, '', '/') })
-afterEach(() => { cleanup(); resetProviderOperations(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); resetProviderOperations(); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('accepted provider operations', () => {
  it.each(ids)('validates %s and intersects each catalog with the frozen static adapters', id => {
@@ -155,6 +156,13 @@ describe('shared catalog observation identity',()=>{
   await act(async()=>pending.resolve(jsonResponse(catalogs['codex-cli'])));await settle()
   expect(screen.getAllByText('ready')).toHaveLength(2)
  })
+ it('shares one background revalidation across consumers over a cache lifetime',async()=>{
+  vi.useFakeTimers();const {requests}=fixtureFetch(()=>jsonResponse(catalogs['codex-cli']))
+  renderRoute(<>{probe('codex-cli')}{probe('codex-cli')}</>);await act(async()=>{await vi.advanceTimersByTimeAsync(0)})
+  expect(requests).toHaveLength(1)
+  await act(async()=>{await vi.advanceTimersByTimeAsync(60_000)})
+  expect(requests).toHaveLength(2);expect(screen.getAllByText('ready')).toHaveLength(2)
+ })
  it('does not let an invalidated late response reinstall permissions',async()=>{
   const old=deferred<Response>();let calls=0;fixtureFetch(()=>++calls===1?old.promise:jsonResponse(scenarios.adapter_mismatch))
   updateNativeMetadata(statuses)
@@ -162,12 +170,32 @@ describe('shared catalog observation identity',()=>{
   await refreshProviderOperations('codex-cli');old.resolve(jsonResponse(catalogs['codex-cli']));await first
   expect(nativeAccess('codex-cli','config')).toBeNull()
  })
- it('drops permissions before a refresh and retains no permissive data after failure',async()=>{
+ it('revokes permissions and retains no permissive data after failed revalidation',async()=>{
   let fail=false;const {requests}=fixtureFetch(path=>path.endsWith('/operations')&&fail?jsonResponse({},503):answer(path))
   native();await settle();expect(screen.getByText('Mounted codex-cli editor')).toBeInTheDocument()
   fail=true;await act(async()=>refreshProviderOperations('codex-cli'));await settle()
   expect(screen.queryByText(/Mounted/)).toBeNull()
   const before=requests.length;await expect(apiClient('codex-config',{method:'PATCH'})).rejects.toThrow(/unavailable/);expect(requests).toHaveLength(before)
+ })
+ it('preserves unsaved editor state during healthy catalog revalidation',async()=>{
+  const pending=deferred<Response>();let reads=0;const {requests}=fixtureFetch(path=>path.endsWith('/operations')&&++reads===2?pending.promise:answer(path))
+  native();await settle();fireEvent.change(screen.getByRole('textbox',{name:'Unsaved setting'}),{target:{value:'Keep this edit'}})
+  let flight!:Promise<void>;act(()=>{flight=refreshProviderOperations('codex-cli')})
+  expect(screen.getByRole('textbox',{name:'Unsaved setting'})).toHaveValue('Keep this edit')
+  await act(async()=>{pending.resolve(jsonResponse(catalogs['codex-cli']));await flight});await settle()
+  expect(screen.getByRole('textbox',{name:'Unsaved setting'})).toHaveValue('Keep this edit')
+  expect(requests.filter(r=>r.path==='codex-config')).toHaveLength(1)
+ })
+ it('revokes an expired retained catalog on visible-tab resume while its refresh is stalled',async()=>{
+  const pending=deferred<Response>();let reads=0;const {requests}=fixtureFetch(path=>path.endsWith('/operations')&&++reads===2?pending.promise:answer(path))
+  native();await settle();let flight!:Promise<void>;act(()=>{flight=refreshProviderOperations('codex-cli')})
+  const time=Date.now();vi.spyOn(Date,'now').mockReturnValue(time+60_001)
+  Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'})
+  act(()=>document.dispatchEvent(new Event('visibilitychange')));await settle()
+  expect(screen.queryByText(/Mounted/)).toBeNull()
+  const before=requests.length;await expect(apiClient('codex-config',{method:'PATCH'})).rejects.toThrow(/unavailable/);expect(requests).toHaveLength(before)
+  await act(async()=>{pending.resolve(jsonResponse({},503));await flight});await settle()
+  expect(screen.getByText('Native page unavailable')).toBeInTheDocument()
  })
  it('expires cached permissions before a newly mounted route can fetch',async()=>{
   fixtureFetch(answer);updateNativeMetadata(statuses);await refreshProviderOperations('codex-cli')
