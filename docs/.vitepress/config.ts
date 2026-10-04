@@ -5,6 +5,10 @@ export default defineConfig({
   description: 'Documentation for Claude Deck — Web dashboard for local AI coding agents',
   appearance: 'force-dark',
   base: '/docs/',
+  srcExclude: [
+    'plans/**',
+    'superpowers/**',
+  ],
   head: [
     ['link', { rel: 'icon', href: '/docs/favicon.ico' }],
   ],
@@ -68,6 +72,7 @@ export default defineConfig({
           text: 'API Reference',
           items: [
             { text: 'Overview', link: '/api/' },
+            { text: 'Factory', link: '/api/factory' },
             { text: 'Config', link: '/api/config' },
             { text: 'Providers', link: '/api/providers' },
             { text: 'MCP Servers', link: '/api/mcp' },
@@ -92,11 +97,6 @@ export default defineConfig({
         },
       ],
     },
-
-    srcExclude: [
-      'plans/**',
-      'superpowers/**',
-    ],
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/adrirubio/claude-deck' },

@@ -12,7 +12,7 @@ In development, the Vite dev server proxies `/api` requests from port 5173 to th
 
 ## Authentication
 
-None. Claude Deck is a local-only application — no authentication is required.
+Authentication is endpoint-specific. The five observational [Factory GET routes](/api/factory) have no operator or session credential dependency. Protected recovery, policy and mutation routes require their documented operator or authenticated Mail-session principal, with state and actor checks on the server. An action eligibility observation does not authenticate its viewer.
 
 ## Request/Response Format
 
@@ -46,6 +46,10 @@ Error responses return JSON with a `detail` field:
 
 Provider-aware endpoints may also map failures into normalized states such as unsupported capability, missing binary, unavailable CLI command, CLI failure, parse failure, or validation failure. Sensitive CLI stdout/stderr and raw provider payloads should be redacted or omitted before they are returned.
 
+### Factory read errors
+
+Factory reads return `detail: {code, message}` for invalid filters/cursors (422), absent selected resources (404) and projection failures (500). Preserve both fields. Existing protected routes retain their string or structured detail codes and 401/403/409 results; their endpoint-specific contracts still apply. See [Factory API](/api/factory) for codes and examples.
+
 ## API Documentation
 
 FastAPI generates interactive API docs at:
@@ -57,6 +61,7 @@ FastAPI generates interactive API docs at:
 
 | Module | Prefix | Description |
 |--------|--------|-------------|
+| [Factory](/api/factory) | `/factory` | Observational work counts/details and watched-scope intake, poll and overlap reads |
 | [Config](/api/config) | `/config` and `/codex-config` | Configuration management |
 | [Providers](/api/providers) | `/providers` | Provider metadata, status, diagnostics, and inventory |
 | [MCP Servers](/api/mcp) | `/mcp` | MCP server management |
