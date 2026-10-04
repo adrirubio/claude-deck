@@ -1111,6 +1111,46 @@ def deck_retry_work_item(work_item_id: int, reason: str = "") -> dict:
     )
 
 
+@mcp.tool()
+def deck_get_backlog_coordination(scope_id: int) -> dict:
+    """Current Leader: read the assigned backlog, observations and request version.
+
+    Reconcile reviewed dependency/milestone gates and already-landed fixes even for
+    issues without a dispatch-ready label. This tool grants no implementation authority.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    return _dispatch_request("GET", f"/github-scopes/{scope_id}/coordination-request")
+
+
+@mcp.tool()
+def deck_report_backlog_assessment(
+    scope_id: int, generation: int, request_sequence: int, entries: list[dict],
+) -> dict:
+    """Current Leader: submit one advisory disposition per assigned issue.
+
+    Each entry: issue_number; disposition (eligible, dependency_blocked,
+    human_decision_blocked, resource_blocked, completed, needs_scope_clarification,
+    standing); reason (admission, dependency, m1a_acceptance, pilot_decision,
+    m1b_acceptance, authority_prerequisite, human_merge, review_evidence, resource,
+    owner, scope_clarification, complete, standing, unknown); required_actor
+    (leader, operator, owner, reviewer, none); evidence_issue_numbers (assigned
+    positive issue numbers, at least one). Unknown/out-of-scope evidence is refused.
+
+    Assessments do not approve implementation, add dispatch labels, release leases,
+    change policy or satisfy human merge/milestone gates. Stale requests, OFF/HOLD
+    and a changed Leader binding are refused. Use the existing authorized admission
+    workflow only after verifying every reviewed gate and resource assignment.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    return _dispatch_request("POST", f"/github-scopes/{scope_id}/coordination-assessments",
+                             json={"generation": generation, "request_sequence": request_sequence,
+                                   "entries": entries})
+
+
 if __name__ == "__main__":
     if PROVIDER != "pi-cli":
         _start_heartbeat_thread()

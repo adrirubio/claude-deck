@@ -210,6 +210,27 @@ async def test_run_repo_once_only_processes_enabled_autonomy_scopes(db):
 
 
 @pytest.mark.asyncio
+async def test_backlog_failure_does_not_skip_core_stages_or_next_scope(db, monkeypatch, caplog):
+    from unittest.mock import AsyncMock
+    from app.services.github_coordination_service import github_coordination_service
+    first = await _scope(db)
+    second = await _scope(db)
+    first_id, second_id = first.id, second.id
+    await db.commit()
+    watcher, dispatch, verification = _FakeWatcher(), _FakeDispatch(), _FakeVerification()
+    reconcile = AsyncMock(side_effect=RuntimeError("private fixture body"))
+    monkeypatch.setattr(github_coordination_service, "reconcile", reconcile)
+    service = GithubDispatchScheduler(scheduler=_FakeScheduler(), watcher=watcher,
+        dispatch=dispatch, verification=verification)
+    await service.run_repo_once(db, "o", "r", client=_FakeClient())
+    assert verification.calls == [first_id, second_id]
+    assert dispatch.recovery_calls == [first_id, second_id]
+    assert dispatch.remind_calls == [first_id, second_id]
+    assert reconcile.await_count == 2
+    assert "private fixture body" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_scheduler_orders_disjoint_monitors_around_verification(db):
     scope = await _scope(db, autonomy=True, enabled=True)
     order = []

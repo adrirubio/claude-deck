@@ -264,6 +264,38 @@ class TeamGithubScope(Base):
     )
 
 
+class GithubBacklogCoordination(Base):
+    """Opt-in Leader coordination; separate from dispatch and approval authority."""
+
+    __tablename__ = "github_backlog_coordination"
+
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    issue_numbers: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    fallback_seconds: Mapped[int] = mapped_column(Integer, default=1800, nullable=False)
+    max_daily_requests: Mapped[int] = mapped_column(Integer, default=12, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    request_sequence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    requested_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    budget_day: Mapped[str | None] = mapped_column(String, nullable=True)
+    daily_requests: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    snapshot_requests: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    snapshot_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    assessments: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    assessed_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assessed_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    leader_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_assessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 class GithubWorkItem(Base):
     """A labeled GitHub issue the dispatch pipeline is tracking."""
 
