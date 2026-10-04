@@ -1,4 +1,5 @@
 """Operator configuration, safe observation, and current-Leader assessments."""
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Response
 import httpx
 from sqlalchemy.exc import IntegrityError
@@ -9,12 +10,24 @@ from app.database import get_db
 from app.models.coordination import CoordinationAssessment, CoordinationPolicy
 from app.models.database import MailAgentSession
 from app.services.github_coordination_service import CoordinationError, github_coordination_service as service
+from app.services.github_operator_attention_service import github_operator_attention_service
 
 router = APIRouter()
 
 
 def conflict(error: CoordinationError):
     return HTTPException(status_code=error.status, detail=error.code)
+
+
+@router.get("/presets/{preset_id}/human-actions")
+async def human_actions(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await asyncio.wait_for(github_operator_attention_service.summary(db, preset_id), timeout=9)
+    except CoordinationError as error:
+        raise conflict(error) from error
+    except TimeoutError:
+        raise HTTPException(status_code=409, detail="human_action_observations_unavailable") from None
 
 
 @router.get("/github-scopes/{scope_id}/coordination")

@@ -73,6 +73,39 @@ refused. An identical replay changes neither freshness nor counters.
 
 ## Visibility and limits
 
+The team page shows **Human actions and decision gates** above both the Roster
+and Autonomy tabs. It includes dispatched review/recovery attention and explicit
+Leader requests attached to backlog dispositions, including standing work that
+has no dispatch item. A request provides its assigned issue, controlled action,
+readiness (`requested` or `waiting_for_prerequisites`) and assigned prerequisite
+issue references. PR review/merge requests also provide `pull_request_number`
+and the full lowercase `expected_head_sha`. At most four requests per disposition,
+16 per assessment and eight distinct PRs are accepted. For example:
+
+```json
+"human_actions": [{
+  "kind": "review_pr",
+  "readiness": "requested",
+  "pull_request_number": 38,
+  "expected_head_sha": "a2b94a1971bd19eeae16ea4436beaf00e6381c10",
+  "prerequisite_issue_numbers": []
+}]
+```
+
+Publish this inside the existing authenticated, fresh-read assessment. PR identity
+and head are read again before acceptance. Display reads verify PR state/head with
+a bounded observation cache. Merged/closed PRs resolve the displayed request;
+changed heads and unavailable reads require confirmation. Missing, expired and
+previous assessments stay explicit. Legacy operator dispositions appear as gates,
+without invented PR identity or a claim that a decision is ready. Closing a
+prerequisite issue does not record acceptance or promote a future gate. The read-only
+route is `GET /api/v1/agent-teams/presets/{preset_id}/human-actions`.
+
+This report extension uses the existing assessment JSON and optional fields inside
+the MCP tool's existing `entries` argument. No dispatch item, quota reset or MCP
+function-signature change is required. Requests grant no review acceptance, merge,
+implementation, approval, lease or milestone authority.
+
 The repository card shows active implementations versus the execution limit,
 available and leased workspaces, assessment freshness, next actors and gate
 reasons. A current empty eligible set says **No eligible implementation work**.

@@ -561,6 +561,8 @@ class GithubCoordinationService:
             raise CoordinationError("complete_assessment_required", 422)
         if any(set(e.evidence_issue_numbers) - set(numbers) for e in report.entries):
             raise CoordinationError("assigned_evidence_required", 422)
+        if any(set(a.prerequisite_issue_numbers) - set(numbers) for e in report.entries for a in e.human_actions):
+            raise CoordinationError("assigned_evidence_required", 422)
         scope = await self.scope(db, scope_id)
         if code := hold_code():
             raise CoordinationError(code)
@@ -571,6 +573,8 @@ class GithubCoordinationService:
             raise CoordinationError("coordination_leader_changed")
         await db.commit()
         issues = await self._issues(scope, numbers, client or github_client)
+        from app.services.github_operator_attention_service import github_operator_attention_service
+        await github_operator_attention_service.validate_actions(scope, report.entries, client or github_client)
         public, fingerprint, leader, authority = await self._context(db, scope_id, numbers, issues)
         row = await self.state(db, scope_id)
         if row is None or not row.enabled or principal_id != leader.id:
@@ -596,7 +600,8 @@ class GithubCoordinationService:
                 or public["active_implementations"] >= public["execution_limit"]
             ):
                 raise CoordinationError("implementation_not_available")
-        entries = [e.model_dump() for e in sorted(report.entries, key=lambda e: e.issue_number)]
+        entries = [e.model_dump(exclude={"human_actions"} if not e.human_actions else set())
+                   for e in sorted(report.entries, key=lambda e: e.issue_number)]
         token_hash = hashlib.sha256(report.snapshot_token.encode()).hexdigest() if signed else None
         replay = (row.assessed_generation == generation and row.assessed_sequence == report.request_sequence)
         if signed and row.assessment_revision != claims["revision"]:
