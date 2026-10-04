@@ -84,10 +84,14 @@ if a refresh stalls or the browser tab was suspended. Each refresh has a
 The authority snapshot includes assigned issues and current active implementations,
 plus their current-attempt approvals, registered workspaces and roster. Unrelated
 historical issues do not enlarge the write guard. Each context collection is
-limited to 128 rows. An oversized active context reports
+limited to 64 rows. An oversized active context reports
 `coordination_context_limit`, grants no eligibility and sends no request; the
 operator must review the assignment/resources. Coordination never archives or
 rewrites authority rows to satisfy this limit.
+Current authenticated participant bindings and derived availability are included
+in the snapshot. Owner reconnects, disconnects and binding changes trigger a new
+assessment within the debounce and daily quota. Routine heartbeat timestamps do
+not create a new generation or reset limits.
 
 Only `dispatched` and `verifying` count against execution concurrency. Review
 readiness can still retain a workspace lease; spare execution capacity and spare

@@ -429,3 +429,59 @@ async def test_oversized_active_context_is_visible_and_does_not_send_mail(db, te
     summary = await service.summary(db, team.scope_id)
     assert summary["status"] == "coordination_context_limit" and summary["eligible_count"] is None
     assert team.wake.await_count == 0
+
+
+async def connected_owner(db, team):
+    owner = MailAgentSession(member_id=team.approval.owner_member_id, provider="codex-cli", source="mcp",
+        session_key="fixture-owner-session", team_preset_id=team.preset.id, team_slot_id=team.item.owner_slot_id,
+        capability_token_hash=agent_mail_service.hash_capability_token("fixture-owner-token"),
+        bound_pane_pid=1235, bound_pane_proc_start="2", wake_enabled=True)
+    db.add(owner); await db.commit()
+    return owner
+
+
+@pytest.mark.asyncio
+async def test_owner_reconnect_reopens_capped_snapshot_with_debounce_and_daily_quota(db, team):
+    await service.reconcile(db, team.scope_id, team.client)
+    for _ in range(3):
+        row = await service.state(db, team.scope_id)
+        row.last_requested_at -= timedelta(hours=1); await db.commit()
+        await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.error_code == "coordination_capped" and row.daily_requests == 3
+    # A genuine readiness change creates a generation, with the same daily budget.
+    row.last_requested_at = datetime.utcnow(); await db.commit()
+    await connected_owner(db, team)
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.generation == 2 and row.daily_requests == 3 and row.requested_generation == 1
+    row.last_requested_at -= timedelta(seconds=61); await db.commit()
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.requested_generation == 2 and row.daily_requests == 4 and row.snapshot_requests == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["disconnect", "stale", "rebound", "dead", "heartbeat"])
+async def test_owner_availability_changes_invalidate_but_heartbeat_does_not(db, team, monkeypatch, change):
+    owner = await connected_owner(db, team)
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    await service.assess(db, team.scope_id, team.leader, report(row), team.client)
+    if change == "disconnect":
+        owner.mailbox_status = "offline"
+    elif change == "stale":
+        owner.last_seen_at -= timedelta(hours=2)
+    elif change == "rebound":
+        owner.bound_pane_proc_start = "new-fixture-start"
+    elif change == "dead":
+        monkeypatch.setattr("app.utils.peer_process.pane_is_alive", lambda pid, _start: pid == 1234)
+    else:
+        owner.last_seen_at = datetime.utcnow()
+    await db.commit()
+    summary = await service.summary(db, team.scope_id)
+    assert summary["assessment_current"] is (change == "heartbeat")
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.generation == (1 if change == "heartbeat" else 2)
+    assert row.daily_requests == 1
