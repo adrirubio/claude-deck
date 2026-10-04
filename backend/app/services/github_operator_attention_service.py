@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from app.models.coordination import CoordinationDisposition
-from app.models.database import AgentTeamPreset, GithubApprovalRequest, GithubWorkItem, TeamGithubScope
+from app.models.database import AgentTeamPreset, GithubApprovalRequest, GithubAttemptScopeRevision, GithubWorkItem, TeamGithubScope
 from app.services.github_client import github_client
 
 
@@ -66,6 +66,7 @@ class GithubOperatorAttentionService:
             raise CoordinationError("preset_not_found", 404)
         scopes = list((await db.scalars(select(TeamGithubScope).where(
             TeamGithubScope.preset_id == preset_id).order_by(TeamGithubScope.id).limit(33))).all())
+        scope_snapshot = [(s.id,s.repo_owner,s.repo_name,s.merge_policy,s.enabled,s.updated_at) for s in scopes]
         complete = len(scopes) <= 32
         actions, expires, versions = [], [], {}
         for scope in scopes[:32]:
@@ -86,7 +87,8 @@ class GithubOperatorAttentionService:
                 reported = [a.model_dump() for a in entry.human_actions]
                 if not reported and entry.required_actor == "operator":
                     # Older Leaders report a gate without declaring it ready for action.
-                    kind = entry.reason if entry.reason in {"pilot_decision", "milestone_acceptance", "scope_clarification"} else "scope_clarification"
+                    kind = "milestone_acceptance" if entry.reason in {"m1a_acceptance","m1b_acceptance"} else (
+                        entry.reason if entry.reason in {"pilot_decision","scope_clarification"} else "scope_clarification")
                     reported = [{"kind":kind, "legacy_reason":entry.reason, "readiness":"waiting_for_prerequisites", "pull_request_number":None,
                                  "expected_head_sha":None, "prerequisite_issue_numbers":[]}]
                 for action in reported:
@@ -104,30 +106,54 @@ class GithubOperatorAttentionService:
             complete = False
         async def pending_approvals():
             return list((await db.execute(select(GithubApprovalRequest.id, GithubApprovalRequest.work_item_id,
-                GithubApprovalRequest.request_kind).join(GithubWorkItem, GithubWorkItem.id==GithubApprovalRequest.work_item_id).where(
+                GithubApprovalRequest.request_kind, GithubApprovalRequest.scope_revision_id).join(GithubWorkItem, GithubWorkItem.id==GithubApprovalRequest.work_item_id).where(
                 GithubWorkItem.scope_id.in_(scope_by_id), GithubApprovalRequest.status=="pending",
                 GithubApprovalRequest.dispatch_nonce==GithubWorkItem.dispatch_nonce).order_by(GithubApprovalRequest.id).limit(65))).all())
         approvals = await pending_approvals()
         pending = {a.work_item_id:a.request_kind for a in approvals}
-        if len(approvals)>64:
+        async def checkpoint_revisions():
+            return list((await db.execute(select(GithubAttemptScopeRevision.id,GithubAttemptScopeRevision.work_item_id,
+                GithubAttemptScopeRevision.revision,GithubAttemptScopeRevision.status,GithubAttemptScopeRevision.recovery_checkpoint_stage)
+                .join(GithubWorkItem,GithubWorkItem.id==GithubAttemptScopeRevision.work_item_id).where(
+                GithubWorkItem.scope_id.in_(scope_by_id),GithubAttemptScopeRevision.dispatch_nonce==GithubWorkItem.dispatch_nonce,
+                GithubAttemptScopeRevision.status.in_(["proposed","approved"])).order_by(GithubAttemptScopeRevision.id).limit(65))).all())
+        revisions = await checkpoint_revisions()
+        approval_revisions = {a.work_item_id:a.scope_revision_id for a in approvals}
+        checkpoint_by_item = {}
+        for revision in revisions:
+            selected = approval_revisions.get(revision.work_item_id)
+            if (selected==revision.id or (selected is None and revision.status=="approved")):
+                previous = checkpoint_by_item.get(revision.work_item_id)
+                if previous is None or revision.revision>previous.revision:
+                    checkpoint_by_item[revision.work_item_id]=revision
+        if len(approvals)>64 or len(revisions)>64:
             complete = False
         for item in items[:64]:
             scope = scope_by_id[item.scope_id]
-            if item.id in pending and not (item.dispatch_status in {"escalated","failed"} and pending[item.id]=="initial"):
+            checkpoint = checkpoint_by_item.get(item.id)
+            operator_checkpoint = item.dispatch_status=="escalated" and checkpoint is not None and checkpoint.recovery_checkpoint_stage in {"decision_hold","ack_hold"}
+            if item.id in pending and not operator_checkpoint and not (item.dispatch_status in {"escalated","failed"} and pending[item.id]=="initial"):
                 continue  # Pending Leader decisions do not become operator requests.
             fallback = any((item.status_note or "").startswith(prefix) for prefix in (
                 "Auto-merge blocked", "Auto-merge budget exhausted", "Auto-merge failed", "Auto-merge retry budget exhausted"))
             if item.dispatch_status == "ready_for_review" and ((scope.merge_policy != "human" and not fallback) or item.attempt_phase == "diagnostic"):
                 continue
-            kind = "review_pr" if item.dispatch_status in {"ready_for_review", "awaiting_human_review"} else "inspect_attempt"
+            kind = "inspect_checkpoint" if operator_checkpoint else (
+                "review_pr" if item.dispatch_status in {"ready_for_review", "awaiting_human_review"} else "inspect_attempt")
             actions = [a for a in actions if not (a["scope_id"]==scope.id and a["issue_number"]==item.issue_number
                 and a.get("legacy_reason")=="human_merge" and kind=="review_pr")]
             actions.append({"scope_id":scope.id, "repo":f"{scope.repo_owner}/{scope.repo_name}", "issue_number":item.issue_number,
                 "kind":kind, "readiness":"requested", "pull_request_number":item.pr_number if kind=="review_pr" else None,
                 "expected_head_sha":item.last_verified_sha if kind=="review_pr" else None, "work_item_id":item.id,
+                "dispatch_issue_type":item.issue_type,
                 "source":"dispatch", "assessment_current":True, "assessment_status":item.dispatch_status,
                 "last_assessed_at":None, "evidence_issue_numbers":[item.issue_number], "prerequisite_issue_numbers":[], "state":"requested"})
-        item_snapshot = [(i.id, i.dispatch_status, i.pr_number, i.last_verified_sha, i.attempt_phase) for i in items]
+            if kind=="review_pr" and item.pr_number is None:
+                actions[-1]["state"]="pr_identity_unavailable";complete=False
+        def item_identity(item):
+            return (item.id,item.scope_id,item.issue_number,item.issue_type,item.dispatch_status,item.pr_number,item.last_verified_sha,
+                    item.attempt_phase,item.status_note,item.dispatch_nonce,item.active_scope_revision)
+        item_snapshot = [item_identity(i) for i in items]
         # End the DB transaction before bounded GitHub reads; presentation writes no rows.
         await db.commit()
         refs_by_scope = {s.id:{a["pull_request_number"] for a in actions if a["scope_id"]==s.id and a["pull_request_number"]} for s in scopes[:32]}
@@ -146,13 +172,16 @@ class GithubOperatorAttentionService:
                 action["pr_state"] = pull["state"]
                 action["pr_observed_at"] = pull.get("observed_at")
                 action["pr_observation_expires_at"] = pull.get("expires_at")
+                action["observed_head_sha"] = pull.get("head_sha")
                 if pull.get("expires_at"):
                     expires.append(pull["expires_at"])
                 if pull["state"]=="closed":
                     action["state"] = "resolved"
                 elif pull["state"]=="unavailable":
                     action["state"] = "pr_unavailable";complete = False
-                elif not action["expected_head_sha"] or pull["head_sha"]!=action["expected_head_sha"]:
+                elif (not action["expected_head_sha"] and not (action["source"]=="dispatch" and action.get("dispatch_issue_type")=="design"
+                    and action["assessment_status"]=="awaiting_human_review")) or (
+                    action["expected_head_sha"] and pull["head_sha"]!=action["expected_head_sha"]):
                     action["state"] = "head_changed";complete = False
                 elif action["kind"]=="merge_pr" and pull["draft"]:
                     action["state"] = "waiting_for_prerequisites"
@@ -172,11 +201,14 @@ class GithubOperatorAttentionService:
             GithubWorkItem.scope_id.in_(scope_by_id),
             GithubWorkItem.dispatch_status.in_(["ready_for_review", "awaiting_human_review", "escalated", "failed"]),
         ).order_by(GithubWorkItem.id).limit(65).execution_options(populate_existing=True))).all())
-        if (item_snapshot != [(i.id, i.dispatch_status, i.pr_number, i.last_verified_sha, i.attempt_phase) for i in latest_items]
-            or approvals != await pending_approvals()):
+        latest_scopes = list((await db.scalars(select(TeamGithubScope).where(TeamGithubScope.preset_id==preset_id)
+            .order_by(TeamGithubScope.id).limit(33).execution_options(populate_existing=True))).all())
+        scope_changed = scope_snapshot != [(s.id,s.repo_owner,s.repo_name,s.merge_policy,s.enabled,s.updated_at) for s in latest_scopes]
+        if (item_snapshot != [item_identity(i) for i in latest_items] or approvals != await pending_approvals()
+            or revisions != await checkpoint_revisions() or scope_changed):
             complete = False
             for action in actions:
-                if action["source"]=="dispatch" and action["state"]!="resolved":
+                if (action["source"]=="dispatch" or scope_changed) and action["state"]!="resolved":
                     action["state"] = "historical"; action["assessment_current"] = False
         deduped = {}
         rank = {"requested":3,"waiting_for_prerequisites":2,"historical":1}

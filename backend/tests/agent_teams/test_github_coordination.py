@@ -11,7 +11,7 @@ from sqlalchemy import func, select, update
 from app.config import settings
 from app.models.coordination import CoordinationAssessment, CoordinationPolicy
 from app.models.database import (
-    AgentTeamPreset, AgentTeamSlot, GithubApprovalRequest, GithubBacklogCoordination,
+    AgentTeamPreset, AgentTeamSlot, GithubApprovalRequest, GithubAttemptScopeRevision, GithubBacklogCoordination,
     GithubWorkItem, GithubWorkspace, MailAgentSession, MailMessage, MailTeamMember,
     TeamGithubScope,
 )
@@ -832,3 +832,54 @@ async def test_attention_does_not_replace_pending_leader_approval_or_auto_merge(
     team.item.status_note="Auto-merge blocked: independent review unavailable";await db.commit()
     actions=(await attention.summary(db, team.preset.id, team.client))["actions"]
     assert len(actions)==1 and actions[0]["kind"]=="review_pr"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["decision_hold","ack_hold"])
+async def test_attention_keeps_operator_checkpoint_visible_with_pending_revision(db, team, stage):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    team.item.dispatch_status="escalated"
+    revision=GithubAttemptScopeRevision(work_item_id=team.item.id,dispatch_nonce=team.item.dispatch_nonce,revision=1,
+        owner_slot_id=team.item.owner_slot_id,owner_member_id=team.approval.owner_member_id,phase="diagnostic",
+        execution_target="workspace",summary="fixture",allowed_paths=[],allowed_actions=[],allowed_commands=[],
+        prohibited_actions=[],tool_fallbacks={},baseline_head_sha="a"*40,baseline_tree_sha="b"*40,
+        originating_escalation_reason="fixture",expected_workspace_id=team.lease.id,expected_lease_token_hash="fixture",
+        max_failed_heads=1,status="proposed",recovery_checkpoint_stage=stage)
+    db.add(revision);await db.flush()
+    team.approval.status="pending";team.approval.request_kind="scope_revision";team.approval.scope_revision_id=revision.id
+    await db.commit()
+    actions=(await attention.summary(db,team.preset.id,team.client))["actions"]
+    assert len(actions)==1 and actions[0]["kind"]=="inspect_checkpoint" and actions[0]["state"]=="requested"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["policy","fallback","nonce"])
+async def test_dispatch_attention_rechecks_all_classification_inputs_after_http(db, team, change):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    scope=await service.scope(db,team.scope_id)
+    if change=="fallback":scope.merge_policy="auto";team.item.status_note="Auto-merge blocked: fixture"
+    await db.commit()
+    original=team.client.get_pull
+    async def changed_pull(*args):
+        result=await original(*args)
+        if change=="policy":scope.merge_policy="auto"
+        elif change=="fallback":team.item.status_note=None
+        else:team.item.dispatch_nonce="next-fixture-attempt"
+        await db.commit()
+        return result
+    team.client.get_pull=changed_pull
+    summary=await attention.summary(db,team.preset.id,team.client)
+    assert not summary["coverage_complete"] and summary["actions"][0]["state"]=="historical"
+
+
+@pytest.mark.asyncio
+async def test_design_review_uses_fresh_pr_identity_without_code_verified_head(db, team):
+    from app.services.github_operator_attention_service import github_operator_attention_service as attention
+    team.item.dispatch_status="awaiting_human_review";team.item.issue_type="design";team.item.last_verified_sha=None
+    await db.commit()
+    action=(await attention.summary(db,team.preset.id,team.client))["actions"][0]
+    assert action["state"]=="requested" and action["expected_head_sha"] is None
+    assert action["observed_head_sha"]=="a"*40
+    team.item.pr_number=None;await db.commit()
+    summary=await attention.summary(db,team.preset.id,team.client)
+    assert summary["actions"][0]["state"]=="pr_identity_unavailable" and not summary["coverage_complete"]

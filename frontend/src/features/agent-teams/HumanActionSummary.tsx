@@ -16,11 +16,13 @@ const kinds: Record<string, string> = {
   pilot_decision: 'Operator pilot decision', milestone_acceptance: 'Milestone acceptance',
   provide_evidence: 'Provide acceptance or pilot evidence', scope_clarification: 'Clarify the remaining scope',
   inspect_attempt: 'Inspect the stopped attempt in Autonomy',
+  inspect_checkpoint: 'Inspect the operator recovery checkpoint in Autonomy',
 }
 const states: Record<string, string> = {
   requested: 'Your action is requested', waiting_for_prerequisites: 'Decision gate — waiting for prerequisites',
   historical: 'Last reported — awaiting confirmation', head_changed: 'PR head changed — Leader confirmation needed',
   pr_unavailable: 'PR status unavailable — verify on GitHub',
+  pr_identity_unavailable: 'PR identity is missing — inspect in Autonomy',
 }
 function timestamp(value: string | undefined) {
   if (!value) return NaN
