@@ -1,6 +1,6 @@
 # Quick Start
 
-Get Claude Deck running and explore the dashboard in under 5 minutes.
+Start Deck, inspect existing work, or launch a manual session before deciding whether to connect a repository.
 
 ## Start the Dev Servers
 
@@ -21,36 +21,21 @@ To stop or restart the dev servers for this checkout:
 ./scripts/dev.sh restart
 ```
 
-## Explore the Dashboard
+## Observe existing work
 
-The dashboard shows an overview of your selected provider and local project state. Claude Code still has the richest metrics; Codex surfaces focus on provider status, sessions, configuration, diagnostics, and inventory.
+Overview is the home page for tracking counts and automation observations across this backend. Use team, scope and harness filters on factory pages; native harness/project preferences do not filter work. Open [Work](/features/work) for an owner, waiting reason or PR. Open [Repositories](/features/repositories) to distinguish configured enablement from effective intake. An empty workload does not require enabling autonomy, and a read failure is not an empty factory.
 
-- **Projects** — tracked project directories
-- **MCP Servers** — configured server count
-- **Commands** — available slash commands
-- **Plugins** — installed plugins
-- **Hooks** — automation hooks
-- **Permissions** — allow/deny rules
-- **Sessions** — conversation history with today/this week counts
-- **Context Window** — highest context usage across active sessions
+## Launch manually or inspect configuration
 
-Data is cached between page navigations and updates when you click the refresh button or switch projects.
+Use Live sessions for standalone work or [Teams](/features/agent-teams) for a current launch plan. Reuse only sessions belonging to intended slots. Unbound adoption is an explicit operator review; opening a Work launch link starts nothing.
 
-## Select a Project
+Use [Harnesses](/features/harnesses) for guarded native pages. Local projects scope supported native settings independently of factory filters. Other harnesses' integration capabilities do not create native editors.
 
-Use the project selector in the sidebar to switch between projects. Many features show project-scoped data — MCP servers, commands, hooks, and permissions can differ between projects.
+## Connect a backlog with the current flow
 
-Use **Discover Projects** when you want Claude Deck to find projects from local agent state, or add a path manually with the directory browser.
+Create or inspect a team roster, verify Agent Mail bindings and launch prerequisites, then add an existing primary checkout in Teams > Autonomy. Put the desired Leader first among enabled slots; Role text is descriptive. Configure GitHub polling access on the host and dispatch/design/area labels on GitHub. Choose merge policy and finite budgets; review the enable confirmation only when ready.
 
-## Switch Providers
-
-Use the provider switcher in the sidebar to move between Claude Code, Codex CLI, and GitHub Copilot CLI.
-
-With Codex selected, start with:
-
-- **Agent Bridge** — find or start Codex tmux sessions
-- **Config** — edit safe TOML settings, inspect profiles, and manage feature flags
-- **Backup** — create a redacted Codex export
+The operator credential uses the existing per-tab flow, separately from GitHub polling access and authenticated agent sessions. No cookie login or guided wizard is included. Team/scope pause controls intake; inspect existing attempts separately rather than assuming processes stopped.
 
 ## Identify the Backend Instance
 
@@ -63,20 +48,21 @@ CLAUDE_DECK_INSTANCE_ID="studio-mac" \
 ./scripts/dev.sh --host 0.0.0.0
 ```
 
-Use a trusted network or tunnel when binding to all interfaces: many team and autonomy configuration routes are not operator-token protected. A Vite dev UI on another origin needs that exact origin in the JSON `CORS_ORIGINS` setting; Deck's production UI is same-origin.
+Use a trusted network or tunnel when binding to all interfaces. Protected roster, autonomy and recovery controls require their documented credentials; safe reads remain observational. Local trust is not remote multi-user isolation. A Vite dev UI on another origin needs that exact origin in the JSON `CORS_ORIGINS` setting; Deck's production UI is same-origin.
 
 The instance name appears in the header, browser tab title, Agent Bridge terminal panes, and kill-session confirmations. Supported accents are `blue`, `green`, `purple`, `orange`, `red`, `pink`, `cyan`, and `slate`.
 
-## Key Pages
+## Key pages
 
-| Page | What You Can Do |
-|------|-----------------|
-| **MCP Servers** | Add servers, test connections, browse the MCP Registry |
-| **Commands** | Create and edit slash commands |
-| **Hooks** | Configure pre/post tool use automation |
-| **Sessions** | Browse conversation transcripts |
-| **Usage** | View token costs and billing blocks |
-| **Agent Bridge** | Attach to live Claude Code, Codex, and Copilot terminals |
+| Page | Purpose |
+| --- | --- |
+| [Overview](/features/dashboard) | Tracking counts and automation observations |
+| [Work](/features/work) | Mixed-team details and current remedies |
+| [Repositories](/features/repositories) | Watched scopes, intake, polling and overlaps |
+| [Harnesses](/features/harnesses) | Guarded native settings and manual entry points |
+| [Teams](/features/agent-teams) | Rosters, launch plans and current repository/autonomy configuration |
+| [Live sessions](/features/agent-bridge) | Standalone sessions and explicit terminal interaction |
+| [Agent Mail](/features/agent-mail) | Coordination and read-only work context |
 
 ## Production Build
 

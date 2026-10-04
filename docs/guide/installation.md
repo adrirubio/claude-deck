@@ -2,6 +2,8 @@
 
 Claude Deck must run in the same environment where your agent CLIs and credentials are installed. Docker is not supported because containers cannot see host-installed CLIs, host tmux sessions, native agent credentials, or your real repository environment.
 
+The new Overview/Work navigation described here belongs to the product integration build. Earlier packaged releases can retain the configuration-focused home page. Use the matching source when evaluating this build; native prerequisites and installation steps still apply.
+
 ## Native Installation
 
 ### Prerequisites
@@ -19,7 +21,7 @@ Claude Deck must run in the same environment where your agent CLIs and credentia
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/adrirubio/claude-deck.git
+git clone --branch feature/software-delivery-product-reposition https://github.com/juanrubio/claude-deck.git
 cd claude-deck
 ```
 

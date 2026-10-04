@@ -1,6 +1,16 @@
 # Multi-Provider and Codex CLI
 
-Claude Deck has moved from a Claude Code-only control surface to a provider-aware local agent dashboard. Claude Code remains the most complete provider. Codex CLI support is stable for sessions, safe configuration, diagnostics, MCP/plugin inventory, supported CLI-backed mutations, feature flags, and redacted exports. The UI is explicit about what is diagnostics-only and what is intentionally unavailable.
+Claude Deck supports mixed local harness workflows with separate factory observations, native adapters and provider APIs. Codex includes sessions, safe TOML settings, diagnostics, MCP/plugin inventory and supported CLI-backed mutations. Native coverage differs from Claude Code; unsupported data remains unavailable.
+
+## Browser pages in the product integration build
+
+Use Harnesses for Codex Configuration summary, Config, MCP, Plugins and read-only Plans. Config can expose guarded diagnostic/feature information and safe settings edits; nested MCP/plugins have separate access checks. No Codex Backup, Usage, Context or transcript adapter is registered here.
+
+The existing capability table describes CLI/API contracts, not browser-page permission. A positive capability flag cannot create an absent adapter; read-only access cannot authorize a write. Summary/Plans remain read-only. Factory filters are independent of the native preference.
+
+Redacted export and automatic-restore refusal remain the existing backup API contract, without a Codex Backup editor here. Preserve unavailable usage/context parity, bounded/redacted history/cache diagnostics and unsupported plugin enable/disable. Binary/configuration status does not establish credential or slot-session readiness.
+
+See [Harnesses](/features/harnesses) and [Work](/features/work).
 
 ## Provider Model
 

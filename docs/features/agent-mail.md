@@ -11,6 +11,14 @@ Broadcasts require an explicit audience: an Agent Team preset, repository, or Gi
 - Keep short-lived agent sessions attached to a durable repo or Agent Team slot participant, so role and charter survive restarts and context compaction.
 - Inspect team communication from Claude Deck without turning the product into a general chat app.
 
+## Mail context inside Work
+
+Work context reads relevant messages/threads using verified team/slot/member identity. Missing or mismatched associations do not guess a recipient. Reading context does not check an agent inbox, acknowledge a request, send a message, approve a plan or launch a session.
+
+Standalone Agent Mail retains coordination/install workflows. Ordinary context replies and handoffs are separate from normalized agent plan approvals; operator remedies and human PR review remain distinct. A Role label, visible message or eligible action grants no authority. Durable handoffs should identify issue, PR and exact head without credentials.
+
+See [Work](/features/work) and [Teams](/features/agent-teams). Existing install, wake and visibility limits still apply; factory navigation does not change them.
+
 ## How Agents Connect
 
 Claude Code gets both MCP tools and command hooks:

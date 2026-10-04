@@ -1,37 +1,26 @@
 # Introduction
 
-Claude Deck is a self-hosted web application for visualizing and managing local AI coding agents. It started with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) configuration and now includes stable Codex CLI support plus GitHub Copilot CLI support for live sessions, Agent Mail, and Agent Teams.
+A self-hosted workspace to observe and intervene in bounded coding-agent attempts on GitHub issues, with mixed harnesses, visible policies and recovery controls.
 
-## Why Claude Deck?
+## Find work needing attention
 
-Claude Code stores configuration across multiple JSON files and directories (`~/.claude.json`, `~/.claude/settings.json`, `.claude/settings.json`, `.mcp.json`, and more). Managing these files manually is tedious and error-prone. Claude Deck gives you a visual dashboard to:
+Use [Overview](/features/dashboard) for complete filtered counts and automation observations. Open [Work](/features/work) for owners, waiting reasons and PR context; inspect [Repositories](/features/repositories) for intake, polling and overlaps. Factory views include mixed harnesses by default and have their own URL filters.
 
-- **See everything at a glance** — dashboard with counts, session activity, and context window usage
-- **Edit configuration visually** — no more hand-editing JSON files
-- **Manage MCP servers** — add, test, and configure servers with OAuth support
-- **Track usage** — monitor token costs, billing blocks, and daily/monthly trends
-- **Browse sessions** — view conversation transcripts with tool use details
-- **Monitor live sessions** — attach to running Claude Code, Codex, and Copilot terminals via Agent Bridge
-- **Switch providers intentionally** — use shared surfaces for Claude Code, Codex CLI, and GitHub Copilot CLI while unsupported provider-specific pages stay hidden or disabled
-- **Manage Codex safely** — edit whitelisted TOML settings, inspect feature flags, and run CLI-backed inventory/mutation flows without exposing auth or prompt history
+Finished tracking is not a measured delivery outcome. Escalation or an operator stop does not prove process termination. Unknown observations remain unknown.
 
-## Features
+## Keep the actors separate
 
-Claude Deck covers Claude Code configuration and the shared local-agent operations layer:
+Agents propose plans for designated Leader decisions. Operators configure policies and perform protected interventions. Human PR review and merge follow repository policy. An eligible action is an observation, not authorization; the server checks the current principal and state again.
 
-| Category | Features |
-|----------|----------|
-| **Core Config** | Claude Code settings editor, Codex TOML settings editor, Codex feature flags, MCP servers, slash commands |
-| **Extensions** | Plugins, hooks, permissions, agents, skills |
-| **Monitoring** | Sessions, usage tracking, context window, Agent Bridge |
-| **Customization** | Output styles, status line, memory |
-| **Management** | Projects, plans, backup & restore |
+## Manual work and native configuration
 
-## Provider Support
+[Harnesses](/features/harnesses) lists implemented native pages and manual entry points. [Teams](/features/agent-teams), [Live sessions](/features/agent-bridge) and [Agent Mail](/features/agent-mail) can be used without watching a repository or enabling autonomy. Native/project preferences do not select factory work. Coverage differs; see [Multi-Provider and Codex CLI](/guide/multi-provider-codex-v2).
 
-Claude Deck exposes provider capabilities and status through the Providers API. Claude Code remains the full-featured provider for usage, context, transcripts, plugins, hooks, agents, skills, memory, backup, and restore. Codex CLI support focuses on mixed tmux sessions, safe TOML configuration, feature flags, diagnostics, MCP/plugin inventory and safe CLI-backed mutations, and redacted export-only backups. GitHub Copilot CLI support currently focuses on Agent Bridge sessions, Agent Mail MCP/hooks, and Agent Team launch/reuse workflows.
+## Current scope
 
-See [Multi-Provider and Codex CLI](/guide/multi-provider-codex-v2) for the supported, diagnostics-only, and unsupported Codex surfaces.
+This reference covers the product integration build; earlier packaged releases can retain the previous navigation. The operations/readiness catalog, guided setup and delivery audit charts are not included. Pilot participants, human benefit measurements and timing comparisons are unavailable; no pilot outcome is announced.
+
+Repository setup uses current Teams and host/label procedures. Role text does not redesign Leader selection; the first enabled slot remains Leader.
 
 ## Tech Stack
 
@@ -43,8 +32,9 @@ See [Multi-Provider and Codex CLI](/guide/multi-provider-codex-v2) for the suppo
 | Charts | Recharts |
 | Database | SQLite (async via SQLAlchemy + aiosqlite) |
 
-## Next Steps
+## Next steps
 
-- [Installation](/guide/installation) — get Claude Deck running locally
-- [Quick Start](/guide/quick-start) — explore the dashboard in 5 minutes
-- [Architecture](/guide/architecture) — understand how the app is built
+- [Installation](/guide/installation)
+- [Quick Start](/guide/quick-start)
+- [Factory API](/api/factory)
+- [Architecture](/guide/architecture)

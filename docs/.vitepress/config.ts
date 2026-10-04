@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'Claude Deck',
-  description: 'Documentation for Claude Deck — Web dashboard for local AI coding agents',
+  description: 'Documentation for Claude Deck — observe and intervene in bounded coding-agent work on GitHub',
   appearance: 'force-dark',
   base: '/docs/',
   srcExclude: [
@@ -22,8 +22,8 @@ export default defineConfig({
       { text: 'Features', link: '/features/dashboard' },
       { text: 'API Reference', link: '/api/' },
       {
-        text: 'v2.0.0',
-        link: 'https://github.com/adrirubio/claude-deck/blob/master/CHANGELOG.md',
+        text: 'Product source',
+        link: 'https://github.com/juanrubio/claude-deck/tree/feature/software-delivery-product-reposition',
       },
     ],
 
@@ -45,7 +45,10 @@ export default defineConfig({
         {
           text: 'Features',
           items: [
-            { text: 'Dashboard', link: '/features/dashboard' },
+            { text: 'Overview', link: '/features/dashboard' },
+            { text: 'Work', link: '/features/work' },
+            { text: 'Repositories', link: '/features/repositories' },
+            { text: 'Harnesses', link: '/features/harnesses' },
             { text: 'Config', link: '/features/config' },
             { text: 'MCP Servers', link: '/features/mcp-servers' },
             { text: 'Commands', link: '/features/commands' },
@@ -99,7 +102,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/adrirubio/claude-deck' },
+      { icon: 'github', link: 'https://github.com/juanrubio/claude-deck' },
     ],
 
     search: {
@@ -107,7 +110,7 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/adrirubio/claude-deck/edit/master/docs/:path',
+      pattern: 'https://github.com/juanrubio/claude-deck/edit/feature/software-delivery-product-reposition/docs/:path',
       text: 'Edit this page on GitHub',
     },
 

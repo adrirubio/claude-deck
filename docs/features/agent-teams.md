@@ -2,6 +2,30 @@
 
 Agent Teams are saved rosters of local Claude Code, Codex, and Copilot sessions. Use them when the same group of repositories should be launched or reused together, such as a project team, DevOps team, or release validation team.
 
+## Teams inside the work flow
+
+Teams retains saved rosters and manual launch planning alongside factory work. Overview/Work span teams; here configure a roster and its repositories. The first enabled slot supplies Leader authority; Role text is descriptive.
+
+## Current autonomy and repository setup
+
+Autonomy configures watched repositories, existing primary checkout, labels, merge policy and finite dispatch/recovery limits. GitHub polling uses host access separately from operator authorization; GitHub App dispatch settings alone do not authenticate polling. Existing host/label setup remains necessary; no guided wizard or explicit-role authority redesign is included.
+
+Team/scope enablement controls intake. Pausing retains configuration; inspect current attempts/processes separately. Code follows configured merge policy with the rolling automatic-merge cap; design-labelled work always requires human PR review. Leader plan approval, operator intervention and human PR review are separate.
+
+Build directory, command and parallelism fields are hints in the owner's brief; Deck does not run those build commands. Editable numeric drafts validate on save; clearing a field does not silently increase a budget or authorize recovery.
+
+## Authorization, reuse and deletion
+
+Roster, watched-repository, autonomy and recovery settings/remedies require the configured operator token. Browser launch planning uses the existing per-tab flow. Protected reads and constrained agent launch APIs have separate authenticated Mail-session principal rules; credentials are separate from GitHub polling and are not a role/bootstrap prompt.
+
+Normal reuse requires a live pane already bound to its intended slot. Unbound panes block the default plan; an operator must review target/PID and explicitly adopt or choose fresh spawn. An offline actor's link only selects launch context. Agent sessions cannot adopt, include disabled slots, override paths/prompts, force respawn or bypass plan confirmation.
+
+Retry is confirmed and can discard attempt markers; a leased workspace can defer re-dispatch until normal owner release. A response is not proof of a new dispatch. Remedies depend on current state/principal and finite policy. Enabling recovery while autonomy is live requires explicit live-effect confirmation.
+
+Deletion refuses enabled autonomy, nonterminal/unknown work, residual workspace authority, nonterminal approvals/revisions and affected or unavailable recovery protection. Inspect bounded safe blockers and resolve through normal controls; pausing, a stopped process or an empty-looking table does not establish safe deletion. Quiescent deletion is not a promise of retained delivery audit history.
+
+See [Work](/features/work), [Repositories](/features/repositories), [Live sessions](/features/agent-bridge) and [Agent Mail](/features/agent-mail).
+
 ## What A Team Contains
 
 Each team has slots. A slot stores:
@@ -129,6 +153,6 @@ Local external agents can use the JSON API:
 3. inspect `items` and `plan_hash`
 4. `POST /api/v1/agent-teams/presets/{preset_id}/launch`
 
-Launch accepts a reviewed `confirm_plan_hash`, or `skip_plan_confirmation: true` for explicit single-step local automation. If a plan hash is stale, the API returns `409` with the updated plan.
+Launch requires an operator credential or eligible authenticated Mail-session principal and a reviewed current `confirm_plan_hash`. A stale plan returns `409` with the updated plan. Explicit skip-plan-confirmation, adoption and launch overrides are operator-only; authenticated agent sessions cannot bypass confirmation.
 
 After a launch, use the [External Agent Orchestration](./external-agent-orchestration.md) Agent Mail API to discover registered participants, send context requests, create handoffs, and poll for answers.

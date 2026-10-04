@@ -30,6 +30,14 @@ When Agent Team sessions are running, Agent Bridge also shows a team filter row.
 
 With a specific team selected, the **Team lanes** action opens a fullscreen vertical-lane layout for that team. Lane mode shows up to four live team sessions side by side, ordered by configured team slot position, without changing the normal grid attachments. Press `Esc` or the exit button to return to the previous grid; if more than four members are live, Agent Bridge shows how many are not displayed.
 
+## Live sessions in Work context
+
+Work can open read-only session context. A terminal is selected only after a unique current team/slot/member/MCP-session match; ambiguous, offline or failed observations show filtered candidates without selecting a terminal. Navigation sends no input, launches nothing and claims no work. The contextual terminal is locked read-only.
+
+Open manual Live sessions separately for standalone launch and explicit interactive controls. An offline actor's Teams link requires a current authenticated slot launch-plan review; it is not an automatic restart. Session controls, operator protection and provider-specific constraints are separate from factory observation. Native activity is not proof of progress on a particular issue.
+
+See [Work](/features/work) and [Teams](/features/agent-teams).
+
 ## Keyboard Controls
 
 Each terminal bar includes a keyboard shortcut chip. Click it to open the in-app shortcut reference; the dialog is available in the normal grid, single fullscreen, and team-lanes layouts.

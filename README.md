@@ -2,34 +2,46 @@
 
 **Website**: [claudedeck.org](https://claudedeck.org)
 
-A self-hosted web application for visualizing and managing local AI coding agents. Provides a unified interface for Claude Code configuration, Codex CLI configuration, MCP servers, plugins, slash commands, hooks, agents, permissions, usage tracking, session transcripts, Agent Bridge, and other local agent extensions.
+A self-hosted workspace to observe and intervene in bounded coding-agent attempts on GitHub issues, with mixed harnesses, visible policies and recovery controls.
 
 ## Why This Exists
 
-Claude Code starts simple, then slowly sprawls across config files and directories: `~/.claude.json`, `~/.claude/settings.json`, `.mcp.json`, slash commands, agents, skills, project settings, transcripts, and usage data. That works fine at small scale, but once your setup gets serious it becomes hard to see the whole picture, change things confidently, or understand what is actually configured.
-
-Claude Deck gives you one local interface for that sprawl. It also has provider-aware Codex CLI support for tmux sessions, safe TOML configuration, feature flags, diagnostics, MCP/plugin inventory and supported CLI-backed mutations, and redacted export-only backups.
+Returning to several agents should make it possible to find queued work, review requests and attempts needing attention. Claude Deck brings tracking observations across teams together with the existing session, Mail and configuration workflows. GitHub remains the source of issues and PRs. Native configuration and manual sessions are available without enabling automatic dispatch.
 
 ## Best For
 
-Claude Deck is best for people running multiple Claude Code or Codex CLI sessions, MCP servers, custom commands, hooks, agents, or tracking Claude Code usage across sessions.
+Technical operators with existing repositories, local agent CLIs, native toolchains, tmux sessions and their own model credentials. Teams can mix harnesses; native coverage and operational readiness vary.
 
-If you only use Claude Code casually with mostly default config, Claude Deck may be overkill.
+## Trust model
 
-## Trust Model
-
-- **Local only** — no cloud
-- **No account** — nothing to sign up for
-- **No telemetry** — no usage tracking sent anywhere
-- **Works with your real files** — reads and writes existing Claude Code/Codex config files and agent integration files
+- Local control plane and real agent/repository files; no Deck cloud account.
+- No Deck telemetry sent elsewhere. GitHub and native CLIs use their configured services and credentials.
+- Protected roster, autonomy and recovery actions use the current browser tab's configured operator credential. It is separate from GitHub polling credentials and authenticated Mail-session authority; this is not cookie login or a remote multi-user isolation boundary.
+- Review real-file changes and retain backups.
 
 > [!WARNING]
 > Claude Deck reads and writes your real local agent configuration files. Changes made in the UI affect the files Claude Code, Codex CLI, and installed agent integrations actually use. Review changes carefully, and create a backup before major edits.
 
+## Daily operating flow
+
+1. Read Overview for complete filtered tracking counts and configured versus effective intake.
+2. Open Work or Repositories using explicit team, scope and harness filters.
+3. Inspect an owner, waiting reason, PR and current observations; session/Mail context remains read-only.
+4. Review confirmation, authorization and state before a protected remedy. Agent plan approval, operator intervention and human PR review are separate.
+5. Use Teams for roster/repository policies and finite recovery, or start manually from Live sessions.
+
+Finished is tracking state, not independently reviewed delivery, reliability, cost or time saved. An operator-requested stop can leave a process running and the attempt needing attention.
+
+## Product integration scope
+
+This reference covers the product integration build; earlier packaged releases can retain the previous navigation. The operations/readiness catalog, guided setup and delivery audit charts are not included. Pilot participants, human benefit measurements and timing comparisons are unavailable; no pilot outcome is announced.
+
 ## Features
 
-- **Dashboard** — Overview of local agent configuration with Claude Code context window visualizer
-- **Provider Switcher** — Move between Claude Code, Codex CLI, GitHub Copilot CLI, OpenCode, and Pi surfaces without leaving the app
+Native features vary by harness and registered page access. See [Harnesses](docs/features/harnesses.md) before using the native feature inventory below.
+
+- **Overview** — complete filtered work counts and automation observations; native configuration summaries are under Harnesses.
+- **Harnesses** — guarded native pages and manual entry points for the implemented providers; factory filters remain independent.
 - **Config Editor** — Browse, inspect, and edit Claude Code JSON settings or Codex TOML settings, including Codex profiles, runtime options, and feature flags
 - **MCP Servers** — Add, edit, test, and manage MCP server connections with OAuth support. Browse and install servers from the [MCP Registry](https://registry.modelcontextprotocol.io). View tools, resources, and prompts. Supports stdio, HTTP, and SSE transports
 - **Slash Commands** — Browse, create, and edit custom commands (user and project scope)
@@ -73,10 +85,12 @@ Codex support remains explicit about provider boundaries: usage/context parity a
 
 ## Screenshots
 
+These existing screenshots show retained native/session pages; they do not depict the new factory Overview or Work.
+
 | Agent Bridge | Dashboard |
 |--------------|-----------|
 | ![Agent Bridge](screenshots/cc-bridge.png) | ![Dashboard](screenshots/dashboard.png) |
-| Monitor and interact with Claude Code, Codex, and Copilot tmux sessions | High-level overview of your local agent workspace |
+| Monitor and interact with Claude Code, Codex, and Copilot tmux sessions | Native configuration summary (existing screenshot) |
 
 | Config | MCP Servers |
 |--------|-------------|
@@ -117,7 +131,7 @@ Claude Deck must run in the same environment where your agent CLIs and credentia
 Pi integration requires Pi 0.87.1, Node >=22.19.0, and the repository-local Agent Mail extension dependencies. It supports OpenRouter (default model `moonshotai/kimi-k3`), plain launches and exact project-local resume. No global Pi configuration is installed, and Pi tools are not sandboxed by Deck. See [Pi rollout and team migration](docs/deploy/pi-provider-rollout.md) before deployment or replacing existing team sessions.
 
 ```bash
-git clone https://github.com/adrirubio/claude-deck.git
+git clone --branch feature/software-delivery-product-reposition https://github.com/juanrubio/claude-deck.git
 cd claude-deck
 ./scripts/install.sh
 ```
@@ -150,7 +164,7 @@ To make the dev environment reachable from another machine on your LAN or tailne
 
 Both servers will then bind to all interfaces.
 
-Only use this option on a trusted network. Many team and autonomy configuration routes do not require an operator token; anyone who can reach a non-loopback backend can change them. For remote access, prefer a trusted tunnel to the loopback listener. If you intentionally run the Vite dev UI from another origin, set `CORS_ORIGINS` to a JSON list containing that exact origin (for example, `["http://deck-host:5173"]`). Production UI served by Deck uses the same origin and needs no CORS entry.
+Only use this option on a trusted network. Protected roster, autonomy and recovery routes require their documented credentials, while safe observations remain readable. These endpoint checks do not provide remote multi-user isolation. For remote access, prefer a trusted tunnel to the loopback listener. If you intentionally run the Vite dev UI from another origin, set `CORS_ORIGINS` to a JSON list containing that exact origin (for example, `["http://deck-host:5173"]`). Production UI served by Deck uses the same origin and needs no CORS entry.
 
 Remote use should still be native: run Claude Deck on the remote host where the agents, credentials, repositories, and tmux sessions exist, then connect from your browser over a trusted tunnel or network route.
 
