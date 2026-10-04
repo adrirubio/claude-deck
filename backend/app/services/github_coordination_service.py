@@ -730,7 +730,8 @@ class GithubCoordinationService:
         # assessment fields from the post-read row before attaching its challenge.
         result = await self.summary(db, scope_id)
         row = await self.state(db, scope_id)
-        if (row is None or not row.enabled or row.policy_revision != policy_revision
+        if (row is None or not row.enabled or row.version != result["version"]
+            or row.policy_revision != policy_revision
             or principal_id != leader.id or not await db.scalar(select(authority))):
             raise CoordinationError("coordination_snapshot_changed")
         if code := hold_code():

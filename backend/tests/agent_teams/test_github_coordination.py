@@ -602,6 +602,26 @@ async def test_fresh_read_uses_post_http_assessment_not_obsolete_summary(db, tea
 
 
 @pytest.mark.asyncio
+async def test_fresh_read_rejects_change_after_post_http_summary(db, team, monkeypatch):
+    original = service.summary
+    calls = 0
+    async def changed_summary(*args):
+        nonlocal calls
+        result = await original(*args)
+        calls += 1
+        if calls == 2:
+            await db.execute(update(GithubBacklogCoordination).where(
+                GithubBacklogCoordination.scope_id == team.scope_id).values(
+                version=GithubBacklogCoordination.version + 1,
+                assessment_revision=GithubBacklogCoordination.assessment_revision + 1))
+            await db.commit()
+        return result
+    monkeypatch.setattr(service, "summary", changed_summary)
+    with pytest.raises(CoordinationError, match="coordination_snapshot_changed"):
+        await service.request(db, team.scope_id, principal=team.leader, client=team.client)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["issue", "workspace", "policy", "session", "secret", "sequence", "expired"])
 async def test_signed_read_rejects_changed_context(db, team, monkeypatch, change):
     receipt = await fresh_report(db, team)
