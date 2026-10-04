@@ -38,7 +38,7 @@
       10,
       30
     ],
-    "worker_limit": "One fixed local Python observer subprocess has a90s aggregate timeout; requests wait2s and retain singleflight rather than duplicating/cancelling the observation. CLI/model/session launch or credential probes are not executed; output is allowlisted booleans/empty-or-missing-hook flags only.",
+    "worker_limit": "One fixed local Python observer subprocess has a90s aggregate timeout; requests wait2s and retain singleflight rather than duplicating/cancelling the observation. Existing non-billable local version/runtime/MCP-inventory CLI checks remain; no model calls, session launches or credential checks. Observer output is allowlisted booleans/empty-or-missing-hook flags only.",
     "aggregate_probe_seconds": 90
   }
 }
