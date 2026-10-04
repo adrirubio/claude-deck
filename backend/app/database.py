@@ -940,6 +940,15 @@ async def _run_sqlite_compat_migrations(conn) -> None:
             text("ALTER TABLE github_workspaces ADD COLUMN lease_release_reminded_at DATETIME")
         )
 
+    coordination_columns = await _sqlite_columns(conn, "github_backlog_coordination")
+    for name, definition in (
+        ("policy_revision", "INTEGER DEFAULT 1 NOT NULL"),
+        ("assessment_revision", "INTEGER DEFAULT 0 NOT NULL"),
+        ("last_assessment_token_hash", "VARCHAR"),
+    ):
+        if coordination_columns and name not in coordination_columns:
+            await conn.execute(text(f"ALTER TABLE github_backlog_coordination ADD COLUMN {name} {definition}"))
+
     result = await conn.execute(text("PRAGMA table_info(agent_team_launch_items)"))
     launch_item_columns = {row[1] for row in result.fetchall()}
     if launch_item_columns and "message" not in launch_item_columns:

@@ -48,7 +48,7 @@ async def coordination_request(
     try:
         if principal is not None:
             await service.require_leader(db, scope_id, principal)
-        return await service.request(db, scope_id)
+        return await service.request(db, scope_id, principal=principal)
     except CoordinationError as error:
         raise conflict(error) from error
 

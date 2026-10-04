@@ -56,5 +56,6 @@ class CoordinationDisposition(BaseModel):
 class CoordinationAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid")
     generation: int = Field(gt=0, strict=True)
-    request_sequence: int = Field(gt=0, strict=True)
+    request_sequence: int = Field(ge=0, strict=True)
+    snapshot_token: str | None = Field(default=None, min_length=1, max_length=2048)
     entries: list[CoordinationDisposition] = Field(min_length=1, max_length=32)

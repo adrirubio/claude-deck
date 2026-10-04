@@ -18,6 +18,35 @@ from app.database import (
 
 
 @pytest.mark.asyncio
+async def test_coordination_revisions_migrate_without_resetting_quota_or_linkage():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for column in ("policy_revision", "assessment_revision", "last_assessment_token_hash"):
+                await conn.execute(text(f"ALTER TABLE github_backlog_coordination DROP COLUMN {column}"))
+            await conn.execute(text(
+                "INSERT INTO github_backlog_coordination "
+                "(scope_id, enabled, issue_numbers, version, generation, request_sequence, "
+                "requested_generation, message_id, daily_requests, snapshot_requests, "
+                "budget_day, assessments, fallback_seconds, max_daily_requests) VALUES "
+                "(1, 1, '[7,8]', 29, 4, 12, 4, 31, 12, 2, '2026-10-04', "
+                "'[]', 3600, 24)"
+            ))
+            before = (await conn.execute(text("SELECT * FROM github_backlog_coordination"))).mappings().one()
+            await conn.commit()
+            for _ in range(2):
+                await _run_sqlite_compat_migrations(conn)
+            after = (await conn.execute(text("SELECT * FROM github_backlog_coordination"))).mappings().one()
+            assert all(after[key] == value for key, value in before.items())
+            assert after["policy_revision"] == 1
+            assert after["assessment_revision"] == 0
+            assert after["last_assessment_token_hash"] is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_compat_migrations_repair_misdefined_named_indexes():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
