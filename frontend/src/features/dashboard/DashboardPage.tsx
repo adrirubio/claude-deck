@@ -20,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { useDashboard } from "@/contexts/DashboardContext";
 import { useProjectContext } from "@/contexts/ProjectContext";
 import { useProviderContext } from "@/contexts/ProviderContext";
+import { useProviderOperations } from "@/hooks/useProviders";
+import { nativeAccess, nativeAdapter } from "@/features/native-settings/surfaceRegistry";
 import { getRelativeTime } from "@/features/usage/utils";
 
 export function DashboardPage() {
@@ -48,6 +50,11 @@ export function DashboardPage() {
           ? "OpenCode CLI"
           : "Claude Code");
   const isCodex = selectedProviderId === "codex-cli";
+  const { catalog } = useProviderOperations(selectedProviderId);
+  const canOpen = (surface: string) => {
+    const access = catalog && nativeAccess(selectedProviderId, surface, selectedProvider, catalog);
+    return Boolean(access && (nativeAdapter(selectedProviderId, surface)?.access === "read_only" || access === "write_capable"));
+  };
 
   return (
     <div className="space-y-6">
@@ -71,6 +78,9 @@ export function DashboardPage() {
         </div>
       </div>
 
+      <p className="text-sm text-muted-foreground">
+        Configuration: {catalog?.readiness.configuration.state === "ready" ? "Configured for launch" : catalog?.readiness.configuration.state === "blocked" ? "blocked" : "unknown"} · Credentials: {catalog?.readiness.credentials.state ?? "unknown"} · Session: {catalog?.readiness.session.state ?? "unknown"}. Configuration does not prove model access or a worker binding.
+      </p>
       {error && (
         <Card className="border-destructive">
           <CardHeader>
@@ -131,7 +141,7 @@ export function DashboardPage() {
                     Agent Providers
                   </CardTitle>
                   <CardDescription>
-                    Claude Code and Codex CLI availability on this machine
+                    Local binary availability; launch configuration, credentials and session binding remain separate
                   </CardDescription>
                 </div>
                 <Badge variant="outline">
@@ -226,6 +236,7 @@ export function DashboardPage() {
                 <Button
                   variant="link"
                   className="p-0 h-auto mt-2"
+                  disabled={!canOpen("config")}
                   onClick={() => navigate(`/harnesses/${selectedProviderId}/config`)}
                 >
                   View Codex config →
@@ -263,6 +274,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
+                disabled={!canOpen("mcp")}
                 onClick={() => navigate(`/harnesses/${selectedProviderId}/mcp`)}
               >
                 Manage MCP servers →
@@ -270,7 +282,7 @@ export function DashboardPage() {
             </CardContent>
           </Card>
 
-          {!isCodex && (
+          {selectedProviderId === "claude-code" && (
             <Card>
               <CardHeader className="pb-2">
                 <CardDescription>Claude Commands</CardDescription>
@@ -302,6 +314,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
+                disabled={!canOpen("plugins")}
                 onClick={() => navigate(`/harnesses/${selectedProviderId}/plugins`)}
               >
                 {isCodex ? "Open Codex plugins →" : "View plugins →"}
@@ -324,6 +337,7 @@ export function DashboardPage() {
                 <Button
                   variant="link"
                   className="p-0 h-auto mt-2"
+                  disabled={!canOpen("config")}
                   onClick={() => navigate(`/harnesses/${selectedProviderId}/config#codex-features`)}
                 >
                   Manage feature flags →
@@ -332,7 +346,7 @@ export function DashboardPage() {
             </Card>
           )}
 
-          {!isCodex && (
+          {selectedProviderId === "claude-code" && (
             <>
               <Card>
                 <CardHeader className="pb-2">
@@ -393,7 +407,7 @@ export function DashboardPage() {
           )}
 
           {/* Tier 3: Customization */}
-          {!isCodex && (
+          {selectedProviderId === "claude-code" && (
             <Card>
               <CardHeader className="pb-2">
                 <CardDescription>Claude Output Styles</CardDescription>
@@ -440,6 +454,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
+                disabled={providerStats.sessionMetricKind !== "live" && !canOpen("sessions")}
                 onClick={() =>
                   navigate(
                     providerStats.sessionMetricKind === "live"
@@ -471,6 +486,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
+                disabled={!canOpen("plans")}
                 onClick={() => navigate(`/harnesses/${selectedProviderId}/plans`)}
               >
                 View all plans →
@@ -478,7 +494,7 @@ export function DashboardPage() {
             </CardContent>
           </Card>
 
-          {!isCodex && (
+          {selectedProviderId === "claude-code" && (
             <Card>
               <CardHeader className="pb-2">
                 <CardDescription>Claude Context Window</CardDescription>
@@ -520,6 +536,7 @@ export function DashboardPage() {
                 <Button
                   variant="link"
                   className="p-0 h-auto mt-2"
+                  disabled={!canOpen("context")}
                   onClick={() => navigate(`/harnesses/${selectedProviderId}/context`)}
                 >
                   View context →

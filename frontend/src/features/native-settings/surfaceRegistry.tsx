@@ -1,4 +1,4 @@
-import type { AgentProviderId, AgentProviderStatus } from "@/types/providers";
+import type { AgentProviderId, AgentProviderStatus, ProviderOperations } from "@/types/providers";
 
 export type NativeSurface =
   | "summary"
@@ -105,16 +105,26 @@ export function nativeAccess(
   provider: string,
   surface: string,
   metadata?: AgentProviderStatus | null,
+  catalog = providerCatalogs.get(provider as AgentProviderId)?.catalog,
 ) {
   const entry = nativeAdapter(provider, surface);
-  if (!entry) return null;
+  const reported = catalog?.native_surfaces[surface];
+  const published = providerCatalogs.get(provider as AgentProviderId);
+  if (!published || published.catalog !== catalog || Date.now() >= published.expires ||
+      !entry || catalog?.schema_version !== 1 || catalog.provider !== provider ||
+      reported?.state !== "available" || reported.adapter_id !== `${provider}:${surface}:${entry.component}` ||
+      !["read_only", "read_write"].includes(reported.access)) return null;
+  metadata ??= providerMetadata.find(p => p.id === provider);
+  if (!metadata || metadata.id !== provider) return null;
   const capability = surface === "output-styles" ? "output_styles" : surface;
+  const catalogState = catalog.native_capabilities[capability]?.state;
   const state =
     metadata?.capability_matrix?.[
       capability as keyof AgentProviderStatus["capability_matrix"]
     ]?.state;
-  if (state === "unsupported" || state === "unknown") return null;
-  return state === "read_only" || entry.access === "read_only"
+  if ((surface !== "summary" && !["supported", "read_only", "write_capable"].includes(state ?? "unknown")) ||
+      (surface !== "summary" && !["supported", "read_only", "write_capable"].includes(catalogState ?? "unknown"))) return null;
+  return state === "read_only" || catalogState === "read_only" || reported.access === "read_only" || entry.access === "read_only"
     ? "read_only"
     : "write_capable";
 }
@@ -124,11 +134,12 @@ export function assertNativeAction(
   surface: string,
   endpoint: string,
   method = "GET",
-  access = nativeAdapter(provider, surface)?.access,
+  access: "read_only" | "write_capable" | null = nativeAccess(provider, surface),
 ) {
   const entry = nativeAdapter(provider, surface);
   const path = endpoint.replace(/^\/?api\/v1\//, "").split("?")[0];
   const read = method.toUpperCase() === "GET";
+  const effectiveAccess = nativeAccess(provider, surface);
   if (!read && provider === "codex-cli") {
     const allowed =
       (path === "codex-config" && method === "PATCH") ||
@@ -144,8 +155,9 @@ export function assertNativeAction(
   const roots = read ? entry?.reads : entry?.writes;
   if (
     !entry ||
+    !effectiveAccess ||
     !roots?.some((root) => path === root || path.startsWith(`${root}/`)) ||
-    (!read && access !== "write_capable")
+    (!read && (access !== "write_capable" || effectiveAccess !== "write_capable"))
   )
     throw new Error(
       `Native ${provider}/${surface} does not permit ${method} ${path}.`,
@@ -153,11 +165,24 @@ export function assertNativeAction(
 }
 
 let providerMetadata: AgentProviderStatus[] = [];
+const providerCatalogs = new Map<AgentProviderId, { catalog: ProviderOperations; expires: number }>();
+export function clearNativeCatalogs() { providerCatalogs.clear(); }
+export function updateNativeCatalog(provider: AgentProviderId, catalog?: ProviderOperations) {
+  if (catalog?.schema_version === 1 && catalog.provider === provider) providerCatalogs.set(provider, { catalog, expires: Date.now() + 60_000 });
+  else providerCatalogs.delete(provider);
+}
 export function updateNativeMetadata(providers: AgentProviderStatus[]) {
   providerMetadata = providers;
 }
 export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
   if (typeof window === "undefined") return;
+  const path = endpoint.replace(/^\/?api\/v1\//, "").split("?")[0];
+  // Only this fixed read can bootstrap the required catalog. It does not grant
+  // access to any returned adapter/API path or exempt nested native mutations.
+  if (/^providers\/[^/]+\/operations(?:\/|$)/.test(path)) {
+    if (method.toUpperCase() === "GET" && /^providers\/(claude-code|codex-cli|copilot-cli|opencode-cli|pi-cli)\/operations$/.test(path)) return;
+    throw new Error("Operating catalog permits only a known provider GET.");
+  }
   const route = window.location.pathname.split("/").filter(Boolean);
   const canonical = route[0] === "harnesses" && route.length >= 3;
   const surface = canonical ? route[2] : route[0];
@@ -166,7 +191,6 @@ export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
     ? route[1]
     : (window.localStorage.getItem("claude-deck:selected-provider") ??
       "claude-code");
-  const path = endpoint.replace(/^\/?api\/v1\//, "").split("?")[0];
   const nativeRoots = [
     "codex-config",
     "config",
@@ -195,11 +219,14 @@ export function assertBrowserNativeRequest(endpoint: string, method = "GET") {
     providerMetadata.find((p) => p.id === provider),
   );
   if (!access) throw new Error(`Native ${provider}/${surface} unavailable.`);
-  const nestedSurface =
-    provider === "codex-cli" && path.startsWith("providers/codex-cli/")
-      ? path.split("/")[2]
-      : null;
-  if (nestedSurface === "mcp" || nestedSurface === "plugins") {
+  const providerSurface = path.startsWith("providers/codex-cli/") ? path.split("/")[2] : null;
+  const nestedSurface = path === "codex-config" || path.startsWith("codex-config/")
+    ? "config"
+    : providerSurface === "doctor" || providerSurface === "features" ? "config"
+    : providerSurface === "mcp" || providerSurface === "plugins" ? providerSurface
+    : path === "agents/skills" || path.startsWith("agents/skills/") ? "skills"
+    : Object.keys(claude).find(s => path === s || path.startsWith(`${s}/`));
+  if (nestedSurface && nestedSurface !== surface) {
     const nestedAccess = nativeAccess(
       provider,
       nestedSurface,
