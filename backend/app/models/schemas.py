@@ -2477,6 +2477,20 @@ class GithubCredentialResponse(BaseModel):
     password: str
 
 
+class AgentActivityObservation(BaseModel):
+    slot_id: int
+    state: Literal["working", "idle", "stopped", "unknown"]
+    reason: str
+    observed_at: Optional[datetime] = None
+
+
+class AgentTeamActivityResponse(BaseModel):
+    preset_id: int
+    checked_at: datetime
+    valid_until: datetime
+    slots: List[AgentActivityObservation] = Field(default_factory=list)
+
+
 class GithubWorkItemResponse(BaseModel):
     id: int
     scope_id: int
@@ -2514,6 +2528,7 @@ class GithubWorkItemResponse(BaseModel):
     pending_approval_request_id: Optional[int] = None
     pending_approval_kind: Optional[str] = None
     pending_approval_status: Optional[str] = None
+    recovery_checkpoint_stage: Optional[str] = None
     pending_approval_request_message_id: Optional[int] = None
     pending_approval_delivery_status: Optional[Literal["linked", "delivery_pending"]] = None
     attempt_phase: str

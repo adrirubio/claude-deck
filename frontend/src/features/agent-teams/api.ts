@@ -1,5 +1,6 @@
 import { apiClient } from '@/lib/api'
 import type {
+  AgentTeamActivityResponse,
   AgentTeamCreateFromBridgeRequest,
   AgentTeamCreateFromMailRequest,
   AgentTeamLaunchPlan,
@@ -23,6 +24,13 @@ import type {
   TeamGithubScopeListResponse,
   TeamGithubScopeUpdate,
 } from '@/types/agentTeams'
+
+export function fetchAgentTeamActivity(presetId: number, signal: AbortSignal): Promise<AgentTeamActivityResponse> {
+  return apiClient<AgentTeamActivityResponse>(`agent-teams/presets/${presetId}/activity`, {
+    signal,
+    cache: 'no-store',
+  })
+}
 
 export function fetchAgentTeamPresets(): Promise<AgentTeamPresetListResponse> {
   return apiClient<AgentTeamPresetListResponse>('agent-teams/presets')
