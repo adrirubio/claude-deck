@@ -73,11 +73,59 @@ const policyNumberKeys: PolicyNumberKey[] = [
   'max_scope_paths', 'max_scope_commands',
 ]
 
-function parsedLimit(value: string, label: string, minimum: number): number {
-  const parsed = Number(value)
-  if (!value.trim() || !Number.isInteger(parsed)) throw new Error(`Enter a whole number for ${label}.`)
-  if (parsed < minimum) throw new Error(`${label} must be at least ${minimum}.`)
-  return parsed
+function parsedLimit(value: string, label: string, minimum: number, maximum?: number): number {
+  const text = value.trim()
+  const parsed = Number(text)
+  const [mantissa, exponent = '0'] = text.toLowerCase().split('e')
+  const fractionalPlaces = (mantissa.split('.')[1]?.length ?? 0) - Number(exponent)
+  const digits = mantissa.replace(/[+.-]/g, '')
+  // Check the decimal string too: Number can round fractions or underflow to zero.
+  const hasFraction = fractionalPlaces > 0 && /[1-9]/.test(digits.slice(-fractionalPlaces))
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text) || !Number.isInteger(parsed) || hasFraction) {
+    throw new Error(`Enter a whole number for ${label}.`)
+  }
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Enter a safely representable whole number for ${label}.`)
+  return Math.max(minimum, maximum === undefined ? parsed : Math.min(parsed, maximum))
+}
+
+// Changes retain the editing string; only blur or an explicit save normalizes it.
+function LimitInput({ id, label, value, minimum, maximum, disabled, onChange }: {
+  id: string
+  label: string
+  value: string
+  minimum: number
+  maximum?: number
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  const [error, setError] = useState<string | null>(null)
+  return <>
+    <Input
+      id={id}
+      type="number"
+      step={1}
+      min={minimum}
+      max={maximum}
+      disabled={disabled}
+      value={value}
+      aria-invalid={Boolean(error)}
+      aria-describedby={error ? `${id}-error` : undefined}
+      onChange={(event) => {
+        setError(null)
+        onChange(event.target.value)
+      }}
+      onBlur={(event) => {
+        try {
+          const normalized = parsedLimit(event.target.value, label, minimum, maximum)
+          setError(null)
+          onChange(String(normalized))
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : 'Enter a whole number.')
+        }
+      }}
+    />
+    {error && <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{error}</p>}
+  </>
 }
 
 const emptyScope: TeamGithubScopeInput = {
@@ -408,6 +456,7 @@ function ScopeDialog({
         dispatch_label: form.dispatch_label?.trim() || 'claude-deck-ready',
         design_label: form.design_label?.trim() || 'claude-deck-design',
       }
+      setNumberInputs(Object.fromEntries(scopeNumberKeys.map((key) => [key, String(input[key])])) as Record<ScopeNumberKey, string>)
       if (state?.mode === 'edit' && state.scope) {
         const original = scopeToInput(state.scope)
         const changes = Object.fromEntries(
@@ -521,46 +570,46 @@ function ScopeDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="approval-rounds">Max approval rounds</Label>
-            <Input
+            <LimitInput
               id="approval-rounds"
-              type="number"
-              min={1}
+              label="Max approval rounds"
+              minimum={1}
               value={numberInputs.max_approval_rounds}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_approval_rounds: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_approval_rounds: value }))}
             />
             <p className="text-xs text-muted-foreground">Times the Leader may send an owner&apos;s plan back before escalation.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="concurrent-dispatches">Max concurrent dispatched</Label>
-            <Input
+            <LimitInput
               id="concurrent-dispatches"
-              type="number"
-              min={1}
+              label="Max concurrent dispatched"
+              minimum={1}
               value={numberInputs.max_concurrent_dispatched}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_concurrent_dispatched: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_concurrent_dispatched: value }))}
             />
             <p className="text-xs text-muted-foreground">Issues from this repo worked on at once; extra issues wait.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="verification-retries">Max verification retries</Label>
-            <Input
+            <LimitInput
               id="verification-retries"
-              type="number"
-              min={0}
+              label="Max verification retries"
+              minimum={0}
               value={numberInputs.max_verification_retries}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_verification_retries: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_verification_retries: value }))}
             />
             <p className="text-xs text-muted-foreground">Distinct failing PR heads allowed before escalation.</p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="auto-merges">Max auto-merges per day</Label>
-            <Input
+            <LimitInput
               id="auto-merges"
-              type="number"
-              min={0}
+              label="Max auto-merges per day"
+              minimum={0}
               value={numberInputs.max_auto_merges_per_day}
               disabled={form.merge_policy !== 'auto'}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_auto_merges_per_day: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_auto_merges_per_day: value }))}
             />
             <p className="text-xs text-muted-foreground">Rolling 24-hour cap. Beyond it, PRs wait for human review.</p>
           </div>
@@ -584,12 +633,12 @@ function ScopeDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="scope-build-parallelism">Max build parallelism</Label>
-            <Input
+            <LimitInput
               id="scope-build-parallelism"
-              type="number"
-              min={1}
+              label="Max build parallelism"
+              minimum={1}
               value={numberInputs.max_build_parallelism}
-              onChange={(event) => setNumberInputs((current) => ({ ...current, max_build_parallelism: event.target.value }))}
+              onChange={(value) => setNumberInputs((current) => ({ ...current, max_build_parallelism: value }))}
             />
             <p className="text-xs text-muted-foreground">Tells the agent to cap parallel build jobs at this value.</p>
           </div>
@@ -674,15 +723,23 @@ function ContinuationPolicyDialog({
       const limits = Object.fromEntries(policyNumberKeys.map((key) => [
         key, parsedLimit(numberInputs[key], key.replaceAll('_', ' '), 1),
       ])) as Record<PolicyNumberKey, number>
-      if (limits.max_failed_heads_per_revision > limits.max_continuation_failed_heads) {
-        throw new Error('Per-revision failed heads cannot exceed the attempt-wide failed-head cap.')
-      }
+      limits.max_failed_heads_per_revision = Math.min(limits.max_failed_heads_per_revision, limits.max_continuation_failed_heads)
+      setNumberInputs(Object.fromEntries(policyNumberKeys.map((key) => [key, String(limits[key])])) as Record<PolicyNumberKey, string>)
       await onSave(scope.id, { ...form, ...limits })
       onOpenChange(null)
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save recovery policy')
     } finally {
       setSaving(false)
+    }
+  }
+
+  let perRevisionMaximum: number | undefined
+  if (numberInputs) {
+    try {
+      perRevisionMaximum = parsedLimit(numberInputs.max_continuation_failed_heads, 'Attempt failed-head cap', 1)
+    } catch {
+      // An invalid attempt cap cannot supply a bound for another editing field.
     }
   }
 
@@ -719,12 +776,13 @@ function ContinuationPolicyDialog({
             ] as const).map(([key, label, help]) => (
               <div className="grid gap-2" key={key}>
                 <Label htmlFor={`policy-${key}`}>{label}</Label>
-                <Input
+                <LimitInput
                   id={`policy-${key}`}
-                  type="number"
-                  min={1}
+                  label={label}
+                  minimum={1}
+                  maximum={key === 'max_failed_heads_per_revision' ? perRevisionMaximum : undefined}
                   value={numberInputs[key]}
-                  onChange={(event) => setNumberInputs((current) => current ? { ...current, [key]: event.target.value } : current)}
+                  onChange={(value) => setNumberInputs((current) => current ? { ...current, [key]: value } : current)}
                 />
                 <p className="text-xs text-muted-foreground">{help}</p>
               </div>
