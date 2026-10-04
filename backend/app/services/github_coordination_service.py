@@ -30,7 +30,7 @@ from app.utils import peer_process
 logger = logging.getLogger(__name__)
 _BOOT_ID = uuid4().hex
 _MAX_SNAPSHOT_REQUESTS = 3
-_MAX_CONTEXT_ROWS = 128
+_MAX_CONTEXT_ROWS = 64
 
 
 class CoordinationError(ValueError):
@@ -206,6 +206,35 @@ class GithubCoordinationService:
             .execution_options(populate_existing=True))).all())
         if any(len(rows) > _MAX_CONTEXT_ROWS for rows in (items, workspaces, approvals)):
             raise CoordinationError("coordination_context_limit")
+        enabled_slots = [slot.id for slot in slots if slot.enabled]
+        ranked_members = select(
+            MailTeamMember.id, func.row_number().over(
+                partition_by=MailTeamMember.team_slot_id,
+                order_by=(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()),
+            ).label("position"),
+        ).where(MailTeamMember.team_slot_id.in_(enabled_slots)).subquery()
+        current_members = (MailTeamMember.id.in_(select(ranked_members.c.id).where(
+            ranked_members.c.position == 1,
+        ))) & (MailTeamMember.team_preset_id == scope.preset_id)
+        members = list((await db.scalars(select(MailTeamMember).where(current_members)
+            .limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
+        available_sessions = (
+            MailAgentSession.member_id.in_(select(MailTeamMember.id).where(current_members))
+            & (MailAgentSession.team_slot_id == select(MailTeamMember.team_slot_id).where(
+                MailTeamMember.id == MailAgentSession.member_id,
+            ).correlate(MailAgentSession).scalar_subquery())
+            & (MailAgentSession.team_preset_id == scope.preset_id)
+            & MailAgentSession.team_slot_id.in_(enabled_slots)
+            & (MailAgentSession.source == "mcp") & MailAgentSession.closed_at.is_(None)
+            & (MailAgentSession.mailbox_status == "connected") & MailAgentSession.wake_enabled.is_(True)
+            & MailAgentSession.capability_token_hash.is_not(None)
+            & MailAgentSession.bound_pane_pid.is_not(None) & MailAgentSession.bound_pane_proc_start.is_not(None)
+            & (MailAgentSession.last_seen_at >= datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS))
+        )
+        participants = list((await db.scalars(select(MailAgentSession).where(available_sessions)
+            .limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
+        if len(members) > _MAX_CONTEXT_ROWS or len(participants) > _MAX_CONTEXT_ROWS:
+            raise CoordinationError("coordination_context_limit")
         observations = []
         for number in numbers:
             issue = issues.get(number)
@@ -254,6 +283,11 @@ class GithubCoordinationService:
             "leader": [leader.id, leader.member_id, leader.bound_pane_pid, leader.bound_pane_proc_start,
                        leader.capability_token_hash],
             "slots": [[s.id, s.position, s.enabled, s.role, s.area_labels] for s in slots],
+            "members": [[m.id, m.team_slot_id] for m in sorted(members, key=lambda m: m.id)],
+            "participants": [[s.id, s.member_id, s.team_slot_id, s.bound_pane_pid,
+                s.bound_pane_proc_start, s.capability_token_hash,
+                peer_process.pane_is_alive(s.bound_pane_pid, s.bound_pane_proc_start) is True]
+                for s in sorted(participants, key=lambda s: s.id)],
             "items": [[i.id, i.dispatch_status, i.owner_slot_id, i.dispatch_nonce,
                        i.pr_number, i.last_verified_sha, i.active_scope_revision,
                        i.attempt_phase, i.ack_evidence_message_id, i.retry_count]
@@ -306,6 +340,22 @@ class GithubCoordinationService:
             authority &= exists(select(AgentTeamSlot.id).where(
                 AgentTeamSlot.id == slot.id, AgentTeamSlot.updated_at == slot.updated_at,
             ))
+        for member in members:
+            authority &= exists(select(MailTeamMember.id).where(
+                current_members, MailTeamMember.id == member.id,
+                MailTeamMember.team_slot_id == member.team_slot_id,
+            ))
+        for participant in participants:
+            authority &= exists(select(MailAgentSession.id).where(
+                available_sessions, MailAgentSession.id == participant.id,
+                MailAgentSession.member_id == participant.member_id,
+                MailAgentSession.team_slot_id == participant.team_slot_id,
+                MailAgentSession.bound_pane_pid == participant.bound_pane_pid,
+                MailAgentSession.bound_pane_proc_start == participant.bound_pane_proc_start,
+                MailAgentSession.capability_token_hash == participant.capability_token_hash,
+            ))
+        authority &= select(func.count()).select_from(MailTeamMember).where(current_members).scalar_subquery() == len(members)
+        authority &= select(func.count()).select_from(MailAgentSession).where(available_sessions).scalar_subquery() == len(participants)
         authority &= select(func.count()).select_from(GithubWorkItem).where(relevant_items).scalar_subquery() == len(items)
         authority &= select(func.count()).select_from(GithubWorkspace).where(
             GithubWorkspace.scope_id == scope_id,
