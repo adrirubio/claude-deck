@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -49,6 +49,10 @@ import {
 const panel = "space-y-3 rounded-lg border bg-card p-4";
 const anchor =
   "text-primary underline underline-offset-4 break-words focus-visible:outline focus-visible:outline-2";
+const destination = buttonVariants({
+  variant: "outline",
+  className: "h-auto min-h-11 max-w-full whitespace-normal break-words justify-start text-left focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+});
 function Time({
   value,
   label = "Observed",
@@ -241,7 +245,7 @@ function WorkTable({ rows }: { rows: WorkProjection[] }) {
                 <Time value={work.item.updated_at} label="Record observation" />
               </td>
               <td className="p-3">
-                <Link className={anchor} to={`/work/${work.item.id}`}>
+                <Link className={destination} to={`/work/${work.item.id}`}>
                   Open details
                 </Link>
               </td>
@@ -548,14 +552,14 @@ export function OverviewPage() {
                     Clear filters
                   </Link>
                 ) : (
-                  <Link className={anchor} to="/teams?tab=autonomy">
+                  <Link className={destination} to="/teams?tab=autonomy">
                     Configure a repository
                   </Link>
                 )}
-                <Link className={anchor} to="/agent-bridge">
+                <Link className={destination} to="/agent-bridge">
                   Open live sessions
                 </Link>
-                <Link className={anchor} to="/harnesses">
+                <Link className={destination} to="/harnesses">
                   Open Harnesses and configuration
                 </Link>
               </div>
@@ -613,14 +617,14 @@ function ContextLinks({ work: w }: { work: WorkProjection }) {
           ? `slot ${launch.slot_id}`
           : "";
   return (
-    <nav aria-label="Work context" className="flex flex-wrap gap-4">
+    <nav aria-label="Work context" className="flex flex-wrap items-center gap-2">
       <Link className={anchor} to={`/teams/${w.team.id}`}>
         Team
       </Link>
       <Link className={anchor} to={`/repositories/${w.repository.scope_id}`}>
         Repository scope
       </Link>
-      <Link className={anchor} to={`/agent-bridge?${bridge}`}>
+      <Link className={destination} to={`/agent-bridge?${bridge}`}>
         {target && w.session.state === "bound"
           ? "Read-only verified session"
           : "Inspect team/slot sessions"}
@@ -635,7 +639,7 @@ function ContextLinks({ work: w }: { work: WorkProjection }) {
       )}
       {launch && (
         <Link
-          className={anchor}
+          className={destination}
           to={`/teams/${launch.team_id}?slot_id=${launch.slot_id}&review_launch=1`}
         >
           Review launch for {launchName}
@@ -643,7 +647,7 @@ function ContextLinks({ work: w }: { work: WorkProjection }) {
       )}
       {w.owner?.configured_provider && (
         <Link
-          className={anchor}
+          className={destination}
           to={`/harnesses/${w.owner.configured_provider}`}
         >
           Native harness settings
@@ -786,7 +790,7 @@ function ProtectedRemedies({
           Inspect protected revision history
         </Button>
         <Link
-          className={anchor}
+          className={destination}
           to={`/teams/${work.team.id}?tab=autonomy&work_item_id=${work.item.id}`}
         >
           Existing attempt recovery and remedies

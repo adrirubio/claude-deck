@@ -6,6 +6,9 @@ import { spawn, execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 const evidence = process.env.P02_EVIDENCE_DIR;
 assert(evidence, "P02_EVIDENCE_DIR is required");
+const beforeCapture = process.env.P42_BEFORE_DIR
+  ? JSON.parse(await fs.readFile(path.join(process.env.P42_BEFORE_DIR, "browser.json"), "utf8"))
+  : null;
 await fs.mkdir(evidence, { recursive: true });
 const fixtures = async (name) =>
   JSON.parse(await fs.readFile(`tests/fixtures/factory/v1/${name}.json`));
@@ -16,6 +19,12 @@ const [overview, work, detail, repos, repo] = await Promise.all(
 );
 const operationFixtures = JSON.parse(await fs.readFile("tests/fixtures/provider-operations/v1/catalog.json"));
 const operationManifest = JSON.parse(await fs.readFile("tests/fixtures/provider-operations/v1/manifest.json"));
+if (beforeCapture) {
+  assert.equal(beforeCapture.fixture_source, "eb31749bcae8f456d6df6709273afd5921d094ad");
+  assert.equal(beforeCapture.manifest_sha256, "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706");
+  assert.equal(beforeCapture.operations_catalog_sha256, operationManifest.catalog_sha256);
+  assert.equal(beforeCapture.operations_manifest_sha256, "0ac33401f6a36ce92c1264884fec87d5999a105f8fb4520f74ca18ea4b1d3173");
+}
 const providers = [
   "claude-code",
   "codex-cli",
@@ -90,6 +99,7 @@ function respond(req) {
     ].response;
   }
   if (key === "factory/work-items/6") return detail.operator_stop_retry_eligible.response;
+  if (key === "factory/work-items/2") return detail.verified_offline_owner.response;
   if (key.startsWith("factory/work-items/")) return detail.completed.response;
   if (key === "factory/repositories") return repos.normal.response;
   if (key.startsWith("factory/repositories/"))
@@ -305,7 +315,31 @@ try {
   const observations = [],
     keyboard = [],
     navigation = [],
-    retryConfirmations = [];
+    retryConfirmations = [],
+    navigationPolish = [],
+    polishShots = [];
+  const tab = async (backwards = false) => {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: backwards ? 8 : 0 });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: backwards ? 8 : 0 });
+  };
+  const focusByTab = async (selector, backwards = false, label = null) => {
+    for (let i = 0; i < 90; i++) {
+      if (await evaluate("document.activeElement?.matches(" + JSON.stringify(selector) + ")" + (label ? " && document.activeElement.textContent.trim()===" + JSON.stringify(label) : ""))) break;
+      await tab(backwards);
+    }
+    const focus = await evaluate("(() => { const e=document.activeElement,s=getComputedStyle(e),r=e.getBoundingClientRect(); return {matches:e.matches(" + JSON.stringify(selector) + "),visible:e.matches(':focus-visible'),shadow:s.boxShadow,outline:s.outlineStyle,height:r.height,href:e.getAttribute('href'),name:e.getAttribute('aria-label')||e.textContent.trim()}; })()");
+    assert(focus.matches && focus.visible, "Natural keyboard focus did not reach " + selector);
+    if (label) assert.equal(focus.name, label);
+    assert(focus.shadow !== "none" || focus.outline !== "none", "Focus indication missing");
+    assert(focus.height >= 44, "Destination target height below 44px");
+    return focus;
+  };
+  const supplementalShot = async (name, theme, width) => {
+    const shot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+    const filename = name + "-" + theme + "-" + width + ".png";
+    await fs.writeFile(path.join(evidence, filename), Buffer.from(shot.data, "base64"));
+    polishShots.push({ name, theme, width, filename, comparison: "supplemental_after_only" });
+  };
   for (const theme of ["light", "dark"]) {
     const {identifier} = await send("Page.addScriptToEvaluateOnNewDocument", {source: `localStorage.setItem("theme", "${theme}")`});
   for (const width of [360, 768, 1280]) {
@@ -319,9 +353,11 @@ try {
       ["overview", "/", "132 matching work"],
       ["work", "/work", "Work"],
       ["detail", "/work/9", "delivery and human review are unconfirmed"],
+      ["offline-detail", "/work/2", "owner session offline"],
       ["retry-confirmation", "/work/6", "Fixture issue 6"],
       ["repository", "/repositories/1", "Same-label overlap"],
       ["harnesses", "/harnesses", "Harnesses"],
+      ["harness-detail", "/harnesses/codex-cli", "Harnesses · Codex"],
       ["native-codex", "/harnesses/codex-cli/config", "Codex Config"],
       ["catalog-error", "/harnesses/codex-cli/config?fixture_catalog=catalog_error", "Native page unavailable"],
       ["adapter-mismatch", "/harnesses/codex-cli/config?fixture_catalog=adapter_mismatch", "Native page unavailable"],
@@ -393,7 +429,71 @@ try {
         path.join(evidence, `${name}-${theme}-${width}.png`),
         Buffer.from(shot.data, "base64"),
       );
-      observations.push({ theme, name, route, ...layout });
+      const paired = beforeCapture?.observations.find(o => o.theme === theme && o.name === name && o.width === width);
+      if (paired && ["work", "detail", "harnesses"].includes(name)) {
+        assert(layout.mainScrollWidth <= Math.max(paired.mainScrollWidth, layout.mainWidth), name + " added main overflow");
+      }
+      observations.push({ theme, name, route, ...layout, comparison: paired ? "paired_before_after" : "supplemental_or_unpaired", before_layout: paired ?? null });
+      if (name === "harnesses") {
+        const primary = await focusByTab('a[href="/harnesses/claude-code/config"]');
+        await tab(true);
+        const previous = await evaluate("document.activeElement?.getAttribute('href')");
+        await tab();
+        assert.equal(await evaluate("document.activeElement?.getAttribute('href')"), primary.href);
+        assert.notEqual(previous, primary.href);
+        await supplementalShot("harnesses-primary-focus", theme, width);
+        const sidebar = await focusByTab('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', true);
+        assert.equal(await evaluate("document.activeElement.getAttribute('aria-current')"), "page");
+        await supplementalShot("sidebar-focus", theme, width);
+        if (width >= 768) {
+          await focusByTab('button[aria-label="Collapse sidebar"]');
+          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))'));
+          assert.equal(await evaluate('document.querySelectorAll(\'nav[aria-label="Main navigation"] a[aria-label]\').length'), 8);
+          await supplementalShot("sidebar-collapsed", theme, width);
+          for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+          assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))'));
+        }
+        navigationPolish.push({ theme, width, case: "harness destination and sidebar natural focus", primary, sidebar, shiftTabReturns: true });
+      }
+      if (name === "detail" || name === "offline-detail") {
+        const primary = await focusByTab('nav[aria-label="Work context"] a[href^="/agent-bridge?"]');
+        const hierarchy = await evaluate("(() => {const nav=document.querySelector('nav[aria-label=\"Work context\"]'),links=[...nav.querySelectorAll('a')];return links.map(a=>({name:a.textContent.trim(),href:a.getAttribute('href'),border:getComputedStyle(a).borderTopWidth,tag:a.tagName,role:a.getAttribute('role')}));})()");
+        for (const label of ["Team", "Repository scope", "Mail context"]) assert.equal(hierarchy.find(a => a.name === label)?.border, "0px", "Supporting reference became a prominent button");
+        assert(hierarchy.every(a => a.tag === "A" && a.role !== "button"));
+        const sessionUrl = new URL(primary.href, "http://fixture.test");
+        assert.equal(sessionUrl.searchParams.get("context"), "readonly");
+        if (name === "offline-detail") assert(!sessionUrl.searchParams.has("member_id") && !sessionUrl.searchParams.has("session_id"));
+        await supplementalShot(name + "-context-focus", theme, width);
+        navigationPolish.push({ theme, width, case: name + " destination/reference hierarchy", primary, hierarchy });
+      }
+      if (name === "work") {
+        const primary = await focusByTab('a[href^="/work/"]', false, "Open details");
+        await supplementalShot("work-primary-focus", theme, width);
+        const currentUrl = await evaluate("location.href");
+        const point = await evaluate("(() => {const r=document.activeElement.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()");
+        const opened = [];
+        for (const click of [{ button: "left", buttons: 1, modifiers: 2, kind: "ctrl" }, { button: "middle", buttons: 4, modifiers: 0, kind: "middle" }]) {
+          const oldTargets = new Set((await send("Target.getTargets")).targetInfos.map(t => t.targetId));
+          for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, ...point, button: click.button, buttons: type === "mousePressed" ? click.buttons : 0, modifiers: click.modifiers, clickCount: 1 });
+          let target;
+          for (let i = 0; i < 50; i++) {
+            target = (await send("Target.getTargets")).targetInfos.find(t => t.type === "page" && !oldTargets.has(t.targetId) && t.url === new URL(primary.href, currentUrl).href);
+            if (target) break;
+            await sleep(50);
+          }
+          assert(target, click.kind + " click did not open its original destination in a new tab");
+          const { sessionId } = await send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+          // Observe child-tab runtime events on the same owned CDP connection.
+          const childId = ++seq;
+          await new Promise((resolve, reject) => { pending.set(childId, { resolve, reject }); ws.send(JSON.stringify({ id: childId, sessionId, method: "Runtime.enable" })); });
+          await sleep(100);
+          assert.equal(await evaluate("location.href"), currentUrl, "Modified click navigated the source tab");
+          opened.push({ kind: click.kind, href: primary.href, target_url: target.url, source_unchanged: true });
+          await send("Target.closeTarget", { targetId: target.targetId });
+        }
+        navigationPolish.push({ theme, width, case: "Open details ctrl/middle new-tab semantics", primary, opened });
+      }
       if (name === "retry-confirmation") {
         await evaluate('[...document.querySelectorAll("[role=alertdialog] button")].find(b=>b.textContent==="Cancel").click()');
         await sleep(100);
@@ -553,6 +653,10 @@ try {
         operations_schema_version: operationFixtures.schema_version,
         operations_catalog_sha256: operationManifest.catalog_sha256,
         operations_manifest_sha256: "0ac33401f6a36ce92c1264884fec87d5999a105f8fb4520f74ca18ea4b1d3173",
+        navigation_before_head: beforeCapture?.head ?? null,
+        navigation_before_fixture_source: beforeCapture?.fixture_source ?? null,
+        navigationPolish,
+        supplemental_after_only: polishShots,
         observations,
         keyboard,
         navigation,
@@ -568,7 +672,7 @@ try {
   console.log(
     JSON.stringify({
       head,
-      screenshots: observations.length + navigation.length,
+      screenshots: observations.length + navigation.length + polishShots.length,
       routeReturns: navigation.length,
       unknown,
       errors: errors.length,
