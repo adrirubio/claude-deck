@@ -27,6 +27,7 @@ from app.models.database import (
 from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
 
 _TAIL_BYTES = 1_048_576
+_MAX_PROCESS_DESCRIPTORS = 256
 _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
 
@@ -62,6 +63,33 @@ def _codex_home(pid: int) -> Path:
     except PermissionError:
         pass
     return Path(pwd.getpwuid(proc.stat().st_uid).pw_dir) / ".codex"
+
+
+def _process_rollout_path(pid: int, home: Path, session_id: str) -> Path | None:
+    """Find the native conversation actually opened by this exact process.
+
+    This needs only read access. SQLite's live WAL index can require writable
+    scratch files even for a mode=ro query from another controller user.
+    """
+    descriptors = Path(f"/proc/{pid}/fd")
+    matches: set[Path] = set()
+    try:
+        with os.scandir(descriptors) as entries:
+            for index, entry in enumerate(entries):
+                if index >= _MAX_PROCESS_DESCRIPTORS:
+                    raise ValueError("Process descriptor observation exceeds its bound")
+                target = Path(os.readlink(entry.path))
+                if not target.name.endswith(f"-{session_id}.jsonl") or not target.is_absolute():
+                    continue
+                target = target.resolve()
+                if (target.is_relative_to((home / "sessions").resolve())
+                        and stat.S_ISREG(target.stat().st_mode)):
+                    matches.add(target)
+    except OSError:
+        return None
+    if len(matches) > 1:
+        raise ValueError("Native conversation has ambiguous process descriptors")
+    return next(iter(matches), None)
 
 
 def _rollout_path(home: Path, session_id: str, cwd: str) -> Path | None:
@@ -186,7 +214,8 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         if (Path(os.fsdecode(argv[0])).name != "codex" or b"resume" not in argv
                 or session_id.encode() not in argv):
             return result("unknown", "session_mismatch")
-        path = _rollout_path(_codex_home(pid), session_id, cwd)
+        home = _codex_home(pid)
+        path = _process_rollout_path(pid, home, session_id) or _rollout_path(home, session_id, cwd)
         if path is None:
             return result("unknown", "native_log_unavailable")
         state, reason, observed_at = _native_state(path, session_id, cwd, now, _process_started_at(start))
