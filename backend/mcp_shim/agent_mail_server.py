@@ -1142,6 +1142,17 @@ def deck_report_backlog_assessment(
     (leader, operator, owner, reviewer, none); evidence_issue_numbers (assigned
     positive issue numbers, at least one). Unknown/out-of-scope evidence is refused.
 
+    An entry may also include human_actions (at most four per entry,16 overall):
+    kind (review_pr, merge_pr, pilot_decision, milestone_acceptance, provide_evidence,
+    scope_clarification); readiness (requested, waiting_for_prerequisites);
+    prerequisite_issue_numbers (assigned references). PR actions require
+    pull_request_number and expected_head_sha (full40-character lowercase SHA;
+    at most eight distinct PRs). Fresh same-repository/open/head checks are required.
+    Include standing documentation PRs as explicit human requests in their assigned
+    standing issue. Distinguish current review requests from future pilot/acceptance
+    gates; never mark a gated decision requested before its prerequisites permit it.
+    These requests appear above the Roster and Autonomy tabs and grant no authority.
+
     Pass snapshot_token from a fresh deck_get_backlog_coordination read to publish
     while already working, even when notification quota is exhausted or no request
     has been sent (request_sequence may be zero). This spends no notification quota.
