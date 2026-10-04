@@ -24,6 +24,7 @@ type Summary = {
   requests_today: number
   status: string
   last_polled_at: string | null
+  observation_expires_at: string | null
   last_assessed_at: string | null
   active_implementations: number | null
   execution_limit: number
@@ -52,6 +53,7 @@ const statuses: Record<string, string> = {
   coordination_capped: 'Coordination notification limit reached', hold: 'Coordination is paused by a safety hold',
   hold_unavailable: 'Safety hold status cannot be confirmed', recovery_only: 'Coordination is paused during scoped recovery',
   single_scope_required: 'Coordination requires one enabled repository scope',
+  coordination_context_limit: 'Coordination context exceeds its supported limit. The operator must review the assignment and resources.',
 }
 function policy(data: Summary): Policy {
   return { enabled: data.enabled, issue_numbers: data.issue_numbers,
@@ -60,6 +62,10 @@ function policy(data: Summary): Policy {
 function date(value: string | null) {
   if (!value) return 'not yet'
   return new Date(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString()
+}
+function timestamp(value: string | null | undefined) {
+  if (!value) return NaN
+  return Date.parse(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`)
 }
 
 export function BacklogCoordination({ scopeId, withOperatorToken }: {
@@ -75,6 +81,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
   const [daily, setDaily] = useState('12')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [clock, setClock] = useState(Date.now)
   const originalPolicy = useRef<Policy | null>(null)
   const controller = useRef<AbortController | null>(null)
   const serial = useRef(0)
@@ -84,12 +91,20 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
     controller.current?.abort()
     const abort = new AbortController()
     controller.current = abort
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    let timedOut = false
     try {
-      const next = await apiClient<Summary>(path, { signal: abort.signal, cache: 'no-store' })
+      const deadline = new Promise<never>((_resolve, reject) => {
+        abort.signal.addEventListener('abort', () => reject(new Error('Coordination refresh ended')), { once: true })
+        timeout = setTimeout(() => { timedOut = true; abort.abort() }, 10000)
+      })
+      const next = await Promise.race([apiClient<Summary>(path, { signal: abort.signal, cache: 'no-store' }), deadline])
       if (next?.scope_id !== scopeId || !Array.isArray(next.entries) || !Array.isArray(next.issue_numbers)) throw new Error('Invalid coordination response')
-      if (request === serial.current && !abort.signal.aborted) { setData(next); setError(null) }
+      if (request === serial.current && !abort.signal.aborted) { setData(next); setClock(Date.now()); setError(null) }
     } catch {
-      if (request === serial.current && !abort.signal.aborted) setError('Unable to refresh coordination. Any retained assessment is historical.')
+      if (request === serial.current && (timedOut || !abort.signal.aborted)) setError('Unable to refresh coordination. Any retained assessment is historical.')
+    } finally {
+      clearTimeout(timeout)
     }
   }, [path, scopeId])
   useEffect(() => {
@@ -103,6 +118,18 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
     const pending = controller
     return () => { active = false; clearTimeout(timer); pending.current?.abort() }
   }, [refresh])
+  const expiresAt = timestamp(data?.observation_expires_at)
+  useEffect(() => {
+    const updateClock = () => setClock(Date.now())
+    const timer = Number.isFinite(expiresAt) ? setTimeout(updateClock, Math.max(0, expiresAt - Date.now() + 1)) : undefined
+    document.addEventListener('visibilitychange', updateClock)
+    window.addEventListener('focus', updateClock)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', updateClock)
+      window.removeEventListener('focus', updateClock)
+    }
+  }, [expiresAt])
 
   const configure = () => {
     if (!data) return
@@ -135,9 +162,11 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
       setSaveError(failure instanceof Error ? failure.message : 'Could not save coordination policy.')
     } finally { setSaving(false) }
   }
-  const current = Boolean(data?.assessment_current && !error)
+  const expired = !Number.isFinite(expiresAt) || clock >= expiresAt
+  const current = Boolean(data?.assessment_current && !error && !expired && data.scope_id === scopeId)
   const heading = error ? 'Coordination status is unavailable' : current
     ? data?.eligible_count === 0 ? 'No eligible implementation work' : `${data?.eligible_count} ${data?.eligible_count === 1 ? 'item' : 'items'} assessed as eligible`
+    : data?.assessment_current && expired ? statuses.stale
     : statuses[data?.status ?? 'unknown'] ?? 'Coordination status is unavailable'
   return <section aria-label="Leader backlog coordination" className="mt-4 border-t pt-4 text-sm">
     <div className="flex flex-wrap items-start justify-between gap-2">

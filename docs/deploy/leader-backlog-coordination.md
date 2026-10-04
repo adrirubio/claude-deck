@@ -77,6 +77,17 @@ The repository card shows active implementations versus the execution limit,
 available and leased workspaces, assessment freshness, next actors and gate
 reasons. A current empty eligible set says **No eligible implementation work**.
 Unknown, stale, failed, capped and previous assessments remain explicit.
+The UI expires retained eligibility at the server's observation deadline, even
+if a refresh stalls or the browser tab was suspended. Each refresh has a
+10-second deadline; a failed refresh remains historical and polling continues.
+
+The authority snapshot includes assigned issues and current active implementations,
+plus their current-attempt approvals, registered workspaces and roster. Unrelated
+historical issues do not enlarge the write guard. Each context collection is
+limited to 128 rows. An oversized active context reports
+`coordination_context_limit`, grants no eligibility and sends no request; the
+operator must review the assignment/resources. Coordination never archives or
+rewrites authority rows to satisfy this limit.
 
 Only `dispatched` and `verifying` count against execution concurrency. Review
 readiness can still retain a workspace lease; spare execution capacity and spare

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -30,6 +30,7 @@ from app.utils import peer_process
 logger = logging.getLogger(__name__)
 _BOOT_ID = uuid4().hex
 _MAX_SNAPSHOT_REQUESTS = 3
+_MAX_CONTEXT_ROWS = 128
 
 
 class CoordinationError(ValueError):
@@ -140,7 +141,9 @@ class GithubCoordinationService:
             raise CoordinationError("leader_identity_unavailable")
         slots = list((await db.scalars(select(AgentTeamSlot).where(
             AgentTeamSlot.preset_id == scope.preset_id,
-        ).order_by(AgentTeamSlot.position, AgentTeamSlot.id))).all())
+        ).order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(_MAX_CONTEXT_ROWS + 1))).all())
+        if len(slots) > _MAX_CONTEXT_ROWS:
+            raise CoordinationError("coordination_context_limit")
         leader = github_dispatch_service._leader_slot(slots)
         member = await github_dispatch_service._slot_member(db, leader.id) if leader else None
         if member is None or member.team_preset_id != scope.preset_id:
@@ -155,7 +158,9 @@ class GithubCoordinationService:
             MailAgentSession.wake_enabled.is_(True),
             MailAgentSession.capability_token_hash.is_not(None),
             MailAgentSession.last_seen_at >= datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS),
-        ).execution_options(populate_existing=True))).all())
+        ).limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
+        if len(sessions) > _MAX_CONTEXT_ROWS:
+            raise CoordinationError("coordination_context_limit")
         sessions = [s for s in sessions if s.bound_pane_pid is not None
                     and s.bound_pane_proc_start
                     and peer_process.pane_is_alive(s.bound_pane_pid, s.bound_pane_proc_start) is True]
@@ -183,16 +188,24 @@ class GithubCoordinationService:
         if count != 1:
             raise CoordinationError("single_scope_required")
         leader, slots = await self.current_leader(db, scope)
-        items = list((await db.scalars(select(GithubWorkItem).where(
-            GithubWorkItem.scope_id == scope_id,
-        ).execution_options(populate_existing=True))).all())
+        # Historical unrelated attempts cannot change capacity or assigned gates.
+        relevant_items = (GithubWorkItem.scope_id == scope_id) & or_(
+            GithubWorkItem.issue_number.in_(numbers),
+            GithubWorkItem.dispatch_status.in_(["dispatched", "verifying"]),
+        )
+        items = list((await db.scalars(select(GithubWorkItem).where(relevant_items)
+            .limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
         by_number = {i.issue_number: i for i in items}
         workspaces = list((await db.scalars(select(GithubWorkspace).where(
             GithubWorkspace.scope_id == scope_id,
-        ).execution_options(populate_existing=True))).all())
+        ).limit(_MAX_CONTEXT_ROWS + 1).execution_options(populate_existing=True))).all())
+        relevant_approvals = relevant_items & (GithubApprovalRequest.dispatch_nonce == GithubWorkItem.dispatch_nonce)
         approvals = list((await db.scalars(select(GithubApprovalRequest).join(
             GithubWorkItem, GithubWorkItem.id == GithubApprovalRequest.work_item_id,
-        ).where(GithubWorkItem.scope_id == scope_id))).all())
+        ).where(relevant_approvals).limit(_MAX_CONTEXT_ROWS + 1)
+            .execution_options(populate_existing=True))).all())
+        if any(len(rows) > _MAX_CONTEXT_ROWS for rows in (items, workspaces, approvals)):
+            raise CoordinationError("coordination_context_limit")
         observations = []
         for number in numbers:
             issue = issues.get(number)
@@ -293,15 +306,13 @@ class GithubCoordinationService:
             authority &= exists(select(AgentTeamSlot.id).where(
                 AgentTeamSlot.id == slot.id, AgentTeamSlot.updated_at == slot.updated_at,
             ))
-        authority &= select(func.count()).select_from(GithubWorkItem).where(
-            GithubWorkItem.scope_id == scope_id,
-        ).scalar_subquery() == len(items)
+        authority &= select(func.count()).select_from(GithubWorkItem).where(relevant_items).scalar_subquery() == len(items)
         authority &= select(func.count()).select_from(GithubWorkspace).where(
             GithubWorkspace.scope_id == scope_id,
         ).scalar_subquery() == len(workspaces)
         authority &= select(func.count()).select_from(GithubApprovalRequest).join(
             GithubWorkItem, GithubWorkItem.id == GithubApprovalRequest.work_item_id,
-        ).where(GithubWorkItem.scope_id == scope_id).scalar_subquery() == len(approvals)
+        ).where(relevant_approvals).scalar_subquery() == len(approvals)
         authority &= select(func.count()).select_from(AgentTeamSlot).where(
             AgentTeamSlot.preset_id == scope.preset_id,
         ).scalar_subquery() == len(slots)
@@ -526,6 +537,9 @@ class GithubCoordinationService:
             "max_daily_requests": row.max_daily_requests if row else 12,
             "requests_today": row.daily_requests if row and row.budget_day == datetime.utcnow().strftime("%Y-%m-%d") else 0,
             "status": status, "last_polled_at": row.last_polled_at if row else None,
+            "observation_expires_at": (row.last_polled_at + timedelta(
+                seconds=max(120, settings.github_dispatch_interval_seconds * 2),
+            )) if row and row.last_polled_at else None,
             "last_assessed_at": row.last_assessed_at if row else None,
             "active_implementations": snapshot.get("active_implementations"),
             "execution_limit": scope.max_concurrent_dispatched,
