@@ -85,7 +85,9 @@ review acceptance. Check the current PR head and review evidence before merging.
 The initial adapter supports Codex CLI sessions with an explicit resume UUID and
 an authenticated current process binding. Other providers and fresh sessions
 without a pinned native identity show Activity unknown. The controller must be
-able to read the corresponding Codex state database and native rollout log.
+able to read the process's open file descriptors and the corresponding native
+rollout log. An exact-ID lookup in the Codex state database is used as a fallback
+when the process has no open rollout descriptor and the database is readable.
 Each Codex slot must have a distinct UUID across Deck presets. Reused UUIDs show
 Activity unknown, including reuse in disabled slots, because the shared log cannot
 distinguish which harness supplied an event.
@@ -106,8 +108,11 @@ turn can remain Idle while the same process and identity are still current.
 
 If the controller cannot read the runtime user's Codex history, labels remain
 steady at Activity unknown. Before enabling observations, arrange read access to
-the dedicated runtime's native state database, SQLite WAL/SHM files and rollout
-logs, with directory traversal access. New files must inherit the same access.
+the dedicated runtime's process descriptors and rollout logs, with directory
+traversal access. The indexed fallback also needs access to the native state
+database and SQLite WAL/SHM files. SQLite can require writable scratch files for
+that fallback even with a read-only connection; the process descriptor lookup
+avoids that requirement. New rollout files must inherit the same read access.
 Grant read access only for that dedicated runtime; do not make home directories
 or histories world-readable. This PR does not change live filesystem permissions.
 
