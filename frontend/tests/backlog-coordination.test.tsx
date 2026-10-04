@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BacklogCoordination } from '../src/features/agent-teams/BacklogCoordination'
 import { apiClient } from '../src/lib/api'
 
@@ -9,6 +9,7 @@ const summary = {
   scope_id: 1, repo: 'o/r', enabled: true, version: 1, issue_numbers: [7, 8],
   fallback_seconds: 1800, max_daily_requests: 12, requests_today: 1,
   status: 'assessed', last_polled_at: '2026-10-04T10:00:00', last_assessed_at: '2026-10-04T10:00:00',
+  observation_expires_at: new Date(Date.now() + 120000).toISOString(),
   active_implementations: 0, execution_limit: 2, available_workspaces: 1, leased_workspaces: 1,
   eligible_count: 0, assessment_current: true,
   entries: [
@@ -18,6 +19,7 @@ const summary = {
 }
 const withToken = <T,>(action: (token: string) => Promise<T>) => action('fixture-token')
 beforeEach(() => { vi.mocked(apiClient).mockReset(); vi.mocked(apiClient).mockResolvedValue(summary) })
+afterEach(() => vi.useRealTimers())
 
 describe('Leader backlog coordination', () => {
   it('shows why no implementation is eligible, capacity and the required actor', async () => {
@@ -73,5 +75,31 @@ describe('Leader backlog coordination', () => {
     await screen.findByText('Backlog has not been observed yet')
     resolveOld(summary)
     await waitFor(() => expect(screen.queryByText('No eligible implementation work')).toBeNull())
+  })
+  it('expires retained eligibility and bounds a pending refresh before polling again', async () => {
+    vi.useFakeTimers()
+    const now = Date.now()
+    vi.mocked(apiClient).mockResolvedValueOnce({ ...summary, observation_expires_at: new Date(now + 16000).toISOString() })
+      .mockImplementation(() => new Promise(() => {}))
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText('No eligible implementation work')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(16001) })
+    expect(screen.queryByText('No eligible implementation work')).toBeNull()
+    expect(screen.getByText('Backlog observations are stale')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(screen.getByText('Coordination status is unavailable')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+    expect(apiClient).toHaveBeenCalledTimes(3)
+  })
+  it('expires retained eligibility when a suspended tab becomes visible', async () => {
+    vi.useFakeTimers()
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText('No eligible implementation work')).toBeTruthy()
+    vi.setSystemTime(Date.now() + 180000)
+    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(screen.queryByText('No eligible implementation work')).toBeNull()
+    expect(screen.getByText('Previous assessment — not current eligibility')).toBeTruthy()
   })
 })

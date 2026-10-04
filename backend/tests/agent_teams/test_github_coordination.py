@@ -404,3 +404,28 @@ async def test_api_requires_operator_for_policy_and_exact_leader_for_receipt(db,
                 assert private not in public.text
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.asyncio
+async def test_unrelated_history_does_not_expand_guard_or_invalidate_assessment(db, team):
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    await service.assess(db, team.scope_id, team.leader, report(row), team.client)
+    db.add_all([GithubWorkItem(scope_id=team.scope_id, issue_number=n, issue_title="Historical",
+        issue_url="u", github_updated_at=datetime.utcnow(), dispatch_status="merged") for n in range(100, 1300)])
+    await db.commit()
+    assert (await service.summary(db, team.scope_id))["assessment_current"]
+    await service.reconcile(db, team.scope_id, team.client)
+    row = await service.state(db, team.scope_id)
+    assert row.generation == 1 and row.daily_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_oversized_active_context_is_visible_and_does_not_send_mail(db, team):
+    db.add_all([GithubWorkItem(scope_id=team.scope_id, issue_number=n, issue_title="Active",
+        issue_url="u", github_updated_at=datetime.utcnow(), dispatch_status="verifying") for n in range(100, 229)])
+    await db.commit()
+    await service.reconcile(db, team.scope_id, team.client)
+    summary = await service.summary(db, team.scope_id)
+    assert summary["status"] == "coordination_context_limit" and summary["eligible_count"] is None
+    assert team.wake.await_count == 0
