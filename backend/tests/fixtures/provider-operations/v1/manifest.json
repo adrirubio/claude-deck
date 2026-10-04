@@ -6,12 +6,12 @@
   "source_sha256": {
     "backend/app/models/provider_operations_schemas.py": "7cb632961ccdbf3350ba69381bc34b82de73b37d581e634d805fd79bb88333d8",
     "backend/app/services/provider_readiness_service.py": "991cc57f69a2844ce9cad0ab7f5ab7a237eb3adfda6c6845ddc69e49df9ed5f0",
-    "backend/app/services/provider_operations_service.py": "138f210ff56275c9a8a12b6ba95cbc80e3788bf1b16668a008e32f53a2ecf17d",
+    "backend/app/services/provider_operations_service.py": "05b7194a4cee07f4b6837a209e84ab5b4152c804ae743b984f476de1813c0387",
     "backend/app/api/v1/providers.py": "1568537ef086cd1188e9b641460a6a50d851a53d3aba7e6eeb6370de6933e2fd",
     "backend/app/services/agent_team_service.py": "169af0ea01f674190a013d1452ad30ce3c4139a49452a18f1f4cf5293ae0ad6c",
     "frontend/tests/fixtures/factory/native-adapters.json": "fdf65fa6f92a60cd9748084726b5caea78c4b62662c3226eee66def090bc07be",
     "backend/tests/test_provider_operations.py": "ebe6960bea779891fcf96e4a598389197812c08280133c2ed7046cca51f8fa5e",
-    "backend/tests/test_provider_readiness.py": "e3195587f0b0883ce8a446d916548efc3f0ba78fcfa5e21b0e8ee2c4402bfa93"
+    "backend/tests/test_provider_readiness.py": "48bc09e71031115bdf52d1d01efec61e7c0cac11e4d61869414fc770b4c624f7"
   },
   "providers": [
     "claude-code",
@@ -38,7 +38,7 @@
       10,
       30
     ],
-    "worker_limit": "One fixed local Python observer subprocess has a90s aggregate timeout; requests wait2s and retain singleflight rather than duplicating/cancelling the observation. Existing non-billable local version/runtime/MCP-inventory CLI checks remain; no model calls, session launches or credential checks. Observer output is allowlisted booleans/empty-or-missing-hook flags only.",
+    "worker_limit": "One snapshot worker starts a fixed local Linux cleanup supervisor and observer, with a90s aggregate deadline. The private supervisor adopts only its own orphaned descendants, terminates only the owned observer process group and reaps all its children before snapshot completion, including timeout/error or closed pipes; refresh cannot overlap abandoned probe work. Subreaping is never enabled in the API process. Unavailable cleanup support fails to unknown readiness without launching probes. Requests wait2s and retain singleflight rather than duplicating/cancelling the observation. Existing non-billable local version/runtime/MCP-inventory CLI checks remain; no model calls, session launches or credential checks. Output is allowlisted booleans/empty-or-missing-hook flags only.",
     "aggregate_probe_seconds": 90
   }
 }

@@ -138,9 +138,8 @@ def test_malformed_legacy_snapshot_remains_unknown(key, value):
 
 def test_snapshot_exception_has_no_private_projection(monkeypatch):
     def broken(*_, **kwargs):
-        assert kwargs["timeout"] == 90
         raise RuntimeError("synthetic-private-error")
-    monkeypatch.setattr(ops.subprocess, "run", broken)
+    monkeypatch.setattr(ops, "_observe_install_status", broken)
     monkeypatch.setattr(ops.shutil, "which", lambda _: "/synthetic-private-binary")
     result = ops._collect_snapshot()
     assert result.failed and result.install_status is None
@@ -151,9 +150,77 @@ def test_snapshot_exception_has_no_private_projection(monkeypatch):
 @pytest.mark.parametrize("payload", [b"not-json", b"{}", b"[]", b"x" * 8193])
 def test_malformed_observer_payload_is_unknown(monkeypatch, payload):
     monkeypatch.setattr(ops.shutil, "which", lambda _: None)
-    monkeypatch.setattr(ops.subprocess, "run", lambda *_, **kwargs: SimpleNamespace(stdout=payload))
+    monkeypatch.setattr(ops, "_observe_install_status", lambda: payload)
     result = ops._collect_snapshot()
     assert result.failed and result.install_status is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("child_pipe", ["inherited", "closed"])
+@pytest.mark.parametrize("failure", ["deadline", "nonzero_exit"])
+async def test_observer_failure_cleans_descendants_before_shared_refresh(monkeypatch, tmp_path, child_pipe, failure):
+    # Only inert Python processes and temporary markers; never installed CLIs.
+    import asyncio
+    import json
+    import os
+    import subprocess
+    import sys
+    from concurrent.futures import ThreadPoolExecutor
+
+    started, completed = tmp_path / "child-started", tmp_path / "child-completed"
+    child = (
+        "import os,time; from pathlib import Path; "
+        f"Path({str(started)!r}).write_text(str(os.getpid())); "
+        f"time.sleep(1.2); Path({str(completed)!r}).write_text('completed')"
+    )
+    redirects = ", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL" if child_pipe == "closed" else ""
+    parent = (
+        "import subprocess,sys,time; "
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]{redirects}); "
+        + ("time.sleep(3)" if failure == "deadline" else "time.sleep(.15); sys.exit(1)")
+    )
+    real_popen = subprocess.Popen
+    observers = []
+
+    def child_exists():
+        return started.exists() and Path(f"/proc/{int(started.read_text())}").exists()
+
+    def fixture_popen(command, **kwargs):
+        assert command[1:] == ["-m", "app.services.provider_operations_service", "--snapshot"]
+        assert kwargs["start_new_session"] is True
+        if observers:
+            assert observers[0].returncode is not None
+            assert not child_exists(), "Refresh overlapped previous probe descendant"
+        program = parent if not observers else f"print({json.dumps({k: None for k in ops.INSTALL_FIELDS})!r})"
+        # Exercise the exact cleanup supervisor without invoking its real probes.
+        supervisor = (
+            "import sys; from app.services import provider_operations_service as ops; "
+            f"sys.stdout.buffer.write(ops._supervised_observation([sys.executable,'-c',{program!r}]))"
+        )
+        observer = real_popen([sys.executable, "-c", supervisor], **kwargs)
+        observers.append(observer)
+        return observer
+
+    monkeypatch.setattr(ops.subprocess, "Popen", fixture_popen)
+    monkeypatch.setattr(ops, "get_providers", lambda: [])
+    monkeypatch.setattr(ops, "AGGREGATE_SECONDS", .7)
+    monkeypatch.setattr(ops, "WAIT_SECONDS", .01)
+    monkeypatch.setattr(ops, "_future", None)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(ops, "_executor", executor)
+        assert await ops.readiness_snapshot() is None
+        assert await ops.readiness_snapshot() is None
+        first = await asyncio.wrap_future(ops._future)
+        assert first.failed and started.exists()
+        assert observers[0].returncode is not None and not child_exists()
+        assert len(observers) == 1 and not completed.exists()
+        monkeypatch.setattr(ops, "TTL_SECONDS", 0)
+        await ops.readiness_snapshot()
+        second = await asyncio.wrap_future(ops._future)
+        assert not second.failed and len(observers) == 2
+        await asyncio.sleep(1.3)  # Beyond the child's completion marker deadline.
+        assert not completed.exists() and not child_exists()
+    assert os.getpgrp() != observers[0].pid  # The test runner's group was untouched.
 
 
 @pytest.mark.asyncio

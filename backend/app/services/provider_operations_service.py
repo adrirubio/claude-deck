@@ -8,11 +8,14 @@ Cancellation never starts another worker while that observation is in flight.
 from __future__ import annotations
 
 import asyncio
+import ctypes
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
 import sys
@@ -46,6 +49,68 @@ class Snapshot:
     failed: bool = False
 
 
+def _observe_install_status():
+    # The isolated supervisor owns/reaps its observer's entire inherited tree.
+    # A request timeout never cancels this worker; only the aggregate deadline
+    # asks the supervisor to terminate its probes and finish cleanup.
+    with subprocess.Popen(
+        [sys.executable, "-m", "app.services.provider_operations_service", "--snapshot"],
+        cwd=Path(__file__).resolve().parents[2],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+    ) as observer:
+        try:
+            stdout, _ = observer.communicate(timeout=AGGREGATE_SECONDS)
+            if observer.returncode:
+                raise subprocess.CalledProcessError(observer.returncode, observer.args)
+        except BaseException:
+            observer.terminate()
+            observer.communicate()  # Wait for supervisor-owned tree cleanup.
+            raise
+        return stdout
+
+
+def _supervised_observation(command):
+    # Linux-only, in the disposable supervisor process, never the API process.
+    # Subreaping adopts only this process's orphaned descendants, allowing us to
+    # wait for their exit even if the observer exited first or closed its pipes.
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("Observer cleanup unavailable")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise RuntimeError("Observer cleanup unavailable")
+
+    def deadline(*_):
+        raise TimeoutError("Observer deadline")
+
+    signal.signal(signal.SIGTERM, deadline)
+    # Track the child before a pending deadline can interrupt its creation.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    child = None
+    try:
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    finally:
+        # Unblocking can raise via deadline(); keep cleanup around that too.
+        if child is None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        stdout, _ = child.communicate()
+        if child.returncode:
+            raise subprocess.CalledProcessError(child.returncode, command)
+        return stdout
+    finally:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.communicate()
+        while True:
+            try:
+                os.waitpid(-1, 0)  # Only children of this private supervisor.
+            except ChildProcessError:
+                break
+
+
 def _collect_snapshot():
     started = now()
     installed = {}
@@ -57,14 +122,10 @@ def _collect_snapshot():
         # The legacy async helper performs synchronous probes. A fixed local
         # Python observer gives the entire observation a hard aggregate deadline.
         # It executes no provider model/launch command and returns only flags.
-        result = subprocess.run(
-            [sys.executable, "-m", "app.services.provider_operations_service", "--snapshot"],
-            cwd=Path(__file__).resolve().parents[2], capture_output=True,
-            timeout=AGGREGATE_SECONDS, check=True,
-        )
-        if len(result.stdout) > 8192:
+        stdout = _observe_install_status()
+        if len(stdout) > 8192:
             raise ValueError("Invalid observer payload")
-        payload = json.loads(result.stdout)
+        payload = json.loads(stdout)
         if not isinstance(payload, dict) or set(payload) != set(INSTALL_FIELDS):
             raise ValueError("Invalid observer fields")
         status = SimpleNamespace(**payload)
@@ -219,6 +280,11 @@ async def scoped_session(db, provider_id, team_id, slot_id):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] != ["--snapshot"]:
+    if sys.argv[1:] == ["--snapshot"]:
+        sys.stdout.buffer.write(_supervised_observation(
+            [sys.executable, "-m", "app.services.provider_operations_service", "--snapshot-payload"],
+        ))
+    elif sys.argv[1:] == ["--snapshot-payload"]:
+        print(json.dumps(asyncio.run(_snapshot_payload())))
+    else:
         raise SystemExit(2)
-    print(json.dumps(asyncio.run(_snapshot_payload())))
