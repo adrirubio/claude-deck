@@ -47,6 +47,7 @@ import type {
 } from '@/types/agentTeams'
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 import { AgentActivityBadge } from './AgentActivityBadge'
+import { BacklogCoordination } from './BacklogCoordination'
 import { workItemAttention, workItemStatusLabel } from './workItemAttention'
 import {
   abandonGithubWorkItem, cancelGithubActiveRevision, fetchGithubRecoveryGate,
@@ -1644,6 +1645,7 @@ export function AutonomyPanel({
                   </Button>
                 </div>
               </div>
+              <BacklogCoordination scopeId={scope.id} withOperatorToken={withOperatorToken} />
             </CardContent>
           </Card>
         ))}

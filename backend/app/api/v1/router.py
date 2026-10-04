@@ -19,6 +19,7 @@ from .context import router as context_router
 from .plans import router as plans_router
 from .agent_mail import router as agent_mail_router
 from .agent_teams import router as agent_teams_router
+from .github_coordination import router as github_coordination_router
 from .external_agent_mail import router as external_agent_mail_router
 from .cc_bridge.router import router as cc_bridge_router
 from .agent_bridge.router import router as agent_bridge_router
@@ -60,6 +61,7 @@ router.include_router(context_router, tags=["Context"])
 router.include_router(plans_router, tags=["Plans"])
 router.include_router(agent_mail_router, prefix="/agent-mail", tags=["Agent Mail"])
 router.include_router(agent_teams_router, prefix="/agent-teams", tags=["Agent Teams"])
+router.include_router(github_coordination_router, prefix="/agent-teams", tags=["Agent Teams"])
 router.include_router(external_agent_mail_router, prefix="/external/agent-mail", tags=["External Agent Mail"])
 router.include_router(cc_bridge_router, prefix="/cc-bridge", tags=["CC Bridge"])
 router.include_router(agent_bridge_router, prefix="/agent-bridge", tags=["Agent Bridge"])

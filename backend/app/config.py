@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     github_continuation_owner_ack_nudge_cooldown_seconds: int = 180
     github_recovery_nudge_cooldown_seconds: int = 180
     github_recovery_only_attempt: str = ""
+    # Existing external supervisors can supply their HOLD markers. Paths are never
+    # exposed to agents or public coordination responses. Unreadable paths halt work.
+    github_coordination_hold_paths: list[str] = []
 
     # Agent Mail identity settings
     mail_capability_tokens_required: bool = False
