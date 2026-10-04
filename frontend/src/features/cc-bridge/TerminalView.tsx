@@ -24,6 +24,7 @@ import type { BridgeAttachment, CCSession, LeaderNavigationDirection } from './t
 import type { InstanceIdentity } from '@/types/status'
 
 interface TerminalViewProps {
+  forceReadOnly?: boolean
   target: string | null
   fullscreen?: boolean
   inLanes?: boolean
@@ -70,6 +71,7 @@ function imageFromClipboard(event: React.ClipboardEvent<HTMLDivElement>): File |
 }
 
 export function TerminalView({
+  forceReadOnly = false,
   target,
   fullscreen,
   inLanes,
@@ -100,6 +102,7 @@ export function TerminalView({
       onLeaderNavigate,
       onLeaderStateChange,
       onRequestModeChange: () => {
+        if (forceReadOnly) return
         if (readOnly) void enableInteractive()
         else handleReadOnly()
       },
@@ -141,6 +144,7 @@ export function TerminalView({
   }, [])
 
   async function enableInteractive(candidate?: string) {
+    if (forceReadOnly) return
     if (candidate !== undefined && !candidate.trim()) {
       setInteractiveTokenError('Enter the Deck operator token to continue.')
       return
@@ -317,6 +321,7 @@ export function TerminalView({
                     ? 'bg-primary text-primary-foreground'
                     : 'text-foreground/80 hover:bg-muted hover:text-foreground'
                 )}
+                disabled={forceReadOnly}
                 onClick={() => { void enableInteractive() }}
               >
                 Interactive

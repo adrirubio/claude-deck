@@ -35,15 +35,8 @@ export function ProviderProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (providers.length === 0) return
 
-    const installed = providers.filter((provider) => provider.installed)
     const selectedExists = providers.some((provider) => provider.id === selectedProviderId)
-    if (!selectedExists) {
-      setSelectedProviderIdState(DEFAULT_PROVIDER)
-      return
-    }
-    if (installed.length === 1 && selectedProviderId !== installed[0].id) {
-      setSelectedProviderIdState(installed[0].id)
-    }
+    if (!selectedExists) queueMicrotask(() => setSelectedProviderIdState(DEFAULT_PROVIDER))
   }, [providers, selectedProviderId])
 
   const setSelectedProviderId = useCallback((providerId: AgentProviderId) => {
@@ -73,10 +66,18 @@ export function ProviderProvider({ children }: { children: ReactNode }) {
   )
 }
 
+// Context consumers share this hook with the provider and route scope.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useProviderContext() {
   const context = useContext(ProviderContext)
   if (!context) {
     throw new Error('useProviderContext must be used within ProviderProvider')
   }
   return context
+}
+
+export function NativeProviderScope({ providerId, onSelect, children }: { providerId: AgentProviderId; onSelect: (id: AgentProviderId) => void; children: ReactNode }) {
+  const parent = useProviderContext()
+  const value = { ...parent, selectedProviderId: providerId, selectedProvider: parent.providers.find(p => p.id === providerId) ?? null, setSelectedProviderId: onSelect }
+  return <ProviderContext.Provider value={value}>{children}</ProviderContext.Provider>
 }

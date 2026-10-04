@@ -1,3 +1,4 @@
+import { updateNativeMetadata } from '@/features/native-settings/surfaceRegistry'
 import { useCallback, useEffect, useState } from 'react'
 import { apiClient } from '@/lib/api'
 import type {
@@ -26,6 +27,7 @@ export function useProviders() {
   const refresh = useCallback(async () => {
     try {
       const data = await apiClient<ProvidersResponse>('providers')
+      updateNativeMetadata(data.providers)
       setProviders(data.providers)
       setError(null)
     } catch (err) {

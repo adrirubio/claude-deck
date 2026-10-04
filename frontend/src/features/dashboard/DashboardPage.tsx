@@ -226,7 +226,7 @@ export function DashboardPage() {
                 <Button
                   variant="link"
                   className="p-0 h-auto mt-2"
-                  onClick={() => navigate("/config")}
+                  onClick={() => navigate(`/harnesses/${selectedProviderId}/config`)}
                 >
                   View Codex config →
                 </Button>
@@ -263,7 +263,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
-                onClick={() => navigate("/mcp")}
+                onClick={() => navigate(`/harnesses/${selectedProviderId}/mcp`)}
               >
                 Manage MCP servers →
               </Button>
@@ -302,7 +302,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
-                onClick={() => navigate("/plugins")}
+                onClick={() => navigate(`/harnesses/${selectedProviderId}/plugins`)}
               >
                 {isCodex ? "Open Codex plugins →" : "View plugins →"}
               </Button>
@@ -324,7 +324,7 @@ export function DashboardPage() {
                 <Button
                   variant="link"
                   className="p-0 h-auto mt-2"
-                  onClick={() => navigate("/config#codex-features")}
+                  onClick={() => navigate(`/harnesses/${selectedProviderId}/config#codex-features`)}
                 >
                   Manage feature flags →
                 </Button>
@@ -444,7 +444,7 @@ export function DashboardPage() {
                   navigate(
                     providerStats.sessionMetricKind === "live"
                       ? "/agent-bridge"
-                      : "/sessions",
+                      : `/harnesses/${selectedProviderId}/sessions`,
                   )
                 }
               >
@@ -471,7 +471,7 @@ export function DashboardPage() {
               <Button
                 variant="link"
                 className="p-0 h-auto mt-2"
-                onClick={() => navigate("/plans")}
+                onClick={() => navigate(`/harnesses/${selectedProviderId}/plans`)}
               >
                 View all plans →
               </Button>
@@ -520,7 +520,7 @@ export function DashboardPage() {
                 <Button
                   variant="link"
                   className="p-0 h-auto mt-2"
-                  onClick={() => navigate("/context")}
+                  onClick={() => navigate(`/harnesses/${selectedProviderId}/context`)}
                 >
                   View context →
                 </Button>

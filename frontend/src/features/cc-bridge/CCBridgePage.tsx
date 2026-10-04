@@ -61,7 +61,7 @@ function compareTeamLaneSessions(a: CCSession, b: CCSession): number {
 }
 
 export function CCBridgePage() {
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all')
+  const [providerFilter, setProviderFilter] = useState<ProviderFilter>(() => { const provider = new URLSearchParams(window.location.search).get('provider'); return PROVIDER_FILTERS.some(p => p.value === provider) ? provider as ProviderFilter : 'all' })
   const [teamFilter, setTeamFilter] = useState<TeamFilter>('all')
   const { providers, selectedProviderId } = useProviderContext()
   const status = useSystemStatus()

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -751,8 +752,17 @@ function LaunchPlanDialog({
 }
 
 export function AgentTeamsPage() {
+  const { teamId } = useParams()
+  const [contextParams] = useSearchParams()
+  const navigate = useNavigate()
+  const requestedTeamId = teamId && /^\d+$/.test(teamId) ? Number(teamId) : null
+  const requestedSlotId = Number(contextParams.get('slot_id')) || null
+  const requestedTab = contextParams.get('tab')
+
   const [presets, setPresets] = useState<AgentTeamPreset[]>([])
-  const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null)
+  const [selectedPresetIdState, setSelectedPresetId] = useState<number | null>(requestedTeamId)
+  const selectedPresetId = requestedTeamId ?? selectedPresetIdState
+  const presetRequestIdRef = useRef(0)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [presetDialog, setPresetDialog] = useState<PresetDialogState>(null)
@@ -770,7 +780,7 @@ export function AgentTeamsPage() {
   const [githubWorkItems, setGithubWorkItems] = useState<GithubWorkItem[]>([])
   const [autonomyLoading, setAutonomyLoading] = useState(false)
   const [autonomyRefreshing, setAutonomyRefreshing] = useState(false)
-  const [autonomyTab, setAutonomyTab] = useState<'roster' | 'autonomy'>('roster')
+  const [autonomyTab, setAutonomyTab] = useState<'roster' | 'autonomy'>(requestedTab === 'autonomy' ? 'autonomy' : 'roster')
   const [autonomyLastRefreshedAt, setAutonomyLastRefreshedAt] = useState<Date | null>(null)
   const [autonomyLoadError, setAutonomyLoadError] = useState<string | null>(null)
   const [autonomyDataPresetId, setAutonomyDataPresetId] = useState<number | null>(null)
@@ -781,6 +791,19 @@ export function AgentTeamsPage() {
   const [tokenError, setTokenError] = useState<string | null>(null)
   const tokenResolverRef = useRef<((token: string | null) => void) | null>(null)
   const tokenPromiseRef = useRef<Promise<string | null> | null>(null)
+  const teamContextGenerationRef = useRef(0)
+  const currentTeamIdRef = useRef(selectedPresetId)
+
+  // Retire authorization at route commit, before a pending token can resume an old action.
+  useLayoutEffect(() => {
+    currentTeamIdRef.current = selectedPresetId
+    return () => {
+      teamContextGenerationRef.current += 1
+      tokenResolverRef.current?.(null)
+      tokenResolverRef.current = null
+      tokenPromiseRef.current = null
+    }
+  }, [selectedPresetId, contextParams])
 
   useEffect(() => () => {
     tokenResolverRef.current?.(null)
@@ -809,12 +832,24 @@ export function AgentTeamsPage() {
   }
 
   const withOperatorToken = async <Result,>(action: (token: string) => Promise<Result>): Promise<Result> => {
+    const generation = teamContextGenerationRef.current
+    const targetId = currentTeamIdRef.current
+    const assertCurrentContext = () => {
+      if (generation !== teamContextGenerationRef.current || targetId !== currentTeamIdRef.current) {
+        throw new Error('Team context changed. Review the current team again.')
+      }
+    }
     for (let attempt = 0; attempt < 2; attempt++) {
+      assertCurrentContext()
       const token = await requestOperatorToken(attempt ? 'The operator token was rejected. Enter a valid token to retry.' : null)
+      assertCurrentContext()
       if (!token) throw new Error('Operator token is required for this action.')
       try {
-        return await action(token)
+        const result = await action(token)
+        assertCurrentContext()
+        return result
       } catch (error) {
+        assertCurrentContext()
         if (!(error instanceof ApiHttpError) || error.status !== 401) throw error
         clearOperatorToken()
         if (attempt === 1) throw error
@@ -831,20 +866,33 @@ export function AgentTeamsPage() {
   const agentActivity = useAgentActivity(selectedPresetId)
 
   const loadPresets = useCallback(async () => {
+    const requestId = ++presetRequestIdRef.current
     setLoading(true)
     try {
       const response = await fetchAgentTeamPresets()
+      if (requestId !== presetRequestIdRef.current) return
       setPresets(response.presets)
       setSelectedPresetId((current) => {
+        if (requestedTeamId) return requestedTeamId
         if (current && response.presets.some((preset) => preset.id === current)) return current
-        return response.presets[0]?.id ?? null
+        return requestedTeamId ?? response.presets[0]?.id ?? null
       })
+      if (!requestedTab && !contextParams.has('review_launch')) {
+        const initial = requestedTeamId ?? response.presets[0]?.id
+        if (initial) {
+          try {
+            const scopes = await fetchTeamGithubScopes(initial)
+            if (requestId === presetRequestIdRef.current) setAutonomyTab(scopes.scopes.length ? 'autonomy' : 'roster')
+          } catch { /* Keep roster usable when the scope read is unavailable. */ }
+        }
+      }
+
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to load Agent Teams')
+      if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to load Agent Teams')
     } finally {
-      setLoading(false)
+      if (requestId === presetRequestIdRef.current) setLoading(false)
     }
-  }, [])
+  }, [requestedTeamId, requestedTab, contextParams])
 
   const loadProviderLaunchOptions = useCallback(async () => {
     try {
@@ -904,12 +952,21 @@ export function AgentTeamsPage() {
     let cancelled = false
     queueMicrotask(() => {
       if (!cancelled) {
+        setPlan(null)
+        setLaunchResult(null)
+        setPlanLoading(false)
+        setLaunching(false)
+        setTokenDialogOpen(false)
+        setTokenInput('')
+        setTokenError(null)
         void loadPresets()
         void loadProviderLaunchOptions()
       }
     })
     return () => {
       cancelled = true
+      presetRequestIdRef.current += 1
+      autonomyRequestIdRef.current += 1
     }
   }, [loadPresets, loadProviderLaunchOptions])
 
@@ -929,11 +986,16 @@ export function AgentTeamsPage() {
       return
     }
     if (autonomyTab !== 'autonomy') return
-    queueMicrotask(() => { void loadAutonomy(selectedPresetId, true) })
+    let cancelled = false
+    queueMicrotask(() => { if (!cancelled) void loadAutonomy(selectedPresetId, true) })
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') void loadAutonomy(selectedPresetId)
     }, 5000)
-    return () => window.clearInterval(interval)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      autonomyRequestIdRef.current += 1
+    }
   }, [autonomyTab, loadAutonomy, selectedPresetId])
 
   const stats = useMemo(() => {
@@ -1181,6 +1243,7 @@ export function AgentTeamsPage() {
     reuseExisting: boolean = true
   ) => {
     if (!selectedPreset) return
+    const requestId = presetRequestIdRef.current
     setPlanLoading(true)
     setPlan(null)
     setLaunchResult(null)
@@ -1193,16 +1256,23 @@ export function AgentTeamsPage() {
         adopt_unbound_sessions: adoptUnbound,
         reuse_existing: reuseExisting,
       }
-      setPlan(await withOperatorToken((token) => planAgentTeamLaunch(selectedPreset.id, request, token)))
+      const nextPlan = await withOperatorToken((token) => {
+        if (requestId !== presetRequestIdRef.current) throw new Error('Team context changed. Review the current team again.')
+        return planAgentTeamLaunch(selectedPreset.id, request, token)
+      })
+      if (requestId === presetRequestIdRef.current) setPlan(nextPlan)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
+      if (requestId === presetRequestIdRef.current) toast.error(error instanceof Error ? error.message : 'Failed to plan launch')
     } finally {
-      setPlanLoading(false)
+      if (requestId === presetRequestIdRef.current) setPlanLoading(false)
     }
   }
 
   const runLaunch = async () => {
-    if (!selectedPreset || !plan) return
+    if (!selectedPreset || !plan || plan.preset_id !== selectedPreset.id) return
+    const generation = teamContextGenerationRef.current
+    const targetId = selectedPreset.id
+    const isCurrentTarget = () => generation === teamContextGenerationRef.current && targetId === currentTeamIdRef.current
     setLaunching(true)
     try {
       const request: AgentTeamLaunchRequest = {
@@ -1212,14 +1282,18 @@ export function AgentTeamsPage() {
         reuse_existing: reuseExistingSessions,
         confirm_plan_hash: plan.plan_hash,
       }
-      const result = await withOperatorToken((token) => launchAgentTeam(selectedPreset.id, request, token))
+      const result = await withOperatorToken((token) => {
+        if (!isCurrentTarget()) throw new Error('Team context changed. Review the current team again.')
+        return launchAgentTeam(targetId, request, token)
+      })
+      if (!isCurrentTarget()) return
       setLaunchResult(result)
       await loadPresets()
-      toast.success('Launch complete')
+      if (isCurrentTarget()) toast.success('Launch complete')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to launch team')
+      if (isCurrentTarget()) toast.error(error instanceof Error ? error.message : 'Failed to launch team')
     } finally {
-      setLaunching(false)
+      if (isCurrentTarget()) setLaunching(false)
     }
   }
 
@@ -1297,7 +1371,7 @@ export function AgentTeamsPage() {
               <button
                 key={preset.id}
                 type="button"
-                onClick={() => setSelectedPresetId(preset.id)}
+                onClick={() => { setSelectedPresetId(preset.id); navigate(`/teams/${preset.id}`) }}
                 className={cn(
                   'mb-2 w-full rounded-md border p-3 text-left transition-colors hover:bg-accent',
                   selectedPresetId === preset.id && 'border-primary bg-accent'
@@ -1323,10 +1397,12 @@ export function AgentTeamsPage() {
         <div className="min-w-0 rounded-lg border">
           {!selectedPreset ? (
             <div className="p-8 text-sm text-muted-foreground">
-              Select or create a team.
+              {teamId ? `Team ${teamId} not found. Select an available team.` : 'Select or create a team.'}
             </div>
           ) : (
             <div className="space-y-6 p-5">
+              {contextParams.get('review_launch') === '1' && <section className="space-y-2 rounded border p-3"><h3 className="font-semibold">Review selected slot launch</h3><p>{selectedPreset.slots.find(slot => slot.id === requestedSlotId)?.display_name ?? 'Selected slot not found'} · slot {requestedSlotId ?? 'unknown'}. Opening this page does not launch or approve work.</p><Button className="h-auto whitespace-normal text-left" variant="outline" disabled={!selectedPreset.slots.some(slot => slot.id === requestedSlotId)} onClick={() => void openPlan(requestedSlotId ? [requestedSlotId] : null)}>Review current authenticated launch plan</Button></section>}
+
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="grid flex-1 gap-3">
                   <div className="grid gap-2">
@@ -1544,8 +1620,8 @@ export function AgentTeamsPage() {
       />
       {!tokenDialogOpen && (
         <LaunchPlanDialog
-          plan={plan}
-          result={launchResult}
+          plan={plan?.preset_id === selectedPreset?.id ? plan : null}
+          result={launchResult?.preset_id === selectedPreset?.id ? launchResult : null}
           loading={planLoading}
           launching={launching}
           onOpenChange={(open) => {

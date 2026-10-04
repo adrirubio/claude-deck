@@ -1,3 +1,4 @@
+import { assertBrowserNativeRequest } from '@/features/native-settings/surfaceRegistry'
 import { API_BASE_URL } from './constants'
 
 /**
@@ -23,7 +24,7 @@ export function buildEndpoint(
 
 export interface ApiError {
   message?: string
-  detail?: string | { message?: string; block_code?: string; msg?: string } | Array<{ msg?: string }>
+  detail?: string | { message?: string; block_code?: string; code?: string; msg?: string } | Array<{ msg?: string }>
 }
 
 const operatorErrorMessages: Record<string, string> = {
@@ -49,12 +50,14 @@ function apiErrorMessage(error: ApiError, fallback = 'An error occurred'): strin
 export class ApiHttpError extends Error {
   readonly status: number
   readonly blockCode?: string
+  readonly code?: string
 
-  constructor(message: string, status: number, blockCode?: string) {
+  constructor(message: string, status: number, blockCode?: string, code?: string) {
     super(message)
     this.name = 'ApiHttpError'
     this.status = status
     this.blockCode = blockCode
+    this.code = code
   }
 }
 
@@ -63,7 +66,7 @@ function httpError(response: Response, body: ApiError): ApiHttpError {
   const blockCode = detail && !Array.isArray(detail) && typeof detail === 'object'
     ? detail.block_code
     : undefined
-  return new ApiHttpError(apiErrorMessage(body), response.status, blockCode)
+  return new ApiHttpError(apiErrorMessage(body), response.status, blockCode, detail && !Array.isArray(detail) && typeof detail === 'object' ? detail.code : undefined)
 }
 
 export class ApiClient {
@@ -71,6 +74,7 @@ export class ApiClient {
     endpoint: string,
     options?: RequestInit
   ): Promise<T> {
+    assertBrowserNativeRequest(endpoint, options?.method ?? 'GET')
     const url = `${API_BASE_URL}${endpoint}`
 
     try {
@@ -94,7 +98,7 @@ export class ApiClient {
       if (error instanceof Error) {
         throw error
       }
-      throw new Error('An unknown error occurred')
+      throw new Error('An unknown error occurred', { cause: error })
     }
   }
 
@@ -125,7 +129,8 @@ export const api = new ApiClient()
 
 // Helper function for simpler API calls
 export async function apiClient<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint}`
+  assertBrowserNativeRequest(endpoint, options?.method ?? 'GET')
+    const url = `${API_BASE_URL}${endpoint}`
 
   try {
     const response = await fetch(url, {
@@ -153,6 +158,6 @@ export async function apiClient<T>(endpoint: string, options?: RequestInit): Pro
     if (error instanceof Error) {
       throw error
     }
-    throw new Error('An unknown error occurred')
+    throw new Error('An unknown error occurred', { cause: error })
   }
 }

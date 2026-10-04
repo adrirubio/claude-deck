@@ -54,7 +54,7 @@ export function SessionViewer({ sessionId, projectFolder, open, onClose }: Props
   }
 
   const handleViewFullScreen = () => {
-    const url = `/sessions/${projectFolder}/${sessionId}?page=${currentPage}`
+    const url = `/harnesses/claude-code/sessions/${encodeURIComponent(projectFolder)}/${encodeURIComponent(sessionId)}?page=${currentPage}`
     navigate(url)
   }
 

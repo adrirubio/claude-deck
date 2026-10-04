@@ -1,70 +1,65 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { ProjectProvider } from './contexts/ProjectContext'
-import { DashboardProvider } from './contexts/DashboardContext'
 import { ProviderProvider } from './contexts/ProviderContext'
 import { MainLayout } from './components/layout/MainLayout'
-import { DashboardPage } from './features/dashboard/DashboardPage'
-import { ConfigViewerPage } from './features/config/ConfigViewerPage'
 import { ProjectsPage } from './features/projects/ProjectsPage'
-import { MCPServersPage } from './features/mcp/MCPServersPage'
-import { CommandsPage } from './features/commands/CommandsPage'
-import { PluginsPage } from './features/plugins/PluginsPage'
-import { HooksPage } from './features/hooks/HooksPage'
-import { PermissionsPage } from './features/permissions/PermissionsPage'
-import { AgentsPage } from './features/agents/AgentsPage'
-import { SkillsPage } from './features/skills/SkillsPage'
-import { BackupPage } from './features/backup/BackupPage'
-import { OutputStylesPage } from './features/output-styles/OutputStylesPage'
-import { StatusLinePage } from './features/statusline/StatusLinePage'
-import { SessionsPage } from './features/sessions/SessionsPage'
-import { SessionViewPage } from './features/sessions/SessionViewPage'
-import { UsagePage } from './features/usage/UsagePage'
-import { MemoryPage } from './features/memory/MemoryPage'
-import { ContextPage } from './features/context/ContextPage'
-import { PlansPage } from './features/plans/PlansPage'
-import { PlanDetailPage } from './features/plans/PlanDetailPage'
-import { CCBridgePage } from './features/cc-bridge/CCBridgePage'
-import { AgentMailPage } from './features/agent-mail/AgentMailPage'
+import { NativeRoute } from './features/native-settings/NativeRoute'
+import { HarnessesPage } from './features/harnesses/HarnessesPage'
+import { OverviewPage, WorkPage, WorkDetailPage, RepositoriesPage, RepositoryPage } from './features/factory/FactoryPages'
+import { BridgeEntry, MailEntry } from './features/factory/ContextPages'
 import { AgentTeamsPage } from './features/agent-teams/AgentTeamsPage'
+
+function TeamsAlias() { const { search, hash } = useLocation(); return <Navigate replace to={`/teams${search}${hash}`} /> }
 
 function App() {
   return (
     <ProjectProvider>
       <ProviderProvider>
-        <DashboardProvider>
+
           <BrowserRouter>
             <Toaster richColors position="top-right" />
             <Routes>
               <Route path="/" element={<MainLayout />}>
-                <Route index element={<DashboardPage />} />
-                <Route path="config" element={<ConfigViewerPage />} />
-                <Route path="mcp" element={<MCPServersPage />} />
-                <Route path="commands" element={<CommandsPage />} />
-                <Route path="plugins" element={<PluginsPage />} />
-                <Route path="hooks" element={<HooksPage />} />
-                <Route path="permissions" element={<PermissionsPage />} />
-                <Route path="agents" element={<AgentsPage />} />
-                <Route path="skills" element={<SkillsPage />} />
-                <Route path="memory" element={<MemoryPage />} />
+                <Route index element={<OverviewPage />} />
+                <Route path="work" element={<WorkPage />} />
+                <Route path="work/:workItemId" element={<WorkDetailPage />} />
+                <Route path="repositories" element={<RepositoriesPage />} />
+                <Route path="repositories/:scopeId" element={<RepositoryPage />} />
+                <Route path="harnesses" element={<HarnessesPage />} />
+                <Route path="harnesses/:providerId" element={<HarnessesPage />} />
+                <Route path="harnesses/:providerId/:surface" element={<NativeRoute />} />
+                <Route path="harnesses/:providerId/plans/:filename" element={<NativeRoute surface="plans" detail="plan" />} />
+                <Route path="harnesses/:providerId/sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />
+                <Route path="teams" element={<AgentTeamsPage />} />
+                <Route path="teams/:teamId" element={<AgentTeamsPage />} />
+                <Route path="config" element={<NativeRoute surface="config" />} />
+                <Route path="mcp" element={<NativeRoute surface="mcp" />} />
+                <Route path="commands" element={<NativeRoute surface="commands" />} />
+                <Route path="plugins" element={<NativeRoute surface="plugins" />} />
+                <Route path="hooks" element={<NativeRoute surface="hooks" />} />
+                <Route path="permissions" element={<NativeRoute surface="permissions" />} />
+                <Route path="agents" element={<NativeRoute surface="agents" />} />
+                <Route path="skills" element={<NativeRoute surface="skills" />} />
+                <Route path="memory" element={<NativeRoute surface="memory" />} />
                 <Route path="projects" element={<ProjectsPage />} />
-                <Route path="backup" element={<BackupPage />} />
-                <Route path="output-styles" element={<OutputStylesPage />} />
-                <Route path="statusline" element={<StatusLinePage />} />
-                <Route path="sessions/:projectFolder/:sessionId" element={<SessionViewPage />} />
-                <Route path="sessions" element={<SessionsPage />} />
-                <Route path="agent-bridge" element={<CCBridgePage />} />
-                <Route path="cc-bridge" element={<CCBridgePage />} />
-                <Route path="agent-mail" element={<AgentMailPage />} />
-                <Route path="agent-teams" element={<AgentTeamsPage />} />
-                <Route path="plans/:filename" element={<PlanDetailPage />} />
-                <Route path="plans" element={<PlansPage />} />
-                <Route path="context" element={<ContextPage />} />
-                <Route path="usage" element={<UsagePage />} />
+                <Route path="backup" element={<NativeRoute surface="backup" />} />
+                <Route path="output-styles" element={<NativeRoute surface="output-styles" />} />
+                <Route path="statusline" element={<NativeRoute surface="statusline" />} />
+                <Route path="sessions/:projectFolder/:sessionId" element={<NativeRoute surface="sessions" detail="session" />} />
+                <Route path="sessions" element={<NativeRoute surface="sessions" />} />
+                <Route path="agent-bridge" element={<BridgeEntry />} />
+                <Route path="cc-bridge" element={<BridgeEntry />} />
+                <Route path="agent-mail" element={<MailEntry />} />
+                <Route path="agent-teams" element={<TeamsAlias />} />
+                <Route path="plans/:filename" element={<NativeRoute surface="plans" detail="plan" />} />
+                <Route path="plans" element={<NativeRoute surface="plans" />} />
+                <Route path="context" element={<NativeRoute surface="context" />} />
+                <Route path="usage" element={<NativeRoute surface="usage" />} />
               </Route>
             </Routes>
           </BrowserRouter>
-        </DashboardProvider>
+
       </ProviderProvider>
     </ProjectProvider>
   )

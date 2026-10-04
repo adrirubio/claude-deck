@@ -1,0 +1,81 @@
+{
+  "incompatible_filters": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 422,
+    "method": "GET",
+    "query": {
+      "scope_id": 2,
+      "team_id": 1
+    },
+    "response": {
+      "detail": {
+        "code": "invalid_filter",
+        "message": "Select valid compatible filters."
+      }
+    }
+  },
+  "invalid_cursor": {
+    "endpoint": "/api/v1/factory/work-items",
+    "http_status": 422,
+    "method": "GET",
+    "query": {
+      "cursor": "invalid"
+    },
+    "response": {
+      "detail": {
+        "code": "invalid_cursor",
+        "message": "Refresh from start with the selected filters."
+      }
+    }
+  },
+  "invalid_filter": {
+    "endpoint": "/api/v1/factory/work-items",
+    "http_status": 422,
+    "method": "GET",
+    "query": {
+      "limit": 0
+    },
+    "response": {
+      "detail": {
+        "code": "invalid_filter",
+        "message": "Select valid compatible filters."
+      }
+    }
+  },
+  "missing_repository": {
+    "endpoint": "/api/v1/factory/repositories/9999",
+    "http_status": 404,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "detail": {
+        "code": "resource_not_found",
+        "message": "The selected resource was not found."
+      }
+    }
+  },
+  "missing_work_item": {
+    "endpoint": "/api/v1/factory/work-items/9999",
+    "http_status": 404,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "detail": {
+        "code": "resource_not_found",
+        "message": "The selected resource was not found."
+      }
+    }
+  },
+  "projection_failed": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 500,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "detail": {
+        "code": "projection_failed",
+        "message": "Factory observations could not be loaded."
+      }
+    }
+  }
+}

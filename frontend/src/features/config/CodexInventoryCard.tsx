@@ -1,3 +1,5 @@
+import { useProviderContext } from '@/contexts/ProviderContext'
+import { nativeAccess } from '@/features/native-settings/surfaceRegistry'
 import { useMemo, useState } from "react";
 import { ChevronRight, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -158,8 +160,12 @@ export function CodexInventoryCard({
   title = "Codex Inventory",
   description,
 }: CodexInventoryCardProps) {
-  const showMcp = sections.includes("mcp");
-  const showPlugins = sections.includes("plugins");
+  const { selectedProviderId, selectedProvider } = useProviderContext()
+  const mcpAccess = nativeAccess(selectedProviderId, 'mcp', selectedProvider)
+  const pluginAccess = nativeAccess(selectedProviderId, 'plugins', selectedProvider)
+  const canWriteMcp = selectedProviderId === 'codex-cli' && mcpAccess === 'write_capable'
+  const showMcp = sections.includes("mcp") && selectedProviderId === 'codex-cli' && mcpAccess !== null;
+  const showPlugins = sections.includes("plugins") && selectedProviderId === 'codex-cli' && pluginAccess !== null;
   const [mode, setMode] = useState<McpMode>("command");
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
@@ -197,8 +203,8 @@ export function CodexInventoryCard({
     );
   }, [pluginSearch, plugins?.plugins]);
   const pluginCapabilities = plugins?.mutation_capabilities;
-  const canInstallPlugins = pluginCapabilities?.install.state === "supported";
-  const canRemovePlugins = pluginCapabilities?.remove.state === "supported";
+  const canInstallPlugins = pluginAccess === 'write_capable' && pluginCapabilities?.install.state === "supported";
+  const canRemovePlugins = pluginAccess === 'write_capable' && pluginCapabilities?.remove.state === "supported";
   const pluginToggleUnsupported = [
     pluginCapabilities?.enable.reason,
     pluginCapabilities?.disable.reason,
@@ -221,6 +227,7 @@ export function CodexInventoryCard({
   };
 
   const handleAddMcp = async () => {
+    if (!canWriteMcp) return
     setMutationError(null);
     setMutationMessage(null);
     try {
@@ -270,6 +277,7 @@ export function CodexInventoryCard({
   };
 
   const handleRemoveMcp = async (serverName: string) => {
+    if (!canWriteMcp) return
     setMutationError(null);
     setMutationMessage(null);
     setMutating(true);
@@ -504,7 +512,7 @@ export function CodexInventoryCard({
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="linear"
-                  disabled={mutating}
+                  disabled={mutating || !canWriteMcp}
                 />
               </div>
               {mode === "url" ? (
@@ -516,7 +524,7 @@ export function CodexInventoryCard({
                       value={url}
                       onChange={(event) => setUrl(event.target.value)}
                       placeholder="https://example.com/mcp"
-                      disabled={mutating}
+                      disabled={mutating || !canWriteMcp}
                     />
                   </div>
                   <div className="space-y-1.5 md:col-span-2">
@@ -530,7 +538,7 @@ export function CodexInventoryCard({
                         setBearerTokenEnvVar(event.target.value)
                       }
                       placeholder="MCP_TOKEN"
-                      disabled={mutating}
+                      disabled={mutating || !canWriteMcp}
                     />
                   </div>
                 </>
@@ -543,7 +551,7 @@ export function CodexInventoryCard({
                       value={command}
                       onChange={(event) => setCommand(event.target.value)}
                       placeholder="npx"
-                      disabled={mutating}
+                      disabled={mutating || !canWriteMcp}
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -553,7 +561,7 @@ export function CodexInventoryCard({
                       value={argsText}
                       onChange={(event) => setArgsText(event.target.value)}
                       placeholder={"-y\n@linear/mcp"}
-                      disabled={mutating}
+                      disabled={mutating || !canWriteMcp}
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -563,7 +571,7 @@ export function CodexInventoryCard({
                       value={envText}
                       onChange={(event) => setEnvText(event.target.value)}
                       placeholder="LINEAR_API_KEY=value"
-                      disabled={mutating}
+                      disabled={mutating || !canWriteMcp}
                     />
                   </div>
                 </>
@@ -572,7 +580,7 @@ export function CodexInventoryCard({
             <div className="mt-3 flex justify-end">
               <Button
                 onClick={handleAddMcp}
-                disabled={mutating}
+                disabled={mutating || !canWriteMcp}
                 className="gap-2"
               >
                 <Plus className="h-4 w-4" />
@@ -653,7 +661,7 @@ export function CodexInventoryCard({
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-                      disabled={mutating}
+                      disabled={mutating || !canWriteMcp}
                       title={`Remove ${server.name}`}
                     >
                       <Trash2 className="h-4 w-4" />

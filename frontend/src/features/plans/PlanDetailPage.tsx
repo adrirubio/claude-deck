@@ -24,7 +24,7 @@ export function PlanDetailPage() {
   useEffect(() => {
     if (previousProviderId.current !== selectedProviderId) {
       previousProviderId.current = selectedProviderId
-      navigate('/plans', { replace: true })
+      navigate(`/harnesses/${selectedProviderId}/plans`, { replace: true })
     }
   }, [navigate, selectedProviderId])
 
@@ -47,7 +47,7 @@ export function PlanDetailPage() {
   }, [fetchPlan])
 
   const backButton = (
-    <Button variant="ghost" size="sm" onClick={() => navigate('/plans')} className="mb-2">
+    <Button variant="ghost" size="sm" onClick={() => navigate(`/harnesses/${selectedProviderId}/plans`)} className="mb-2">
       <ArrowLeft className="h-4 w-4 mr-2" />
       Back to Plans
     </Button>

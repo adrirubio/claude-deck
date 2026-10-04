@@ -28,6 +28,17 @@ beforeEach(() => {
 })
 
 describe('interactive terminal entry', () => {
+  it('keeps delivery context locked read-only even with a stored operator credential', async () => {
+    const user = userEvent.setup()
+    setOperatorToken('test-stored')
+    render(<TerminalView target="fixture:0.0" forceReadOnly />)
+    const interactive = screen.getByRole('button', { name: 'Interactive' })
+    expect(interactive).toBeDisabled()
+    await user.click(interactive)
+    expect(terminal.setReadOnly).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('keeps read-only access while asking for a masked operator token', async () => {
     const user = userEvent.setup()
     render(<TerminalView target="deck:0.0" />)
