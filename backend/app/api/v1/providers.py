@@ -5,8 +5,13 @@ import json
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models.provider_operations_schemas import ProviderOperations
+from app.services import provider_operations_service
 
 from app.models.schemas import CLIExecuteRequest, CLIResult
 from app.services.cli_executor import ProviderCLIExecutor
@@ -163,6 +168,33 @@ def get_provider_capabilities(provider_id: str):
 @router.get("/providers/{provider_id}/launch-options")
 def get_provider_launch_options(provider_id: str):
     return build_provider_launch_options(_get_provider_or_404(provider_id))
+
+
+@router.get("/providers/{provider_id}/operations", response_model=ProviderOperations)
+async def get_provider_operations(
+    provider_id: str,
+    team_id: int | None = Query(default=None, gt=0),
+    slot_id: int | None = Query(default=None, gt=0),
+    db: AsyncSession = Depends(get_db),
+):
+    provider = _get_provider_or_404(provider_id)
+    if (team_id is None) != (slot_id is None):
+        raise _provider_error(422, "invalid_slot_context", "Select both team_id and slot_id.", provider_id=provider_id)
+    session = None
+    if team_id is not None:
+        try:
+            session = await provider_operations_service.scoped_session(db, provider_id, team_id, slot_id)
+        except ValueError as exc:
+            if str(exc) == "slot_context_not_found":
+                raise _provider_error(404, "slot_context_not_found", "No matching team slot for this provider.", provider_id=provider_id) from None
+            from app.models.provider_operations_schemas import SessionReadiness
+            session = SessionReadiness(team_id=team_id, slot_id=slot_id, reason="Session observation could not be completed.")
+        except Exception:
+            # A failed observation is unknown, never a guessed live worker.
+            from app.models.provider_operations_schemas import SessionReadiness
+            session = SessionReadiness(team_id=team_id, slot_id=slot_id, reason="Session observation could not be completed.")
+    snapshot = await provider_operations_service.readiness_snapshot()
+    return provider_operations_service.catalog(provider, snapshot, session)
 
 
 def _get_provider_or_404(provider_id: str):

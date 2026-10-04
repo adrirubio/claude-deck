@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "source_base_sha": "667841e7e71ea4c1007a4124273bb7c3a6b04869",
+  "exact_review_head": "Recorded in external authenticated freeze receipt; no self-referential commit hash",
+  "catalog_sha256": "326aef478a580794926886cf46662a46fe8e0a533c813bf80c2bda8f51ff6fe1",
+  "source_sha256": {
+    "backend/app/models/provider_operations_schemas.py": "7cb632961ccdbf3350ba69381bc34b82de73b37d581e634d805fd79bb88333d8",
+    "backend/app/services/provider_readiness_service.py": "991cc57f69a2844ce9cad0ab7f5ab7a237eb3adfda6c6845ddc69e49df9ed5f0",
+    "backend/app/services/provider_operations_service.py": "138f210ff56275c9a8a12b6ba95cbc80e3788bf1b16668a008e32f53a2ecf17d",
+    "backend/app/api/v1/providers.py": "1568537ef086cd1188e9b641460a6a50d851a53d3aba7e6eeb6370de6933e2fd",
+    "backend/app/services/agent_team_service.py": "169af0ea01f674190a013d1452ad30ce3c4139a49452a18f1f4cf5293ae0ad6c",
+    "frontend/tests/fixtures/factory/native-adapters.json": "fdf65fa6f92a60cd9748084726b5caea78c4b62662c3226eee66def090bc07be",
+    "backend/tests/test_provider_operations.py": "ebe6960bea779891fcf96e4a598389197812c08280133c2ed7046cca51f8fa5e",
+    "backend/tests/test_provider_readiness.py": "e3195587f0b0883ce8a446d916548efc3f0ba78fcfa5e21b0e8ee2c4402bfa93"
+  },
+  "providers": [
+    "claude-code",
+    "codex-cli",
+    "copilot-cli",
+    "opencode-cli",
+    "pi-cli"
+  ],
+  "scenarios": [
+    "binary_missing",
+    "mail_not_positively_configured",
+    "pending",
+    "probe_failed",
+    "adapter_mismatch",
+    "read_only_config",
+    "unknown_config"
+  ],
+  "probe_contract": {
+    "request_wait_seconds": 2,
+    "cache_ttl_seconds": 60,
+    "max_concurrent_snapshot_workers_per_process": 1,
+    "legacy_command_limits_seconds": [
+      5,
+      10,
+      30
+    ],
+    "worker_limit": "One fixed local Python observer subprocess has a90s aggregate timeout; requests wait2s and retain singleflight rather than duplicating/cancelling the observation. CLI/model/session launch or credential probes are not executed; output is allowlisted booleans/empty-or-missing-hook flags only.",
+    "aggregate_probe_seconds": 90
+  }
+}
