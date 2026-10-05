@@ -1,9 +1,12 @@
 import { Link, useParams } from "react-router-dom";
+import { buttonVariants } from "@/components/ui/button";
 import { useProviderContext } from "@/contexts/ProviderContext";
 import { useProviderOperations } from "@/hooks/useProviders";
 import { harnesses } from "@/features/factory/filterHelpers";
 import { surfaceRegistry, nativeAccess } from "@/features/native-settings/surfaceRegistry";
 import { providerOperationKeys, type AgentProviderId, type AgentProviderStatus } from "@/types/providers";
+
+const destination = buttonVariants({ variant: "outline", className: "h-auto min-h-11 max-w-full whitespace-normal break-words justify-start text-left focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background" });
 
 function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentProviderStatus }) {
   const { state, catalog, refresh, refreshing } = useProviderOperations(id);
@@ -11,7 +14,7 @@ function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentPr
   return (
     <article className="min-w-0 space-y-3 rounded-lg border bg-card p-4 break-words">
       <h3 className="text-lg font-semibold">
-        <Link className="text-primary underline" to={`/harnesses/${id}`}>{harnesses[id]}</Link>
+        <Link className="rounded-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background" to={`/harnesses/${id}`}>{harnesses[id]}</Link>
       </h3>
       <p>Binary: {metadata ? metadata.installed ? `installed ${metadata.version ?? ""}` : "missing" : "unknown"}</p>
       {(state === "idle" || state === "loading") && <p role="status">Loading operating catalog…</p>}
@@ -26,7 +29,7 @@ function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentPr
         <div><dt className="font-medium">Session</dt><dd>{readiness?.session.state ?? "unknown"} · {readiness?.session.reason ?? "No team slot selected; a generic provider card cannot establish a worker binding."}</dd></div>
       </dl>
       {readiness && <p className="text-xs text-muted-foreground">Observation: {readiness.probe_state} · {new Date(readiness.observed_at).toLocaleString()}. {readiness.probe_state === "pending" ? "Local checks are still pending." : readiness.probe_state === "failed" ? "Local checks could not complete; uncertain results remain unknown." : "Local configuration checks do not contact a model."}</p>}
-      <button type="button" className="text-primary underline" onClick={() => { void refresh() }} disabled={refreshing}>Refresh observations</button>
+      <button type="button" className={buttonVariants({ variant: "secondary", className: "h-auto min-h-11 whitespace-normal text-left focus-visible:ring-2" })} onClick={() => { void refresh() }} disabled={refreshing}>Refresh observations</button>
       {catalog && <details>
         <summary className="cursor-pointer">Operations and conditions</summary>
         <ul className="space-y-3 pt-2 text-sm">
@@ -37,16 +40,16 @@ function HarnessCard({ id, metadata }: { id: AgentProviderId; metadata?: AgentPr
         </ul>
       </details>}
       <p>Native pages: {Object.keys(surfaceRegistry[id]).length ? "matching implemented adapters listed below" : "no dedicated settings adapters; CLI and Mail integration support are separate"}</p>
-      <nav className="flex flex-wrap gap-3 text-sm" aria-label={`${harnesses[id]} native surfaces`}>
+      <nav className="flex flex-wrap items-start gap-2 text-sm" aria-label={`${harnesses[id]} native surfaces`}>
         {Object.keys(surfaceRegistry[id]).map(surface => {
           const access = catalog && nativeAccess(id, surface, metadata, catalog);
-          return access ? <Link className="text-primary underline" key={surface} to={`/harnesses/${id}/${surface}`}>{surface === "summary" ? "Configuration summary" : surface.replaceAll("-", " ")} ({access.replaceAll("_", " ")})</Link> : <span key={surface}>{surface}: unavailable</span>;
+          return access ? <Link className={destination} key={surface} to={`/harnesses/${id}/${surface}`}>{surface === "summary" ? "Configuration summary" : surface.replaceAll("-", " ")} ({access.replaceAll("_", " ")})</Link> : <span key={surface}>{surface}: unavailable</span>;
         })}
       </nav>
       {catalog && <details><summary className="cursor-pointer">Reported native capabilities</summary><ul className="text-sm">{Object.entries(catalog.native_capabilities).map(([name, value]) => <li key={name}>{name}: {value.state} · {value.reason}</li>)}</ul></details>}
-      <div className="flex flex-wrap gap-3 text-sm">
-        <Link className="text-primary underline" to="/teams">Teams and launch planning</Link>
-        <Link className="text-primary underline" to={`/agent-bridge?provider=${id}`}>Live sessions</Link>
+      <div className="flex flex-wrap items-start gap-2 text-sm">
+        <Link className={destination} to="/teams">Teams and launch planning</Link>
+        <Link className={destination} to={`/agent-bridge?provider=${id}`}>Live sessions</Link>
       </div>
     </article>
   );
