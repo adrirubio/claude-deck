@@ -52,7 +52,9 @@ def report(row, *, eligible=True):
 @pytest_asyncio.fixture
 async def team(db, monkeypatch):
     from app.services.github_operator_attention_service import github_operator_attention_service
+    from app.services.github_operator_context_service import github_operator_context_service
     monkeypatch.setattr(github_operator_attention_service, "_pr_cache", {})
+    monkeypatch.setattr(github_operator_context_service, "_cache", {})
     monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
     monkeypatch.setattr(settings, "github_coordination_hold_paths", [])
     monkeypatch.setattr(settings, "github_recovery_only_attempt", "")
