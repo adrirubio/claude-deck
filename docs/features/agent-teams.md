@@ -69,6 +69,32 @@ It does not present the gate as ready or treat its evidence as accepted.
 
 These reports describe the requested action. They do not approve work or satisfy a milestone.
 
+## Clear Instructions for Human Actions
+
+Deck keeps the detailed instructions in the main GitHub issue. A comment history or team Mail exchange is insufficient.
+The **Current operator actions** section belongs near the start of the issue body.
+It states why the request exists, who must act, the exact steps, the evidence, and the condition that clears it.
+It names delegated maintenance explicitly. A delegated repair must not look like an unexplained new decision for the operator.
+
+The team Leader prepares and publishes these instructions through the team's existing authorized GitHub access.
+This task covers automatic dispatch escalations and review requests as well as milestone and pilot decisions.
+The Leader updates the record when the request changes and clears or supersedes it when the request ends.
+Other issue facts and records from other scopes remain intact.
+
+Deck checks the current record before showing an action as ready. A PR record identifies its target and reviewed head.
+A new assessment with missing or stale instructions is refused. Older or automatic requests remain visible as **Action details pending**.
+The Leader must prepare those details. Autonomy inspection remains available for urgent recovery.
+Missing instructions do not clear a gate, hide the stopped attempt, or authorize a retry.
+
+The panel shows a short action label, its readiness, and a **Read action instructions** link.
+The link opens the current section in GitHub. Detailed steps stay in the issue.
+Instruction records expire after 24 hours and need an update if the request remains current.
+A failed GitHub read or publication cannot make an unexplained action ready.
+
+These records do not approve work, release a workspace, change merge policy, or satisfy a milestone.
+Deck checks the record's structure and identity. The Leader remains responsible for clear and accurate explanations.
+See the [API publication contract](../api/agent-teams.md#current-operator-action-records) for the preparation tools and record format.
+
 ## Same-Repo Role Workflows
 
 Use Agent Teams when multiple agents need distinct roles inside the same repository. A common setup is:

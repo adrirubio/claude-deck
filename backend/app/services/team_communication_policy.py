@@ -17,6 +17,21 @@ The operator disabled Deck's ASD-STE100 guidance for this member. Use your own w
 This choice replaces only Deck's earlier controlled-language instruction for this member.
 Keep the human summary requirement. Keep all other instructions, safety conditions, authority rules, and decision gates."""
 
+OPERATOR_ACTION_CONTEXT_GUIDANCE = """Current operator action instructions
+Before requesting human input, call deck_prepare_operator_action_contexts for the intended requests.
+For automatic review or recovery requests, call deck_get_operator_action_contexts.
+Publish the completed records near the start of the main GitHub issue body.
+Use the returned markers and heading. Replace each WRITE_ placeholder.
+State the reason, responsible person, exact action, evidence, and completion condition.
+Name delegated recovery explicitly. Do not imply that an agent task needs a new human decision.
+State the PR target and reviewed head for a PR request. Give a current UTC update time.
+Preserve other issue facts and other scopes. Use existing authorized GitHub access.
+Do not leave the instructions only in Mail or comments. Never publish private credentials, prompts, or raw logs.
+Clear or supersede old records when the request changes or ends.
+After editing the issue, read fresh coordination before reporting its assessment.
+Missing or stale instructions remain visible as Action details pending.
+These records grant no approval, retry, lease, merge, or milestone authority."""
+
 HUMAN_REVIEW_SUMMARY_GUIDANCE = """Summary for human review
 PR means GitHub pull request. CI means automatic checks.
 Before you request human review or merge, add a brief Human review summary.
@@ -28,7 +43,7 @@ Keep the summary brief. Link detailed evidence below it.
 Preserve the original issue facts and existing PR metadata. Update a clearly marked summary section.
 Update the summary when the PR head, results, or requested action changes.
 Do not use a comment as the only summary. Do not claim completion without evidence.
-The summary does not replace approval, independent review, or the configured merge policy."""
+The summary does not replace approval, independent review, or the configured merge policy.""" + "\n\n" + OPERATOR_ACTION_CONTEXT_GUIDANCE
 
 
 def team_communication_guidance(controlled_language_enabled: bool = True) -> str:

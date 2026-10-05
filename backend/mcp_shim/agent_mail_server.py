@@ -1128,6 +1128,49 @@ def deck_get_backlog_coordination(scope_id: int) -> dict:
 
 
 @mcp.tool()
+def deck_get_operator_action_contexts(preset_id: int) -> dict:
+    """Read current requests and issue instruction templates. This grants no authority.
+
+    The Leader must publish completed templates near the start of each main
+    GitHub issue. Use the returned section markers. Fill every WRITE_ placeholder.
+    State the reason, responsible person, exact steps, evidence and completion
+    condition. Use a UTC update time. Keep existing content and other scopes.
+    Use existing authorized GitHub access. Never copy tokens, leases, nonces,
+    private paths, prompts or raw logs into GitHub. The read does not write to
+    GitHub, retry work, release a lease, approve a plan or merge a PR.
+    Missing or stale instructions appear as Action details pending in Deck.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    return _dispatch_request("GET", f"/presets/{preset_id}/human-actions?include_templates=true")
+
+
+@mcp.tool()
+def deck_prepare_operator_action_contexts(scope_id: int, entries: list[dict]) -> dict:
+    """Prepare issue records for the current Leader's intended human requests.
+
+    Entries use the backlog assessment schema. Supply only the assigned issues
+    that have intended human_actions. Use required_actor operator. Up to sixteen
+    unique actions and eight PRs are allowed. PRs need their full expected head.
+    Inspection actions require a current stopped attempt.
+
+    Publish the completed templates in the main issue body before requesting
+    input. Preserve other issue facts and other scopes. Clear or supersede old
+    records when the request changes. A PR record must include its target and
+    reviewed head. Do not leave instructions only in Mail or comments.
+    After publication, read fresh backlog coordination and pass its private
+    snapshot_token to the normal assessment tool. This preparation is read-only
+    and grants no approval, lease, retry, merge or milestone authority.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    return _dispatch_request("POST", f"/github-scopes/{scope_id}/operator-action-contexts/prepare",
+                             json={"entries":entries})
+
+
+@mcp.tool()
 def deck_report_backlog_assessment(
     scope_id: int, generation: int, request_sequence: int, entries: list[dict],
     snapshot_token: str | None = None,
@@ -1144,7 +1187,7 @@ def deck_report_backlog_assessment(
 
     An entry may also include human_actions (at most four per entry,16 overall):
     kind (review_pr, merge_pr, pilot_decision, milestone_acceptance, provide_evidence,
-    scope_clarification); readiness (requested, waiting_for_prerequisites);
+    scope_clarification, inspect_attempt, inspect_checkpoint); readiness (requested, waiting_for_prerequisites);
     prerequisite_issue_numbers (assigned references). PR actions require
     pull_request_number and expected_head_sha (full40-character lowercase SHA;
     at most eight distinct PRs). Fresh same-repository/open/head checks are required.
@@ -1152,6 +1195,11 @@ def deck_report_backlog_assessment(
     standing issue. Distinguish current review requests from future pilot/acceptance
     gates; never mark a gated decision requested before its prerequisites permit it.
     These requests appear above the Roster and Autonomy tabs and grant no authority.
+    Human actions require required_actor operator. Before reporting requested,
+    prepare and publish current issue instructions with
+    deck_prepare_operator_action_contexts. Missing, stale or changed records are
+    refused. Clear or supersede replaced records in the issue body first.
+    Automatic dispatch requests use deck_get_operator_action_contexts templates.
 
     Pass snapshot_token from a fresh deck_get_backlog_coordination read to publish
     while already working, even when notification quota is exhausted or no request
