@@ -265,6 +265,40 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_get_backlog_coordination",
+    "description": "Current Leader: read the assigned backlog, observations and request version.\n\n    Reconcile reviewed dependency/milestone gates and already-landed fixes even for\n    issues without a dispatch-ready label. While ON, this read returns a short-lived\n    snapshot_token for publishing a current assessment without another notification.\n    Read again immediately before reporting; keep the token private. OFF/HOLD reads\n    grant no publication challenge. This tool grants no implementation authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "scope_id": {
+          "title": "Scope Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope_id"
+      ],
+      "title": "deck_get_backlog_coordinationArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_get_operator_action_contexts",
+    "description": "Read current requests and issue instruction templates. This grants no authority.\n\n    The Leader must publish completed templates near the start of each main\n    GitHub issue. Use the returned section markers. Fill every WRITE_ placeholder.\n    State the reason, responsible person, exact steps, evidence and completion\n    condition. Use a UTC update time. Keep existing content and other scopes.\n    Use existing authorized GitHub access. Never copy tokens, leases, nonces,\n    private paths, prompts or raw logs into GitHub. The read does not write to\n    GitHub, retry work, release a lease, approve a plan or merge a PR.\n    Missing or stale instructions appear as Action details pending in Deck.\n    ",
+    "inputSchema": {
+      "properties": {
+        "preset_id": {
+          "title": "Preset Id",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "preset_id"
+      ],
+      "title": "deck_get_operator_action_contextsArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_get_work_item_context",
     "description": "Claim the current owner's continuation context, including the persisted\n    branch, approval round, workspace, and lease capability after a handoff or\n    session restart.",
     "inputSchema": {
@@ -283,7 +317,7 @@ export const manifest = [
   },
   {
     "name": "deck_launch_team",
-    "description": "Launch an Agent Team preset.\n\n    Call deck_plan_team_launch first and pass its plan_hash as\n    confirm_plan_hash. force_without_plan bypasses that safety check only when\n    explicitly set true. Launch behavior uses the per-provider launch_options\n    accepted by deck_create_team; validation errors include machine-readable\n    block_code values when available.\n    ",
+    "description": "Launch an Agent Team preset.\n\n    Call deck_plan_team_launch first and pass its plan_hash as\n    confirm_plan_hash. Forced respawn and force_without_plan require an\n    operator and are not available through this agent tool. Launch behavior\n    uses the per-provider launch_options accepted by deck_create_team;\n    validation errors include machine-readable\n    block_code values when available.\n    ",
     "inputSchema": {
       "properties": {
         "preset_id": {
@@ -429,7 +463,7 @@ export const manifest = [
   },
   {
     "name": "deck_plan_team_launch",
-    "description": "Plan an Agent Team launch and return the plan_hash required by\n    deck_launch_team. Review blocked items and warnings before launching.",
+    "description": "Plan an Agent Team launch and return the plan_hash required by\n    deck_launch_team. Agent sessions cannot include disabled slots or force\n    replacement of a running session; those options require an operator.",
     "inputSchema": {
       "properties": {
         "preset_id": {
@@ -470,6 +504,32 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_prepare_operator_action_contexts",
+    "description": "Prepare issue records for the current Leader's intended human requests.\n\n    Entries use the backlog assessment schema. Supply only the assigned issues\n    that have intended human_actions. Use required_actor operator. Up to sixteen\n    unique actions and eight PRs are allowed. PRs need their full expected head.\n    Inspection actions require a current stopped attempt.\n\n    Publish the completed templates in the main issue body before requesting\n    input. Preserve other issue facts and other scopes. Clear or supersede old\n    records when the request changes. A PR record must include its target and\n    reviewed head. Do not leave instructions only in Mail or comments.\n    After publication, read fresh backlog coordination and pass its private\n    snapshot_token to the normal assessment tool. This preparation is read-only\n    and grants no approval, lease, retry, merge or milestone authority.\n    ",
+    "inputSchema": {
+      "properties": {
+        "scope_id": {
+          "title": "Scope Id",
+          "type": "integer"
+        },
+        "entries": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Entries",
+          "type": "array"
+        }
+      },
+      "required": [
+        "scope_id",
+        "entries"
+      ],
+      "title": "deck_prepare_operator_action_contextsArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_reply",
     "description": "Reply in an existing thread. If the root is a pending context request addressed\n    to you, your reply is recorded as the answer and resolves it.",
     "inputSchema": {
@@ -488,6 +548,54 @@ export const manifest = [
         "body"
       ],
       "title": "deck_replyArguments",
+      "type": "object"
+    }
+  },
+  {
+    "name": "deck_report_backlog_assessment",
+    "description": "Current Leader: submit one advisory disposition per assigned issue.\n\n    Each entry: issue_number; disposition (eligible, dependency_blocked,\n    human_decision_blocked, resource_blocked, completed, needs_scope_clarification,\n    standing); reason (admission, dependency, m1a_acceptance, pilot_decision,\n    m1b_acceptance, authority_prerequisite, human_merge, review_evidence, resource,\n    owner, scope_clarification, complete, standing, unknown); required_actor\n    (leader, operator, owner, reviewer, none); evidence_issue_numbers (assigned\n    positive issue numbers, at least one). Unknown/out-of-scope evidence is refused.\n\n    An entry may also include human_actions (at most four per entry,16 overall):\n    kind (review_pr, merge_pr, pilot_decision, milestone_acceptance, provide_evidence,\n    scope_clarification, inspect_attempt, inspect_checkpoint); readiness (requested, waiting_for_prerequisites);\n    prerequisite_issue_numbers (assigned references). PR actions require\n    pull_request_number and expected_head_sha (full40-character lowercase SHA;\n    at most eight distinct PRs). Fresh same-repository/open/head checks are required.\n    Include standing documentation PRs as explicit human requests in their assigned\n    standing issue. Distinguish current review requests from future pilot/acceptance\n    gates; never mark a gated decision requested before its prerequisites permit it.\n    These requests appear above the Roster and Autonomy tabs and grant no authority.\n    Human actions require required_actor operator. Before reporting requested,\n    prepare and publish current issue instructions with\n    deck_prepare_operator_action_contexts. Missing, stale or changed records are\n    refused. Clear or supersede replaced records in the issue body first.\n    Automatic dispatch requests use deck_get_operator_action_contexts templates.\n\n    Pass snapshot_token from a fresh deck_get_backlog_coordination read to publish\n    while already working, even when notification quota is exhausted or no request\n    has been sent (request_sequence may be zero). This spends no notification quota.\n    A changed or expired read requires a fresh read; never reuse it for a correction.\n    Omitting the token retains the legacy one-assessment-per-notification protocol.\n\n    Assessments do not approve implementation, add dispatch labels, release leases,\n    change policy or satisfy human merge/milestone gates. Stale requests, OFF/HOLD\n    and a changed Leader binding are refused. Use the existing authorized admission\n    workflow only after verifying every reviewed gate and resource assignment.\n    ",
+    "inputSchema": {
+      "properties": {
+        "scope_id": {
+          "title": "Scope Id",
+          "type": "integer"
+        },
+        "generation": {
+          "title": "Generation",
+          "type": "integer"
+        },
+        "request_sequence": {
+          "title": "Request Sequence",
+          "type": "integer"
+        },
+        "entries": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Entries",
+          "type": "array"
+        },
+        "snapshot_token": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Token"
+        }
+      },
+      "required": [
+        "scope_id",
+        "generation",
+        "request_sequence",
+        "entries"
+      ],
+      "title": "deck_report_backlog_assessmentArguments",
       "type": "object"
     }
   },
