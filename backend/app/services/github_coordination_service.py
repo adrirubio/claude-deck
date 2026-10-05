@@ -595,7 +595,7 @@ class GithubCoordinationService:
         from app.services.github_operator_attention_service import github_operator_attention_service
         pulls = await github_operator_attention_service.validate_actions(scope, report.entries, client or github_client)
         from app.services.github_operator_context_service import github_operator_context_service
-        await github_operator_context_service.validate_report(db, scope, report.entries, issues, pulls)
+        await github_operator_context_service.validate_report(db, scope, report.entries, issues, pulls, client)
         public, fingerprint, leader, authority = await self._context(db, scope_id, numbers, issues)
         row = await self.state(db, scope_id)
         if row is None or not row.enabled or principal_id != leader.id:

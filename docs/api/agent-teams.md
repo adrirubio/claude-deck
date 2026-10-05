@@ -180,7 +180,8 @@ The returned markers enclose this shape. Fill the generated records; do not publ
 ```
 
 Use `Waiting for prerequisites` for a future decision gate. Its record must describe the remaining evidence.
-Records must remain visible Markdown prose. Do not put them in a code fence, HTML comment, or collapsed details block.
+Records must remain visible Markdown prose. Do not put them in a code fence, HTML comment, or raw HTML container.
+Deck rejects raw HTML tags before or inside the section. Put the section before existing HTML content.
 Keep at most sixteen records in the section. Do not alter a generated public ID or use a private nonce as an ID.
 
 ### Validation and incomplete records

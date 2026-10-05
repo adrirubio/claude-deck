@@ -116,11 +116,13 @@ def inspect_issue(issue, owner, repo, number):
     if (begin > 4096 or end < begin or prefix.count("```") % 2
         or prefix.count("~~~") % 2 or prefix.count("<!--") != prefix.count("-->")):
         return {"state": "invalid", "records": {}}
-    if ((prefix and not prefix.endswith("\n"))
-        or prefix.lower().count("<details") > prefix.lower().count("</details>")):
+    if prefix and not prefix.endswith("\n"):
         return {"state": "invalid", "records": {}}
     section = body[begin + len(SECTION_START):end]
     if ("```" in section or "~~~" in section
+        # Keep the current section in plain Markdown. Raw HTML can hide or
+        # collapse valid-looking records, including containers opened above it.
+        or re.search(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>)", prefix + section)
         or len(re.findall(r"^## Current operator actions\s*$", body, re.M)) != 1
         or not re.search(r"^## Current operator actions\s*$", section, re.M)):
         return {"state": "invalid", "records": {}}
@@ -230,7 +232,7 @@ class GithubOperatorContextService:
                 action["pr_base_ref"] = pulls.get(action["pull_request_number"], {}).get("base_ref")
         return actions
 
-    async def validate_report(self, db, scope, entries, issues, pulls):
+    async def validate_report(self, db, scope, entries, issues, pulls, client=None):
         from app.services.github_coordination_service import CoordinationError
         actions = await self.draft_actions(db, scope, entries, pulls)
         observations = {number: inspect_issue(issue, scope.repo_owner, scope.repo_name, number)
@@ -254,7 +256,7 @@ class GithubOperatorContextService:
         if len(numbers | set(pulls)) > 8:
             raise CoordinationError("human_action_context_unavailable")
         await db.commit()
-        observed = await attention.observe_pulls(scope, numbers, fresh=True) if numbers else {}
+        observed = await attention.observe_pulls(scope, numbers, client, fresh=True) if numbers else {}
         for action in direct:
             if action["pull_request_number"]:
                 pull = observed.get(action["pull_request_number"], {})
