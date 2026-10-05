@@ -352,15 +352,15 @@ try {
       let background=e;
       while(background.parentElement && getComputedStyle(background).backgroundColor==='rgba(0, 0, 0, 0)') background=background.parentElement;
       const bg=getComputedStyle(background).backgroundColor;
-      const colors=[...s.boxShadow.matchAll(/rgba?\\([^)]*\\)/g)].map(m=>m[0]);
-      const ring=colors.find(c=>!c.endsWith(', 0)'));
+      const ringShadow=s.boxShadow.split(/,(?![^(]*\\))/).find(shadow=>shadow.includes('inset') && shadow.includes('0px 0px 0px 2px'));
+      const ring=ringShadow?.match(/rgba?\\([^)]*\\)/)?.[0];
       const luminance=color=>rgb(color).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i],0);
       const a=ring?luminance(ring):0,b=luminance(bg);
       return {visible:e.matches(':focus-visible'),hovered:e.matches(':hover'),shadow:s.boxShadow,ringColor:ring,backgroundColor:bg,contrast: ring?(Math.max(a,b)+.05)/(Math.min(a,b)+.05):0,name:e.getAttribute('aria-label'),selected:e.getAttribute('aria-current'),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
     })()`);
     assert(focused.visible && focused.hovered === hovered, state + " keyboard/hover state missing");
     assert(focused.shadow.includes("inset") && focused.shadow.includes("0px 0px 0px 2px"), state + " missing rendered 2px inset focus ring");
-    assert(focused.contrast >= 3, state + " focus ring contrast below 3:1: " + focused.contrast);
+    assert(focused.contrast >= 3, state + " focus ring contrast below 3:1: " + JSON.stringify(focused));
     assert(focused.rect.x >= 0 && focused.rect.y >= 0 && focused.rect.x + focused.rect.width <= width && focused.rect.y + focused.rect.height <= 900, state + " focus indicator clipped");
     await supplementalShot("focus-contrast-" + state, theme, width);
     await tab();
