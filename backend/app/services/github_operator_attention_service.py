@@ -76,7 +76,7 @@ class GithubOperatorAttentionService:
         items = list((await db.scalars(select(GithubWorkItem).where(
             GithubWorkItem.scope_id.in_(scope_by_id),
             GithubWorkItem.dispatch_status.in_(["ready_for_review", "awaiting_human_review", "escalated", "failed"]),
-        ).order_by(GithubWorkItem.id).limit(65))).all())
+        ).order_by(GithubWorkItem.id).limit(65).execution_options(populate_existing=True))).all())
         if len(items) > 64:
             complete = False
         async def pending_approvals():
@@ -269,7 +269,8 @@ class GithubOperatorAttentionService:
             or revisions != latest_dispatch["revisions"] or scope_changed):
             complete = False
             for action in actions:
-                if (action["source"]=="dispatch" or scope_changed) and action["state"]!="resolved":
+                if (action["source"]=="dispatch" or scope_changed
+                    or action["kind"] in {"inspect_attempt", "inspect_checkpoint"}) and action["state"]!="resolved":
                     action["state"] = "historical"; action["assessment_current"] = False
         deduped = {}
         rank = {"requested":4,"context_pending":3,"waiting_for_prerequisites":2,"historical":1}
