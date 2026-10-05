@@ -33,6 +33,26 @@ def svc():
     return AgentMailService()
 
 
+def _assert_authorized_work_continuation(prompt):
+    for instruction in (
+        "deck_check_inbox(unread_only=False)",
+        "Read task and review messages",
+        "answer pending context requests and handoffs",
+        "continue your current unfinished authorized task",
+        "An empty inbox does not mean the assignment is complete",
+        "Check the current assignment before you declare idle",
+        "Respect the factory pause, HOLD, ownership, approval, and review gates",
+        "If blocked, report the specific blocker to your Leader",
+        "If no authorized work remains, report idle",
+        "This wake grants no new authority",
+    ):
+        assert instruction in prompt
+
+
+def test_generic_wake_requires_authorized_work_continuation():
+    _assert_authorized_work_continuation(INBOX_CHECK_PROMPT)
+
+
 def _register(cwd, session_key="cc:s1", source="hook", provider="claude-code", pid=None):
     return MailAgentRegisterRequest(
         source=source,
@@ -922,7 +942,13 @@ async def test_observed_unsupported_provider_session_cannot_be_nudged(db, svc, t
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider", "display_name"),
-    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+    [
+        ("codex-cli", "Codex"),
+        ("claude-code", "Claude Code"),
+        ("copilot-cli", "GitHub Copilot"),
+        ("opencode-cli", "OpenCode"),
+        ("pi-cli", "Pi"),
+    ],
 )
 async def test_queue_inbox_check_sends_prompt_to_tmux_observed_agent(
     db,
@@ -969,6 +995,7 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_agent(
 
     assert result["target"] == "w:0.1"
     assert result["prompt"] == INBOX_CHECK_PROMPT
+    _assert_authorized_work_continuation(result["prompt"])
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT]
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "%7", "Enter"]
     assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
@@ -1369,8 +1396,17 @@ async def test_opt_out_suppresses_manual_and_automatic_team_wakes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "nudge_prompt", [None, "Resume the approved continuation after its owner ACK."]
+)
+@pytest.mark.parametrize(
     ("provider", "display_name"),
-    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+    [
+        ("codex-cli", "Codex"),
+        ("claude-code", "Claude Code"),
+        ("copilot-cli", "GitHub Copilot"),
+        ("opencode-cli", "OpenCode"),
+        ("pi-cli", "Pi"),
+    ],
 )
 async def test_send_message_auto_nudges_tmux_observed_recipient(
     db,
@@ -1379,6 +1415,7 @@ async def test_send_message_auto_nudges_tmux_observed_recipient(
     monkeypatch,
     provider,
     display_name,
+    nudge_prompt,
 ):
     cwd = tmp_path / "obs"
     cwd.mkdir()
@@ -1421,6 +1458,7 @@ async def test_send_message_auto_nudges_tmux_observed_recipient(
     await db.refresh(sender)
     calls.clear()
 
+    prompt_options = {} if nudge_prompt is None else {"nudge_prompt": nudge_prompt}
     await svc.send_message(
         db,
         MailMessageCreate(
@@ -1428,10 +1466,14 @@ async def test_send_message_auto_nudges_tmux_observed_recipient(
             recipient_member_id=recipient.id,
             body_markdown="please check this",
         ),
+        **prompt_options,
     )
 
     tmux_calls = [call for call in calls if call[0][1] == "send-keys"]
-    assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT]
+    expected_prompt = INBOX_CHECK_PROMPT if nudge_prompt is None else nudge_prompt
+    assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "%7", "-l", expected_prompt]
+    if nudge_prompt is None:
+        _assert_authorized_work_continuation(tmux_calls[0][0][-1])
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "%7", "Enter"]
     assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
 
