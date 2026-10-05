@@ -18,7 +18,13 @@ Agents propose plans for designated Leader decisions. Operators configure polici
 
 ## Current scope
 
-This reference covers the product integration build; earlier packaged releases can retain the previous navigation. The operations/readiness catalog, guided setup and delivery audit charts are not included. Pilot participants, human benefit measurements and timing comparisons are unavailable; no pilot outcome is announced.
+This reference describes the integrated product source candidate. Earlier packaged releases and separately pinned runtime or pilot environments can retain previous navigation and capabilities; integrating source does not upgrade those environments.
+
+[Harnesses](/features/harnesses) includes the versioned operations/readiness catalog for all five harnesses, bounded local configuration observations and guarded native pages. See the [Providers API](/api/providers) for the catalog contract. Native adapters remain provider-specific; catalog support does not create an editor or grant authority.
+
+Configuration checks do not verify model access. Credential readiness remains unknown, and generic provider cards do not establish a team-slot session binding. Conditional operating support still requires the current identity, workspace and approval authority.
+
+Guided setup, explicit Leader selection and delivery audit/metrics are not included. This source candidate has not received M1b or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
 
 Repository setup uses current Teams and host/label procedures. Role text does not redesign Leader selection; the first enabled slot remains Leader.
 
