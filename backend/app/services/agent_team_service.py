@@ -51,6 +51,7 @@ from app.services.providers.launch_contract import (
 from app.services.providers.platform_env import PLATFORM_BEDROCK
 from app.utils.peer_process import read_proc_stat
 from app.utils.repo_utils import derive_repo_identity
+from app.services.team_communication_policy import team_communication_guidance
 
 
 class PlanConflictError(ValueError):
@@ -188,6 +189,7 @@ class AgentTeamService:
                     charter=slot.charter,
                     ui_color=slot.ui_color,
                     bootstrap_prompt=slot.bootstrap_prompt,
+                    controlled_language_enabled=slot.controlled_language_enabled,
                     launch_mode=slot.launch_mode,
                     launch_options=slot.launch_options or {},
                     area_labels=slot.area_labels,
@@ -346,6 +348,8 @@ class AgentTeamService:
             updates["ui_color"] = self._clean_ui_color(request.ui_color)
         if request.bootstrap_prompt is not None:
             updates["bootstrap_prompt"] = self._clean_optional(request.bootstrap_prompt)
+        if request.controlled_language_enabled is not None:
+            updates["controlled_language_enabled"] = request.controlled_language_enabled
         if "area_labels" in request.model_fields_set:
             updates["area_labels"] = self._clean_area_labels(request.area_labels)
         if request.expertise is not None:
@@ -654,9 +658,12 @@ class AgentTeamService:
             return result
 
         try:
-            bootstrap_prompt = prompt_override or await self._bootstrap_prompt(
-                db, preset, slot
-            )
+            if prompt_override:
+                bootstrap_prompt = await self._bootstrap_prompt(
+                    db, preset, slot, prompt_override=prompt_override
+                )
+            else:
+                bootstrap_prompt = await self._bootstrap_prompt(db, preset, slot)
             options = self._spawn_options_for_slot(
                 slot,
                 bootstrap_prompt,
@@ -1362,9 +1369,13 @@ class AgentTeamService:
         db: AsyncSession,
         preset: AgentTeamPreset,
         slot: AgentTeamSlot,
+        *,
+        prompt_override: str | None = None,
     ) -> str:
         is_leader = await self._slot_is_leader(db, preset, slot)
-        if slot.bootstrap_prompt:
+        if prompt_override:
+            base = prompt_override
+        elif slot.bootstrap_prompt:
             base = slot.bootstrap_prompt
         else:
             parts = [
@@ -1381,7 +1392,8 @@ class AgentTeamService:
             from app.services.github_dispatch_service import github_dispatch_service
 
             base = f"{base}\n\n{github_dispatch_service._leader_unblock_instructions()}"
-        return base
+        guidance = team_communication_guidance(slot.controlled_language_enabled is not False)
+        return f"{base}\n\n{guidance}"
 
     async def _slot_is_leader(
         self,
@@ -1468,6 +1480,7 @@ class AgentTeamService:
             charter=slot.charter,
             ui_color=slot.ui_color,
             bootstrap_prompt=slot.bootstrap_prompt,
+            controlled_language_enabled=slot.controlled_language_enabled is not False,
             launch_mode=slot.launch_mode,
             launch_options=slot.launch_options or {},
             area_labels=slot.area_labels,
@@ -1564,6 +1577,7 @@ class AgentTeamService:
             "charter": self._clean_optional(slot.charter),
             "ui_color": self._clean_ui_color(slot.ui_color),
             "bootstrap_prompt": self._clean_optional(slot.bootstrap_prompt),
+            "controlled_language_enabled": slot.controlled_language_enabled,
             "launch_mode": launch_mode,
             "launch_options": launch_options,
             "area_labels": self._clean_area_labels(slot.area_labels),

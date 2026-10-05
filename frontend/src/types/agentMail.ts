@@ -35,6 +35,8 @@ export interface MailMemberResponse {
   team_slot_name?: string | null
   role?: string | null
   charter?: string | null
+  controlled_language_enabled?: boolean | null
+  communication_instructions?: string | null
   status: MailMemberStatus
   unread_count: number
   pending_count: number

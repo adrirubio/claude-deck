@@ -546,6 +546,7 @@ async def _sqlite_rebuild_agent_team_slots(conn, columns: set[str]) -> None:
     await conn.commit()
 
     bootstrap_expr = "bootstrap_prompt" if "bootstrap_prompt" in columns else "NULL"
+    language_expr = "COALESCE(controlled_language_enabled, 1)" if "controlled_language_enabled" in columns else "1"
     launch_mode_expr = "COALESCE(NULLIF(launch_mode, ''), 'plain')" if "launch_mode" in columns else "'plain'"
     launch_options_expr = "launch_options" if "launch_options" in columns else "NULL"
     enabled_expr = "COALESCE(enabled, 1)" if "enabled" in columns else "1"
@@ -566,6 +567,7 @@ async def _sqlite_rebuild_agent_team_slots(conn, columns: set[str]) -> None:
                 role VARCHAR,
                 charter VARCHAR,
                 bootstrap_prompt VARCHAR,
+                controlled_language_enabled BOOLEAN DEFAULT 1 NOT NULL,
                 launch_mode VARCHAR NOT NULL,
                 launch_options JSON,
                 enabled BOOLEAN NOT NULL,
@@ -591,6 +593,7 @@ async def _sqlite_rebuild_agent_team_slots(conn, columns: set[str]) -> None:
                 role,
                 charter,
                 bootstrap_prompt,
+                controlled_language_enabled,
                 launch_mode,
                 launch_options,
                 enabled,
@@ -609,6 +612,7 @@ async def _sqlite_rebuild_agent_team_slots(conn, columns: set[str]) -> None:
                 role,
                 charter,
                 {bootstrap_expr},
+                {language_expr},
                 {launch_mode_expr},
                 {launch_options_expr},
                 {enabled_expr},
@@ -738,6 +742,10 @@ async def _run_sqlite_compat_migrations(conn) -> None:
         )
     if slot_columns and "ui_color" not in slot_columns:
         await conn.execute(text("ALTER TABLE agent_team_slots ADD COLUMN ui_color VARCHAR"))
+    if slot_columns and "controlled_language_enabled" not in slot_columns:
+        await conn.execute(text(
+            "ALTER TABLE agent_team_slots ADD COLUMN controlled_language_enabled BOOLEAN DEFAULT 1 NOT NULL"
+        ))
     if slot_columns and "area_labels" not in slot_columns:
         await conn.execute(text("ALTER TABLE agent_team_slots ADD COLUMN area_labels JSON"))
     if slot_columns and "expertise" not in slot_columns:

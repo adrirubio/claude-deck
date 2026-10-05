@@ -1841,6 +1841,8 @@ class MailMemberResponse(BaseModel):
     team_preset_name: Optional[str] = None
     team_slot_id: Optional[int] = None
     team_slot_name: Optional[str] = None
+    controlled_language_enabled: Optional[bool] = None
+    communication_instructions: Optional[str] = None
     role: Optional[str] = None
     charter: Optional[str] = None
     status: str
@@ -2219,6 +2221,7 @@ class AgentTeamSlotCreate(BaseModel):
     charter: Optional[str] = None
     ui_color: Optional[str] = None
     bootstrap_prompt: Optional[str] = None
+    controlled_language_enabled: bool = True
     launch_mode: str = "plain"
     launch_options: Dict[str, Any] = Field(default_factory=dict)
     @model_validator(mode="after")
@@ -2240,6 +2243,7 @@ class AgentTeamSlotUpdate(BaseModel):
     charter: Optional[str] = None
     ui_color: Optional[str] = None
     bootstrap_prompt: Optional[str] = None
+    controlled_language_enabled: Optional[bool] = None
     launch_mode: Optional[str] = None
     launch_options: Optional[Dict[str, Any]] = None
     area_labels: Optional[List[str]] = None
@@ -2261,6 +2265,7 @@ class AgentTeamSlotResponse(BaseModel):
     charter: Optional[str] = None
     ui_color: Optional[str] = None
     bootstrap_prompt: Optional[str] = None
+    controlled_language_enabled: bool = True
     launch_mode: str
     launch_options: Dict[str, Any] = Field(default_factory=dict)
     area_labels: Optional[List[str]] = None

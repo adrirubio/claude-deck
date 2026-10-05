@@ -47,6 +47,7 @@ from app.models.schemas import (
 from app.services.agent_bridge.discovery import discover_agent_sessions
 from app.utils import peer_process
 from app.utils.repo_utils import derive_repo_identity
+from app.services.team_communication_policy import team_communication_guidance
 
 logger = logging.getLogger(__name__)
 
@@ -958,6 +959,8 @@ class AgentMailService:
             context[member.id] = {
                 "team_preset_name": preset.name if preset is not None else None,
                 "team_slot_name": slot.display_name if slot is not None else None,
+                "controlled_language_enabled": (slot.controlled_language_enabled is not False) if slot is not None else None,
+                "communication_instructions": team_communication_guidance(slot.controlled_language_enabled is not False) if slot is not None else None,
             }
         return context
 
@@ -1015,6 +1018,8 @@ class AgentMailService:
                     team_preset_name=member_context.get("team_preset_name"),
                     team_slot_id=member.team_slot_id,
                     team_slot_name=member_context.get("team_slot_name"),
+                    controlled_language_enabled=member_context.get("controlled_language_enabled"),
+                    communication_instructions=member_context.get("communication_instructions"),
                     role=member.role,
                     charter=member.charter,
                     status=status,
@@ -2445,6 +2450,8 @@ class AgentMailService:
             lines.append(f"Charter: {member.charter}")
         if slot is not None and slot.charter:
             lines.append(f"Team slot charter: {slot.charter}")
+        if slot is not None:
+            lines.append(team_communication_guidance(slot.controlled_language_enabled is not False))
         if others:
             roster = " | ".join(
                 f"{candidate.display_name} ({candidate.role or candidate.repo_name}, {candidate.status})"
