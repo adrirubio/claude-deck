@@ -82,7 +82,9 @@ test('environment allowlist excludes credentials', () => {
 test('real stdio transport has parity, one registration, safe env and acknowledged teardown', async () => {
   const { root, fence, generation } = fixture()
   try {
+    assert.equal(generation.ownsActivity(), false)
     await generation.start(root)
+    assert.equal(generation.ownsActivity(), true)
     const results = await Promise.all([generation.call('deck_list_team', {}), generation.call('deck_list_team', {})])
     assert.deepEqual(results.map(result => result.details.deck.calls), [2, 3])
     for (const result of results) {
@@ -90,6 +92,7 @@ test('real stdio transport has parity, one registration, safe env and acknowledg
       assert(!keys.some(key => /TOKEN|KEY/.test(key)))
     }
     await generation.close()
+    assert.equal(generation.ownsActivity(), false)
     await generation.close()
     assert(!existsSync(fence.file))
     assert.equal(generation.call && (await generation.call('deck_list_team', {})).details.deckError, true)

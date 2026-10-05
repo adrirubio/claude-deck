@@ -18,11 +18,17 @@ function fixture() {
     return () => handlers.delete(name)
   } } as unknown as ExtensionAPI
   const ctx = { cwd: root, sessionManager: manager } as unknown as ExtensionContext
-  registerNativeActivity(pi, () => pane)
-  const emit = (name: string, event: Record<string, unknown> = {}) => handlers.get(name)?.(event as never, ctx)
+  const recorder = registerNativeActivity(pi)
+  let owned = true
+  const emit = (name: string, event: Record<string, unknown> = {}) => {
+    if (name === 'session_start') recorder.start(ctx, pane, () => owned)
+    else if (name === 'session_shutdown') recorder.stop()
+    else handlers.get(name)?.(event as never, ctx)
+  }
   const marker = join(manager.getSessionDir(), `.deck-native-${pane.pid}-${pane.start}.json`)
   const read = () => JSON.parse(readFileSync(marker, 'utf8'))
-  return { root, manager, pane, handlers, ctx, emit, marker, read,
+  return { root, manager, pane, handlers, ctx, emit, marker, read, recorder,
+    setOwned: (value: boolean) => { owned = value },
     close: () => rmSync(root, { recursive: true, force: true }) }
 }
 
@@ -161,5 +167,55 @@ test('an unavailable native observation cannot throw or change Mail tool authori
     assert.doesNotThrow(() => f.emit('agent_settled'))
     assert.equal(existsSync(f.marker), false)
     assert(!f.handlers.has('tool_call'))
+  } finally { f.close() }
+})
+
+test('a refused Mail generation cannot create or overwrite the current pane marker', () => {
+  const f = fixture()
+  try {
+    f.setOwned(false)
+    f.emit('session_start')
+    f.emit('agent_start')
+    assert.equal(existsSync(f.marker), false)
+    f.setOwned(true)
+    f.emit('session_start')
+    f.emit('agent_start')
+    const owner = readFileSync(f.marker, 'utf8')
+    const refused = registerNativeActivity({ on: () => () => {} } as unknown as ExtensionAPI)
+    refused.start(f.ctx, f.pane, () => false)
+    refused.stop()
+    assert.equal(readFileSync(f.marker, 'utf8'), owner)
+  } finally { f.close() }
+})
+
+test('ownership loss prevents even shutdown callbacks from overwriting a new owner', () => {
+  const f = fixture()
+  try {
+    f.emit('session_start')
+    f.emit('agent_start')
+    const owner = readFileSync(f.marker, 'utf8')
+    f.setOwned(false)
+    f.emit('ui_prompt_start')
+    f.emit('agent_settled')
+    f.emit('session_shutdown')
+    assert.equal(readFileSync(f.marker, 'utf8'), owner)
+  } finally { f.close() }
+})
+
+test('a callback from an old session cannot stop the current native run', () => {
+  const f = fixture()
+  try {
+    f.emit('session_start')
+    const oldId = f.manager.getSessionId()
+    const oldFile = f.manager.getSessionFile()
+    const stale = { cwd: f.root, sessionManager: {
+      getSessionId: () => oldId, getSessionFile: () => oldFile,
+    } } as unknown as ExtensionContext
+    f.emit('session_shutdown')
+    f.manager.newSession()
+    f.emit('session_start')
+    f.emit('agent_start')
+    f.handlers.get('agent_settled')?.({} as never, stale)
+    assert.equal(f.read().state, 'working')
   } finally { f.close() }
 })

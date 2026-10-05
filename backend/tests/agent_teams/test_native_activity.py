@@ -57,7 +57,8 @@ def native(tmp_path, monkeypatch):
 
     def observe(provider="pi-cli", candidates=None):
         return activity._observe(2, provider, None, candidates if candidates is not None else [
-            (pane_pid, pane_start, str(cwd))], False, now)
+            activity.ActivityBinding(pane_pid, pane_start, str(cwd), native_pid,
+                                     now - timedelta(seconds=5))], False, now)
 
     write()
     return {
@@ -134,7 +135,7 @@ def test_pi_expired_observation_does_not_infer_activity(native, state, reason):
     native_start = native["now"] - timedelta(seconds=300)
     native["write"]()
     result = pi.observe_pi(native["pane_pid"], native["pane_start"], str(native["cwd"]),
-                           native["now"], native_start)
+                           native["now"], native_start, native["native_pid"], native["native_start"])
     assert (result[0], result[1]) == ("unknown", "native_event_stale")
 
 
@@ -278,6 +279,7 @@ async def test_pi_inputs_require_current_authenticated_live_mail_binding(db, nat
     session = MailAgentSession(member_id=member.id, provider="pi-cli", source="mcp",
         session_key="fixture", cwd=str(native["cwd"]), team_preset_id=preset.id,
         team_slot_id=slot.id, capability_token_hash="fixture-only", mailbox_status="connected",
+        pid=native["native_pid"], created_at=(native["now"] - timedelta(seconds=5)).replace(tzinfo=None),
         bound_pane_pid=native["pane_pid"], bound_pane_proc_start=native["pane_start"])
     db.add(session)
     db.add(AgentPaneBinding(pane_pid=native["pane_pid"], pane_proc_start=native["pane_start"],
@@ -305,7 +307,8 @@ async def test_pi_inputs_require_current_authenticated_live_mail_binding(db, nat
 
 @pytest.mark.asyncio
 async def test_team_binding_is_checked_after_native_observation(native, monkeypatch):
-    entries = [(2, "pi-cli", None, [(native["pane_pid"], native["pane_start"], str(native["cwd"]))], False)]
+    entries = [(2, "pi-cli", None, [activity.ActivityBinding(native["pane_pid"], native["pane_start"],
+        str(native["cwd"]), native["native_pid"], native["now"] - timedelta(seconds=5))], False)]
     calls = 0
     async def inputs(db, preset):
         nonlocal calls
@@ -316,3 +319,38 @@ async def test_team_binding_is_checked_after_native_observation(native, monkeypa
     assert result.slots[0].state == "unknown"
     assert result.slots[0].reason == "binding_changed"
     assert result.slots[0].observed_at is None
+
+
+def test_pi_refused_sibling_cannot_supply_current_owners_activity(native):
+    sibling_pid = 50020
+    native["process"](sibling_pid, native["pane_pid"], "1002")
+    native["value"]["native"] = {"pid": sibling_pid, "start": "1002"}
+    native["write"]()
+    result = native["observe"]()
+    assert (result.state, result.reason) == ("unknown", "native_identity_mismatch")
+
+
+def test_pi_dead_auxiliary_session_does_not_hide_live_owner(native):
+    owner = activity.ActivityBinding(native["pane_pid"], native["pane_start"], str(native["cwd"]),
+        native["native_pid"], native["now"] - timedelta(seconds=5))
+    dead = activity.ActivityBinding(native["pane_pid"], native["pane_start"], "/fixture-other-cwd",
+        99999, native["now"] - timedelta(seconds=5))
+    assert native["observe"](candidates=[owner, dead]).state == "working"
+
+
+def test_pi_multiple_live_authenticated_native_processes_remain_unknown(native):
+    sibling_pid = 50020
+    native["process"](sibling_pid, native["pane_pid"], "1002")
+    candidates = [activity.ActivityBinding(native["pane_pid"], native["pane_start"], str(native["cwd"]),
+        pid, native["now"] - timedelta(seconds=5)) for pid in (native["native_pid"], sibling_pid)]
+    assert native["observe"](candidates=candidates).reason == "ambiguous_binding"
+
+
+def test_pi_reused_native_pid_after_registration_is_rejected(native, monkeypatch):
+    monkeypatch.setattr(activity, "_process_started_at", lambda start: native["now"])
+    assert native["observe"]().state != "working"
+
+
+def test_pi_missing_authenticated_native_identity_is_unknown(native):
+    binding = activity.ActivityBinding(native["pane_pid"], native["pane_start"], str(native["cwd"]))
+    assert native["observe"](candidates=[binding]).reason == "native_identity_unavailable"

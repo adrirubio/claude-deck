@@ -15,17 +15,23 @@ Backend tests compare the complete list with the real server. The pinned Pi runt
 
 ## Native activity
 
-The opted-in extension writes a small activity file beside the current native
+After authenticated Mail startup, the owning opted-in extension writes a small activity file beside the current native
 session. The file contains process identity, session identity, state, and time.
 It contains no prompt, reply, tool argument, credential, or UI prompt title.
 It does not grant dispatch, approval, or Mail authority.
 
 Deck reads this file through the current authenticated Mail pane binding. It
-checks the native process, its kernel start, its pane ancestry, its project,
+checks the authenticated session's exact native PID, its kernel start, its pane ancestry, its project,
 and the native session header. Pi keeps the first turn in memory until the first
 assistant reply. The extension supplies the SDK header during that turn. Deck
 also checks the file header as soon as the file exists. It does not select the
 newest session file.
+The native process must have existed when its authenticated Mail session was
+created. PID reuse cannot inherit that session's observation. The recorder
+checks its current Mail generation and pane fence before each write. A refused
+or retired generation cannot overwrite the owner's marker. A confirmed dead
+auxiliary session does not hide a live owner. Different live native identities
+remain unknown.
 Missing access, an older extension, or `--no-session` gives an unknown state.
 Share only the session directory when a controller uses another Unix account.
 The activity file uses mode 0640, subject to the native process umask.

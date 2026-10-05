@@ -82,7 +82,8 @@ def _native_process(pid: int, start: str, pane_pid: int, pane_start: str, cwd: s
     return state, uid
 
 
-def observe_pi(pane_pid: int, pane_start: str, cwd: str, now: datetime, started_at: datetime
+def observe_pi(pane_pid: int, pane_start: str, cwd: str, now: datetime, started_at: datetime,
+               expected_native_pid: int, expected_native_start: str
                ) -> tuple[str, str, datetime | None]:
     directory = pi_session_directory(cwd).resolve()
     marker = directory / f".deck-native-{pane_pid}-{pane_start}.json"
@@ -100,6 +101,8 @@ def observe_pi(pane_pid: int, pane_start: str, cwd: str, now: datetime, started_
     if (type(pid) is not int or pid <= 0 or not isinstance(start, str)
             or not start.isdecimal() or int(start) < int(pane_start)):
         raise ValueError("Invalid native identity")
+    if pid != expected_native_pid or start != expected_native_start:
+        return "unknown", "native_identity_mismatch", None
     process_state, native_uid = _native_process(pid, start, pane_pid, pane_start, cwd)
     if native_uid != uid:
         raise ValueError("Native process owner differs from its pane")

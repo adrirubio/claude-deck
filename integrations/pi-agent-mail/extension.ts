@@ -6,10 +6,11 @@ import { registerNativeActivity } from './activity.ts'
 
 export default function deckMail(pi: ExtensionAPI) {
   if (process.env.CLAUDE_DECK_MAIL_OPT_IN !== '1') return
-  registerNativeActivity(pi)
+  const activity = registerNativeActivity(pi)
   let generation: MailGeneration | undefined
   let startup: Promise<void> | undefined
   const stop = async () => {
+    activity.stop()
     const old = generation
     generation = undefined
     await old?.close()
@@ -19,9 +20,12 @@ export default function deckMail(pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     await stop()
     try {
-      generation = new MailGeneration(new PaneFence(resolvePaneIdentity()))
-      startup = generation.start(ctx.cwd)
+      const pane = resolvePaneIdentity()
+      const selected = new MailGeneration(new PaneFence(pane))
+      generation = selected
+      startup = selected.start(ctx.cwd)
       await startup
+      if (generation === selected) activity.start(ctx, pane, () => generation === selected && selected.ownsActivity())
     } catch {
       ctx.ui.notify('Deck Agent Mail is unavailable or fenced. Tools remain disabled; operator recovery may be required.', 'error')
     }
