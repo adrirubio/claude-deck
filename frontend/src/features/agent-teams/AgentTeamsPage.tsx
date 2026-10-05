@@ -111,6 +111,7 @@ const emptySlot: AgentTeamSlotInput = {
   charter: '',
   ui_color: '',
   bootstrap_prompt: '',
+  controlled_language_enabled: true,
   launch_mode: 'plain',
   launch_options: {},
   area_labels: [],
@@ -184,6 +185,7 @@ function slotToInput(slot: AgentTeamSlot): AgentTeamSlotInput {
     charter: slot.charter ?? '',
     ui_color: slot.ui_color ?? '',
     bootstrap_prompt: slot.bootstrap_prompt ?? '',
+    controlled_language_enabled: slot.controlled_language_enabled ?? true,
     launch_mode: slot.launch_mode,
     launch_options: slot.launch_options ?? {},
     area_labels: slot.area_labels ?? [],
@@ -621,6 +623,22 @@ function SlotDialog({
                 />
               </CollapsibleContent>
             </Collapsible>
+          </div>
+          <div className="grid gap-2 md:col-span-2">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="slot-controlled-language"
+                checked={form.controlled_language_enabled ?? true}
+                onCheckedChange={(checked) => update({ controlled_language_enabled: checked === true })}
+                aria-describedby="slot-controlled-language-help"
+                disabled={saving}
+              />
+              <Label htmlFor="slot-controlled-language">Controlled language (ASD-STE100)</Label>
+            </div>
+            <p id="slot-controlled-language-help" className="text-xs text-muted-foreground">
+              Use short, clear English for team messages and GitHub text. Clear this option to use the member&apos;s own writing style.
+              The new setting applies when the member receives new Deck instructions.
+            </p>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox
@@ -1416,6 +1434,9 @@ export function AgentTeamsPage() {
                             </Badge>
                             <Badge variant="secondary">{slot.provider}</Badge>
                             <Badge variant="secondary">{slot.launch_mode}</Badge>
+                            <Badge variant="outline">
+                              {slot.controlled_language_enabled === false ? 'Own writing style' : 'ASD-STE100'}
+                            </Badge>
                             {slot.ui_color && (
                               <Badge variant="outline" className={colorClasses.badge}>
                                 {slot.ui_color}

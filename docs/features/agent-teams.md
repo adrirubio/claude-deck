@@ -12,10 +12,45 @@ Each team has slots. A slot stores:
 - role and charter
 - optional UI color for Agent Bridge cards and terminals
 - optional bootstrap prompt
+- controlled language, enabled by default for each member
 - launch mode and provider options
 - enabled or disabled state
 
 Agent Teams do not create a second messaging system. Once agents are launched or reused, use Agent Mail for messages, context requests, and handoffs.
+
+## Controlled Language
+
+Each member uses ASD-STE100 guidance by default. Clear **Controlled language (ASD-STE100)** in the member form to select another writing style.
+The option applies to one member. A copied roster keeps each member's choice. Existing slots use the enabled default after migration.
+
+Deck includes the guidance in launch prompts, Agent Mail identity and session-start context, and new work instructions.
+Custom bootstrap prompts and launch prompt overrides retain this guidance. A saved change does not rewrite an active conversation.
+An active member receives the new choice with its next identity or session-start context, or its next work instructions.
+
+The guidance applies to team messages, GitHub issue and PR text, comments, reports, and documentation.
+It asks agents to use short sentences, active voice, simple verb forms, and consistent terms.
+Agents must preserve code, commands, identifiers, quotations, safety conditions, decision gates, and evidence limits.
+
+The [official ASD-STE100 standard](https://www.asd-ste100.org/about_STE.html) contains writing rules and a controlled dictionary.
+Deck supplies agent instructions. It does not check the full dictionary or certify output compliance.
+
+## Summary for Human Review
+
+Before agents request human review or merge, they must add a brief **Human review summary**.
+The section belongs near the start of both the PR body and its main issue body.
+This rule also applies when a member selects another writing style.
+
+The summary must state:
+
+- **Goal:** The user outcome, in one or two sentences.
+- **Changes:** The main changes, in a short list.
+- **Checks:** The completed checks and material limits. Distinguish source review, automatic checks, and human trials.
+- **Action:** The requested human action, PR link, target branch, and any separate decision gate.
+
+Agents must preserve the original issue facts and PR metadata. They must update the summary when the head, results, or requested action changes.
+They must link detailed evidence below the summary. A comment alone does not meet this instruction.
+Deck supplies this rule in launch and Agent Mail context, work instructions, and review notifications.
+These instructions do not prove summary quality or replace independent review and the configured merge policy.
 
 ## Same-Repo Role Workflows
 

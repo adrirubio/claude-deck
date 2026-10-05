@@ -38,6 +38,7 @@ POST /api/v1/agent-teams/presets
       "role": "planner-reviewer",
       "charter": "Review the plan and implementation against release goals.",
       "ui_color": "purple",
+      "controlled_language_enabled": true,
       "enabled": true
     }
   ]
@@ -73,6 +74,14 @@ POST /api/v1/agent-teams/presets/{preset_id}/slots/reorder
 ```
 
 Slots store provider, repository path, display name, role, charter, UI color, bootstrap prompt, launch mode, provider options, and enabled state.
+
+Slots also store `controlled_language_enabled`. The default is `true` for new and existing slots.
+Send `false` on creation or slot update to disable ASD-STE100 guidance for that member. Omit the field on update to keep its value.
+A copied roster preserves explicit `false` values. This option does not disable the requirement for human review summaries.
+
+The member form exposes the same option. Launch prompts, Agent Mail identity and session-start context, and dispatch instructions use the saved value.
+Agent Mail member responses expose `controlled_language_enabled` and `communication_instructions` for team slots. Other participants receive `null`.
+The instructions guide agent output. They do not certify ASD-STE100 compliance or change approval and merge authority.
 
 Multiple enabled slots can point at the same repository. Use this for same-repo roles such as planner/reviewer or implementer/reviewer. Each launched slot gets a distinct Agent Mail identity, so external tools should route follow-up Agent Mail requests to the slot member returned by Agent Mail discovery.
 
