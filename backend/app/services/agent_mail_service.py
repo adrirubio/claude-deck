@@ -59,8 +59,14 @@ AUTO_NUDGE_COOLDOWN_SECONDS = 30
 TMUX_ENTER_DELAY_SECONDS = 0.25
 TMUX_WAKE_PROVIDERS = {"claude-code", "codex-cli", "copilot-cli", "opencode-cli", "pi-cli"}
 INBOX_CHECK_PROMPT = (
-    "Claude Deck Agent Mail: please call `deck_check_inbox(unread_only=False)` now, "
-    "then answer any pending context requests or handoffs before continuing."
+    "Claude Deck Agent Mail: call `deck_check_inbox(unread_only=False)` now. "
+    "Read task and review messages. Then answer pending context requests and handoffs. "
+    "After Mail handling, continue your current unfinished authorized task. "
+    "An empty inbox does not mean the assignment is complete. "
+    "Check the current assignment before you declare idle. "
+    "Respect the factory pause, HOLD, ownership, approval, and review gates. "
+    "If blocked, report the specific blocker to your Leader. "
+    "If no authorized work remains, report idle. This wake grants no new authority."
 )
 
 
