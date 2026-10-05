@@ -2280,6 +2280,7 @@ class AgentTeamPresetCreate(BaseModel):
     name: str
     description: Optional[str] = None
     created_by: Optional[str] = None
+    autonomy_enabled: bool = False
     slots: List[AgentTeamSlotCreate] = Field(default_factory=list)
 
 
@@ -2315,6 +2316,7 @@ class SetupPreflightRequest(BaseModel):
     dispatch_label: str = Field(min_length=1, max_length=100)
     design_label: str = Field(min_length=1, max_length=100)
     dispatch_auth_mode: Literal["token", "github_app"]
+    base_ref: str = Field(default="origin/HEAD", min_length=1, max_length=255)
 
 
 class SetupPreflightCheck(BaseModel):
@@ -2360,6 +2362,7 @@ class TeamGithubScopeCreate(BaseModel):
     max_verification_retries: int = Field(default=2, ge=0)
     max_auto_merges_per_day: int = Field(default=5, ge=0)
     base_ref: str = "origin/HEAD"
+    github_auth_mode: Literal["unknown", "ambient", "app"] = "unknown"
     builds_out_of_tree: bool = False
     build_dir_template: str = "build"
     build_command_hint: Optional[str] = None
@@ -2379,6 +2382,7 @@ class TeamGithubScopeUpdate(BaseModel):
     max_verification_retries: Optional[int] = Field(default=None, ge=0)
     max_auto_merges_per_day: Optional[int] = Field(default=None, ge=0)
     base_ref: Optional[str] = None
+    github_auth_mode: Optional[Literal["unknown", "ambient", "app"]] = None
     builds_out_of_tree: Optional[bool] = None
     build_dir_template: Optional[str] = None
     build_command_hint: Optional[str] = None

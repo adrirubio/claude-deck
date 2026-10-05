@@ -1,5 +1,6 @@
 """Local observational delivery reads; legacy protected remedies stay separate."""
 import asyncio
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from app.models import factory_schemas as wire
 from app.models.schemas import SetupPreflightRequest, SetupPreflightResponse, SetupPreflightCheck
 from app.services.github_client import github_client
 from app.services import factory_projection_service as projections
-from app.utils.repo_utils import derive_repo_identity
+from app.utils.repo_utils import is_primary_github_checkout
 
 
 class FactoryReadRoute(APIRoute):
@@ -54,16 +55,21 @@ async def setup_preflight(
 ):
     """Observe setup prerequisites. This route never creates or changes records."""
     checked_at = datetime.utcnow()
+    repository_info: dict | None = None
 
     async def checkout_check() -> SetupPreflightCheck:
         try:
             path = Path(request.repo_path).expanduser()
-            if not path.is_dir() or not (path / ".git").exists():
+            if not path.is_dir():
                 return SetupPreflightCheck(status="blocked", code="checkout_unavailable")
-            identity = await asyncio.wait_for(
-                asyncio.to_thread(derive_repo_identity, str(path)), timeout=5.0
+            matches = await asyncio.wait_for(
+                asyncio.to_thread(
+                    is_primary_github_checkout,
+                    str(path), request.repo_owner, request.repo_name,
+                ),
+                timeout=8.0,
             )
-            if identity["repo_name"].casefold() != request.repo_name.casefold():
+            if not matches:
                 return SetupPreflightCheck(status="blocked", code="checkout_identity_mismatch")
             return SetupPreflightCheck(status="ready", code="checkout_identity_matches")
         except asyncio.TimeoutError:
@@ -72,10 +78,11 @@ async def setup_preflight(
             return SetupPreflightCheck(status="unknown", code="checkout_check_failed")
 
     async def repository_check() -> SetupPreflightCheck:
+        nonlocal repository_info
         if not settings.github_token:
             return SetupPreflightCheck(status="blocked", code="polling_credential_missing")
         try:
-            await asyncio.wait_for(
+            repository_info = await asyncio.wait_for(
                 github_client.get_repository(request.repo_owner, request.repo_name), timeout=5.0
             )
             return SetupPreflightCheck(status="ready", code="repository_readable")
@@ -87,6 +94,48 @@ async def setup_preflight(
             return SetupPreflightCheck(status="unknown", code="repository_check_failed")
         except Exception:
             return SetupPreflightCheck(status="unknown", code="repository_check_failed")
+
+    async def base_branch_check() -> SetupPreflightCheck:
+        if request.base_ref == "origin/HEAD":
+            default_branch = repository_info.get("default_branch") if repository_info else None
+            if isinstance(default_branch, str) and default_branch.strip():
+                return SetupPreflightCheck(status="ready", code="repository_default_branch_available")
+            return SetupPreflightCheck(status="unknown", code="repository_default_branch_unknown")
+        if not request.base_ref.startswith("origin/"):
+            return SetupPreflightCheck(status="blocked", code="base_branch_invalid")
+        branch = request.base_ref.removeprefix("origin/")
+        try:
+            valid = await asyncio.wait_for(asyncio.to_thread(
+                subprocess.run,
+                ["git", "check-ref-format", f"refs/remotes/{branch}"],
+                capture_output=True, text=True, timeout=2, check=False,
+            ), timeout=3.0)
+        except asyncio.TimeoutError:
+            return SetupPreflightCheck(status="unknown", code="base_branch_check_timeout")
+        except (OSError, subprocess.TimeoutExpired):
+            return SetupPreflightCheck(status="unknown", code="base_branch_check_failed")
+        if valid.returncode != 0:
+            return SetupPreflightCheck(status="blocked", code="base_branch_invalid")
+        try:
+            ref = await asyncio.wait_for(
+                github_client.get_ref(
+                    request.repo_owner, request.repo_name, branch,
+                    token=settings.github_token,
+                ),
+                timeout=5.0,
+            )
+            return SetupPreflightCheck(
+                status="ready" if ref is not None else "blocked",
+                code="base_branch_exists" if ref is not None else "base_branch_missing",
+            )
+        except asyncio.TimeoutError:
+            return SetupPreflightCheck(status="unknown", code="base_branch_check_timeout")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (403, 404):
+                return SetupPreflightCheck(status="blocked", code="base_branch_not_readable")
+            return SetupPreflightCheck(status="unknown", code="base_branch_check_failed")
+        except Exception:
+            return SetupPreflightCheck(status="unknown", code="base_branch_check_failed")
 
     async def labels_check() -> SetupPreflightCheck:
         try:
@@ -114,20 +163,23 @@ async def setup_preflight(
         )
     else:
         app_ready = bool(settings.github_app_id and settings.github_app_private_key_path
+                         and settings.github_app_bot_login
                          and Path(settings.github_app_private_key_path).is_file())
         dispatch_auth = SetupPreflightCheck(
             status="ready" if app_ready else "blocked",
             code="github_app_configuration_present" if app_ready else "github_app_configuration_missing",
         )
 
+    repository_status = await repository_check()
     checks = {
         "checkout_identity": await checkout_check(),
         "polling_credential": SetupPreflightCheck(
             status="ready" if settings.github_token else "blocked",
             code="polling_credential_configured" if settings.github_token else "polling_credential_missing",
         ),
-        "repository_read": await repository_check(),
+        "repository_read": repository_status,
         "labels": await labels_check(),
+        "base_branch": await base_branch_check(),
         "dispatch_auth": dispatch_auth,
     }
     if all(check.status == "ready" for check in checks.values()):

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.models.database import AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailTeamMember
+from app.models.database import AgentPaneBinding, AgentTeamSlot, GithubWorkspace, MailAgentSession, MailTeamMember, TeamGithubScope
 from app.models.schemas import (
     AgentTeamCreateFromMailRequest,
     AgentTeamCreateFromBridgeRequest,
@@ -176,6 +176,68 @@ async def test_slot_ui_color_rejects_unknown_palette_value(db, tmp_path):
         )
 
     assert "Unsupported ui_color: magenta" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_leader_cannot_be_disabled_or_deleted_after_explicit_assignment(db, tmp_path):
+    repo = tmp_path / "leader-guard-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Leader mutation guard",
+            slots=[
+                AgentTeamSlotCreate(display_name="Leader", provider="codex-cli", repo_path=str(repo)),
+                AgentTeamSlotCreate(display_name="Worker", provider="codex-cli", repo_path=str(repo)),
+            ],
+        ),
+    )
+    leader = preset.slots[0]
+    await agent_team_service.set_leader(
+        db, preset.id, leader_slot_id=leader.id, expected_leader_slot_id=None,
+        expected_updated_at=preset.updated_at, reason="Assign the test Leader.",
+    )
+
+    with pytest.raises(ValueError, match="leader_slot_replacement_required"):
+        await agent_team_service.update_slot(db, leader.id, AgentTeamSlotUpdate(enabled=False))
+    await db.rollback()
+    with pytest.raises(ValueError, match="leader_slot_replacement_required"):
+        await agent_team_service.delete_slot(db, leader.id)
+    await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_leader_assignment_rejects_residual_push_capability(db, tmp_path):
+    repo = tmp_path / "push-capability-guard-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Push capability guard",
+            slots=[
+                AgentTeamSlotCreate(display_name="Current", provider="codex-cli", repo_path=str(repo)),
+                AgentTeamSlotCreate(display_name="Next", provider="codex-cli", repo_path=str(repo)),
+            ],
+        ),
+    )
+    scope = TeamGithubScope(
+        preset_id=preset.id, repo_owner="example", repo_name="synthetic",
+        repo_path=str(repo), enabled=False,
+    )
+    db.add(scope)
+    await db.flush()
+    db.add(GithubWorkspace(
+        scope_id=scope.id, path=str(repo / "workspace"),
+        push_token_expires_at=datetime.utcnow() + timedelta(minutes=5),
+    ))
+    await db.commit()
+
+    with pytest.raises(ValueError, match="leader_assignment_team_not_quiescent"):
+        await agent_team_service.set_leader(
+            db, preset.id, leader_slot_id=preset.slots[1].id,
+            expected_leader_slot_id=None, expected_updated_at=preset.updated_at,
+            reason="Attempt a guarded assignment.",
+        )
 
 
 @pytest.mark.asyncio

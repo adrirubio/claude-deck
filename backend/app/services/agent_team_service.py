@@ -9,7 +9,7 @@ from dataclasses import fields
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, text, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,6 +120,7 @@ class AgentTeamService:
             name=name,
             description=self._clean_optional(request.description),
             created_by=self._clean_optional(request.created_by),
+            autonomy_enabled=False,
         )
         db.add(preset)
         await db.flush()
@@ -146,20 +147,7 @@ class AgentTeamService:
         reason: str,
     ) -> AgentTeamPresetResponse:
         """Change Leader authority only while the team is stopped and quiescent."""
-        if db.get_bind().dialect.name != "sqlite":
-            raise ValueError("leader_assignment_protection_unavailable")
-        # Reserve the SQLite writer before reading any authority state.
-        result = await db.execute(
-            update(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
-            .values(id=AgentTeamPreset.id).execution_options(synchronize_session=False)
-        )
-        if result.rowcount != 1:
-            await db.rollback()
-            raise ValueError("team_not_found")
-        preset = (await db.execute(
-            select(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
-            .execution_options(populate_existing=True)
-        )).scalar_one()
+        preset = await self._lock_preset_for_slot_mutation(db, preset_id)
         expected_time = expected_updated_at.replace(tzinfo=None)
         if (preset.leader_slot_id != expected_leader_slot_id
                 or preset.updated_at != expected_time):
@@ -199,6 +187,7 @@ class AgentTeamService:
                 GithubWorkspace.lease_token.is_not(None),
                 GithubWorkspace.leased_owner_pid.is_not(None),
                 GithubWorkspace.leased_owner_proc_start.is_not(None),
+                GithubWorkspace.push_token_expires_at.is_not(None),
                 and_(GithubWorkspace.leased_at.is_not(None),
                      GithubWorkspace.released_at.is_(None))),
         ).limit(1))).scalar_one_or_none()
@@ -566,8 +555,7 @@ class AgentTeamService:
         slot_id: int,
         request: AgentTeamSlotUpdate,
     ) -> AgentTeamPresetResponse:
-        slot = await self._require_slot(db, slot_id)
-        preset = await self._require_preset(db, slot.preset_id)
+        slot, preset = await self._lock_slot_and_preset(db, slot_id)
         updates: dict[str, Any] = {}
 
         if request.display_name is not None:
@@ -631,8 +619,7 @@ class AgentTeamService:
         return await self._preset_response(db, preset)
 
     async def delete_slot(self, db: AsyncSession, slot_id: int) -> AgentTeamPresetResponse:
-        slot = await self._require_slot(db, slot_id)
-        preset = await self._require_preset(db, slot.preset_id)
+        slot, preset = await self._lock_slot_and_preset(db, slot_id)
         if preset.leader_slot_id == slot.id:
             raise ValueError("leader_slot_replacement_required")
         await self._move_sessions_to_repo_members(db, MailAgentSession.team_slot_id == slot.id)
@@ -1706,6 +1693,53 @@ class AgentTeamService:
         if slot is None:
             raise ValueError("Agent team slot not found")
         return slot
+
+    async def _lock_preset_for_slot_mutation(
+        self, db: AsyncSession, preset_id: int
+    ) -> AgentTeamPreset:
+        """Serialize slot changes with authority assignment before reading state."""
+        if db.get_bind().dialect.name != "sqlite":
+            raise ValueError("leader_assignment_protection_unavailable")
+        if not db.in_transaction():
+            await db.execute(text("BEGIN IMMEDIATE"))
+        result = await db.execute(
+            update(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
+            .values(id=AgentTeamPreset.id)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            raise ValueError("team_not_found")
+        return (await db.execute(
+            select(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
+            .execution_options(populate_existing=True)
+        )).scalar_one()
+
+    async def _lock_slot_and_preset(
+        self, db: AsyncSession, slot_id: int
+    ) -> tuple[AgentTeamSlot, AgentTeamPreset]:
+        if db.get_bind().dialect.name != "sqlite":
+            raise ValueError("leader_assignment_protection_unavailable")
+        # Acquire the SQLite writer before reading slot or authority state.
+        # This prevents a deferred-read snapshot from bypassing Leader guards.
+        if not db.in_transaction():
+            await db.execute(text("BEGIN IMMEDIATE"))
+        preset_id = (await db.execute(
+            select(AgentTeamSlot.preset_id).where(AgentTeamSlot.id == slot_id)
+        )).scalar_one_or_none()
+        if preset_id is None:
+            raise ValueError("Agent team slot not found")
+        preset = await self._lock_preset_for_slot_mutation(db, preset_id)
+        slot = (await db.execute(
+            select(AgentTeamSlot).where(
+                AgentTeamSlot.id == slot_id,
+                AgentTeamSlot.preset_id == preset.id,
+            ).execution_options(populate_existing=True)
+        )).scalar_one_or_none()
+        if slot is None:
+            await db.rollback()
+            raise ValueError("Agent team slot not found")
+        return slot, preset
 
     async def _slots_for_preset(self, db: AsyncSession, preset_id: int) -> list[AgentTeamSlot]:
         return (

@@ -1,5 +1,7 @@
 """Synthetic response fixtures for the observation-only setup preflight."""
 
+import subprocess
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -10,6 +12,18 @@ from app.main import app
 
 OPERATOR = "synthetic-setup-preflight-operator"
 PRIVATE = "synthetic-private-credential"
+
+
+def _init_checkout(path, remote="https://github.com/example/synthetic-repo.git"):
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "-c", "user.name=Fixture", "-c",
+         "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", remote], check=True)
+    return path
 
 
 @pytest_asyncio.fixture
@@ -26,12 +40,11 @@ async def client(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_preflight_returns_allowlisted_ready_checks(client, monkeypatch, tmp_path):
-    checkout = tmp_path / "synthetic-repo"
-    (checkout / ".git").mkdir(parents=True)
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
     monkeypatch.setattr(settings, "github_token", PRIVATE)
 
     async def repository(*_args, **_kwargs):
-        return {"name": "synthetic-repo", "private": True}
+        return {"name": "synthetic-repo", "private": True, "default_branch": "main"}
 
     async def labels(*_args, **_kwargs):
         return ["dispatch", "design"]
@@ -53,18 +66,17 @@ async def test_preflight_returns_allowlisted_ready_checks(client, monkeypatch, t
     assert PRIVATE not in response.text
     assert str(checkout) not in response.text
     assert set(body["checks"]) == {
-        "checkout_identity", "polling_credential", "repository_read", "labels", "dispatch_auth"
+        "checkout_identity", "polling_credential", "repository_read", "labels", "base_branch", "dispatch_auth"
     }
 
 
 @pytest.mark.asyncio
 async def test_preflight_missing_labels_blocks_and_timeout_is_unknown(client, monkeypatch, tmp_path):
-    checkout = tmp_path / "synthetic-repo"
-    (checkout / ".git").mkdir(parents=True)
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
     monkeypatch.setattr(settings, "github_token", PRIVATE)
 
     async def repository(*_args, **_kwargs):
-        return {"name": "synthetic-repo"}
+        return {"name": "synthetic-repo", "default_branch": "main"}
 
     async def labels(*_args, **_kwargs):
         return ["dispatch"]
@@ -88,6 +100,103 @@ async def test_preflight_missing_labels_blocks_and_timeout_is_unknown(client, mo
     assert unknown.json()["status"] == "unknown"
     assert unknown.json()["checks"]["repository_read"]["status"] == "unknown"
     assert unknown.json()["checks"]["labels"]["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_preflight_requires_primary_checkout_and_exact_remote_identity(client, monkeypatch, tmp_path):
+    checkout = _init_checkout(
+        tmp_path / "renamed-directory",
+        "git@github.com:Example/Synthetic-Repo.git",
+    )
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "Synthetic-Repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    body = {
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+    }
+    ready = await client.post("/api/v1/factory/setup-preflight", json=body)
+    assert ready.json()["checks"]["checkout_identity"] == {
+        "status": "ready", "code": "checkout_identity_matches"
+    }
+
+    wrong_owner = {**body, "repo_owner": "other"}
+    blocked = await client.post("/api/v1/factory/setup-preflight", json=wrong_owner)
+    assert blocked.json()["checks"]["checkout_identity"]["code"] == "checkout_identity_mismatch"
+    assert str(checkout) not in blocked.text
+
+    worktree = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "-C", str(checkout), "worktree", "add", "-q", "--detach", str(worktree)],
+        check=True,
+    )
+    linked = await client.post("/api/v1/factory/setup-preflight", json={**body, "repo_path": str(worktree)})
+    assert linked.json()["checks"]["checkout_identity"]["code"] == "checkout_identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_preflight_github_app_requires_bot_login(client, monkeypatch, tmp_path):
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+    monkeypatch.setattr(settings, "github_app_id", "synthetic-app")
+    monkeypatch.setattr(settings, "github_app_bot_login", "")
+    key = tmp_path / "key.pem"
+    key.write_text("synthetic key fixture")
+    monkeypatch.setattr(settings, "github_app_private_key_path", str(key))
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    response = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "github_app",
+    })
+    assert response.json()["checks"]["dispatch_auth"] == {
+        "status": "blocked", "code": "github_app_configuration_missing"
+    }
+    assert "synthetic key fixture" not in response.text
+    assert str(key) not in response.text
+
+
+@pytest.mark.asyncio
+async def test_preflight_checks_explicit_base_branch_and_rejects_invalid_value(client, monkeypatch, tmp_path):
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    async def get_ref(_owner, _repo, ref, **_kwargs):
+        return {"ref": f"refs/heads/{ref}"} if ref == "release/2" else None
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_ref", get_ref)
+    body = {
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+        "base_ref": "origin/release/2",
+    }
+    valid = await client.post("/api/v1/factory/setup-preflight", json=body)
+    assert valid.json()["checks"]["base_branch"] == {"status": "ready", "code": "base_branch_exists"}
+
+    invalid = await client.post("/api/v1/factory/setup-preflight", json={**body, "base_ref": "origin/bad branch"})
+    assert invalid.json()["checks"]["base_branch"] == {"status": "blocked", "code": "base_branch_invalid"}
 
 
 @pytest.mark.asyncio

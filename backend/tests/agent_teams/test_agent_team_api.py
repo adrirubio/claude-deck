@@ -181,6 +181,17 @@ async def test_preset_autonomy_and_slot_routing_fields_round_trip(client, monkey
     assert slot["area_labels"] == ["area:backend", "area:api"]
     assert slot["expertise"] == "Owns the API"
 
+    leader = await client.put(
+        f"/api/v1/agent-teams/presets/{preset['id']}/leader",
+        json={
+            "leader_slot_id": slot["id"],
+            "expected_leader_slot_id": None,
+            "expected_updated_at": preset["updated_at"],
+            "reason": "Assign the fixture Leader before activation.",
+        },
+    )
+    assert leader.status_code == 200
+
     response = await client.patch(
         f"/api/v1/agent-teams/presets/{preset['id']}",
         json={"autonomy_enabled": True},
@@ -233,6 +244,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
             "max_verification_retries": 3,
             "max_auto_merges_per_day": 1,
             "base_ref": "origin/main",
+            "github_auth_mode": "app",
             "builds_out_of_tree": True,
             "build_dir_template": "build-{issue_number}",
             "build_command_hint": "meson compile -C {build_dir} -j{parallelism}",
@@ -244,7 +256,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     scope = create_response.json()
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
-    assert scope["github_auth_mode"] == "unknown"
+    assert scope["github_auth_mode"] == "app"
     assert isinstance(scope["github_poll_token_configured"], bool)
     assert scope["max_verification_retries"] == 3
     assert scope["base_ref"] == "origin/main"
@@ -257,7 +269,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     )
     assert list_response.status_code == 200
     assert [item["id"] for item in list_response.json()["scopes"]] == [scope["id"]]
-    assert list_response.json()["scopes"][0]["github_auth_mode"] == "unknown"
+    assert list_response.json()["scopes"][0]["github_auth_mode"] == "app"
 
     update_response = await client.patch(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}",
@@ -265,6 +277,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
             "merge_policy": "human",
             "build_dir_template": "build",
             "max_build_parallelism": 4,
+            "github_auth_mode": "ambient",
             "enabled": False,
         },
     )
@@ -272,6 +285,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     assert update_response.json()["merge_policy"] == "human"
     assert update_response.json()["build_dir_template"] == "build"
     assert update_response.json()["max_build_parallelism"] == 4
+    assert update_response.json()["github_auth_mode"] == "ambient"
     assert update_response.json()["enabled"] is False
 
     item = GithubWorkItem(
@@ -693,7 +707,7 @@ async def test_leader_assignment_is_explicit_and_survives_reorder(client, db, tm
         json={
             "leader_slot_id": leader_slot.id,
             "expected_leader_slot_id": None,
-            "expected_updated_at": preset.updated_at,
+            "expected_updated_at": preset.updated_at.isoformat(),
             "reason": "Select the approved fixture Leader.",
         },
     )
@@ -710,7 +724,7 @@ async def test_leader_assignment_is_explicit_and_survives_reorder(client, db, tm
         json={
             "leader_slot_id": leader_slot.id,
             "expected_leader_slot_id": None,
-            "expected_updated_at": preset.updated_at,
+            "expected_updated_at": preset.updated_at.isoformat(),
             "reason": "Check a missing team safely.",
         },
     )

@@ -465,6 +465,8 @@ def _apply_scope_create(
         scope.max_auto_merges_per_day = request.max_auto_merges_per_day
     if request.base_ref is not None:
         scope.base_ref = _clean_required(request.base_ref, "Base ref")
+    if request.github_auth_mode is not None:
+        scope.github_auth_mode = request.github_auth_mode
     if request.builds_out_of_tree is not None:
         scope.builds_out_of_tree = request.builds_out_of_tree
     if request.build_dir_template is not None:
