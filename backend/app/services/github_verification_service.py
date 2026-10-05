@@ -38,6 +38,7 @@ from app.services.github_recovery_gate import (
     configured_recovery_only_attempt,
 )
 from app.services.github_workspace_service import github_workspace_service
+from app.services.team_communication_policy import HUMAN_REVIEW_SUMMARY_GUIDANCE
 
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _STATUS_SUCCESS_STATES = {"success"}
@@ -924,7 +925,8 @@ class GithubVerificationService:
                 subject="Design PR ready for review",
                 body_markdown=(
                     f"Design PR #{pr_number} is ready for human review for "
-                    f"issue #{item.issue_number}: {item.issue_title}"
+                    f"issue #{item.issue_number}: {item.issue_title}\n\n"
+                    + HUMAN_REVIEW_SUMMARY_GUIDANCE
                 ),
                 payload={
                     "kind": "github_dispatch_design_pr_ready",
@@ -2123,6 +2125,7 @@ class GithubVerificationService:
             f"Verified head: {item.last_verified_sha or 'unknown'}. "
             "CI readiness does not establish independent review acceptance.\n\n"
             + github_dispatch_service.review_rework_guidance(item)
+            + "\n\n" + HUMAN_REVIEW_SUMMARY_GUIDANCE
         )
         payload = {
             "kind": "github_dispatch_code_pr_ready",

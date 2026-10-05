@@ -164,6 +164,9 @@ class AgentTeamSlot(Base):
     charter: Mapped[str | None] = mapped_column(String, nullable=True)
     ui_color: Mapped[str | None] = mapped_column(String, nullable=True)
     bootstrap_prompt: Mapped[str | None] = mapped_column(String, nullable=True)
+    controlled_language_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1", nullable=False
+    )
     launch_mode: Mapped[str] = mapped_column(String, default="plain", nullable=False)
     launch_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     area_labels: Mapped[list | None] = mapped_column(JSON, nullable=True)

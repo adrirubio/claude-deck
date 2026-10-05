@@ -52,6 +52,7 @@ export interface AgentTeamSlot {
   charter?: string | null
   ui_color?: string | null
   bootstrap_prompt?: string | null
+  controlled_language_enabled?: boolean
   launch_mode: string
   launch_options: SlotLaunchOptions
   area_labels?: string[] | null
@@ -85,6 +86,7 @@ export interface AgentTeamSlotInput {
   charter?: string | null
   ui_color?: string | null
   bootstrap_prompt?: string | null
+  controlled_language_enabled?: boolean
   launch_mode?: string
   launch_options?: SlotLaunchOptions
   area_labels?: string[] | null
@@ -101,6 +103,7 @@ export interface AgentTeamSlotUpdate {
   charter?: string | null
   ui_color?: string | null
   bootstrap_prompt?: string | null
+  controlled_language_enabled?: boolean
   launch_mode?: string
   launch_options?: SlotLaunchOptions
   area_labels?: string[] | null

@@ -30,6 +30,10 @@ from app.models.schemas import AgentTeamLaunchRequest
 from app.models.schemas import MailMessageCreate
 from app.services.agent_mail_service import agent_mail_service
 from app.services.agent_team_service import agent_team_service
+from app.services.team_communication_policy import (
+    HUMAN_REVIEW_SUMMARY_GUIDANCE,
+    team_communication_guidance,
+)
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
     github_app_auth_service,
@@ -1080,7 +1084,7 @@ class GithubDispatchService:
                     f"{item.dispatch_head_ref}`.",
                     f"- After the push, call `deck_report_dispatch_status(work_item_id={item.id}, "
                     f"status=\"pr_ready\", lease_token=\"{workspace.lease_token}\", "
-                    f"head_ref=\"{item.dispatch_head_ref}\")`. Deck owns the PR title and body.",
+                    f"head_ref=\"{item.dispatch_head_ref}\")`. Deck creates the initial PR title and body.",
                 ]
             )
         else:
@@ -1147,6 +1151,8 @@ class GithubDispatchService:
                     ]
                 )
             lines.extend(self._build_instructions(item, scope))
+        language_enabled = owner is None or owner.controlled_language_enabled is not False
+        lines.extend(["", team_communication_guidance(language_enabled)])
         return "\n".join(lines)
 
     async def _escalate_prepared_owner_unavailable(
@@ -1442,6 +1448,7 @@ class GithubDispatchService:
             "- Track review disposition by full PR head SHA. A changed head needs "
             "fresh independent review and CI; an older acceptance or ready state "
             "does not accept it."
+            "\n\n" + HUMAN_REVIEW_SUMMARY_GUIDANCE
         )
 
     async def _send_dispatch_brief_to_slot(
