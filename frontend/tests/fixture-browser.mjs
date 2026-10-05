@@ -317,6 +317,7 @@ try {
     navigation = [],
     retryConfirmations = [],
     navigationPolish = [],
+    sidebarFocusContrast = [],
     polishShots = [];
   const tab = async (backwards = false) => {
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: backwards ? 8 : 0 });
@@ -339,6 +340,36 @@ try {
     const filename = name + "-" + theme + "-" + width + ".png";
     await fs.writeFile(path.join(evidence, filename), Buffer.from(shot.data, "base64"));
     polishShots.push({ name, theme, width, filename, comparison: "supplemental_after_only" });
+  };
+  const checkSidebarFocus = async (selector, state, theme, width, hovered = false) => {
+    await focusByTab(selector, true);
+    const point = await evaluate("(() => {const r=document.activeElement.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()");
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: hovered ? point.x : width - 1, y: hovered ? point.y : 1 });
+    await sleep(200); // Let the existing color transition reach its rendered state.
+    const focused = await evaluate(`(() => {
+      const e=document.activeElement,s=getComputedStyle(e),r=e.getBoundingClientRect();
+      const rgb=value=>value.match(/[\\d.]+/g).slice(0,3).map(Number);
+      let background=e;
+      while(background.parentElement && getComputedStyle(background).backgroundColor==='rgba(0, 0, 0, 0)') background=background.parentElement;
+      const bg=getComputedStyle(background).backgroundColor;
+      const colors=[...s.boxShadow.matchAll(/rgba?\\([^)]*\\)/g)].map(m=>m[0]);
+      const ring=colors.find(c=>!c.endsWith(', 0)'));
+      const luminance=color=>rgb(color).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((n,v,i)=>n+v*[.2126,.7152,.0722][i],0);
+      const a=ring?luminance(ring):0,b=luminance(bg);
+      return {visible:e.matches(':focus-visible'),hovered:e.matches(':hover'),shadow:s.boxShadow,ringColor:ring,backgroundColor:bg,contrast: ring?(Math.max(a,b)+.05)/(Math.min(a,b)+.05):0,name:e.getAttribute('aria-label'),selected:e.getAttribute('aria-current'),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
+    })()`);
+    assert(focused.visible && focused.hovered === hovered, state + " keyboard/hover state missing");
+    assert(focused.shadow.includes("inset") && focused.shadow.includes("0px 0px 0px 2px"), state + " missing rendered 2px inset focus ring");
+    assert(focused.contrast >= 3, state + " focus ring contrast below 3:1: " + focused.contrast);
+    assert(focused.rect.x >= 0 && focused.rect.y >= 0 && focused.rect.x + focused.rect.width <= width && focused.rect.y + focused.rect.height <= 900, state + " focus indicator clipped");
+    await supplementalShot("focus-contrast-" + state, theme, width);
+    await tab();
+    const unfocused = await evaluate("(() => {const e=document.querySelector(" + JSON.stringify(selector) + "),s=getComputedStyle(e);return {focused:e.matches(':focus-visible'),hovered:e.matches(':hover'),shadow:s.boxShadow,backgroundColor:s.backgroundColor};})()");
+    assert(!unfocused.focused && unfocused.hovered === hovered && unfocused.shadow !== focused.shadow, state + " focused/unfocused rendered distinction missing");
+    await supplementalShot("focus-contrast-" + state + "-unfocused", theme, width);
+    await tab(true);
+    assert(await evaluate("document.activeElement.matches(" + JSON.stringify(selector) + ")"), state + " ShiftTab did not restore focus");
+    sidebarFocusContrast.push({ theme, width, state, focused, unfocused, naturalTabShiftTab: true });
   };
   for (const theme of ["light", "dark"]) {
     const {identifier} = await send("Page.addScriptToEvaluateOnNewDocument", {source: `localStorage.setItem("theme", "${theme}")`});
@@ -445,13 +476,19 @@ try {
         const sidebar = await focusByTab('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', true);
         assert.equal(await evaluate("document.activeElement.getAttribute('aria-current')"), "page");
         await supplementalShot("sidebar-focus", theme, width);
+        await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', "expanded-selected", theme, width);
+        await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Work"]', "expanded-inactive-hover", theme, width, true);
         if (width >= 768) {
+          await checkSidebarFocus('button[aria-label="Collapse sidebar"]', "expanded-toggle-hover", theme, width, true);
           await focusByTab('button[aria-label="Collapse sidebar"]');
           for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
           for (let i = 0; i < 20 && !(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))')); i++) await sleep(50);
           assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Expand sidebar"]\'))'));
           assert.equal(await evaluate('document.querySelectorAll(\'nav[aria-label="Main navigation"] a[aria-label]\').length'), 8);
           await supplementalShot("sidebar-collapsed", theme, width);
+          await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Harnesses"]', "collapsed-selected", theme, width);
+          await checkSidebarFocus('nav[aria-label="Main navigation"] a[aria-label="Work"]', "collapsed-inactive-hover", theme, width, true);
+          await checkSidebarFocus('button[aria-label="Expand sidebar"]', "collapsed-toggle-hover", theme, width, true);
           for (const type of ["keyDown", "keyUp"]) await send("Input.dispatchKeyEvent", { type, text: "\r", unmodifiedText: "\r", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
           for (let i = 0; i < 20 && !(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))')); i++) await sleep(50);
           assert(await evaluate('Boolean(document.querySelector(\'button[aria-label="Collapse sidebar"]\'))'));
@@ -658,6 +695,7 @@ try {
         navigation_before_head: beforeCapture?.head ?? null,
         navigation_before_fixture_source: beforeCapture?.fixture_source ?? null,
         navigationPolish,
+        sidebarFocusContrast,
         supplemental_after_only: polishShots,
         observations,
         keyboard,
