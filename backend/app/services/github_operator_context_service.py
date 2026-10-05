@@ -127,7 +127,8 @@ def inspect_issue(issue, owner, repo, number):
         or not re.search(r"^## Current operator actions\s*$", section, re.M)):
         return {"state": "invalid", "records": {}}
     matches = list(_RECORD.finditer(section))
-    if (len(matches) > 16 or section.count("<!-- deck:operator-action:") != len(matches)
+    # The shared prefix occurs in both the start and end marker of each record.
+    if (len(matches) > 16 or section.count("<!-- deck:operator-action:") != 2 * len(matches)
         or section.count("<!-- deck:operator-action:end -->") != len(matches)):
         return {"state": "invalid", "records": {}}
     records = {}
