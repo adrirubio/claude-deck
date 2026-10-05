@@ -1,7 +1,7 @@
 """Read bounded native activity observations; never infer work from a live PID.
 
-Only authenticated, current pane bindings and explicit Codex resume UUIDs are
-supported. Missing permissions, ambiguous bindings and other harnesses return
+Use authenticated current pane bindings, explicit Codex resume UUIDs, or Pi's
+native extension observations. Missing permissions and ambiguous bindings return
 unknown. No transcripts, paths, session IDs or credentials leave this module.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ import stat
 import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -25,11 +26,21 @@ from app.models.database import (
     AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailPaneLifecycle, MailTeamMember,
 )
 from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
+from app.services.pi_activity_service import observe_pi
 
 _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
 _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
+
+
+@dataclass(frozen=True)
+class ActivityBinding:
+    pane_pid: int
+    pane_start: str
+    cwd: str
+    native_pid: int | None = None
+    registered_at: datetime | None = None
 
 
 def _canonical_session_id(value: object) -> str | None:
@@ -180,29 +191,56 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
 
 
 def _observe(slot_id: int, provider: str, session_id: str | None,
-             candidates: list[tuple[int, str, str]], duplicate_identity: bool, now: datetime
+             candidates: list[ActivityBinding], duplicate_identity: bool, now: datetime
              ) -> AgentActivityObservation:
     def result(state: str, reason: str, observed_at: datetime | None = None):
         return AgentActivityObservation(slot_id=slot_id, state=state, reason=reason,
                                         observed_at=observed_at)
 
     try:
-        live = []
-        for pid, start, cwd in candidates:
+        live = {}
+        for binding in candidates:
+            pid, start, cwd = binding.pane_pid, binding.pane_start, binding.cwd
             try:
                 process_state, current_start = _process(pid)
             except FileNotFoundError:
                 continue
             if current_start == start:
-                live.append((pid, start, cwd, process_state))
+                native_pid, native_start = None, None
+                if provider == "pi-cli":
+                    if not binding.native_pid or binding.registered_at is None:
+                        return result("unknown", "native_identity_unavailable")
+                    try:
+                        _, native_start = _process(binding.native_pid)
+                    except FileNotFoundError:
+                        continue  # a dead auxiliary shim is not another live owner
+                    registered_at = binding.registered_at
+                    if registered_at.tzinfo is None:
+                        registered_at = registered_at.replace(tzinfo=timezone.utc)
+                    if (_process_started_at(native_start) > registered_at
+                            or registered_at > now + timedelta(seconds=5)):
+                        continue  # this PID did not exist at its authenticated registration
+                    native_pid = binding.native_pid
+                # Repeated authenticated rows for one exact native process do
+                # not create another worker. Different live identities do.
+                live[(pid, start, cwd, native_pid, native_start)] = process_state
         if not live:
             return result("stopped" if candidates else "unknown",
                           "process_ended" if candidates else "no_current_binding")
         if len(live) != 1:
             return result("unknown", "ambiguous_binding")
-        pid, start, cwd, process_state = live[0]
+        (pid, start, cwd, native_pid, native_start), process_state = next(iter(live.items()))
         if process_state in _STOPPED_STATES:
             return result("stopped", "process_stopped")
+        if provider == "pi-cli":
+            state, reason, observed_at = observe_pi(
+                pid, start, cwd, now, _process_started_at(start), native_pid, native_start)
+            process_state, current_start = _process(pid)
+            if current_start != start:
+                return result("unknown", "binding_changed")
+            if process_state in _STOPPED_STATES:
+                return result("stopped", "process_stopped")
+            return result(state, reason, observed_at)
         if provider != "codex-cli":
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
@@ -262,14 +300,18 @@ async def _team_inputs(db: AsyncSession, preset_id: int):
             MailAgentSession.mailbox_status == "connected",
             MailAgentSession.capability_token_hash.is_not(None),
             MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))).all()
-    bindings: dict[int, set[tuple[int, str, str, str]]] = {}
+    bindings: dict[int, set[tuple[str, ActivityBinding]]] = {}
     for binding, session in rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
-            bindings.setdefault(binding.slot_id, set()).add((
-                binding.pane_pid, binding.pane_proc_start, session.provider, session.cwd))
+            bindings.setdefault(binding.slot_id, set()).add((session.provider, ActivityBinding(
+                binding.pane_pid, binding.pane_proc_start, session.cwd,
+                session.pid if session.provider == "pi-cli" else None,
+                session.created_at if session.provider == "pi-cli" else None)))
     return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
-               sorted((pid, start, cwd) for pid, start, provider, cwd in
-                bindings.get(slot.id, set()) if provider == slot.provider),
+               sorted((binding for provider, binding in bindings.get(slot.id, set())
+                       if provider == slot.provider), key=lambda x: (
+                           x.pane_pid, x.pane_start, x.cwd, x.native_pid or 0,
+                           str(x.registered_at))),
                native_identity_counts.get(_canonical_session_id((slot.launch_options or {}).get("session_id")) or "", 0) > 1)
             for slot in slots]
 

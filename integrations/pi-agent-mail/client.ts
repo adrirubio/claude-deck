@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { manifest, privateTools } from './manifest.ts'
 
@@ -85,7 +85,7 @@ export class PaneFence {
   readonly generation = randomUUID()
   readonly file: string
 
-  constructor(pane: { pid: number; start: string }, root = process.env.XDG_RUNTIME_DIR || `/tmp/claude-deck-pi-${process.getuid!()}`) {
+  constructor(readonly pane: { pid: number; start: string }, root = process.env.XDG_RUNTIME_DIR || `/tmp/claude-deck-pi-${process.getuid!()}`) {
     if (!Number.isSafeInteger(pane.pid) || pane.pid < 1 || !/^\d+$/.test(pane.start)) throw new Error('pane_unresolved')
     mkdirSync(root, { mode: 0o700, recursive: true })
     const directory = join(root, 'claude-deck-pi')
@@ -98,6 +98,23 @@ export class PaneFence {
     const descriptor = openSync(this.file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     try { writeFileSync(descriptor, JSON.stringify({ generation: this.generation, pane, piPid: process.pid, piStart: processIdentity(process.pid).start })) }
     finally { closeSync(descriptor) }
+  }
+
+  isCurrent(): boolean {
+    try {
+      const descriptor = openSync(this.file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      try {
+        const stat = fstatSync(descriptor)
+        if (!stat.isFile() || stat.uid !== process.getuid!() || stat.size > 16384) return false
+        const buffer = Buffer.alloc(16385)
+        const length = readSync(descriptor, buffer, 0, buffer.length, 0)
+        if (length > 16384) return false
+        const stored = JSON.parse(buffer.subarray(0, length).toString())
+        return stored.generation === this.generation && stored.pane?.pid === this.pane.pid
+          && stored.pane?.start === this.pane.start && stored.piPid === process.pid
+          && stored.piStart === processIdentity(process.pid).start
+      } finally { closeSync(descriptor) }
+    } catch { return false }
   }
 
   release() {
@@ -127,6 +144,10 @@ export class MailGeneration {
   private registrationDispatched = false
 
   constructor(private fence: PaneFence, private environment = process.env) {}
+
+  ownsActivity(): boolean {
+    return this.ready && !this.closing && this.fence.isCurrent()
+  }
 
   async start(cwd: string) {
     const command = this.environment.CLAUDE_DECK_MAIL_PYTHON
