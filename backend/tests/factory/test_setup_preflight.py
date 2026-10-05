@@ -386,3 +386,32 @@ async def test_preflight_requires_operator_and_uses_safe_validation(client):
     )
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_filter"
+
+
+@pytest.mark.asyncio
+async def test_v13_preflight_logs_and_response_expose_no_secret_values(client, monkeypatch, tmp_path, caplog):
+    import logging
+
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+    monkeypatch.setattr(settings, "github_app_private_key_path", "/synthetic/private/key")
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    with caplog.at_level(logging.DEBUG):
+        response = await client.post("/api/v1/factory/setup-preflight", json={
+            "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+            "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+        })
+    assert response.status_code == 200
+    # Presence booleans are allowed. Values, key paths, and credentials are not.
+    assert response.json()["configuration_presence"]["github_app_private_key_path"] is True
+    for secret in (PRIVATE, OPERATOR, "/synthetic/private/key"):
+        assert secret not in response.text
+        assert secret not in caplog.text

@@ -1013,3 +1013,206 @@ async def test_compat_adds_verification_clock_columns_without_changing_rows():
                 assert tuple(row) == ("verifying", None, None)
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_v37_rollback_comparison_refuses_divergent_leader_assignments():
+    """V37: a restored legacy copy must not silently reinterpret explicit authority.
+
+    The documented rollback procedure records each explicit assignment against
+    the legacy (position, id) resolver before downgrade. A restored legacy copy
+    recomputes assignments through that resolver. Equal references are
+    representable; any difference or unrepresentable assignment refuses the
+    ordinary downgrade.
+    """
+
+    async def authority_references(conn):
+        rows = (await conn.execute(text(
+            "SELECT p.id, p.leader_slot_id, "
+            "(SELECT s.id FROM agent_team_slots s WHERE s.preset_id = p.id AND s.enabled = 1 "
+            " ORDER BY s.position, s.id LIMIT 1) AS legacy_id FROM agent_team_presets p"
+        ))).all()
+        return {row.id: (row.leader_slot_id, row.legacy_id) for row in rows}
+
+    async def build(upgraded: bool):
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        conn = await engine.connect()
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
+        await conn.execute(text(
+            "INSERT INTO agent_team_presets (id, name, created_at, updated_at, autonomy_enabled) "
+            "VALUES (1, 'representable', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
+            "(2, 'divergent', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
+            "(3, 'unrepresentable', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+        ))
+        await conn.execute(text(
+            "INSERT INTO agent_team_slots "
+            "(id, preset_id, position, display_name, provider, repo_id, repo_path, repo_name, "
+            "controlled_language_enabled, launch_mode, enabled, created_at, updated_at) VALUES "
+            "(10, 1, 0, 'first', 'codex-cli', 'a', '/a', 'a', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+            "(11, 1, 1, 'second', 'codex-cli', 'b', '/b', 'b', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+            "(20, 2, 0, 'first', 'codex-cli', 'c', '/c', 'c', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+            "(21, 2, 1, 'second', 'codex-cli', 'd', '/d', 'd', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+            "(30, 3, 0, 'first', 'codex-cli', 'e', '/e', 'e', 1, 'plain', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ))
+        await conn.commit()
+        await _run_sqlite_compat_migrations(conn)
+        if upgraded:
+            # Record explicit assignments as the rollback procedure requires.
+            await conn.execute(text(
+                "UPDATE agent_team_presets SET leader_slot_id = 21 WHERE id = 2"
+            ))
+            await conn.execute(text(
+                "UPDATE agent_team_presets SET leader_slot_id = 30 WHERE id = 3"
+            ))
+            await conn.commit()
+        refs = await authority_references(conn)
+        await conn.close()
+        return engine, refs
+
+    upgraded_engine, upgraded = await build(True)
+    restored_engine, restored = await build(False)
+    try:
+        assert upgraded[1] == (10, 10)
+        assert upgraded[2] == (21, 20)
+        assert upgraded[3] == (30, None)
+        # The restored legacy copy recomputes every assignment through the legacy resolver.
+        assert restored[1] == (10, 10)
+        assert restored[2] == (20, 20)
+        assert restored[3] == (None, None)
+        representable = sorted(
+            preset_id for preset_id, (explicit, _) in upgraded.items()
+            if explicit is not None and restored[preset_id][0] == explicit
+        )
+        refused = sorted(
+            preset_id for preset_id, (explicit, _) in upgraded.items()
+            if restored[preset_id][0] != explicit
+        )
+        assert representable == [1]
+        assert refused == [2, 3]
+    finally:
+        await upgraded_engine.dispose()
+        await restored_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_v37_representable_downgrade_validated_on_restored_backup(tmp_path):
+    """V37: validate a representable downgrade on a restored disposable backup.
+
+    The documented procedure quiesces work, backs up the upgraded database, and
+    validates the downgrade on a restored copy before any production use. This
+    test never downgrades a production database. Authority references must be
+    identical before and after the rehearsal, and the legacy resolver must
+    reproduce the recorded explicit assignment for a representable case.
+    """
+    import shutil
+
+    upgraded_path = tmp_path / "upgraded.db"
+    backup_path = tmp_path / "upgraded.backup.db"
+    restored_path = tmp_path / "restored.db"
+    url = f"sqlite+aiosqlite:///{upgraded_path}"
+
+    engine = create_async_engine(url)
+    async with engine.connect() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(
+            "INSERT INTO agent_team_presets (id, name, created_at, updated_at, autonomy_enabled, leader_slot_id) "
+            "VALUES (1, 'representable', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 1, 10)"
+        ))
+        await conn.execute(text(
+            "INSERT INTO agent_team_slots "
+            "(id, preset_id, position, display_name, provider, repo_id, repo_path, repo_name, "
+            "controlled_language_enabled, launch_mode, enabled, created_at, updated_at) VALUES "
+            "(10, 1, 0, 'first', 'codex-cli', 'a', '/a', 'a', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+            "(11, 1, 1, 'second', 'codex-cli', 'b', '/b', 'b', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ))
+        await conn.execute(text(
+            "INSERT INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path, dispatch_label, "
+            "design_label, merge_policy, github_auth_mode, base_ref, max_approval_rounds, max_concurrent_dispatched, "
+            "max_verification_retries, max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree, "
+            "continuation_enabled, max_continuation_revisions, max_continuation_failed_heads, "
+            "max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled, created_at, updated_at) "
+            "VALUES (1, 1, 'example', 'a', '/a', 'ready', 'design', 'human', 'ambient', 'origin/main', 3, 1, 1, 0, 1, 0, "
+            "0, 6, 8, 2, 32, 16, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ))
+        await conn.execute(text(
+            "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, github_updated_at, "
+            "issue_type, dispatch_status, attempt_phase, owner_slot_id, handoff_target_slot_id, ack_approver_member_id, "
+            "active_scope_revision, approval_round_count, retry_count, diagnostic_retry_count, created_at, updated_at) "
+            "VALUES (1, 1, 7, 'title', 'https://example.invalid/7', CURRENT_TIMESTAMP, 'code', "
+            "'verifying', 'implementation', 10, 11, 7, 2, 1, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ))
+        await conn.execute(text(
+            "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, leased_item_id, lease_token, "
+            "created_at, updated_at) "
+            "VALUES (1, 1, '/work/1', 'worktree', 1, 1, 1, 'fixture-lease-token', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ))
+        await conn.commit()
+
+        async def authority_references(connection):
+            rows = (await connection.execute(text(
+                "SELECT id, name, autonomy_enabled FROM agent_team_presets ORDER BY id"
+            ))).mappings().all()
+            slots = (await connection.execute(text(
+                "SELECT id, preset_id, position, enabled FROM agent_team_slots ORDER BY id"
+            ))).mappings().all()
+            items = (await connection.execute(text(
+                "SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id, handoff_target_slot_id, "
+                "ack_approver_member_id, active_scope_revision, approval_round_count "
+                "FROM github_work_items ORDER BY id"
+            ))).mappings().all()
+            workspaces = (await connection.execute(text(
+                "SELECT id, scope_id, leased_item_id, lease_token FROM github_workspaces ORDER BY id"
+            ))).mappings().all()
+            legacy = (await connection.execute(text(
+                "SELECT p.id, (SELECT s.id FROM agent_team_slots s WHERE s.preset_id = p.id AND s.enabled = 1 "
+                " ORDER BY s.position, s.id LIMIT 1) AS legacy_id FROM agent_team_presets p ORDER BY p.id"
+            ))).mappings().all()
+            return {
+                "presets": [dict(row) for row in rows],
+                "slots": [dict(row) for row in slots],
+                "items": [dict(row) for row in items],
+                "workspaces": [dict(row) for row in workspaces],
+                "legacy": [dict(row) for row in legacy],
+                "explicit": await explicit_leaders(connection),
+            }
+
+        async def explicit_leaders(connection):
+            columns = {row[1] for row in (await connection.execute(
+                text("PRAGMA table_info(agent_team_presets)"))).all()}
+            if "leader_slot_id" not in columns:
+                return None
+            rows = (await connection.execute(text(
+                "SELECT id, leader_slot_id FROM agent_team_presets ORDER BY id"
+            ))).all()
+            return {row[0]: row[1] for row in rows}
+
+        recorded = await authority_references(conn)
+    await engine.dispose()
+    production_digest = hashlib.sha256(upgraded_path.read_bytes()).hexdigest()
+
+    # Backup the quiesced upgraded database, then restore to a disposable copy.
+    shutil.copy(upgraded_path, backup_path)
+    shutil.copy(backup_path, restored_path)
+
+    restored_engine = create_async_engine(f"sqlite+aiosqlite:///{restored_path}")
+    try:
+        async with restored_engine.connect() as conn:
+            # Downgrade rehearsal runs only on the restored disposable copy.
+            await conn.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
+            await conn.commit()
+            downgraded = await authority_references(conn)
+
+        # Every authority reference is preserved by the downgrade rehearsal.
+        for key in ("presets", "slots", "items", "workspaces"):
+            assert downgraded[key] == recorded[key], key
+        # The recorded explicit assignment equals the legacy resolver: representable.
+        assert recorded["explicit"] == {1: 10}
+        assert recorded["legacy"][0]["legacy_id"] == 10
+        assert downgraded["explicit"] is None
+        assert downgraded["legacy"][0]["legacy_id"] == 10
+    finally:
+        await restored_engine.dispose()
+
+    # The upgraded production database is untouched by the rehearsal.
+    assert hashlib.sha256(upgraded_path.read_bytes()).hexdigest() == production_digest

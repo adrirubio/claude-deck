@@ -251,4 +251,115 @@ describe("guided repository setup", () => {
     expect(screen.getByRole("button", { name: "Enable team automation" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Enable this scope" })).toBeDisabled();
   });
+
+  const connectedRoster = {
+    members: [
+      { id: 1, status: "connected", team_preset_id: 12, team_slot_id: 101, sessions: [{ team_preset_id: 12, team_slot_id: 101, mailbox_status: "connected" }] },
+      { id: 2, status: "connected", team_preset_id: 12, team_slot_id: 102, sessions: [{ team_preset_id: 12, team_slot_id: 102, mailbox_status: "connected" }] },
+    ],
+  };
+  const readyPlan = {
+    can_launch: true, spawn_count: 0, reuse_count: 2, blocked_count: 0, plan_hash: "synthetic-plan",
+    items: [
+      { slot_id: 101, slot_name: "Leader", action: "reuse", block_code: null, reasons: [], matching_session: { id: 1 } },
+      { slot_id: 102, slot_name: "Worker A", action: "reuse", block_code: null, reasons: [], matching_session: { id: 2 } },
+    ],
+  };
+
+  function teamFixture(autonomy: boolean) {
+    return {
+      id: 12, name: "Synthetic team", autonomy_enabled: autonomy, leader_slot_id: 101, updated_at: "2026-10-05T00:00:00Z",
+      slots: [
+        { id: 101, display_name: "Leader", enabled: true, provider: "codex-cli", role: "Leader", repo_path: "/synthetic/checkout", area_labels: [], expertise: null },
+        { id: 102, display_name: "Worker A", enabled: true, provider: "codex-cli", role: "Worker", repo_path: "/synthetic/checkout", area_labels: [], expertise: null },
+      ],
+    };
+  }
+
+  function scopeFixture(id: number, presetId: number, enabled: boolean, repo: string, label: string) {
+    return {
+      id, preset_id: presetId, repo_owner: "example", repo_name: repo, repo_path: "/synthetic/checkout",
+      dispatch_label: label, design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      github_auth_mode: "ambient", github_auth_configured: true, github_poll_token_configured: true, enabled,
+    };
+  }
+
+  async function runDraftToSavedSetup() {
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/Saved configuration/);
+  }
+
+  it("shows an external collision for a scope resumed by team activation and requires acknowledgement", async () => {
+    const team = teamFixture(false);
+    const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const sibling = scopeFixture(56, 12, true, "other-repo", "shared-label");
+    const external = scopeFixture(77, 20, true, "other-repo", "shared-label");
+    const allScopes = [ownScope, sibling, external];
+    mocks.apiClient.mockImplementation((endpoint: string) => {
+      if (endpoint.startsWith("factory/setup-preflight")) return Promise.resolve({
+        status: "ready", observed_at: "2026-10-05T00:00:00Z", checked_at: "2026-10-05T00:00:00Z",
+        checks: { checkout_identity: { status: "ready", code: "checkout_identity_matches", remedy: "ready" } },
+      });
+      return Promise.resolve(connectedRoster);
+    });
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team, externalTeam] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) => Promise.resolve({ scopes: allScopes.filter((item) => item.preset_id === teamId) }));
+    mocks.createAgentTeamPreset.mockResolvedValue(team);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetup();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
+    await screen.findByText(/Team activation overlaps/);
+    expect(screen.getByText(/Prospective overlap/)).toBeInTheDocument();
+    expect(screen.getByText(/This can dispatch the same issue more than once/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/Enable team automation/));
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Prospective overlap/ }));
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeEnabled();
+    expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
+  });
+
+  it("invalidates acknowledgements when a collision appears after the activation review", async () => {
+    const team = teamFixture(true);
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
+    let scopes = [ownScope];
+    mocks.apiClient.mockImplementation((endpoint: string) => {
+      if (endpoint.startsWith("factory/setup-preflight")) return Promise.resolve({
+        status: "ready", observed_at: "2026-10-05T00:00:00Z", checked_at: "2026-10-05T00:00:00Z",
+        checks: { checkout_identity: { status: "ready", code: "checkout_identity_matches", remedy: "ready" } },
+      });
+      return Promise.resolve(connectedRoster);
+    });
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team, externalTeam] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) => Promise.resolve({ scopes: scopes.filter((item) => item.preset_id === teamId) }));
+    mocks.createAgentTeamPreset.mockResolvedValue(team);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetup();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
+    await screen.findByRole("button", { name: "Enable this scope" });
+    expect(screen.getByRole("button", { name: "Enable this scope" })).toBeEnabled();
+
+    // A conflicting external scope appears between review and activation.
+    scopes = [ownScope, scopeFixture(77, 20, true, "synthetic-product", "claude-deck-ready")];
+    fireEvent.click(screen.getByRole("button", { name: "Enable this scope" }));
+
+    await screen.findByText(/changed after the checks/);
+    expect(screen.getByText(/Prospective overlap/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enable this scope" })).toBeDisabled();
+    expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
+  });
 });

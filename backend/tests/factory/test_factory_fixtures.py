@@ -175,3 +175,50 @@ async def test_frozen_response_contract(factory_client, factory_store, monkeypat
             path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
         else:
             assert json.loads(path.read_text()) == value, f"Contract changed: {path.name}"
+
+
+V13_FORBIDDEN_FIELDS = {
+    "dispatch_nonce", "dispatch_head_ref", "dispatch_base_ref", "lease_token",
+    "capability_token_hash", "private_key", "private_key_path", "repo_path",
+    "workspace_path", "bootstrap_prompt", "launch_options", "credential",
+    "operator_token", "github_token",
+}
+
+
+async def test_v13_frozen_responses_enforce_explicit_field_allowlist():
+    """V13: projections omit nonce/head identity, workspace paths, and raw summaries.
+
+    The frozen files equal live responses (checked above), so the allowlist
+    assertions here also cover the live read routes.
+    """
+    safe_item_keys = set(wire.SafeWorkItem.model_fields)
+    for name in ("work-item.json", "work-items.json", "repositories.json", "repository.json",
+                 "overview.json", "errors.json", "protected-errors.json", "mapping.json", "manifest.json"):
+        data = json.loads((FIXTURES / name).read_text())
+        found: set = set()
+        summaries: list = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                found.update(node)
+                for key, value in node.items():
+                    if key in {"summary", "reason", "remedy"} and isinstance(value, str):
+                        summaries.append(value)
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(data)
+        assert not (found & V13_FORBIDDEN_FIELDS), f"{name} exposes private fields: {found & V13_FORBIDDEN_FIELDS}"
+        for value in summaries:
+            assert "/" not in value and "\\" not in value, value
+            assert "synthetic-private" not in value
+
+    work_items = json.loads((FIXTURES / "work-item.json").read_text())
+    for scenario in work_items.values():
+        assert set(scenario["response"]["work_item"]["item"]) == safe_item_keys
+    work_list = json.loads((FIXTURES / "work-items.json").read_text())
+    for scenario in work_list.values():
+        for projection in scenario["response"]["items"]:
+            assert set(projection["item"]) == safe_item_keys
