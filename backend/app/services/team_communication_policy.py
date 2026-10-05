@@ -12,6 +12,11 @@ Keep each safety condition, exception, approval rule, decision gate, and evidenc
 Do not remove facts to shorten the text. Do not claim certified ASD-STE100 compliance.
 These instructions guide your output. Deck does not check the full controlled dictionary."""
 
+OWN_WRITING_STYLE_GUIDANCE = """Communication: member writing style
+The operator disabled Deck's ASD-STE100 guidance for this member. Use your own writing style.
+This choice replaces only Deck's earlier controlled-language instruction for this member.
+Keep the human summary requirement. Keep all other instructions, safety conditions, authority rules, and decision gates."""
+
 HUMAN_REVIEW_SUMMARY_GUIDANCE = """Summary for human review
 PR means GitHub pull request. CI means automatic checks.
 Before you request human review or merge, add a brief Human review summary.
@@ -28,7 +33,5 @@ The summary does not replace approval, independent review, or the configured mer
 
 def team_communication_guidance(controlled_language_enabled: bool = True) -> str:
     """Keep human summaries required when a member opts out of controlled language."""
-    parts = [HUMAN_REVIEW_SUMMARY_GUIDANCE]
-    if controlled_language_enabled:
-        parts.insert(0, CONTROLLED_LANGUAGE_GUIDANCE)
-    return "\n\n".join(parts)
+    writing_style = CONTROLLED_LANGUAGE_GUIDANCE if controlled_language_enabled else OWN_WRITING_STYLE_GUIDANCE
+    return f"{writing_style}\n\n{HUMAN_REVIEW_SUMMARY_GUIDANCE}"
