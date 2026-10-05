@@ -94,10 +94,35 @@ def test_read_proc_stat_returns_none_for_a_dead_pid(tmp_path, monkeypatch):
 def test_process_dead_observation_requires_available_proc(tmp_path, monkeypatch):
     (tmp_path / "self").mkdir()
     (tmp_path / "self" / "stat").write_text(_STAT)
+    def absent(_pid, signal):
+        assert signal == 0
+        raise ProcessLookupError("absent")
+    monkeypatch.setattr(peer_process.os, "kill", absent)
     monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
     assert peer_process.process_is_confirmed_dead(1234) is True
     monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path / "unavailable"))
     assert peer_process.process_is_confirmed_dead(1234) is False
+
+
+@pytest.mark.parametrize("error", [None, PermissionError("denied"), OSError("unknown")])
+def test_process_dead_observation_keeps_hidden_live_or_uncertain_process(tmp_path, monkeypatch, error):
+    (tmp_path / "self").mkdir()
+    (tmp_path / "self" / "stat").write_text(_STAT)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    def observe(_pid, signal):
+        assert signal == 0
+        if error is not None:
+            raise error
+    monkeypatch.setattr(peer_process.os, "kill", observe)
+    assert peer_process.process_is_confirmed_dead(1234) is False
+
+
+def test_process_dead_observation_accepts_non_utf8_process_name(tmp_path, monkeypatch):
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_bytes(_STAT.replace(") S ", ") Z ").encode().replace(b"claude with spaces", b"pi\xff"))
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    assert peer_process.process_is_confirmed_dead(1234) is True
 
 
 @pytest.mark.parametrize("pid", [None, 0, -1, True, "1234"])

@@ -159,20 +159,29 @@ def process_is_confirmed_dead(pid: Optional[int]) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     try:
-        with open(f"{_PROC_ROOT}/{pid}/stat") as handle:
+        with open(f"{_PROC_ROOT}/{pid}/stat", "rb") as handle:
             raw = handle.read(4097)
     except FileNotFoundError:
-        # An unavailable proc mount is not proof that one process exited.
-        return os.path.isfile(f"{_PROC_ROOT}/self/stat")
+        # hidepid can hide a live process. Signal 0 observes existence without
+        # sending a signal. Only ESRCH in this PID namespace proves absence.
+        if not os.path.isfile(f"{_PROC_ROOT}/self/stat"):
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
     except OSError:
         return False
     if len(raw) > 4096:
         return False
     try:
-        fields = raw[raw.rindex(")") + 2 :].split()
+        fields = raw[raw.rindex(b")") + 2 :].split()
         if not fields[19].isdigit() or int(fields[1]) < 0:
             return False
-        return fields[0] in {"Z", "X", "x"}
+        return fields[0] in {b"Z", b"X", b"x"}
     except (ValueError, IndexError):
         return False
 
