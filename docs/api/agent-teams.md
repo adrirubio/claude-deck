@@ -124,6 +124,91 @@ This observation also shows human gates from older assessments with a conflictin
 It marks their readiness as waiting and sets `coverage_complete` to `false`.
 The Leader must correct the report. The observation does not approve work or satisfy a milestone.
 
+## Current Operator Action Records
+
+A current action needs instructions in the main issue body. A comment or Mail message alone is insufficient.
+Each record states its status, responsible person, reason, exact action, evidence, completion condition, and UTC update time.
+A PR record also states the actual target branch and full reviewed head.
+The responsible role must be `operator`. Name any delegated maintainer after the role, such as `operator — Root`.
+
+The Leader can prepare records before a first assessment:
+
+```http
+POST /api/v1/agent-teams/github-scopes/{scope_id}/operator-action-contexts/prepare
+```
+
+The body is `{ "entries": [...] }`. Use the assessment entry schema for the intended assigned issues.
+The current authenticated Leader can prepare one to sixteen unique actions and at most eight PRs.
+This route checks scope, role, current inspection state, and PR identity. It returns text templates and section markers.
+It does not publish to GitHub or grant workflow authority. OFF and HOLD prevent this preparation.
+
+Use `deck_prepare_operator_action_contexts(scope_id, entries)` for intended Leader requests.
+Use `deck_get_operator_action_contexts(preset_id)` for automatic dispatch review and recovery requests.
+The latter reads `human-actions?include_templates=true`. Ordinary UI reads omit templates to keep responses small.
+
+### Publication sequence
+
+1. Prepare the intended records. Keep the generated metadata, headings, and labels.
+2. Fill every `WRITE_` placeholder. State the exact operator steps and the condition that clears each request.
+3. Put one marked section within the first 4096 characters of the main issue body. Use the exact heading `Current operator actions`.
+4. Use existing authorized GitHub access. Preserve other issue facts, human edits, and records that belong to other scopes.
+5. Read the current issue again before updating it. Reconcile concurrent edits. Confirm the published section after the update.
+6. Read fresh backlog coordination after publication. Pass its private token to the complete assessment.
+7. Update the section when the actor, evidence, PR head, checkpoint, or requested action changes.
+8. Set old records to `Cleared` or `Superseded`, or remove them, before reporting that their requests ended.
+
+The returned markers enclose this shape. Fill the generated records; do not publish the example placeholders:
+
+```markdown
+<!-- deck:operator-actions:start -->
+## Current operator actions
+
+<!-- deck:operator-action:GENERATED_PUBLIC_ID:start -->
+<!-- deck:operator-record scope=1 source=leader -->
+### Record milestone acceptance
+
+**Status:** Requested
+**Responsible:** operator — Juan
+**Reason:** The candidate has a recorded evidence packet. Its limits remain explicit.
+**Action:** Review the linked packet. Record acceptance or the changes that you require on this issue.
+**Done when:** The operator decision is recorded and the Leader updates the gate.
+**Updated:** CURRENT_UTC_TIMESTAMP
+**Evidence:** https://github.com/OWNER/REPO/issues/NUMBER
+
+<!-- deck:operator-action:end -->
+<!-- deck:operator-actions:end -->
+```
+
+Use `Waiting for prerequisites` for a future decision gate. Its record must describe the remaining evidence.
+Records must remain visible Markdown prose. Do not put them in a code fence, HTML comment, or collapsed details block.
+Keep at most sixteen records in the section. Do not alter a generated public ID or use a private nonce as an ID.
+
+### Validation and incomplete records
+
+All declared human actions need a current matching record before the new assessment is accepted.
+HTTP 422 `human_action_context_required` retains the previous assessment when instructions are absent, stale, or mismatched.
+`human_action_context_not_cleared` means that the issue still requests a superseded action from this scope.
+`human_action_actor_required` rejects a declared human action assigned to an agent.
+`human_action_completed` rejects an action on a completed disposition.
+`human_action_attempt_changed` means an inspection no longer matches the current stopped attempt or checkpoint.
+
+Older assessments and automatic dispatch requests remain visible. Missing or stale instructions produce `state: "context_pending"`.
+The UI shows **Action details pending** and names the Leader as the person who must prepare the details.
+It keeps Autonomy inspection available. It does not label an unexplained request ready for the human.
+This state makes `coverage_complete` false. It never clears a real gate or approves a recovery action.
+
+The observation reports `context_request_id`, `instructions_url`, `instructions_state`, and instruction timestamps.
+Records expire after 24 hours. Issue observations expire within 60 seconds. Failed reads retry after a short cache interval.
+The observer bounds concurrent issue reads to 32 and PR reads to eight. It stores structural checks, not issue prose or private diagnostics.
+Publication failures, read-only credentials, or rate limits leave details pending. No HTTP GET writes to GitHub or sends publication Mail.
+Escalation broadcasts and team communication guidance give the Leader the explicit publication task.
+
+The public ID uses only public request identity. Issue prose remains advisory and cannot grant API authority.
+No token, lease, private nonce, prompt, raw private log, or private host path belongs in a record.
+The parser checks structure and request identity. It does not certify the quality of an agent's explanation.
+
+Existing MCP server processes must reload to expose the new preparation tools. This does not require changing the roster or model.
+
 ## Launch Planning
 
 ### Plan Launch

@@ -36,7 +36,7 @@ class Client:
 
     async def get_pull(self, owner, repo, number):
         return self.pulls.get(number, {"number":number, "state":"open", "merged":False, "draft":False,
-            "head":{"sha":"a"*40}, "base":{"repo":{"full_name":f"{owner}/{repo}"}}})
+            "head":{"sha":"a"*40}, "base":{"ref":"master", "repo":{"full_name":f"{owner}/{repo}"}}})
 
 
 def report(row, *, eligible=True):
@@ -734,7 +734,17 @@ async def human_report(db, team):
     data["entries"][1]["human_actions"] = [
         {"kind":"review_pr", "readiness":"requested", "pull_request_number":38, "expected_head_sha":"a"*40},
         {"kind":"pilot_decision", "readiness":"waiting_for_prerequisites", "prerequisite_issue_numbers":[7]}]
-    return CoordinationAssessment.model_validate(data)
+    receipt = CoordinationAssessment.model_validate(data)
+    prepared = await service.prepare_operator_contexts(db, team.scope_id, team.leader, receipt.entries, team.client)
+    records = [action["context_template"] for action in prepared["actions"]]
+    body = "\n".join([prepared["section_start"], "## Current operator actions", *records, prepared["section_end"]])
+    body = body.replace("WRITE_RESPONSIBLE_PERSON", "fixture operator").replace("WRITE_CURRENT_REASON", "The reviewed packet requires this decision.")
+    body = body.replace("WRITE_SPECIFIC_OPERATOR_STEPS", "Review the linked evidence and record the decision on this issue.")
+    body = body.replace("WRITE_COMPLETION_CONDITION", "The required evidence and operator decision are recorded.")
+    team.client.issues[8]["body"] = body.replace("WRITE_UTC_TIMESTAMP", datetime.utcnow().isoformat()+"Z")
+    fresh = await fresh_report(db, team, eligible=False)
+    return receipt.model_copy(update={"generation":fresh.generation, "request_sequence":fresh.request_sequence,
+                                      "snapshot_token":fresh.snapshot_token})
 
 
 @pytest.mark.asyncio
@@ -818,7 +828,7 @@ async def test_legacy_replay_and_operator_gate_do_not_invent_pr_readiness(db, te
     assert (row.version,row.last_assessed_at,row.assessment_revision)==before
     summary = await attention.summary(db, team.preset.id, team.client)
     gate=next(a for a in summary["actions"] if a["issue_number"]==8)
-    assert gate["state"]=="waiting_for_prerequisites" and gate["pull_request_number"] is None
+    assert gate["state"]=="context_pending" and gate["pull_request_number"] is None
 
 
 @pytest.mark.asyncio
@@ -849,7 +859,7 @@ async def test_attention_keeps_operator_checkpoint_visible_with_pending_revision
     team.approval.status="pending";team.approval.request_kind="scope_revision";team.approval.scope_revision_id=revision.id
     await db.commit()
     actions=(await attention.summary(db,team.preset.id,team.client))["actions"]
-    assert len(actions)==1 and actions[0]["kind"]=="inspect_checkpoint" and actions[0]["state"]=="requested"
+    assert len(actions)==1 and actions[0]["kind"]=="inspect_checkpoint" and actions[0]["state"]=="context_pending"
 
 
 @pytest.mark.asyncio
@@ -878,7 +888,7 @@ async def test_design_review_uses_fresh_pr_identity_without_code_verified_head(d
     team.item.dispatch_status="awaiting_human_review";team.item.issue_type="design";team.item.last_verified_sha=None
     await db.commit()
     action=(await attention.summary(db,team.preset.id,team.client))["actions"][0]
-    assert action["state"]=="requested" and action["expected_head_sha"] is None
+    assert action["state"]=="context_pending" and action["expected_head_sha"] is None
     assert action["observed_head_sha"]=="a"*40
     team.item.pr_number=None;await db.commit()
     summary=await attention.summary(db,team.preset.id,team.client)

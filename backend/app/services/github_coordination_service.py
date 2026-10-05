@@ -500,6 +500,13 @@ class GithubCoordinationService:
                     "one evidenced disposition per assigned issue using deck_report_backlog_assessment. "
                     'Use required_actor:"operator" for human decisions, milestone acceptance, and pilot decisions. '
                     'Before requesting input, include human_actions with the kind and current readiness. '
+                    'First call deck_prepare_operator_action_contexts for the intended requests. '
+                    'Publish its completed records near the start of each main GitHub issue. '
+                    'State the reason, responsible person, exact action, evidence, and completion condition. '
+                    'Use existing authorized GitHub access. Preserve other issue content and other scopes. '
+                    'Clear or supersede old records when their requests change. '
+                    'For automatic escalations or review requests, use deck_get_operator_action_contexts. '
+                    'Do not leave the instructions only in Mail or comments. '
                     'Use requested when the human can act now. '
                     'Use waiting_for_prerequisites when required evidence is absent. '
                     'Do not assign a human decision to the Leader. '
@@ -577,12 +584,18 @@ class GithubCoordinationService:
         if any(entry.operator_decision_required and entry.required_actor != "operator"
                for entry in report.entries):
             raise CoordinationError("operator_gate_actor_required", 422)
+        if any(entry.human_actions and entry.required_actor != "operator" for entry in report.entries):
+            raise CoordinationError("human_action_actor_required", 422)
+        if any(entry.human_actions and entry.disposition == "completed" for entry in report.entries):
+            raise CoordinationError("human_action_completed", 422)
         if not signed and leader.id != row.leader_session_id:
             raise CoordinationError("coordination_leader_changed")
         await db.commit()
         issues = await self._issues(scope, numbers, client or github_client)
         from app.services.github_operator_attention_service import github_operator_attention_service
-        await github_operator_attention_service.validate_actions(scope, report.entries, client or github_client)
+        pulls = await github_operator_attention_service.validate_actions(scope, report.entries, client or github_client)
+        from app.services.github_operator_context_service import github_operator_context_service
+        await github_operator_context_service.validate_report(db, scope, report.entries, issues, pulls)
         public, fingerprint, leader, authority = await self._context(db, scope_id, numbers, issues)
         row = await self.state(db, scope_id)
         if row is None or not row.enabled or principal_id != leader.id:
@@ -649,6 +662,48 @@ class GithubCoordinationService:
             await db.rollback()
             raise CoordinationError(code)
         await db.commit()
+        github_operator_context_service.invalidate(scope)
+
+    async def prepare_operator_contexts(self, db, scope_id, principal, entries, client=None):
+        """Prepare publication text without GitHub writes or workflow authority."""
+        row = await self.state(db, scope_id)
+        if row is None or not row.enabled:
+            raise CoordinationError("coordination_not_requested")
+        if code := hold_code():
+            raise CoordinationError(code)
+        if not await db.scalar(select(_autonomous(scope_id))):
+            raise CoordinationError("autonomy_off")
+        await self.require_leader(db, scope_id, principal)
+        numbers = set(row.issue_numbers)
+        policy_revision = row.policy_revision
+        if any(entry.issue_number not in numbers or set(entry.evidence_issue_numbers) - numbers
+               or any(set(action.prerequisite_issue_numbers) - numbers for action in entry.human_actions)
+               for entry in entries):
+            raise CoordinationError("assigned_evidence_required", 422)
+        if any(entry.human_actions and entry.required_actor != "operator" for entry in entries):
+            raise CoordinationError("human_action_actor_required", 422)
+        if any(entry.human_actions and entry.disposition == "completed" for entry in entries):
+            raise CoordinationError("human_action_completed", 422)
+        scope = await self.scope(db, scope_id)
+        await db.commit()
+        from app.services.github_operator_attention_service import github_operator_attention_service
+        from app.services.github_operator_context_service import (
+            SECTION_START, SECTION_END, describe, github_operator_context_service,
+        )
+        pulls = await github_operator_attention_service.validate_actions(scope, entries, client or github_client)
+        actions = await github_operator_context_service.draft_actions(db, scope, entries, pulls)
+        await db.commit()
+        if code := hold_code():
+            raise CoordinationError(code)
+        if not await db.scalar(select(_autonomous(scope_id))):
+            raise CoordinationError("autonomy_off")
+        await self.require_leader(db, scope_id, principal)
+        latest = await self.state(db, scope_id)
+        if latest is None or not latest.enabled or latest.policy_revision != policy_revision:
+            raise CoordinationError("coordination_policy_changed")
+        return {"scope_id":scope_id, "section_start":SECTION_START, "section_end":SECTION_END,
+                "actions":[{**action, **describe(action, include_template=True)} for action in actions],
+                "publication_required":True, "grants_authority":False}
 
     async def summary(self, db, scope_id):
         scope = await self.scope(db, scope_id)
