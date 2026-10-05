@@ -108,9 +108,7 @@ def _autonomous(scope_id: int):
 
 
 def _current_authority(scope, preset, leader):
-    designated = select(AgentTeamSlot.id).where(
-        AgentTeamSlot.preset_id == scope.preset_id, AgentTeamSlot.enabled.is_(True),
-    ).order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(1).scalar_subquery()
+    designated = preset.leader_slot_id
     member = select(MailTeamMember.id).where(
         MailTeamMember.team_slot_id == leader.team_slot_id,
     ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1).scalar_subquery()
@@ -181,7 +179,10 @@ class GithubCoordinationService:
         ).order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(_MAX_CONTEXT_ROWS + 1))).all())
         if len(slots) > _MAX_CONTEXT_ROWS:
             raise CoordinationError("coordination_context_limit")
-        leader = github_dispatch_service._leader_slot(slots)
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = github_dispatch_service._leader_slot(
+            slots, preset.leader_slot_id if preset is not None else None
+        )
         member = await github_dispatch_service._slot_member(db, leader.id) if leader else None
         if member is None or member.team_preset_id != scope.preset_id:
             raise CoordinationError("leader_unavailable")

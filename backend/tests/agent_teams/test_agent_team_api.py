@@ -670,3 +670,74 @@ async def test_retry_endpoint_defers_while_workspace_is_leased(client, db):
     assert body["retry_allowed"] is True
     assert body["retry_block_code"] is None
     assert workspace.leased_item_id == item.id
+
+
+@pytest.mark.asyncio
+async def test_leader_assignment_is_explicit_and_survives_reorder(client, db, tmp_path):
+    repo = tmp_path / "leader-repo"
+    repo.mkdir()
+    preset = await agent_team_service.create_preset(
+        db,
+        AgentTeamPresetCreate(
+            name="Explicit Leader fixture",
+            slots=[
+                AgentTeamSlotCreate(display_name="Worker", repo_path=str(repo)),
+                AgentTeamSlotCreate(display_name="Leader", repo_path=str(repo)),
+            ],
+        ),
+    )
+    assert preset.leader_slot_id is None
+    leader_slot = preset.slots[1]
+    response = await client.put(
+        f"/api/v1/agent-teams/presets/{preset.id}/leader",
+        json={
+            "leader_slot_id": leader_slot.id,
+            "expected_leader_slot_id": None,
+            "expected_updated_at": preset.updated_at,
+            "reason": "Select the approved fixture Leader.",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["leader_slot_id"] == leader_slot.id
+
+    reordered = await agent_team_service.reorder_slots(
+        db, preset.id, [leader_slot.id, preset.slots[0].id]
+    )
+    assert reordered.leader_slot_id == leader_slot.id
+
+    missing = await client.put(
+        "/api/v1/agent-teams/presets/999999/leader",
+        json={
+            "leader_slot_id": leader_slot.id,
+            "expected_leader_slot_id": None,
+            "expected_updated_at": preset.updated_at,
+            "reason": "Check a missing team safely.",
+        },
+    )
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["code"] == "team_not_found"
+
+    stale = await client.put(
+        f"/api/v1/agent-teams/presets/{preset.id}/leader",
+        json={
+            "leader_slot_id": preset.slots[0].id,
+            "expected_leader_slot_id": None,
+            "expected_updated_at": "2000-01-01T00:00:00",
+            "reason": "Reject a stale assignment safely.",
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "leader_assignment_changed"
+    unchanged = await agent_team_service.get_preset(db, preset.id)
+    assert unchanged.leader_slot_id == leader_slot.id
+
+
+@pytest.mark.asyncio
+async def test_team_creation_requires_operator(client):
+    response = await client.post(
+        "/api/v1/agent-teams/presets",
+        headers={"X-Deck-Operator-Token": ""},
+        json={"name": "Denied creation", "slots": []},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "operator_token_required"

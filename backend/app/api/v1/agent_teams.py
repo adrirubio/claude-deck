@@ -27,6 +27,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.database import (
     AgentTeamSlot,
+    AgentTeamPreset,
     AgentPaneBinding,
     GithubApprovalRequest,
     GithubAttemptScopeRevision,
@@ -44,6 +45,7 @@ from app.models.schemas import (
     AgentTeamLaunchPlan,
     AgentTeamLaunchRequest,
     AgentTeamLaunchResult,
+    AgentTeamLeaderUpdateRequest,
     AgentTeamPresetCreate,
     AgentTeamPresetListResponse,
     AgentTeamPresetResponse,
@@ -1475,6 +1477,7 @@ async def claim_github_work_item_continuation(
         if claimed.rowcount != 1:
             await db.rollback()
             raise HTTPException(status_code=409, detail="continuation_context_changed")
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
     leader = github_dispatch_service._leader_slot(
         list(
             (
@@ -1484,7 +1487,7 @@ async def claim_github_work_item_continuation(
                     .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
                 )
             ).scalars().all()
-        )
+        ), preset.leader_slot_id if preset is not None else None
     )
     leader_member = (
         await github_dispatch_service._slot_member(db, leader.id)
@@ -1623,6 +1626,7 @@ async def list_presets(db: AsyncSession = Depends(get_db)):
 @router.post("/presets", response_model=AgentTeamPresetResponse)
 async def create_preset(
     request: AgentTeamPresetCreate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1634,6 +1638,7 @@ async def create_preset(
 @router.post("/presets/from-agent-mail", response_model=AgentTeamPresetResponse)
 async def create_preset_from_agent_mail(
     request: AgentTeamCreateFromMailRequest,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1645,6 +1650,7 @@ async def create_preset_from_agent_mail(
 @router.post("/presets/from-agent-bridge", response_model=AgentTeamPresetResponse)
 async def create_preset_from_agent_bridge(
     request: AgentTeamCreateFromBridgeRequest,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -1691,6 +1697,28 @@ async def update_preset(
     if request.autonomy_enabled is not None:
         await _sync_github_jobs(db)
     return response
+
+
+@router.put("/presets/{preset_id}/leader", response_model=AgentTeamPresetResponse)
+async def set_preset_leader(
+    preset_id: int,
+    request: AgentTeamLeaderUpdateRequest,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        return await agent_team_service.set_leader(
+            db,
+            preset_id,
+            leader_slot_id=request.leader_slot_id,
+            expected_leader_slot_id=request.expected_leader_slot_id,
+            expected_updated_at=request.expected_updated_at,
+            reason=request.reason,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        status = 404 if code == "team_not_found" else 409
+        raise HTTPException(status_code=status, detail={"code": code}) from exc
 
 
 @router.delete("/presets/{preset_id}", status_code=204)
@@ -2152,7 +2180,10 @@ async def retry_github_work_item(
                 .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
             )
         ).scalars().all()
-        leader = github_dispatch_service._leader_slot(list(slots))
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = github_dispatch_service._leader_slot(
+            list(slots), preset.leader_slot_id if preset is not None else None
+        )
         leader_member = (
             await github_dispatch_service._slot_member(db, leader.id)
             if leader is not None
@@ -2274,6 +2305,7 @@ async def abandon_github_work_item(
 async def duplicate_preset(
     preset_id: int,
     request: AgentTeamPresetUpdate,
+    _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
     try:

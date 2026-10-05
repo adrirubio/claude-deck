@@ -71,6 +71,7 @@ export interface AgentTeamPreset {
   created_at: string
   updated_at: string
   autonomy_enabled: boolean
+  leader_slot_id?: number | null
   slots: AgentTeamSlot[]
 }
 

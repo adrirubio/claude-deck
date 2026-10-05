@@ -1505,15 +1505,15 @@ class AgentMailService:
         scope = await db.get(TeamGithubScope, item.scope_id)
         if scope is None:
             return None, None
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
         leader_slot = (
             await db.execute(
                 select(AgentTeamSlot)
                 .where(
                     AgentTeamSlot.preset_id == scope.preset_id,
+                    AgentTeamSlot.id == (preset.leader_slot_id if preset else None),
                     AgentTeamSlot.enabled.is_(True),
                 )
-                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-                .limit(1)
             )
         ).scalar_one_or_none()
         return (

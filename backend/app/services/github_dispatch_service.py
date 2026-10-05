@@ -633,6 +633,7 @@ class GithubDispatchService:
         preset_slots: list[AgentTeamSlot],
         issue_labels: list[str],
         classify=None,
+        leader_slot_id: int | None = None,
     ) -> tuple[int | None, str]:
         enabled = [slot for slot in preset_slots if slot.enabled]
         enabled.sort(key=lambda slot: slot.position)
@@ -651,7 +652,8 @@ class GithubDispatchService:
             if chosen is not None:
                 return chosen, "classified"
 
-        return enabled[0].id, "leader_fallback"
+        leader = next((slot for slot in enabled if slot.id == leader_slot_id), None)
+        return (leader.id, "leader_fallback") if leader is not None else (None, "leader_unavailable")
 
     async def slot_is_busy(self, db: AsyncSession, slot_id: int) -> bool:
         active = (
@@ -747,6 +749,17 @@ class GithubDispatchService:
         issue_details_are_authoritative = issue_details_by_number is not None
         issue_details_by_number = issue_details_by_number or {}
         slots_by_id = {slot.id: slot for slot in preset_slots}
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = next((slot for slot in preset_slots if preset and slot.id == preset.leader_slot_id and slot.enabled), None)
+        if leader is None:
+            for item in (await db.execute(select(GithubWorkItem).where(
+                GithubWorkItem.scope_id == scope.id,
+                GithubWorkItem.dispatch_status == "pending",
+            ))).scalars().all():
+                item.pending_reason = "leader_unavailable"
+                item.updated_at = datetime.utcnow()
+            await db.commit()
+            return
         slots_dispatched_this_batch: set[int] = set()
         scope_dispatched_this_batch = 0
         await github_workspace_service.reclaim_stale(db, scope)
@@ -819,7 +832,8 @@ class GithubDispatchService:
                     continue
             else:
                 owner_slot_id, method = await self.route_item(
-                    db, item, preset_slots, issue_labels, classify=classify
+                    db, item, preset_slots, issue_labels, classify=classify,
+                    leader_slot_id=preset.leader_slot_id if preset else None,
                 )
             if owner_slot_id is None:
                 await self.escalate(db, item, "plan_blocked")
@@ -909,7 +923,7 @@ class GithubDispatchService:
                 base_ref=attempt_base_ref,
             )
             try:
-                leader = self._leader_slot(preset_slots)
+                leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
                 leader_member = (
                     await self._slot_member(db, leader.id) if leader is not None else None
                 )
@@ -919,6 +933,7 @@ class GithubDispatchService:
                     workspace,
                     owner_slot_id=attempt.owner_slot_id,
                     preset_slots=preset_slots,
+                    leader_slot_id=preset.leader_slot_id if preset else None,
                     leader_member=leader_member,
                     issue_details=issue_details_by_number.get(item.issue_number),
                 )
@@ -1001,10 +1016,11 @@ class GithubDispatchService:
         *,
         owner_slot_id: int,
         preset_slots: list[AgentTeamSlot],
+        leader_slot_id: int | None = None,
         leader_member: MailTeamMember | None = None,
         issue_details: dict | None = None,
     ) -> str:
-        leader = self._leader_slot(preset_slots)
+        leader = self._leader_slot(preset_slots, leader_slot_id)
         owner = next((slot for slot in preset_slots if slot.id == owner_slot_id), None)
         issue_body = (issue_details or {}).get("body") or ""
         labels = [
@@ -1322,12 +1338,13 @@ class GithubDispatchService:
             )
         return instructions
 
-    def _leader_slot(self, preset_slots: list[AgentTeamSlot]) -> AgentTeamSlot | None:
-        enabled = sorted(
-            [slot for slot in preset_slots if slot.enabled],
-            key=lambda slot: slot.position,
+    def _leader_slot(
+        self, preset_slots: list[AgentTeamSlot], leader_slot_id: int | None = None
+    ) -> AgentTeamSlot | None:
+        return next(
+            (slot for slot in preset_slots if slot.id == leader_slot_id and slot.enabled),
+            None,
         )
-        return enabled[0] if enabled else None
 
     @staticmethod
     def review_rework_guidance(item: GithubWorkItem | None = None) -> str:
@@ -1652,7 +1669,9 @@ class GithubDispatchService:
     ) -> AckEvidence:
         if not settings.mail_capability_tokens_required:
             return AckEvidence(False, "tokens_not_enforced")
-        leader = self._leader_slot(preset_slots)
+        scope = await db.get(TeamGithubScope, item.scope_id)
+        preset = await db.get(AgentTeamPreset, scope.preset_id) if scope is not None else None
+        leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
         leader_member = (
             await self._slot_member(db, leader.id) if leader is not None else None
         )
@@ -3217,7 +3236,8 @@ class GithubDispatchService:
         item: GithubWorkItem,
         preset_slots: list[AgentTeamSlot],
     ) -> None:
-        leader = self._leader_slot(preset_slots)
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        leader = self._leader_slot(preset_slots, preset.leader_slot_id if preset else None)
         if leader is None:
             return
         member = await self._slot_member(db, leader.id)

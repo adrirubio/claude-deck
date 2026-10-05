@@ -2297,7 +2297,35 @@ class AgentTeamPresetResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     autonomy_enabled: bool = False
+    leader_slot_id: Optional[int] = None
     slots: List[AgentTeamSlotResponse] = Field(default_factory=list)
+
+
+class AgentTeamLeaderUpdateRequest(BaseModel):
+    leader_slot_id: int
+    expected_leader_slot_id: Optional[int] = None
+    expected_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SetupPreflightRequest(BaseModel):
+    repo_owner: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    repo_name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    repo_path: str = Field(min_length=1, max_length=2048)
+    dispatch_label: str = Field(min_length=1, max_length=100)
+    design_label: str = Field(min_length=1, max_length=100)
+    dispatch_auth_mode: Literal["token", "github_app"]
+
+
+class SetupPreflightCheck(BaseModel):
+    status: Literal["ready", "blocked", "unknown"]
+    code: str = Field(max_length=64)
+
+
+class SetupPreflightResponse(BaseModel):
+    status: Literal["ready", "blocked", "unknown"]
+    checked_at: datetime
+    checks: Dict[str, SetupPreflightCheck]
 
 
 class AgentTeamPresetListResponse(BaseModel):

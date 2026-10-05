@@ -185,6 +185,51 @@ async def test_compat_migrations_add_capability_columns_idempotently():
 
 
 @pytest.mark.asyncio
+async def test_explicit_leader_migration_preserves_legacy_order_once():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
+            await conn.execute(text(
+                "INSERT INTO agent_team_presets (id, name, created_at, updated_at, autonomy_enabled) "
+                "VALUES (1, 'tied', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
+                "(2, 'disabled', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0), "
+                "(3, 'empty', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO agent_team_slots "
+                "(id, preset_id, position, display_name, provider, repo_id, repo_path, repo_name, "
+                "controlled_language_enabled, launch_mode, enabled, created_at, updated_at) VALUES "
+                "(10, 1, 0, 'first', 'codex-cli', 'a', '/a', 'a', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(11, 1, 0, 'second', 'codex-cli', 'b', '/b', 'b', 1, 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(20, 2, 0, 'disabled', 'codex-cli', 'c', '/c', 'c', 1, 'plain', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.commit()
+            await _run_sqlite_compat_migrations(conn)
+            first = (await conn.execute(text(
+                "SELECT leader_slot_id FROM agent_team_presets WHERE id = 1"
+            ))).scalar_one()
+            assert first == 10
+            assert (await conn.execute(text(
+                "SELECT leader_slot_id FROM agent_team_presets WHERE id = 2"
+            ))).scalar_one() is None
+            assert (await conn.execute(text(
+                "SELECT leader_slot_id FROM agent_team_presets WHERE id = 3"
+            ))).scalar_one() is None
+            await conn.execute(text(
+                "UPDATE agent_team_presets SET leader_slot_id = 11 WHERE id = 1"
+            ))
+            await conn.commit()
+            await _run_sqlite_compat_migrations(conn)
+            assert (await conn.execute(text(
+                "SELECT leader_slot_id FROM agent_team_presets WHERE id = 1"
+            ))).scalar_one() == 11
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_compat_migration_backfills_wake_participation_once_without_changing_ids():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:

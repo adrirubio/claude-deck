@@ -143,6 +143,7 @@ class AgentTeamPreset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     autonomy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    leader_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class AgentTeamSlot(Base):

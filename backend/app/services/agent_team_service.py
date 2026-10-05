@@ -135,6 +135,85 @@ class AgentTeamService:
         await db.refresh(preset)
         return await self._preset_response(db, preset)
 
+    async def set_leader(
+        self,
+        db: AsyncSession,
+        preset_id: int,
+        *,
+        leader_slot_id: int,
+        expected_leader_slot_id: int | None,
+        expected_updated_at: datetime,
+        reason: str,
+    ) -> AgentTeamPresetResponse:
+        """Change Leader authority only while the team is stopped and quiescent."""
+        if db.get_bind().dialect.name != "sqlite":
+            raise ValueError("leader_assignment_protection_unavailable")
+        # Reserve the SQLite writer before reading any authority state.
+        result = await db.execute(
+            update(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
+            .values(id=AgentTeamPreset.id).execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            await db.rollback()
+            raise ValueError("team_not_found")
+        preset = (await db.execute(
+            select(AgentTeamPreset).where(AgentTeamPreset.id == preset_id)
+            .execution_options(populate_existing=True)
+        )).scalar_one()
+        expected_time = expected_updated_at.replace(tzinfo=None)
+        if (preset.leader_slot_id != expected_leader_slot_id
+                or preset.updated_at != expected_time):
+            await db.rollback()
+            raise ValueError("leader_assignment_changed")
+        if preset.autonomy_enabled:
+            await db.rollback()
+            raise ValueError("leader_assignment_team_active")
+        slot = (await db.execute(select(AgentTeamSlot).where(
+            AgentTeamSlot.id == leader_slot_id,
+            AgentTeamSlot.preset_id == preset_id,
+            AgentTeamSlot.enabled.is_(True),
+        ))).scalar_one_or_none()
+        if slot is None:
+            await db.rollback()
+            raise ValueError("leader_slot_unavailable")
+
+        scope_ids = select(TeamGithubScope.id).where(TeamGithubScope.preset_id == preset_id)
+        item_ids = select(GithubWorkItem.id).where(GithubWorkItem.scope_id.in_(scope_ids))
+        active_item = (await db.execute(select(GithubWorkItem.id).where(
+            GithubWorkItem.id.in_(item_ids),
+            GithubWorkItem.dispatch_status.in_(("dispatched", "verifying")),
+        ).limit(1))).scalar_one_or_none()
+        pending_approval = (await db.execute(select(GithubApprovalRequest.id).where(
+            GithubApprovalRequest.work_item_id.in_(item_ids),
+            GithubApprovalRequest.status == "pending",
+        ).limit(1))).scalar_one_or_none()
+        active_revision = (await db.execute(select(GithubAttemptScopeRevision.id).where(
+            GithubAttemptScopeRevision.work_item_id.in_(item_ids),
+            GithubAttemptScopeRevision.status.not_in(
+                ("completed", "exhausted", "rejected", "superseded", "expired")
+            ),
+        ).limit(1))).scalar_one_or_none()
+        active_workspace = (await db.execute(select(GithubWorkspace.id).where(
+            GithubWorkspace.scope_id.in_(scope_ids),
+            or_(GithubWorkspace.leased_item_id.is_not(None),
+                GithubWorkspace.lease_token.is_not(None),
+                GithubWorkspace.leased_owner_pid.is_not(None),
+                GithubWorkspace.leased_owner_proc_start.is_not(None),
+                and_(GithubWorkspace.leased_at.is_not(None),
+                     GithubWorkspace.released_at.is_(None))),
+        ).limit(1))).scalar_one_or_none()
+        if active_item is not None or pending_approval is not None or active_revision is not None or active_workspace is not None:
+            await db.rollback()
+            raise ValueError("leader_assignment_team_not_quiescent")
+        if not reason.strip():
+            await db.rollback()
+            raise ValueError("leader_assignment_reason_required")
+        preset.leader_slot_id = slot.id
+        preset.updated_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(preset)
+        return await self._preset_response(db, preset)
+
     async def update_preset(
         self,
         db: AsyncSession,
@@ -151,6 +230,14 @@ class AgentTeamService:
         if description is not None:
             preset.description = self._clean_optional(description)
         if autonomy_enabled is not None:
+            if autonomy_enabled:
+                leader = await db.execute(select(AgentTeamSlot.id).where(
+                    AgentTeamSlot.id == preset.leader_slot_id,
+                    AgentTeamSlot.preset_id == preset.id,
+                    AgentTeamSlot.enabled.is_(True),
+                ))
+                if leader.scalar_one_or_none() is None:
+                    raise ValueError("leader_assignment_required")
             preset.autonomy_enabled = autonomy_enabled
         preset.updated_at = datetime.utcnow()
         await db.commit()
@@ -342,6 +429,15 @@ class AgentTeamService:
                     enabled=slot.enabled,
                 )
             )
+        if source.leader_slot_id is not None:
+            mapped_leader_index = next(
+                (index for index, slot in enumerate(slots) if slot.id == source.leader_slot_id),
+                None,
+            )
+            if mapped_leader_index is not None:
+                await db.flush()
+                cloned_slots = await self._slots_for_preset(db, clone.id)
+                clone.leader_slot_id = cloned_slots[mapped_leader_index].id
         await db.commit()
         await db.refresh(clone)
         return await self._preset_response(db, clone)
@@ -508,6 +604,8 @@ class AgentTeamService:
                 provider=provider_for_options,
             )
         if request.enabled is not None:
+            if request.enabled is False and preset.leader_slot_id == slot.id:
+                raise ValueError("leader_slot_replacement_required")
             updates["enabled"] = request.enabled
         if request.position is not None:
             updates["position"] = request.position
@@ -535,6 +633,8 @@ class AgentTeamService:
     async def delete_slot(self, db: AsyncSession, slot_id: int) -> AgentTeamPresetResponse:
         slot = await self._require_slot(db, slot_id)
         preset = await self._require_preset(db, slot.preset_id)
+        if preset.leader_slot_id == slot.id:
+            raise ValueError("leader_slot_replacement_required")
         await self._move_sessions_to_repo_members(db, MailAgentSession.team_slot_id == slot.id)
         await db.delete(slot)
         preset.updated_at = datetime.utcnow()
@@ -1514,17 +1614,7 @@ class AgentTeamService:
         preset: AgentTeamPreset,
         slot: AgentTeamSlot,
     ) -> bool:
-        first = (
-            await db.execute(
-                select(AgentTeamSlot)
-                .where(
-                    AgentTeamSlot.preset_id == preset.id,
-                    AgentTeamSlot.enabled.is_(True),
-                )
-                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-            )
-        ).scalars().first()
-        return first is not None and first.id == slot.id
+        return preset.leader_slot_id == slot.id and slot.enabled
 
     def _discover_sessions(self) -> list[dict[str, Any]]:
         try:
@@ -1576,6 +1666,7 @@ class AgentTeamService:
             created_at=preset.created_at,
             updated_at=preset.updated_at,
             autonomy_enabled=preset.autonomy_enabled,
+            leader_slot_id=preset.leader_slot_id,
             slots=[self._slot_response(slot) for slot in slots],
         )
 

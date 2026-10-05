@@ -91,7 +91,7 @@ export function AgentTeamsHelpDialog({ open, onOpenChange }: AgentTeamsHelpDialo
             <ol className="list-decimal space-y-1 pl-5">
               <li>Put <code>github_token</code> in <code>backend/.env</code> for polling private repos and restart Deck. App-backed dispatch also needs GitHub App settings; App settings alone do not authenticate the watcher.</li>
               <li>Add a watched repo with an existing primary checkout under your home directory.</li>
-              <li>The first enabled Roster slot is the Leader; launch it before enabling autonomy. The Role text does not select it.</li>
+              <li>Assign and launch the Leader slot before enabling autonomy. Reordering and Role text do not change the assignment.</li>
               <li>Add the dispatch label to a GitHub issue, then enable autonomy. Area labels route to a matching owner; otherwise Deck uses expertise, then the Leader.</li>
               <li>Watch Activity. The operator token protects roster and watched-repo settings, team launch, autonomy, recovery policy, and operator remedies. It is separate from the GitHub polling token and stays in this browser tab.</li>
             </ol>
