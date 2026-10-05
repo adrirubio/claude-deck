@@ -85,12 +85,18 @@ class GithubOperatorAttentionService:
                     complete = False
                     continue
                 reported = [a.model_dump() for a in entry.human_actions]
-                if not reported and entry.required_actor == "operator":
+                actor_conflict = entry.operator_decision_required and entry.required_actor != "operator"
+                if actor_conflict:
+                    complete = False
+                if not reported and (entry.required_actor == "operator" or entry.operator_decision_required):
                     # Older Leaders report a gate without declaring it ready for action.
                     kind = "milestone_acceptance" if entry.reason in {"m1a_acceptance","m1b_acceptance"} else (
                         entry.reason if entry.reason in {"pilot_decision","scope_clarification"} else "scope_clarification")
                     reported = [{"kind":kind, "legacy_reason":entry.reason, "readiness":"waiting_for_prerequisites", "pull_request_number":None,
                                  "expected_head_sha":None, "prerequisite_issue_numbers":[]}]
+                if actor_conflict:
+                    # Preserve a legacy reported gate without asserting that it is ready.
+                    reported = [{**action, "readiness":"waiting_for_prerequisites"} for action in reported]
                 for action in reported:
                     actions.append({**action, "scope_id":scope.id, "repo":summary["repo"], "issue_number":entry.issue_number,
                         "gate_reason":entry.reason,
