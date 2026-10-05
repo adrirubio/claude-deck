@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import require_mail_session, require_mail_session_or_operator, require_operator
 from app.database import get_db
-from app.models.coordination import CoordinationAssessment, CoordinationPolicy
+from app.models.coordination import CoordinationAssessment, CoordinationPolicy, OperatorActionContextPreparation
 from app.models.database import MailAgentSession
 from app.services.github_coordination_service import CoordinationError, github_coordination_service as service
 from app.services.github_operator_attention_service import github_operator_attention_service
@@ -20,14 +20,31 @@ def conflict(error: CoordinationError):
 
 
 @router.get("/presets/{preset_id}/human-actions")
-async def human_actions(preset_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+async def human_actions(preset_id: int, response: Response, include_templates: bool = False,
+                        db: AsyncSession = Depends(get_db)):
     response.headers["Cache-Control"] = "no-store"
     try:
-        return await asyncio.wait_for(github_operator_attention_service.summary(db, preset_id), timeout=9)
+        return await asyncio.wait_for(github_operator_attention_service.summary(
+            db, preset_id, include_templates=include_templates), timeout=9)
     except CoordinationError as error:
         raise conflict(error) from error
     except TimeoutError:
         raise HTTPException(status_code=409, detail="human_action_observations_unavailable") from None
+
+
+@router.post("/github-scopes/{scope_id}/operator-action-contexts/prepare")
+async def prepare_operator_action_contexts(
+    scope_id: int, request: OperatorActionContextPreparation, response: Response,
+    principal: MailAgentSession = Depends(require_mail_session), db: AsyncSession = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await asyncio.wait_for(service.prepare_operator_contexts(
+            db, scope_id, principal, request.entries), timeout=9)
+    except CoordinationError as error:
+        raise conflict(error) from error
+    except (TimeoutError, OSError, httpx.HTTPError):
+        raise HTTPException(status_code=409, detail="human_action_context_unavailable") from None
 
 
 @router.get("/github-scopes/{scope_id}/coordination")

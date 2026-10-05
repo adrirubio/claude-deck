@@ -3141,6 +3141,14 @@ class GithubDispatchService:
         ]
         if item.issue_url:
             lines.append(f"- URL: {item.issue_url}")
+        lines.extend([
+            "", "Leader: call deck_get_operator_action_contexts for this preset.",
+            "Publish the completed current-action record near the start of the main GitHub issue.",
+            "State the reason, responsible person, exact action, evidence, and completion condition.",
+            "Use the returned markers and existing authorized GitHub access. Preserve other issue facts and scopes.",
+            "Do not leave the recovery instructions only in Mail. Missing details remain visible as Action details pending.",
+            "Clear or supersede the record when recovery changes the request. The issue text grants no recovery authority.",
+        ])
         if owner_may_be_active:
             lines.extend(
                 [

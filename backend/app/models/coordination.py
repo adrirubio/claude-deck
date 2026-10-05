@@ -8,7 +8,7 @@ IssueNumber = Annotated[int, Field(gt=0, strict=True)]
 
 class CoordinationHumanAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["review_pr", "merge_pr", "pilot_decision", "milestone_acceptance", "provide_evidence", "scope_clarification"]
+    kind: Literal["review_pr", "merge_pr", "pilot_decision", "milestone_acceptance", "provide_evidence", "scope_clarification", "inspect_attempt", "inspect_checkpoint"]
     readiness: Literal["requested", "waiting_for_prerequisites"]
     pull_request_number: IssueNumber | None = None
     expected_head_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
@@ -98,4 +98,20 @@ class CoordinationAssessment(BaseModel):
         keys = [(a.kind, a.pull_request_number or issue) for issue, a in actions]
         if len(set(keys)) != len(keys):
             raise ValueError("Human actions must be unique")
+        return self
+
+
+class OperatorActionContextPreparation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entries: list[CoordinationDisposition] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def bounded_actions(self):
+        actions = [(e.issue_number, a) for e in self.entries for a in e.human_actions]
+        if (not actions or len(actions) > 16
+            or len({a.pull_request_number for _, a in actions if a.pull_request_number}) > 8
+            or len({(a.kind, a.pull_request_number or number) for number, a in actions}) != len(actions)):
+            raise ValueError("Prepare one to sixteen unique actions and at most eight PRs")
+        if len({e.issue_number for e in self.entries}) != len(self.entries):
+            raise ValueError("Issue entries must be unique")
         return self

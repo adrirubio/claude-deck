@@ -9,6 +9,10 @@ from sqlalchemy import select
 from app.models.coordination import CoordinationDisposition
 from app.models.database import AgentTeamPreset, GithubApprovalRequest, GithubAttemptScopeRevision, GithubWorkItem, TeamGithubScope
 from app.services.github_client import github_client
+from app.services.github_operator_context_service import (
+    SECTION_START, SECTION_END, bind_attempt, check as check_context, covered_by_leader,
+    describe, github_operator_context_service, instruction_template,
+)
 
 
 class GithubOperatorAttentionService:
@@ -33,7 +37,11 @@ class GithubOperatorAttentionService:
                     or not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head)
                     or type(pull.get("merged")) is not bool or type(pull.get("draft")) is not bool):
                     raise ValueError("invalid_pr_observation")
+                base_ref = pull.get("base", {}).get("ref")
+                if not isinstance(base_ref, str) or not re.fullmatch(r"[A-Za-z0-9_./-]{1,255}", base_ref):
+                    base_ref = None
                 result = {"state":pull["state"], "merged":pull["merged"], "draft":pull["draft"], "head_sha":head,
+                          "base_ref":base_ref,
                           "observed_at":observed_at, "expires_at":observed_at + timedelta(seconds=60)}
             except Exception:
                 result = {"state":"unavailable", "observed_at":observed_at,
@@ -50,7 +58,7 @@ class GithubOperatorAttentionService:
         from app.services.github_coordination_service import CoordinationError
         actions = [action for entry in entries for action in entry.human_actions if action.pull_request_number]
         if not actions:
-            return
+            return {}
         observed = await self.observe_pulls(scope, {a.pull_request_number for a in actions}, client, fresh=True)
         for action in actions:
             pull = observed[action.pull_request_number]
@@ -59,50 +67,10 @@ class GithubOperatorAttentionService:
             if (pull["state"] != "open" or pull["merged"] or pull["head_sha"] != action.expected_head_sha
                 or (action.kind == "merge_pr" and pull["draft"])):
                 raise CoordinationError("human_action_pr_changed")
+        return observed
 
-    async def summary(self, db, preset_id, client=None):
-        from app.services.github_coordination_service import CoordinationError, github_coordination_service as coordination
-        if await db.get(AgentTeamPreset, preset_id) is None:
-            raise CoordinationError("preset_not_found", 404)
-        scopes = list((await db.scalars(select(TeamGithubScope).where(
-            TeamGithubScope.preset_id == preset_id).order_by(TeamGithubScope.id).limit(33))).all())
-        scope_snapshot = [(s.id,s.repo_owner,s.repo_name,s.merge_policy,s.enabled,s.updated_at) for s in scopes]
-        complete = len(scopes) <= 32
-        actions, expires, versions = [], [], {}
-        for scope in scopes[:32]:
-            summary = await coordination.summary(db, scope.id)
-            if not summary["enabled"]:
-                continue
-            versions[scope.id] = summary["version"]
-            current = summary["assessment_current"]
-            complete = complete and current
-            if current and summary["observation_expires_at"]:
-                expires.append(summary["observation_expires_at"])
-            for raw in summary["entries"]:
-                try:
-                    entry = CoordinationDisposition.model_validate(raw)
-                except ValueError:
-                    complete = False
-                    continue
-                reported = [a.model_dump() for a in entry.human_actions]
-                actor_conflict = entry.operator_decision_required and entry.required_actor != "operator"
-                if actor_conflict:
-                    complete = False
-                if not reported and (entry.required_actor == "operator" or entry.operator_decision_required):
-                    # Older Leaders report a gate without declaring it ready for action.
-                    kind = "milestone_acceptance" if entry.reason in {"m1a_acceptance","m1b_acceptance"} else (
-                        entry.reason if entry.reason in {"pilot_decision","scope_clarification"} else "scope_clarification")
-                    reported = [{"kind":kind, "legacy_reason":entry.reason, "readiness":"waiting_for_prerequisites", "pull_request_number":None,
-                                 "expected_head_sha":None, "prerequisite_issue_numbers":[]}]
-                if actor_conflict:
-                    # Preserve a legacy reported gate without asserting that it is ready.
-                    reported = [{**action, "readiness":"waiting_for_prerequisites"} for action in reported]
-                for action in reported:
-                    actions.append({**action, "scope_id":scope.id, "repo":summary["repo"], "issue_number":entry.issue_number,
-                        "gate_reason":entry.reason,
-                        "source":"leader", "assessment_current":current, "assessment_status":summary["status"],
-                        "last_assessed_at":summary["last_assessed_at"], "evidence_issue_numbers":entry.evidence_issue_numbers,
-                        "state":action["readiness"] if current else "historical"})
+    async def dispatch_snapshot(self, db, scopes):
+        actions, complete = [], True
         # Existing dispatched review/recovery actions remain visible on the Roster too.
         scope_by_id = {s.id:s for s in scopes[:32]}
         items = list((await db.scalars(select(GithubWorkItem).where(
@@ -152,24 +120,100 @@ class GithubOperatorAttentionService:
             actions.append({"scope_id":scope.id, "repo":f"{scope.repo_owner}/{scope.repo_name}", "issue_number":item.issue_number,
                 "kind":kind, "readiness":"requested", "pull_request_number":item.pr_number if kind=="review_pr" else None,
                 "expected_head_sha":item.last_verified_sha if kind=="review_pr" else None, "work_item_id":item.id,
+                "required_actor":"operator", "gate_reason":item.escalation_reason or item.dispatch_status,
+                "dispatch_epoch":f"{item.dispatched_at or item.created_at}:{item.approval_round_count}:{item.active_scope_revision}",
+                "checkpoint_epoch":f"{checkpoint.id}:{checkpoint.revision}:{checkpoint.status}:{checkpoint.recovery_checkpoint_stage}" if operator_checkpoint else None,
                 "dispatch_issue_type":item.issue_type,
                 "source":"dispatch", "assessment_current":True, "assessment_status":item.dispatch_status,
                 "last_assessed_at":None, "evidence_issue_numbers":[item.issue_number], "prerequisite_issue_numbers":[], "state":"requested"})
             if kind=="review_pr" and item.pr_number is None:
                 actions[-1]["state"]="pr_identity_unavailable";complete=False
+        return {"actions":actions, "items":items, "approvals":approvals, "revisions":revisions, "complete":complete}
+
+    async def summary(self, db, preset_id, client=None, *, include_templates=False):
+        from app.services.github_coordination_service import CoordinationError, github_coordination_service as coordination
+        if await db.get(AgentTeamPreset, preset_id) is None:
+            raise CoordinationError("preset_not_found", 404)
+        scopes = list((await db.scalars(select(TeamGithubScope).where(
+            TeamGithubScope.preset_id == preset_id).order_by(TeamGithubScope.id).limit(33))).all())
+        scope_snapshot = [(s.id,s.repo_owner,s.repo_name,s.merge_policy,s.enabled,s.updated_at) for s in scopes]
+        complete = len(scopes) <= 32
+        actions, expires, versions = [], [], {}
+        for scope in scopes[:32]:
+            summary = await coordination.summary(db, scope.id)
+            if not summary["enabled"]:
+                continue
+            versions[scope.id] = summary["version"]
+            current = summary["assessment_current"]
+            complete = complete and current
+            if current and summary["observation_expires_at"]:
+                expires.append(summary["observation_expires_at"])
+            for raw in summary["entries"]:
+                try:
+                    entry = CoordinationDisposition.model_validate(raw)
+                except ValueError:
+                    complete = False
+                    continue
+                reported = [a.model_dump() for a in entry.human_actions]
+                actor_conflict = entry.operator_decision_required and entry.required_actor != "operator"
+                if actor_conflict:
+                    complete = False
+                if not reported and (entry.required_actor == "operator" or entry.operator_decision_required):
+                    # Older Leaders report a gate without declaring it ready for action.
+                    kind = "milestone_acceptance" if entry.reason in {"m1a_acceptance","m1b_acceptance"} else (
+                        entry.reason if entry.reason in {"pilot_decision","scope_clarification"} else "scope_clarification")
+                    reported = [{"kind":kind, "legacy_reason":entry.reason, "readiness":"waiting_for_prerequisites", "pull_request_number":None,
+                                 "expected_head_sha":None, "prerequisite_issue_numbers":[]}]
+                if actor_conflict:
+                    # Preserve a legacy reported gate without asserting that it is ready.
+                    reported = [{**action, "readiness":"waiting_for_prerequisites"} for action in reported]
+                for action in reported:
+                    actions.append({**action, "scope_id":scope.id, "repo":summary["repo"], "issue_number":entry.issue_number,
+                        "gate_reason":entry.reason,
+                        "required_actor":entry.required_actor,
+                        "source":"leader", "assessment_current":current, "assessment_status":summary["status"],
+                        "last_assessed_at":summary["last_assessed_at"], "evidence_issue_numbers":entry.evidence_issue_numbers,
+                        "state":action["readiness"] if current else "historical"})
+        snapshot = await self.dispatch_snapshot(db, scopes[:32])
+        complete = complete and snapshot["complete"]
+        for action in actions:
+            if action["source"]=="leader" and action["kind"] in {"inspect_attempt", "inspect_checkpoint"}:
+                item = next((i for i in snapshot["items"] if i.scope_id==action["scope_id"] and i.issue_number==action["issue_number"]), None)
+                if item:
+                    bind_attempt(action, item)
+                    direct = next((a for a in snapshot["actions"] if a["scope_id"]==action["scope_id"] and a["issue_number"]==action["issue_number"]), None)
+                    action["checkpoint_epoch"] = direct.get("checkpoint_epoch") if direct else None
+                    if not direct or direct["kind"] != action["kind"]:
+                        action.update(state="historical", assessment_current=False)
+                        complete = False
+        for dispatch_action in snapshot["actions"]:
+            actions = [a for a in actions if not (a["scope_id"]==dispatch_action["scope_id"]
+                and a["issue_number"]==dispatch_action["issue_number"]
+                and a.get("legacy_reason")=="human_merge" and dispatch_action["kind"]=="review_pr")]
+            if not covered_by_leader(dispatch_action, [a for a in actions if a["assessment_current"]]):
+                actions.append(dispatch_action)
+        items, approvals, revisions = snapshot["items"], snapshot["approvals"], snapshot["revisions"]
         def item_identity(item):
             return (item.id,item.scope_id,item.issue_number,item.issue_type,item.dispatch_status,item.pr_number,item.last_verified_sha,
-                    item.attempt_phase,item.status_note,item.dispatch_nonce,item.active_scope_revision)
+                    item.attempt_phase,item.status_note,item.dispatch_nonce,item.active_scope_revision,
+                    item.dispatched_at,item.approval_round_count)
         item_snapshot = [item_identity(i) for i in items]
         # End the DB transaction before bounded GitHub reads; presentation writes no rows.
         await db.commit()
         refs_by_scope = {s.id:{a["pull_request_number"] for a in actions if a["scope_id"]==s.id and a["pull_request_number"]} for s in scopes[:32]}
+        issue_refs = {s.id:{a["issue_number"] for a in actions if a["scope_id"]==s.id} for s in scopes[:32]}
+        if sum(len(refs) for refs in issue_refs.values()) > 32:
+            complete = False
+        async def pull_observations():
+            return dict(await asyncio.gather(*(
+                self._scope_pulls(scope, refs_by_scope[scope.id], client) for scope in scopes[:32] if refs_by_scope[scope.id])))
         if sum(len(refs) for refs in refs_by_scope.values()) > 8:
             complete = False
             observed_by_scope = {}
+            contexts = await github_operator_context_service.observe(scopes[:32], issue_refs, client)
         else:
-            observed_by_scope = dict(await asyncio.gather(*(
-                self._scope_pulls(scope, refs_by_scope[scope.id], client) for scope in scopes[:32] if refs_by_scope[scope.id])))
+            observed_by_scope, contexts = await asyncio.gather(
+                pull_observations(), github_operator_context_service.observe(scopes[:32], issue_refs, client))
         for scope in scopes[:32]:
             pulls = observed_by_scope.get(scope.id, {})
             for action in actions:
@@ -180,6 +224,7 @@ class GithubOperatorAttentionService:
                 action["pr_observed_at"] = pull.get("observed_at")
                 action["pr_observation_expires_at"] = pull.get("expires_at")
                 action["observed_head_sha"] = pull.get("head_sha")
+                action["pr_base_ref"] = pull.get("base_ref")
                 if pull.get("expires_at"):
                     expires.append(pull["expires_at"])
                 if pull["state"]=="closed":
@@ -192,6 +237,17 @@ class GithubOperatorAttentionService:
                     action["state"] = "head_changed";complete = False
                 elif action["kind"]=="merge_pr" and pull["draft"]:
                     action["state"] = "waiting_for_prerequisites"
+        for action in actions:
+            action.update(describe(action))
+            observation = contexts.get((action["scope_id"], action["issue_number"]), {"state":"unavailable"})
+            context_state, updated_at = check_context(action, observation)
+            action.update(instructions_state=context_state, instructions_updated_at=updated_at,
+                          instructions_checked_at=observation.get("observed_at"))
+            if observation.get("expires_at"):
+                expires.append(observation["expires_at"])
+            if action["state"] in {"requested", "waiting_for_prerequisites"} and context_state != "current":
+                action["state"] = "context_pending"
+                complete = False
         # Network reads can overlap a correction, OFF/HOLD, routing or dispatch
         # change. Retain the original report as history instead of mixing revisions.
         for scope_id, version in versions.items():
@@ -204,21 +260,19 @@ class GithubOperatorAttentionService:
                         action["assessment_current"] = False
                         if action["state"] not in {"resolved", "head_changed", "pr_unavailable"}:
                             action["state"] = "historical"
-        latest_items = list((await db.scalars(select(GithubWorkItem).where(
-            GithubWorkItem.scope_id.in_(scope_by_id),
-            GithubWorkItem.dispatch_status.in_(["ready_for_review", "awaiting_human_review", "escalated", "failed"]),
-        ).order_by(GithubWorkItem.id).limit(65).execution_options(populate_existing=True))).all())
+        latest_dispatch = await self.dispatch_snapshot(db, scopes[:32])
+        latest_items = latest_dispatch["items"]
         latest_scopes = list((await db.scalars(select(TeamGithubScope).where(TeamGithubScope.preset_id==preset_id)
             .order_by(TeamGithubScope.id).limit(33).execution_options(populate_existing=True))).all())
         scope_changed = scope_snapshot != [(s.id,s.repo_owner,s.repo_name,s.merge_policy,s.enabled,s.updated_at) for s in latest_scopes]
-        if (item_snapshot != [item_identity(i) for i in latest_items] or approvals != await pending_approvals()
-            or revisions != await checkpoint_revisions() or scope_changed):
+        if (item_snapshot != [item_identity(i) for i in latest_items] or approvals != latest_dispatch["approvals"]
+            or revisions != latest_dispatch["revisions"] or scope_changed):
             complete = False
             for action in actions:
                 if (action["source"]=="dispatch" or scope_changed) and action["state"]!="resolved":
                     action["state"] = "historical"; action["assessment_current"] = False
         deduped = {}
-        rank = {"requested":3,"waiting_for_prerequisites":2,"historical":1}
+        rank = {"requested":4,"context_pending":3,"waiting_for_prerequisites":2,"historical":1}
         for action in actions:
             key = (action["repo"],action["kind"],action["pull_request_number"] or action["issue_number"])
             previous = deduped.get(key)
@@ -226,9 +280,14 @@ class GithubOperatorAttentionService:
                 deduped[key] = action
         actions = list(deduped.values())
         now = datetime.utcnow()
-        return {"preset_id":preset_id, "checked_at":now,
+        result = {"preset_id":preset_id, "checked_at":now,
                 "observation_expires_at":min([now + timedelta(seconds=60), *expires]),
                 "coverage_complete":bool(complete), "actions":actions}
+        if include_templates:
+            result.update(section_start=SECTION_START, section_end=SECTION_END)
+            for action in actions:
+                action["context_template"] = instruction_template(action)
+        return result
 
     async def _scope_pulls(self, scope, refs, client):
         return scope.id, await self.observe_pulls(scope, refs, client)
