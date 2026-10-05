@@ -59,6 +59,7 @@ It shows the human requests from the Leader's current assessment and dispatch st
 
 The Leader must assign human decisions to the operator. This includes milestone acceptance and pilot decisions.
 Deck rejects a new assessment that assigns an incomplete human decision to the Leader or another actor.
+The check covers the stated reason and explicit milestone or pilot actions.
 The Leader must include the action and its readiness before requesting human input.
 Use **requested** when the human can act now. Use **waiting for prerequisites** when required evidence is absent.
 

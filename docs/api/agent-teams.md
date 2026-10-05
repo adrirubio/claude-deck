@@ -90,6 +90,7 @@ Multiple enabled slots can point at the same repository. Use this for same-repo 
 The current authenticated Leader publishes assessments through `deck_report_backlog_assessment`.
 For a human decision, use `required_actor: "operator"`.
 This rule also applies to incomplete entries with `m1a_acceptance`, `m1b_acceptance`, or `pilot_decision` as the reason.
+It also applies to an incomplete entry with an explicit `milestone_acceptance` or `pilot_decision` action.
 The assessment route rejects a conflicting actor with HTTP 422 and `operator_gate_actor_required`.
 It retains the previous assessment. The rejected report does not advance its revision or notification counters.
 
