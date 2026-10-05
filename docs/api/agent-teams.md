@@ -85,6 +85,44 @@ The instructions guide agent output. They do not certify ASD-STE100 compliance o
 
 Multiple enabled slots can point at the same repository. Use this for same-repo roles such as planner/reviewer or implementer/reviewer. Each launched slot gets a distinct Agent Mail identity, so external tools should route follow-up Agent Mail requests to the slot member returned by Agent Mail discovery.
 
+## Human Decisions in Backlog Assessments
+
+The current authenticated Leader publishes assessments through `deck_report_backlog_assessment`.
+For a human decision, use `required_actor: "operator"`.
+This rule also applies to incomplete entries with `m1a_acceptance`, `m1b_acceptance`, or `pilot_decision` as the reason.
+The assessment route rejects a conflicting actor with HTTP 422 and `operator_gate_actor_required`.
+It retains the previous assessment. The rejected report does not advance its revision or notification counters.
+
+Before requesting human input, include the action and its current readiness:
+
+```json
+{
+  "issue_number": 9,
+  "disposition": "human_decision_blocked",
+  "reason": "m1b_acceptance",
+  "required_actor": "operator",
+  "evidence_issue_numbers": [8, 9],
+  "human_actions": [
+    {
+      "kind": "milestone_acceptance",
+      "readiness": "requested",
+      "prerequisite_issue_numbers": []
+    }
+  ]
+}
+```
+
+Use `requested` when the human can act now. Use `waiting_for_prerequisites` when required evidence is absent.
+The complete report must still cover every assigned issue. Use the fresh private token only in the authenticated tool exchange.
+
+```http
+GET /api/v1/agent-teams/presets/{preset_id}/human-actions
+```
+
+This observation also shows human gates from older assessments with a conflicting actor.
+It marks their readiness as waiting and sets `coverage_complete` to `false`.
+The Leader must correct the report. The observation does not approve work or satisfy a milestone.
+
 ## Launch Planning
 
 ### Plan Launch
