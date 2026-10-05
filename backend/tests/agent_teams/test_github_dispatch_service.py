@@ -2173,7 +2173,7 @@ async def test_app_brief_uses_persisted_head_and_deck_owned_pr_contract(db):
     assert f'head_ref="{item.dispatch_head_ref}"' in brief
     assert 'status="pr_ready"' in brief
     assert "pr_opened" not in brief
-    assert "Deck owns the PR title and body" in brief
+    assert "Deck creates the initial PR title and body" in brief
 
 
 @pytest.mark.asyncio
