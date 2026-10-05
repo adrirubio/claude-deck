@@ -114,6 +114,7 @@ async def _active_continuation(db, tmp_path):
     )
     db.add_all([leader_slot, owner_slot])
     await db.flush()
+    preset.leader_slot_id = leader_slot.id
     leader = MailTeamMember(
         identity_key=f"slot:{leader_slot.id}",
         repo_id="repo",

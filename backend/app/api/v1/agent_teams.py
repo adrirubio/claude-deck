@@ -438,6 +438,28 @@ async def _scope_identity_in_use(db: AsyncSession, scope_id: int) -> bool:
     return active_attempt is not None
 
 
+async def _resolve_scope_app_installation(scope: TeamGithubScope) -> int:
+    try:
+        github_app_auth_service.require_configuration(require_bot_login=True)
+        installation_id = await github_app_auth_service.resolve_installation(
+            scope.repo_owner, scope.repo_name
+        )
+    except GithubAppAuthError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": "GitHub App access could not be verified."},
+        ) from exc
+    if installation_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "app_installation_missing",
+                "message": "The configured GitHub App is not installed for this repository.",
+            },
+        )
+    return installation_id
+
+
 def _apply_scope_create(
     scope: TeamGithubScope,
     request: TeamGithubScopeCreate | TeamGithubScopeUpdate,
@@ -1783,6 +1805,8 @@ async def create_github_scope(
             repo_path="",
         )
         _apply_scope_create(scope, request)
+        if scope.github_auth_mode == "app":
+            scope.github_app_installation_id = await _resolve_scope_app_installation(scope)
         db.add(scope)
         await db.commit()
         await db.refresh(scope)
@@ -1817,7 +1841,19 @@ async def update_github_scope(
         )
         if identity_change and await _scope_identity_in_use(db, scope_id):
             raise HTTPException(status_code=409, detail="scope_identity_in_use")
+        auth_change = (
+            request.github_auth_mode is not None
+            and request.github_auth_mode != scope.github_auth_mode
+        )
+        if auth_change and await _scope_identity_in_use(db, scope_id):
+            raise HTTPException(status_code=409, detail="scope_auth_in_use")
         _apply_scope_create(scope, request)
+        if scope.github_auth_mode == "app" and (
+            request.github_auth_mode is not None or identity_change
+        ):
+            scope.github_app_installation_id = await _resolve_scope_app_installation(scope)
+        elif request.github_auth_mode is not None:
+            scope.github_app_installation_id = None
         await db.commit()
         await db.refresh(scope)
     except IntegrityError as exc:

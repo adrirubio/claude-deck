@@ -1,11 +1,14 @@
 """Tests for Agent Team preset service behavior."""
+import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models.database import AgentPaneBinding, AgentTeamSlot, GithubWorkspace, MailAgentSession, MailTeamMember, TeamGithubScope
+from app.database import Base
+from app.models.database import AgentPaneBinding, AgentTeamPreset, AgentTeamSlot, GithubWorkspace, MailAgentSession, MailTeamMember, TeamGithubScope
 from app.models.schemas import (
     AgentTeamCreateFromMailRequest,
     AgentTeamCreateFromBridgeRequest,
@@ -203,7 +206,68 @@ async def test_leader_cannot_be_disabled_or_deleted_after_explicit_assignment(db
     await db.rollback()
     with pytest.raises(ValueError, match="leader_slot_replacement_required"):
         await agent_team_service.delete_slot(db, leader.id)
-    await db.rollback()
+        await db.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["disable", "delete"])
+async def test_leader_mutation_rechecks_assignment_after_waiting_for_sqlite_writer(
+    tmp_path, mutation
+):
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'leader-mutation-race.db'}",
+        connect_args={"timeout": 5},
+    )
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as seed:
+            preset = AgentTeamPreset(name="Leader race", description="", created_by="test")
+            seed.add(preset)
+            await seed.flush()
+            current = AgentTeamSlot(
+                preset_id=preset.id, position=0, display_name="Current",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race",
+            )
+            candidate = AgentTeamSlot(
+                preset_id=preset.id, position=1, display_name="Candidate",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race",
+            )
+            seed.add_all([current, candidate])
+            await seed.flush()
+            preset.leader_slot_id = current.id
+            await seed.commit()
+            preset_id, candidate_id = preset.id, candidate.id
+
+        async with maker() as authority, maker() as mutator:
+            await authority.execute(text("BEGIN IMMEDIATE"))
+            await authority.execute(
+                update(AgentTeamPreset)
+                .where(AgentTeamPreset.id == preset_id)
+                .values(leader_slot_id=candidate_id)
+            )
+            if mutation == "delete":
+                attempt = asyncio.create_task(agent_team_service.delete_slot(mutator, candidate_id))
+            else:
+                attempt = asyncio.create_task(agent_team_service.update_slot(
+                    mutator, candidate_id, AgentTeamSlotUpdate(enabled=False)
+                ))
+            await asyncio.sleep(0.05)
+            assert not attempt.done(), "guarded mutation must wait for the writer before reading authority"
+            await authority.commit()
+            with pytest.raises(ValueError, match="leader_slot_replacement_required"):
+                await asyncio.wait_for(attempt, timeout=2)
+            await mutator.rollback()
+
+        async with maker() as verify:
+            fresh_preset = await verify.get(AgentTeamPreset, preset_id)
+            fresh_candidate = await verify.get(AgentTeamSlot, candidate_id)
+            assert fresh_preset.leader_slot_id == candidate_id
+            assert fresh_candidate is not None and fresh_candidate.enabled is True
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -1345,6 +1409,9 @@ async def test_launch_requires_confirmed_plan_hash_and_passes_team_env(db, tmp_p
             ],
         ),
     )
+    stored_preset = await db.get(AgentTeamPreset, preset.id)
+    stored_preset.leader_slot_id = preset.slots[0].id
+    await db.commit()
     plan = await agent_team_service.plan_launch(db, preset.id)
     assert plan.can_launch is True
     assert plan.items[0].action == "spawn"
@@ -1393,6 +1460,9 @@ async def test_launch_uses_custom_bootstrap_prompt(db, tmp_path, monkeypatch):
             ],
         ),
     )
+    stored_preset = await db.get(AgentTeamPreset, preset.id)
+    stored_preset.leader_slot_id = preset.slots[0].id
+    await db.commit()
     plan = await agent_team_service.plan_launch(db, preset.id)
     calls = []
 

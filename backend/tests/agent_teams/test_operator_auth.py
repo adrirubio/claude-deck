@@ -246,6 +246,8 @@ async def test_retry_requires_current_bound_leader_or_operator(
         )
         db.add_all([leader_slot, other_slot])
         await db.flush()
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        preset.leader_slot_id = leader_slot.id
         tokens = {}
         members = {}
         for name, slot in (("leader", leader_slot), ("other", other_slot)):

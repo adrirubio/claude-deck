@@ -174,14 +174,51 @@ class GithubClient:
 
     async def list_repo_labels(self, owner: str, repo: str) -> list[str]:
         client = self._client()
+        endpoint = f"/repos/{owner}/{repo}/labels"
+        params = {"per_page": "100"}
+        labels: list[str] = []
+        seen_urls: set[str] = set()
+        next_url: str | None = endpoint
+        first = True
         try:
-            resp = await client.get(
-                f"/repos/{owner}/{repo}/labels",
-                params={"per_page": 100},
-                headers=self._headers(),
-            )
-            resp.raise_for_status()
-            return [label["name"] for label in resp.json()]
+            while next_url is not None:
+                if first:
+                    response = await client.get(next_url, params=params, headers=self._headers())
+                    first = False
+                else:
+                    response = await client.get(next_url, headers=self._headers())
+                response.raise_for_status()
+                current_url = str(response.request.url)
+                if current_url in seen_urls:
+                    raise GithubClientResponseError("GitHub label pagination cycle detected")
+                seen_urls.add(current_url)
+                body = self._json_list(response, "repository label list")
+                if not all(isinstance(label, dict) and isinstance(label.get("name"), str) for label in body):
+                    raise GithubClientResponseError("GitHub label list response contained an invalid label")
+                labels.extend(label["name"] for label in body)
+                next_link = response.links.get("next", {}).get("url")
+                if not next_link:
+                    next_url = None
+                    continue
+                candidate = response.request.url.join(next_link)
+                parsed = urlsplit(str(candidate))
+                query = parse_qs(parsed.query, keep_blank_values=True)
+                if (
+                    parsed.scheme != "https"
+                    or parsed.hostname != "api.github.com"
+                    or parsed.port is not None
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.path != endpoint
+                    or query.get("per_page") != ["100"]
+                    or not all(key in {"per_page", "page"} for key in query)
+                ):
+                    raise GithubClientResponseError("Unsafe GitHub label pagination link")
+                candidate_text = str(candidate)
+                if candidate_text in seen_urls:
+                    raise GithubClientResponseError("GitHub label pagination cycle detected")
+                next_url = candidate_text
+            return labels
         finally:
             if self._http is None:
                 await client.aclose()

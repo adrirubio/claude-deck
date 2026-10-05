@@ -14,6 +14,7 @@ from app.main import app
 from app.models.database import AgentTeamPreset, GithubWorkItem, GithubWorkspace, TeamGithubScope
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
+from app.services.github_app_auth_service import github_app_auth_service
 
 
 @pytest.mark.parametrize(
@@ -222,7 +223,12 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
         nonlocal sync_calls
         sync_calls += 1
 
+    async def resolve_installation(_owner, _repo):
+        return 73
+
     monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    monkeypatch.setattr(github_app_auth_service, "require_configuration", lambda **_kwargs: None)
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", resolve_installation)
 
     preset_response = await client.post(
         "/api/v1/agent-teams/presets",
@@ -257,6 +263,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     assert scope["repo_owner"] == "adrirubio"
     assert scope["merge_policy"] == "auto"
     assert scope["github_auth_mode"] == "app"
+    assert (await db.get(TeamGithubScope, scope["id"])).github_app_installation_id == 73
     assert isinstance(scope["github_poll_token_configured"], bool)
     assert scope["max_verification_retries"] == 3
     assert scope["base_ref"] == "origin/main"
@@ -287,6 +294,7 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     assert update_response.json()["max_build_parallelism"] == 4
     assert update_response.json()["github_auth_mode"] == "ambient"
     assert update_response.json()["enabled"] is False
+    assert (await db.get(TeamGithubScope, scope["id"])).github_app_installation_id is None
 
     item = GithubWorkItem(
         scope_id=scope["id"],
@@ -312,6 +320,13 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     )
     assert blocked_update.status_code == 409
     assert blocked_update.json()["detail"] == "scope_identity_in_use"
+
+    blocked_auth_update = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"github_auth_mode": "app"},
+    )
+    assert blocked_auth_update.status_code == 409
+    assert blocked_auth_update.json()["detail"] == "scope_auth_in_use"
 
     blocked_delete = await client.delete(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}"

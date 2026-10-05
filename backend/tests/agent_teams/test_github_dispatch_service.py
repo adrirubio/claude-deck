@@ -119,6 +119,7 @@ async def _team(db):
         enabled=True,
         area_labels=None,
         expertise="cross-cutting",
+        role="Leader",
     )
     backend = AgentTeamSlot(
         preset_id=preset.id,
@@ -136,6 +137,7 @@ async def _team(db):
     )
     db.add_all([architect, backend])
     await db.flush()
+    preset.leader_slot_id = architect.id
     scope = TeamGithubScope(
         preset_id=preset.id,
         repo_owner="o",
@@ -1472,6 +1474,8 @@ async def test_ack_evidence_refusal_matrix(
             if case == "no_owner"
             else await _create_registered_slot_member(db, owner_slot)
         )
+    if case == "no_leader":
+        _preset.leader_slot_id = None
     item_round = 2 if case == "stale_round" else 1
     item_nonce = None if case == "null_item_nonce" else "0123456789abcdef"
     item = GithubWorkItem(
@@ -1714,7 +1718,9 @@ async def test_route_leader_fallback_when_no_expertise(db):
     )
     db.add(item)
     await db.commit()
-    owner_id, method = await github_dispatch_service.route_item(db, item, slots, ["nothing"])
+    owner_id, method = await github_dispatch_service.route_item(
+        db, item, slots, ["nothing"], leader_slot_id=preset.leader_slot_id
+    )
     architect = next(slot for slot in slots if slot.display_name == "Architect")
     assert owner_id == architect.id
     assert method == "leader_fallback"

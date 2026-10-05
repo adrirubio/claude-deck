@@ -55,7 +55,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -191,7 +191,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -337,7 +337,7 @@
         "approver": {
           "member_id": 1,
           "slot_id": 1,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -479,7 +479,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -625,7 +625,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -774,7 +774,7 @@
         "approver": {
           "member_id": 1,
           "slot_id": 1,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -920,7 +920,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1066,7 +1066,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1188,7 +1188,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1327,7 +1327,7 @@
         "approver": {
           "member_id": 1,
           "slot_id": 1,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1453,7 +1453,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1592,7 +1592,7 @@
         "approver": {
           "member_id": 1,
           "slot_id": 1,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1738,7 +1738,7 @@
         "approver": {
           "member_id": 3,
           "slot_id": 3,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,
@@ -1874,7 +1874,7 @@
         "approver": {
           "member_id": 1,
           "slot_id": 1,
-          "source": "first_enabled_slot"
+          "source": "explicit_assignment"
         },
         "approver_session": {
           "bridge_target": null,

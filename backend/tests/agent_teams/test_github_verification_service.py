@@ -97,7 +97,9 @@ async def _item(db, scope, **kwargs):
                 )
                 db.add(slot)
                 slots.append(slot)
-            await db.flush()
+        await db.flush()
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
+        preset.leader_slot_id = slots[0].id
         leader_slot, owner_slot = slots[:2]
         members = {}
         for slot in (leader_slot, owner_slot):
@@ -144,6 +146,27 @@ def capability_enforcement(monkeypatch):
 
 
 async def _owner(db, scope):
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    leader_slot = await db.get(AgentTeamSlot, preset.leader_slot_id) if preset.leader_slot_id else None
+    if leader_slot is None:
+        leader_slot = AgentTeamSlot(
+            preset_id=scope.preset_id,
+            position=1,
+            display_name="Leader",
+            role="Leader",
+            provider="codex-cli",
+            repo_id="r",
+            repo_path="/tmp/r",
+            repo_name="r",
+        )
+        db.add(leader_slot)
+        await db.flush()
+        preset.leader_slot_id = leader_slot.id
+        db.add(MailTeamMember(
+            identity_key=f"slot:{leader_slot.id}", repo_id="r", repo_path="/tmp/r",
+            repo_name="r", display_name="Leader", participant_kind="team_slot",
+            team_preset_id=scope.preset_id, team_slot_id=leader_slot.id,
+        ))
     slot = AgentTeamSlot(
         preset_id=scope.preset_id,
         position=0,

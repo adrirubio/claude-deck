@@ -56,6 +56,8 @@ def test_ensure_registered_refreshes_cached_member(monkeypatch):
                     "cwd": "/tmp/repo",
                     "session_key": "mcp:test",
                     "pid": 1234,
+                    "team_preset_id": 1,
+                    "team_slot_id": 2,
                 }
             },
         )
@@ -977,6 +979,8 @@ def test_codex_hook_shim_emits_backend_json(monkeypatch, capsys):
                 "cwd": "/repo",
                 "provider": "codex-cli",
                 "pid": 123,
+                "team_preset_id": 1,
+                "team_slot_id": 2,
             },
         )
     ]

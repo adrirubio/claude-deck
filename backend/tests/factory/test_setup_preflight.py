@@ -66,8 +66,11 @@ async def test_preflight_returns_allowlisted_ready_checks(client, monkeypatch, t
     assert PRIVATE not in response.text
     assert str(checkout) not in response.text
     assert set(body["checks"]) == {
-        "checkout_identity", "polling_credential", "repository_read", "labels", "base_branch", "dispatch_auth"
+        "checkout_identity", "polling_credential", "repository_read", "labels", "dispatch_label",
+        "design_label", "base_branch", "dispatch_auth"
     }
+    assert body["observed_at"] == body["checked_at"]
+    assert all(item["remedy"] for item in body["checks"].values())
 
 
 @pytest.mark.asyncio
@@ -90,6 +93,9 @@ async def test_preflight_missing_labels_blocks_and_timeout_is_unknown(client, mo
     blocked = await client.post("/api/v1/factory/setup-preflight", json=body)
     assert blocked.json()["status"] == "blocked"
     assert blocked.json()["checks"]["labels"]["code"] == "selected_labels_missing"
+    assert blocked.json()["checks"]["dispatch_label"]["status"] == "ready"
+    assert blocked.json()["checks"]["design_label"]["status"] == "blocked"
+    assert "Create" in blocked.json()["checks"]["design_label"]["remedy"]
 
     async def timeout(*_args, **_kwargs):
         raise TimeoutError()
@@ -123,9 +129,8 @@ async def test_preflight_requires_primary_checkout_and_exact_remote_identity(cli
         "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
     }
     ready = await client.post("/api/v1/factory/setup-preflight", json=body)
-    assert ready.json()["checks"]["checkout_identity"] == {
-        "status": "ready", "code": "checkout_identity_matches"
-    }
+    assert ready.json()["checks"]["checkout_identity"]["status"] == "ready"
+    assert ready.json()["checks"]["checkout_identity"]["code"] == "checkout_identity_matches"
 
     wrong_owner = {**body, "repo_owner": "other"}
     blocked = await client.post("/api/v1/factory/setup-preflight", json=wrong_owner)
@@ -163,11 +168,44 @@ async def test_preflight_github_app_requires_bot_login(client, monkeypatch, tmp_
         "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
         "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "github_app",
     })
-    assert response.json()["checks"]["dispatch_auth"] == {
-        "status": "blocked", "code": "github_app_configuration_missing"
-    }
+    assert response.json()["checks"]["dispatch_auth"]["status"] == "blocked"
+    assert response.json()["checks"]["dispatch_auth"]["code"] == "github_app_configuration_missing"
     assert "synthetic key fixture" not in response.text
     assert str(key) not in response.text
+
+    monkeypatch.setattr(settings, "github_app_bot_login", "synthetic-bot[bot]")
+    monkeypatch.setattr(
+        "app.api.v1.factory.github_app_auth_service.require_configuration",
+        lambda **_kwargs: None,
+    )
+
+    async def no_installation(_owner, _repo):
+        return None
+
+    monkeypatch.setattr(
+        "app.api.v1.factory.github_app_auth_service.resolve_installation",
+        no_installation,
+    )
+    missing = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "github_app",
+    })
+    assert missing.json()["checks"]["dispatch_auth"]["status"] == "blocked"
+    assert missing.json()["checks"]["dispatch_auth"]["code"] == "github_app_installation_missing"
+
+    async def installed(_owner, _repo):
+        return 55
+
+    monkeypatch.setattr(
+        "app.api.v1.factory.github_app_auth_service.resolve_installation",
+        installed,
+    )
+    ready = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "github_app",
+    })
+    assert ready.json()["checks"]["dispatch_auth"]["status"] == "ready"
+    assert ready.json()["checks"]["dispatch_auth"]["code"] == "github_app_installation_available"
 
 
 @pytest.mark.asyncio
@@ -193,10 +231,12 @@ async def test_preflight_checks_explicit_base_branch_and_rejects_invalid_value(c
         "base_ref": "origin/release/2",
     }
     valid = await client.post("/api/v1/factory/setup-preflight", json=body)
-    assert valid.json()["checks"]["base_branch"] == {"status": "ready", "code": "base_branch_exists"}
+    assert valid.json()["checks"]["base_branch"]["status"] == "ready"
+    assert valid.json()["checks"]["base_branch"]["code"] == "base_branch_exists"
 
     invalid = await client.post("/api/v1/factory/setup-preflight", json={**body, "base_ref": "origin/bad branch"})
-    assert invalid.json()["checks"]["base_branch"] == {"status": "blocked", "code": "base_branch_invalid"}
+    assert invalid.json()["checks"]["base_branch"]["status"] == "blocked"
+    assert invalid.json()["checks"]["base_branch"]["code"] == "base_branch_invalid"
 
 
 @pytest.mark.asyncio

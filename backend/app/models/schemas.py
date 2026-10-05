@@ -2322,10 +2322,12 @@ class SetupPreflightRequest(BaseModel):
 class SetupPreflightCheck(BaseModel):
     status: Literal["ready", "blocked", "unknown"]
     code: str = Field(max_length=64)
+    remedy: str = Field(default="Review the check and complete any required setup step.", max_length=240)
 
 
 class SetupPreflightResponse(BaseModel):
     status: Literal["ready", "blocked", "unknown"]
+    observed_at: datetime
     checked_at: datetime
     checks: Dict[str, SetupPreflightCheck]
 

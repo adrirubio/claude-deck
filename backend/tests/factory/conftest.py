@@ -77,6 +77,7 @@ async def factory_store(tmp_path, monkeypatch):
                                   launch_options={"prompt": PRIVATE}) for position in (0, 1)]
             db.add_all(pair)
             await db.flush()
+            team.leader_slot_id = pair[0].id
             leaders.append(pair[0]); owners.append(pair[1])
             for slot in pair:
                 member = MailTeamMember(identity_key=f"fixture-slot-{slot.id}", repo_id="fixture",

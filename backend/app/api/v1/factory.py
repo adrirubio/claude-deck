@@ -1,7 +1,7 @@
 """Local observational delivery reads; legacy protected remedies stay separate."""
 import asyncio
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -18,6 +18,7 @@ from app.config import settings
 from app.models import factory_schemas as wire
 from app.models.schemas import SetupPreflightRequest, SetupPreflightResponse, SetupPreflightCheck
 from app.services.github_client import github_client
+from app.services.github_app_auth_service import GithubAppAuthError, github_app_auth_service
 from app.services import factory_projection_service as projections
 from app.utils.repo_utils import is_primary_github_checkout
 
@@ -54,7 +55,7 @@ async def setup_preflight(
     _operator: None = Depends(require_operator),
 ):
     """Observe setup prerequisites. This route never creates or changes records."""
-    checked_at = datetime.utcnow()
+    checked_at = datetime.now(timezone.utc)
     repository_info: dict | None = None
 
     async def checkout_check() -> SetupPreflightCheck:
@@ -137,23 +138,29 @@ async def setup_preflight(
         except Exception:
             return SetupPreflightCheck(status="unknown", code="base_branch_check_failed")
 
-    async def labels_check() -> SetupPreflightCheck:
+    async def labels_check() -> tuple[SetupPreflightCheck, SetupPreflightCheck]:
         try:
             labels = await asyncio.wait_for(
                 github_client.list_repo_labels(request.repo_owner, request.repo_name), timeout=5.0
             )
         except asyncio.TimeoutError:
-            return SetupPreflightCheck(status="unknown", code="label_check_timeout")
+            unknown = SetupPreflightCheck(status="unknown", code="label_check_timeout")
+            return unknown, unknown
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (403, 404):
-                return SetupPreflightCheck(status="blocked", code="labels_not_readable")
-            return SetupPreflightCheck(status="unknown", code="label_check_failed")
+                blocked = SetupPreflightCheck(status="blocked", code="labels_not_readable")
+                return blocked, blocked
+            unknown = SetupPreflightCheck(status="unknown", code="label_check_failed")
+            return unknown, unknown
         except Exception:
-            return SetupPreflightCheck(status="unknown", code="label_check_failed")
-        missing = [label for label in (request.dispatch_label, request.design_label) if label not in labels]
-        return SetupPreflightCheck(
-            status="blocked" if missing else "ready",
-            code="selected_labels_missing" if missing else "selected_labels_exist",
+            unknown = SetupPreflightCheck(status="unknown", code="label_check_failed")
+            return unknown, unknown
+        return tuple(
+            SetupPreflightCheck(
+                status="ready" if label in labels else "blocked",
+                code="selected_label_exists" if label in labels else "selected_label_missing",
+            )
+            for label in (request.dispatch_label, request.design_label)
         )
 
     if request.dispatch_auth_mode == "token":
@@ -162,15 +169,32 @@ async def setup_preflight(
             code="dispatch_token_configured" if settings.github_token else "dispatch_token_missing",
         )
     else:
-        app_ready = bool(settings.github_app_id and settings.github_app_private_key_path
-                         and settings.github_app_bot_login
-                         and Path(settings.github_app_private_key_path).is_file())
-        dispatch_auth = SetupPreflightCheck(
-            status="ready" if app_ready else "blocked",
-            code="github_app_configuration_present" if app_ready else "github_app_configuration_missing",
-        )
+        try:
+            github_app_auth_service.require_configuration(require_bot_login=True)
+            installation_id = await asyncio.wait_for(
+                github_app_auth_service.resolve_installation(request.repo_owner, request.repo_name),
+                timeout=5.0,
+            )
+            dispatch_auth = SetupPreflightCheck(
+                status="ready" if installation_id is not None else "blocked",
+                code="github_app_installation_available" if installation_id is not None else "github_app_installation_missing",
+            )
+        except asyncio.TimeoutError:
+            dispatch_auth = SetupPreflightCheck(status="unknown", code="github_app_installation_lookup_timeout")
+        except GithubAppAuthError as exc:
+            dispatch_auth = SetupPreflightCheck(
+                status="blocked" if exc.code == "app_auth_unconfigured" else "unknown",
+                code="github_app_configuration_missing" if exc.code == "app_auth_unconfigured" else "github_app_installation_lookup_failed",
+            )
 
     repository_status = await repository_check()
+    dispatch_label_status, design_label_status = await labels_check()
+    if dispatch_label_status.status == "unknown" or design_label_status.status == "unknown":
+        labels_status = SetupPreflightCheck(status="unknown", code="label_check_incomplete")
+    elif dispatch_label_status.status == "blocked" or design_label_status.status == "blocked":
+        labels_status = SetupPreflightCheck(status="blocked", code="selected_labels_missing")
+    else:
+        labels_status = SetupPreflightCheck(status="ready", code="selected_labels_exist")
     checks = {
         "checkout_identity": await checkout_check(),
         "polling_credential": SetupPreflightCheck(
@@ -178,7 +202,9 @@ async def setup_preflight(
             code="polling_credential_configured" if settings.github_token else "polling_credential_missing",
         ),
         "repository_read": repository_status,
-        "labels": await labels_check(),
+        "labels": labels_status,
+        "dispatch_label": dispatch_label_status,
+        "design_label": design_label_status,
         "base_branch": await base_branch_check(),
         "dispatch_auth": dispatch_auth,
     }
@@ -188,7 +214,27 @@ async def setup_preflight(
         status = "blocked"
     else:
         status = "unknown"
-    return SetupPreflightResponse(status=status, checked_at=checked_at, checks=checks)
+    remedies = {
+        "checkout_unavailable": "Select an available primary checkout, then run this check again.",
+        "checkout_identity_mismatch": "Select a primary checkout whose origin matches this repository.",
+        "polling_credential_missing": "Configure the operator's GitHub polling credential before activation.",
+        "repository_not_readable": "Grant repository read access to the configured GitHub credential.",
+        "selected_label_missing": "Create the selected label on the repository, then run this check again.",
+        "base_branch_invalid": "Use origin/HEAD or an existing origin/<branch> reference.",
+        "base_branch_missing": "Select an existing remote branch or restore the configured branch.",
+        "github_app_configuration_missing": "Configure the GitHub App and its bot login before using App authentication.",
+        "github_app_installation_missing": "Install the configured GitHub App on this repository.",
+        "dispatch_token_missing": "Configure the dispatch GitHub token or select a configured GitHub App.",
+    }
+    for name, check in list(checks.items()):
+        if check.status == "ready":
+            remedy = "No action is required for this check."
+        elif check.status == "unknown":
+            remedy = "Keep setup disabled and retry this observation after the service responds."
+        else:
+            remedy = remedies.get(check.code, "Review this check's safe code and complete the required host setup.")
+        checks[name] = check.model_copy(update={"remedy": remedy})
+    return SetupPreflightResponse(status=status, observed_at=checked_at, checked_at=checked_at, checks=checks)
 
 
 async def read_snapshot(db: AsyncSession = Depends(get_db)):
