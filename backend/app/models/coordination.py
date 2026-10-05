@@ -67,6 +67,7 @@ class CoordinationDisposition(BaseModel):
         return self.disposition != "completed" and (
             self.disposition == "human_decision_blocked"
             or self.reason in {"m1a_acceptance", "m1b_acceptance", "pilot_decision"}
+            or any(action.kind in {"milestone_acceptance", "pilot_decision"} for action in self.human_actions)
         )
 
     @model_validator(mode="after")
