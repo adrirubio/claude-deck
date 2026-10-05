@@ -2,9 +2,11 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import type { TSchema } from 'typebox'
 import { MailGeneration, PaneFence, failure, resolvePaneIdentity, toolResultOverride } from './client.ts'
 import { manifest } from './manifest.ts'
+import { registerNativeActivity } from './activity.ts'
 
 export default function deckMail(pi: ExtensionAPI) {
   if (process.env.CLAUDE_DECK_MAIL_OPT_IN !== '1') return
+  registerNativeActivity(pi)
   let generation: MailGeneration | undefined
   let startup: Promise<void> | undefined
   const stop = async () => {

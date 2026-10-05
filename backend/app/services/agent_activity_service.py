@@ -1,7 +1,7 @@
 """Read bounded native activity observations; never infer work from a live PID.
 
-Only authenticated, current pane bindings and explicit Codex resume UUIDs are
-supported. Missing permissions, ambiguous bindings and other harnesses return
+Use authenticated current pane bindings, explicit Codex resume UUIDs, or Pi's
+native extension observations. Missing permissions and ambiguous bindings return
 unknown. No transcripts, paths, session IDs or credentials leave this module.
 """
 from __future__ import annotations
@@ -25,6 +25,7 @@ from app.models.database import (
     AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailPaneLifecycle, MailTeamMember,
 )
 from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
+from app.services.pi_activity_service import observe_pi
 
 _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
@@ -203,6 +204,14 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         pid, start, cwd, process_state = live[0]
         if process_state in _STOPPED_STATES:
             return result("stopped", "process_stopped")
+        if provider == "pi-cli":
+            state, reason, observed_at = observe_pi(pid, start, cwd, now, _process_started_at(start))
+            process_state, current_start = _process(pid)
+            if current_start != start:
+                return result("unknown", "binding_changed")
+            if process_state in _STOPPED_STATES:
+                return result("stopped", "process_stopped")
+            return result(state, reason, observed_at)
         if provider != "codex-cli":
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
