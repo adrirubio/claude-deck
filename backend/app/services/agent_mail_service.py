@@ -1920,6 +1920,9 @@ class AgentMailService:
                     continue
                 if binding.bound_pane_pid != pane.pid:
                     continue
+                if (binding.pid != binding.bound_pane_pid
+                        and peer_process.process_is_confirmed_dead(binding.pid)):
+                    continue
                 if peer_process.pane_is_alive(
                     binding.bound_pane_pid, binding.bound_pane_proc_start
                 ) is True:
@@ -1960,6 +1963,8 @@ class AgentMailService:
                 or session.bound_pane_pid is None
                 or not session.bound_pane_proc_start
                 or session.last_seen_at < now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+                or (session.pid != session.bound_pane_pid
+                    and peer_process.process_is_confirmed_dead(session.pid))
                 or peer_process.pane_is_alive(
                     session.bound_pane_pid, session.bound_pane_proc_start
                 ) is not True
