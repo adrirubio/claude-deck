@@ -91,6 +91,47 @@ def test_read_proc_stat_returns_none_for_a_dead_pid(tmp_path, monkeypatch):
     assert peer_process.read_proc_stat(999999) is None
 
 
+def test_process_dead_observation_requires_available_proc(tmp_path, monkeypatch):
+    (tmp_path / "self").mkdir()
+    (tmp_path / "self" / "stat").write_text(_STAT)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    assert peer_process.process_is_confirmed_dead(1234) is True
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path / "unavailable"))
+    assert peer_process.process_is_confirmed_dead(1234) is False
+
+
+@pytest.mark.parametrize("pid", [None, 0, -1, True, "1234"])
+def test_process_dead_observation_keeps_missing_or_invalid_pid(pid):
+    assert peer_process.process_is_confirmed_dead(pid) is False
+
+
+@pytest.mark.parametrize("state,dead", [("S", False), ("R", False), ("T", False),
+                                        ("Z", True), ("X", True), ("x", True)])
+def test_process_dead_observation_checks_bounded_native_stat(tmp_path, monkeypatch, state, dead):
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(_STAT.replace(") S ", f") {state} "))
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    assert peer_process.process_is_confirmed_dead(1234) is dead
+
+
+@pytest.mark.parametrize("raw", ["malformed", "1234 (pi) Z 1", "x" * 4097,
+                                 _STAT.replace("120913170", "invalid")])
+def test_process_dead_observation_keeps_malformed_or_oversized_record(tmp_path, monkeypatch, raw):
+    proc = tmp_path / "1234"
+    proc.mkdir()
+    (proc / "stat").write_text(raw)
+    monkeypatch.setattr(peer_process, "_PROC_ROOT", str(tmp_path))
+    assert peer_process.process_is_confirmed_dead(1234) is False
+
+
+def test_process_dead_observation_keeps_denied_access(monkeypatch):
+    def denied(*_args, **_kwargs):
+        raise PermissionError("denied")
+    monkeypatch.setattr("builtins.open", denied)
+    assert peer_process.process_is_confirmed_dead(1234) is False
+
+
 def test_list_tmux_pane_pids_parses_the_format_string(monkeypatch):
     output = "%3 159009 team:0.0\n%0 149168 team:0.1\n\n"
     monkeypatch.setattr(peer_process, "_run_tmux", lambda *args, **kwargs: output)
