@@ -149,6 +149,43 @@ def read_proc_stat(pid: int) -> Optional[tuple[int, str]]:
         return None
 
 
+def process_is_confirmed_dead(pid: Optional[int]) -> bool:
+    """Exclude only a proved dead registration, never uncertain observation.
+
+    This does not identify a process lifetime or grant wake authority. A live
+    reused PID remains a competing binding. Missing PID, denied access, and a
+    malformed record must also remain competing bindings.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        with open(f"{_PROC_ROOT}/{pid}/stat", "rb") as handle:
+            raw = handle.read(4097)
+    except FileNotFoundError:
+        # hidepid can hide a live process. Signal 0 observes existence without
+        # sending a signal. Only ESRCH in this PID namespace proves absence.
+        if not os.path.isfile(f"{_PROC_ROOT}/self/stat"):
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
+    except OSError:
+        return False
+    if len(raw) > 4096:
+        return False
+    try:
+        fields = raw[raw.rindex(b")") + 2 :].split()
+        if not fields[19].isdigit() or int(fields[1]) < 0:
+            return False
+        return fields[0] in {b"Z", b"X", b"x"}
+    except (ValueError, IndexError):
+        return False
+
+
 @dataclass(frozen=True)
 class PeerPane:
     """The tmux pane a caller's process tree belongs to."""

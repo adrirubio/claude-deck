@@ -29,7 +29,13 @@ from app.utils.repo_utils import derive_repo_identity
 
 
 @pytest.fixture
-def svc():
+def svc(monkeypatch):
+    # These fixture PIDs have no host process. Unknown observation retains a
+    # binding; individual native-liveness cases supply their own observations.
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.peer_process.process_is_confirmed_dead",
+        lambda _pid: False,
+    )
     return AgentMailService()
 
 
@@ -1357,6 +1363,87 @@ async def test_duplicate_mcp_bindings_for_one_pane_refuse_wake_and_opt_in(
             db, duplicate.id, True, actor_type="operator", reason_code="manual_opt_in"
         )
     assert duplicate.wake_enabled is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["pi-cli", "codex-cli"])
+async def test_dead_auxiliary_native_bindings_do_not_block_owner_wake(
+    db, svc, tmp_path, monkeypatch, provider
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{"provider": provider, "tmux_target": "w:0.1", "pane_id": "%41",
+                 "cwd": str(cwd), "pid": "4241", "status": "active"}]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    owner = (await db.execute(select(MailAgentSession).where(
+        MailAgentSession.source == "mcp"))).scalar_one()
+    owner.pid = 4241
+    auxiliary = MailAgentSession(
+        member_id=member.id, source="mcp", provider=provider,
+        session_key="mcp:dead-auxiliary", cwd=str(cwd / "other"), pid=4242,
+        team_preset_id=owner.team_preset_id, team_slot_id=owner.team_slot_id,
+        capability_token_hash=svc.hash_capability_token("auxiliary-token"),
+        bound_pane_pid=owner.bound_pane_pid,
+        bound_pane_proc_start=owner.bound_pane_proc_start,
+        wake_enabled=True, mailbox_status="connected", last_seen_at=datetime.utcnow(),
+    )
+    db.add(auxiliary)
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.peer_process.process_is_confirmed_dead",
+        lambda pid: pid == 4242,
+    )
+    target = await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+    assert target.pane_id == "%41"
+    assert [s.id for s in await svc.nudgeable_sessions_for_slot(db, owner.team_slot_id)] == [target.id]
+    await svc.set_wake_enabled(
+        db, owner.id, True, actor_type="operator", reason_code="manual_opt_in"
+    )
+    await db.refresh(auxiliary)
+    assert auxiliary.closed_at is None and auxiliary.mailbox_status == "connected"
+    assert auxiliary.wake_enabled is True
+    with pytest.raises(MailWakeError, match="wake_target_unbound"):
+        await svc.set_wake_enabled(
+            db, auxiliary.id, True, actor_type="operator", reason_code="manual_opt_in"
+        )
+    await svc.set_wake_enabled(
+        db, owner.id, False, actor_type="operator", reason_code="manual_opt_out"
+    )
+    with pytest.raises(MailWakeError, match="wake_opted_out"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auxiliary_pid", [None, 4242])
+async def test_unknown_or_live_native_binding_preserves_ambiguity(
+    db, svc, tmp_path, monkeypatch, auxiliary_pid
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{"provider": "pi-cli", "tmux_target": "w:0.1", "pane_id": "%41",
+                 "cwd": str(cwd), "pid": "4241", "status": "active"}]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    owner = (await db.execute(select(MailAgentSession).where(
+        MailAgentSession.source == "mcp"))).scalar_one()
+    db.add(MailAgentSession(
+        member_id=member.id, source="mcp", provider="pi-cli",
+        session_key="mcp:uncertain-auxiliary", cwd=str(cwd), pid=auxiliary_pid,
+        team_preset_id=owner.team_preset_id, team_slot_id=owner.team_slot_id,
+        capability_token_hash=svc.hash_capability_token("auxiliary-token"),
+        bound_pane_pid=owner.bound_pane_pid,
+        bound_pane_proc_start=owner.bound_pane_proc_start,
+        wake_enabled=False, mailbox_status="connected", last_seen_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    with pytest.raises(MailWakeError, match="wake_target_ambiguous"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+    assert await svc.nudgeable_sessions_for_slot(db, owner.team_slot_id) == []
 
 
 @pytest.mark.asyncio
