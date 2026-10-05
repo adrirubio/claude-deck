@@ -498,6 +498,11 @@ class GithubCoordinationService:
                     "then inspect the assigned GitHub issues and reviewed dependency/milestone packet. "
                     "Reconcile already-landed fixes before assigning new implementation. Submit exactly "
                     "one evidenced disposition per assigned issue using deck_report_backlog_assessment. "
+                    'Use required_actor:"operator" for human decisions, milestone acceptance, and pilot decisions. '
+                    'Before requesting input, include human_actions with the kind and current readiness. '
+                    'Use requested when the human can act now. '
+                    'Use waiting_for_prerequisites when required evidence is absent. '
+                    'Do not assign a human decision to the Leader. '
                     "Read again immediately before publishing and pass its private snapshot_token. "
                     "A pending notification can cover newer generations; use the fresh read, not this "
                     "Mail's original payload. Current authenticated publication spends no notification quota. "
@@ -569,6 +574,9 @@ class GithubCoordinationService:
         if not await db.scalar(select(_autonomous(scope_id))):
             raise CoordinationError("autonomy_off")
         leader = await self.require_leader(db, scope_id, principal)
+        if any(entry.operator_decision_required and entry.required_actor != "operator"
+               for entry in report.entries):
+            raise CoordinationError("operator_gate_actor_required", 422)
         if not signed and leader.id != row.leader_session_id:
             raise CoordinationError("coordination_leader_changed")
         await db.commit()

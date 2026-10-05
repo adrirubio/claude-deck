@@ -61,6 +61,14 @@ class CoordinationDisposition(BaseModel):
     evidence_issue_numbers: list[IssueNumber] = Field(min_length=1, max_length=32)
     human_actions: list[CoordinationHumanAction] = Field(default_factory=list, max_length=4)
 
+    @property
+    def operator_decision_required(self) -> bool:
+        """Keep a reported human decision distinct from Leader coordination."""
+        return self.disposition != "completed" and (
+            self.disposition == "human_decision_blocked"
+            or self.reason in {"m1a_acceptance", "m1b_acceptance", "pilot_decision"}
+        )
+
     @model_validator(mode="after")
     def evidence(self):
         if any(type(n) is not int or n <= 0 for n in self.evidence_issue_numbers):

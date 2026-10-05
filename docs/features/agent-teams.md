@@ -52,6 +52,22 @@ They must link detailed evidence below the summary. A comment alone does not mee
 Deck supplies this rule in launch and Agent Mail context, work instructions, and review notifications.
 These instructions do not prove summary quality or replace independent review and the configured merge policy.
 
+## Reported Human Decisions
+
+The **Human actions and decision gates** section appears above the Roster and Autonomy tabs.
+It shows the human requests from the Leader's current assessment and dispatch state.
+
+The Leader must assign human decisions to the operator. This includes milestone acceptance and pilot decisions.
+Deck rejects a new assessment that assigns an incomplete human decision to the Leader or another actor.
+The Leader must include the action and its readiness before requesting human input.
+Use **requested** when the human can act now. Use **waiting for prerequisites** when required evidence is absent.
+
+Deck also shows a human gate from an older report with a conflicting actor.
+It marks that gate as waiting and warns that the assessment needs confirmation.
+It does not present the gate as ready or treat its evidence as accepted.
+
+These reports describe the requested action. They do not approve work or satisfy a milestone.
+
 ## Same-Repo Role Workflows
 
 Use Agent Teams when multiple agents need distinct roles inside the same repository. A common setup is:
