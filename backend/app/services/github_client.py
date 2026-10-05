@@ -29,6 +29,11 @@ class GithubClientResponseError(RuntimeError):
     """GitHub returned a response Deck cannot safely interpret."""
 
 
+# Explicit bound for shared GitHub list pagination. Exceeding it is an
+# incomplete observation, not a complete list.
+MAX_LIST_PAGES = 10
+
+
 @dataclass(frozen=True)
 class GithubCommitSnapshot:
     sha: str
@@ -180,8 +185,12 @@ class GithubClient:
         seen_urls: set[str] = set()
         next_url: str | None = endpoint
         first = True
+        pages_fetched = 0
         try:
             while next_url is not None:
+                pages_fetched += 1
+                if pages_fetched > MAX_LIST_PAGES:
+                    raise GithubClientResponseError("GitHub label pagination bound exceeded")
                 if first:
                     response = await client.get(next_url, params=params, headers=self._headers())
                     first = False
@@ -418,8 +427,14 @@ class GithubClient:
         seen_urls: set[str] = set()
         next_url: str | None = endpoint
         first = True
+        pages_fetched = 0
         try:
             while next_url is not None:
+                pages_fetched += 1
+                if pages_fetched > MAX_LIST_PAGES:
+                    raise GithubClientResponseError(
+                        "GitHub pull pagination bound exceeded"
+                    )
                 if first:
                     response = await client.get(
                         next_url,

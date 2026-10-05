@@ -2330,6 +2330,11 @@ class SetupPreflightResponse(BaseModel):
     observed_at: datetime
     checked_at: datetime
     checks: Dict[str, SetupPreflightCheck]
+    # Allowlisted configuration key names mapped to boolean presence only.
+    # Never include values, key-file paths, hashes, or raw environment output.
+    configuration_presence: Dict[str, bool] = Field(default_factory=dict)
+    # Safe static host-procedure steps: credentials, harness/Mail, restart.
+    host_guidance: List[str] = Field(default_factory=list)
 
 
 class AgentTeamPresetListResponse(BaseModel):

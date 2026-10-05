@@ -14,7 +14,21 @@ from app.services import factory_projection_service as projection
 
 pytestmark = pytest.mark.asyncio
 FIXTURES = Path(__file__).parent / "fixtures" / "v1"
+FRONTEND_FIXTURES = Path(__file__).resolve().parents[3] / "frontend" / "tests" / "fixtures" / "factory" / "v1"
 NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+
+
+async def test_frontend_backend_fixture_parity():
+    """Both frozen contract copies must stay identical (cross-lane parity)."""
+    backend_files = sorted(path.name for path in FIXTURES.glob("*.json"))
+    frontend_files = sorted(path.name for path in FRONTEND_FIXTURES.glob("*.json"))
+    assert backend_files == frontend_files
+    for name in backend_files:
+        assert json.loads((FRONTEND_FIXTURES / name).read_text()) == json.loads((FIXTURES / name).read_text()), f"Fixture parity changed: {name}"
+    for name in ("work-item.json", "work-items.json"):
+        text = (FRONTEND_FIXTURES / name).read_text()
+        assert '"source": "explicit_assignment"' in text
+        assert "first_enabled_slot" not in text
 
 
 async def test_frozen_response_contract(factory_client, factory_store, monkeypatch, request):

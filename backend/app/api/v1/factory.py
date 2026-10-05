@@ -17,7 +17,7 @@ from app.api.v1.deps import require_operator
 from app.config import settings
 from app.models import factory_schemas as wire
 from app.models.schemas import SetupPreflightRequest, SetupPreflightResponse, SetupPreflightCheck
-from app.services.github_client import github_client
+from app.services.github_client import github_client, GithubClientResponseError
 from app.services.github_app_auth_service import GithubAppAuthError, github_app_auth_service
 from app.services import factory_projection_service as projections
 from app.utils.repo_utils import is_primary_github_checkout
@@ -47,6 +47,24 @@ class FactoryReadRoute(APIRoute):
 
 
 router = APIRouter(route_class=FactoryReadRoute)
+
+
+def _github_rate_limited(exc: httpx.HTTPStatusError) -> bool:
+    """Recognize GitHub rate limits without treating every 403 as one."""
+    response = exc.response
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    if response.headers.get("x-ratelimit-remaining") == "0" or response.headers.get("retry-after"):
+        return True
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    message = body.get("message", "") if isinstance(body, dict) else ""
+    message = message.casefold() if isinstance(message, str) else ""
+    return "rate limit" in message or "secondary rate" in message
 
 
 @router.post("/setup-preflight", response_model=SetupPreflightResponse)
@@ -90,6 +108,8 @@ async def setup_preflight(
         except asyncio.TimeoutError:
             return SetupPreflightCheck(status="unknown", code="repository_check_timeout")
         except httpx.HTTPStatusError as exc:
+            if _github_rate_limited(exc):
+                return SetupPreflightCheck(status="unknown", code="github_rate_limited")
             if exc.response.status_code in (403, 404):
                 return SetupPreflightCheck(status="blocked", code="repository_not_readable")
             return SetupPreflightCheck(status="unknown", code="repository_check_failed")
@@ -132,6 +152,8 @@ async def setup_preflight(
         except asyncio.TimeoutError:
             return SetupPreflightCheck(status="unknown", code="base_branch_check_timeout")
         except httpx.HTTPStatusError as exc:
+            if _github_rate_limited(exc):
+                return SetupPreflightCheck(status="unknown", code="github_rate_limited")
             if exc.response.status_code in (403, 404):
                 return SetupPreflightCheck(status="blocked", code="base_branch_not_readable")
             return SetupPreflightCheck(status="unknown", code="base_branch_check_failed")
@@ -147,10 +169,17 @@ async def setup_preflight(
             unknown = SetupPreflightCheck(status="unknown", code="label_check_timeout")
             return unknown, unknown
         except httpx.HTTPStatusError as exc:
+            if _github_rate_limited(exc):
+                unknown = SetupPreflightCheck(status="unknown", code="github_rate_limited")
+                return unknown, unknown
             if exc.response.status_code in (403, 404):
                 blocked = SetupPreflightCheck(status="blocked", code="labels_not_readable")
                 return blocked, blocked
             unknown = SetupPreflightCheck(status="unknown", code="label_check_failed")
+            return unknown, unknown
+        except GithubClientResponseError:
+            # Bounded or unsafe pagination is an incomplete observation, not a block.
+            unknown = SetupPreflightCheck(status="unknown", code="label_check_incomplete")
             return unknown, unknown
         except Exception:
             unknown = SetupPreflightCheck(status="unknown", code="label_check_failed")
@@ -201,6 +230,10 @@ async def setup_preflight(
             status="ready" if settings.github_token else "blocked",
             code="polling_credential_configured" if settings.github_token else "polling_credential_missing",
         ),
+        "operator_credential": SetupPreflightCheck(
+            status="ready" if settings.operator_token else "blocked",
+            code="operator_token_configured" if settings.operator_token else "operator_token_missing",
+        ),
         "repository_read": repository_status,
         "labels": labels_status,
         "dispatch_label": dispatch_label_status,
@@ -219,22 +252,47 @@ async def setup_preflight(
         "checkout_identity_mismatch": "Select a primary checkout whose origin matches this repository.",
         "polling_credential_missing": "Configure the operator's GitHub polling credential before activation.",
         "repository_not_readable": "Grant repository read access to the configured GitHub credential.",
+        "github_rate_limited": "Wait for GitHub's rate limit to reset, then run this check again.",
         "selected_label_missing": "Create the selected label on the repository, then run this check again.",
         "base_branch_invalid": "Use origin/HEAD or an existing origin/<branch> reference.",
         "base_branch_missing": "Select an existing remote branch or restore the configured branch.",
         "github_app_configuration_missing": "Configure the GitHub App and its bot login before using App authentication.",
         "github_app_installation_missing": "Install the configured GitHub App on this repository.",
         "dispatch_token_missing": "Configure the dispatch GitHub token or select a configured GitHub App.",
+        "operator_token_missing": "Configure operator_token in backend/.env, then apply the documented backend restart.",
     }
     for name, check in list(checks.items()):
         if check.status == "ready":
             remedy = "No action is required for this check."
         elif check.status == "unknown":
-            remedy = "Keep setup disabled and retry this observation after the service responds."
+            # Unknown checks use a specific safe remedy when one exists.
+            remedy = remedies.get(check.code, "Keep setup disabled and retry this observation after the service responds.")
         else:
             remedy = remedies.get(check.code, "Review this check's safe code and complete the required host setup.")
         checks[name] = check.model_copy(update={"remedy": remedy})
-    return SetupPreflightResponse(status=status, observed_at=checked_at, checked_at=checked_at, checks=checks)
+    # Allowlisted key names with boolean presence only; never values or paths.
+    configuration_presence = {
+        "github_token": bool(settings.github_token),
+        "operator_token": bool(settings.operator_token),
+        "github_app_id": bool(settings.github_app_id),
+        "github_app_private_key_path": bool(settings.github_app_private_key_path),
+        "github_app_bot_login": bool(settings.github_app_bot_login),
+    }
+    host_guidance = [
+        "Configure github_token and operator_token in backend/.env.",
+        "Configure the existing GitHub App settings only when App authentication is selected.",
+        "Install the required harness and Agent Mail integration for team activation.",
+        "Apply the documented backend restart when settings change, then repeat this check.",
+        "Create missing labels on GitHub, then repeat this check.",
+    ]
+    return SetupPreflightResponse(
+        status=status,
+        observed_at=checked_at,
+        checked_at=checked_at,
+        checks=checks,
+        configuration_presence=configuration_presence,
+        host_guidance=host_guidance,
+    )
 
 
 async def read_snapshot(db: AsyncSession = Depends(get_db)):

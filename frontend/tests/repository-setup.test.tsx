@@ -16,9 +16,16 @@ const mocks = vi.hoisted(() => ({
   getOperatorToken: vi.fn(() => "synthetic-operator"),
   setOperatorToken: vi.fn(),
   clearOperatorToken: vi.fn(),
+  ApiHttpError: class ApiHttpError extends Error {
+    status: number;
+    constructor(message: string, status: number) {
+      super(message);
+      this.status = status;
+    }
+  },
 }));
 
-vi.mock("@/lib/api", () => ({ apiClient: mocks.apiClient, ApiHttpError: class ApiHttpError extends Error {} }));
+vi.mock("@/lib/api", () => ({ apiClient: mocks.apiClient, ApiHttpError: mocks.ApiHttpError }));
 vi.mock("@/features/agent-teams/operatorAuth", () => ({
   getOperatorToken: mocks.getOperatorToken,
   setOperatorToken: mocks.setOperatorToken,
@@ -81,13 +88,17 @@ describe("guided repository setup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
     fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/changed-checkout" } });
 
+    await waitFor(() => expect(mocks.apiClient).toHaveBeenCalledTimes(1));
     resolveCheck?.({
       status: "ready", checked_at: "2026-10-05T00:00:00Z",
       checks: { checkout_identity: { status: "ready", code: "checkout_identity_matches" } },
     });
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled());
+    // A configuration-only save stays available while checks have gaps.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue to configuration" })).toBeEnabled());
+    // The response for the changed draft is discarded: no result panel appears.
     expect(screen.queryByText(/Current result:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Stale result/)).not.toBeInTheDocument();
   });
 
   it("keeps Save blocked after an uncertain create until fresh records can be selected", async () => {
@@ -102,7 +113,7 @@ describe("guided repository setup", () => {
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
     fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
     fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
     fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -141,7 +152,7 @@ describe("guided repository setup", () => {
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
     fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
     fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
     fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
     fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A\nWorker B" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
@@ -161,5 +172,83 @@ describe("guided repository setup", () => {
     expect(slots[0]).toMatchObject({ role: "Leader", area_labels: [], expertise: null });
     expect(slots[1]).toMatchObject({ role: "Worker", area_labels: ["backend"], expertise: "API" });
     expect(slots[2]).toMatchObject({ role: "Worker", area_labels: ["frontend"], expertise: "UI" });
+  });
+
+  it("allows safe correction after a definite rejected create without latching", async () => {
+    mocks.apiClient.mockResolvedValue({
+      status: "ready", observed_at: "2026-10-05T00:00:00Z", checked_at: "2026-10-05T00:00:00Z",
+      checks: { checkout_identity: { status: "ready", code: "checkout_identity_matches", remedy: "ready" } },
+    });
+    mocks.createAgentTeamPreset.mockRejectedValue(new mocks.ApiHttpError("invalid team request", 422));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    await screen.findByText(/invalid team request/);
+    // A definite non-write needs no latch and allows safe correction or retry.
+    expect(screen.queryByText(/Fresh reads found/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save configuration" })).toBeEnabled();
+    expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps activation blocked while shared readiness has gaps", async () => {
+    const preflight = {
+      status: "ready", observed_at: "2026-10-05T00:00:00Z", checked_at: "2026-10-05T00:00:00Z",
+      checks: { checkout_identity: { status: "ready", code: "checkout_identity_matches", remedy: "ready" } },
+    };
+    mocks.apiClient.mockImplementation((endpoint: string) => {
+      if (endpoint.startsWith("factory/setup-preflight")) return Promise.resolve(preflight);
+      return Promise.resolve({ members: [] });
+    });
+    const team = {
+      id: 12, name: "Synthetic team", autonomy_enabled: false, leader_slot_id: 101, updated_at: "2026-10-05T00:00:00Z",
+      slots: [
+        { id: 101, display_name: "Leader", enabled: true, provider: "codex-cli", role: "Leader", repo_path: "/synthetic/checkout", area_labels: [], expertise: null },
+        { id: 102, display_name: "Worker A", enabled: true, provider: "codex-cli", role: "Worker", repo_path: "/synthetic/checkout", area_labels: [], expertise: null },
+      ],
+    };
+    const scope = {
+      id: 55, preset_id: 12, repo_owner: "example", repo_name: "synthetic-product", repo_path: "/synthetic/checkout",
+      dispatch_label: "claude-deck-ready", design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      github_auth_mode: "ambient", github_auth_configured: true, github_poll_token_configured: true, enabled: false,
+    };
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [scope] });
+    mocks.createAgentTeamPreset.mockResolvedValue(team);
+    mocks.planAgentTeamLaunch.mockResolvedValue({
+      can_launch: false, spawn_count: 0, reuse_count: 0, blocked_count: 1, plan_hash: "synthetic-plan",
+      items: [{ slot_id: 102, slot_name: "Worker A", action: "blocked", block_code: "provider_unavailable", reasons: [], matching_session: null }],
+    });
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    await screen.findByText(/Saved configuration/);
+    fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
+
+    await screen.findByText(/A connected Agent Mail Leader is required/);
+    expect(screen.getByText(/A distinct connected worker is required/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/Enable team automation/));
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enable this scope" })).toBeDisabled();
   });
 });

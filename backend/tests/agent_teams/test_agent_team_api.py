@@ -361,16 +361,130 @@ async def test_github_scope_crud_endpoints(client, db, monkeypatch, tmp_path):
     item.dispatch_status = "completed"
     await db.commit()
 
+    # Capture identity before the delete; a route rollback can expire shared rows.
+    await db.refresh(item)
+    await db.refresh(workspace)
+    item_id = item.id
+    workspace_id = workspace.id
     delete_response = await client.delete(
         f"/api/v1/agent-teams/github-scopes/{scope['id']}"
     )
     assert delete_response.status_code == 204
-    item_id = item.id
-    workspace_id = workspace.id
     db.expire_all()
     assert await db.get(GithubWorkItem, item_id) is None
     assert await db.get(GithubWorkspace, workspace_id) is None
     assert sync_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_disabled_app_scope_saves_without_installation_discovery(client, db, monkeypatch, tmp_path):
+    repo = tmp_path / "disabled-app-repo"
+    repo.mkdir()
+    calls = []
+
+    async def fake_sync(_db):
+        return None
+
+    def require_configuration(**_kwargs):
+        calls.append("require_configuration")
+
+    async def resolve_installation(_owner, _repo):
+        calls.append("resolve_installation")
+        return 73
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    monkeypatch.setattr(github_app_auth_service, "require_configuration", require_configuration)
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", resolve_installation)
+
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": "Disabled app team", "slots": []},
+    )
+    preset_id = preset_response.json()["id"]
+
+    # A disabled configuration save keeps its App dispatch preference with gaps.
+    create_response = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_id}/github-scopes",
+        json={
+            "repo_owner": "example",
+            "repo_name": "disabled-app-repo",
+            "repo_path": str(repo),
+            "dispatch_label": "deck-ready",
+            "design_label": "deck-design",
+            "base_ref": "origin/main",
+            "github_auth_mode": "app",
+            "enabled": False,
+        },
+    )
+    assert create_response.status_code == 200
+    scope = create_response.json()
+    assert scope["github_auth_mode"] == "app"
+    assert scope["enabled"] is False
+    assert calls == []
+    assert (await db.get(TeamGithubScope, scope["id"])).github_app_installation_id is None
+
+    # Enabling the saved scope resolves the installation and keeps the preference.
+    enabled = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope['id']}",
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200
+    assert calls == ["require_configuration", "resolve_installation"]
+    assert enabled.json()["github_auth_mode"] == "app"
+    assert (await db.get(TeamGithubScope, scope["id"])).github_app_installation_id == 73
+
+
+@pytest.mark.asyncio
+async def test_app_installation_lookup_refuses_changed_configuration(client, db, monkeypatch, tmp_path):
+    repo = tmp_path / "raced-app-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    monkeypatch.setattr(github_app_auth_service, "require_configuration", lambda **_kwargs: None)
+
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": "Raced app team", "slots": []},
+    )
+    preset_id = preset_response.json()["id"]
+    create_response = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_id}/github-scopes",
+        json={
+            "repo_owner": "example",
+            "repo_name": "raced-app-repo",
+            "repo_path": str(repo),
+            "dispatch_label": "deck-ready",
+            "design_label": "deck-design",
+            "base_ref": "origin/main",
+            "github_auth_mode": "app",
+            "enabled": False,
+        },
+    )
+    scope_id = create_response.json()["id"]
+
+    async def resolve_installation(_owner, _repo):
+        # A same-mode request changes scope configuration during remote discovery.
+        await db.execute(
+            text("UPDATE team_github_scopes SET dispatch_label = :label WHERE id = :scope_id"),
+            {"label": "changed-during-lookup", "scope_id": scope_id},
+        )
+        await db.commit()
+        return 73
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", resolve_installation)
+
+    response = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}",
+        json={"enabled": True},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "scope_changed_during_app_lookup"
+    stored = await db.get(TeamGithubScope, scope_id)
+    assert stored.enabled is False
+    assert stored.github_app_installation_id is None
 
 
 @pytest.mark.asyncio

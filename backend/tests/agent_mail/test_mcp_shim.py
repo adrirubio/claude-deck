@@ -45,23 +45,24 @@ def test_ensure_registered_refreshes_cached_member(monkeypatch):
 
     assert result["ok"] is True
     assert shim._state["member_id"] == 8
-    assert requests == [
-        (
-            "POST",
-            "/agent/register",
-            {
-                "json": {
-                    "source": "mcp",
-                    "provider": shim.PROVIDER,
-                    "cwd": "/tmp/repo",
-                    "session_key": "mcp:test",
-                    "pid": 1234,
-                    "team_preset_id": 1,
-                    "team_slot_id": 2,
-                }
-            },
-        )
-    ]
+    assert len(requests) == 1
+    method, path, kwargs = requests[0]
+    assert (method, path) == ("POST", "/agent/register")
+    assert kwargs["json"] == {
+        "source": "mcp",
+        "provider": shim.PROVIDER,
+        "cwd": "/tmp/repo",
+        "session_key": "mcp:test",
+        "pid": 1234,
+        "team_preset_id": 1,
+        "team_slot_id": 2,
+    }
+    # The pi-cli shim adds a bounded total timeout; other providers do not.
+    if shim.PROVIDER == "pi-cli":
+        assert isinstance(kwargs["total_timeout"], (int, float))
+        assert kwargs["total_timeout"] > 0
+    else:
+        assert "total_timeout" not in kwargs
 
 
 def test_heartbeat_once_returns_normal_interval_when_registered(monkeypatch):

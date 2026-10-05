@@ -14,6 +14,12 @@ OPERATOR = "synthetic-setup-preflight-operator"
 PRIVATE = "synthetic-private-credential"
 
 
+def _github_status_error(status, *, headers=None, message="synthetic provider detail"):
+    request = httpx.Request("GET", "https://api.github.com/repos/example/synthetic-repo")
+    response = httpx.Response(status, headers=headers or {}, json={"message": message}, request=request)
+    return httpx.HTTPStatusError("synthetic provider detail", request=request, response=response)
+
+
 def _init_checkout(path, remote="https://github.com/example/synthetic-repo.git"):
     path.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(path)], check=True)
@@ -66,11 +72,73 @@ async def test_preflight_returns_allowlisted_ready_checks(client, monkeypatch, t
     assert PRIVATE not in response.text
     assert str(checkout) not in response.text
     assert set(body["checks"]) == {
-        "checkout_identity", "polling_credential", "repository_read", "labels", "dispatch_label",
-        "design_label", "base_branch", "dispatch_auth"
+        "checkout_identity", "polling_credential", "operator_credential", "repository_read", "labels",
+        "dispatch_label", "design_label", "base_branch", "dispatch_auth"
     }
     assert body["observed_at"] == body["checked_at"]
     assert all(item["remedy"] for item in body["checks"].values())
+
+
+@pytest.mark.asyncio
+async def test_preflight_presence_map_and_host_guidance_are_safe(client, monkeypatch, tmp_path):
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", "")
+    monkeypatch.setattr(settings, "github_app_private_key_path", "/synthetic/private/key/path")
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    response = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+    })
+    body = response.json()
+    presence = body["configuration_presence"]
+    assert set(presence) == {"github_token", "operator_token", "github_app_id",
+                             "github_app_private_key_path", "github_app_bot_login"}
+    assert all(isinstance(value, bool) for value in presence.values())
+    assert presence == {"github_token": False, "operator_token": True, "github_app_id": False,
+                        "github_app_private_key_path": True, "github_app_bot_login": False}
+    assert body["checks"]["operator_credential"] == {
+        "status": "ready", "code": "operator_token_configured", "remedy": "No action is required for this check.",
+    }
+    guidance = " ".join(body["host_guidance"])
+    assert "restart" in guidance
+    assert "harness" in guidance and "Agent Mail" in guidance
+    assert "/synthetic/private/key/path" not in response.text
+    assert PRIVATE not in response.text
+    assert OPERATOR not in response.text
+
+
+@pytest.mark.asyncio
+async def test_preflight_pagination_bound_is_incomplete_unknown(client, monkeypatch, tmp_path):
+    from app.services.github_client import GithubClientResponseError
+
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def bounded(*_args, **_kwargs):
+        raise GithubClientResponseError("GitHub label pagination bound exceeded")
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", bounded)
+    response = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+    })
+    body = response.json()
+    assert body["status"] == "unknown"
+    assert body["checks"]["labels"]["status"] == "unknown"
+    assert body["checks"]["labels"]["code"] == "label_check_incomplete"
+    assert body["checks"]["labels"]["remedy"]
 
 
 @pytest.mark.asyncio
@@ -106,6 +174,71 @@ async def test_preflight_missing_labels_blocks_and_timeout_is_unknown(client, mo
     assert unknown.json()["status"] == "unknown"
     assert unknown.json()["checks"]["repository_read"]["status"] == "unknown"
     assert unknown.json()["checks"]["labels"]["status"] == "unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe", ["repository", "labels"])
+async def test_preflight_rate_limit_403_is_unknown_with_safe_retry_remedy(client, monkeypatch, tmp_path, probe):
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+
+    async def repository(*_args, **_kwargs):
+        if probe == "repository":
+            raise _github_status_error(403, headers={"x-ratelimit-remaining": "0"})
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        if probe == "labels":
+            raise _github_status_error(403, headers={"retry-after": "30"})
+        return ["dispatch", "design"]
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    response = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+    })
+
+    body = response.json()
+    # The per-probe check carries the rate-limit code; the label aggregate stays incomplete.
+    expected_name = "repository_read" if probe == "repository" else "dispatch_label"
+    check = body["checks"][expected_name]
+    assert response.status_code == 200
+    assert body["status"] == "unknown"
+    if probe == "labels":
+        assert body["checks"]["labels"]["status"] == "unknown"
+        assert body["checks"]["design_label"]["code"] == "github_rate_limited"
+    assert body["observed_at"]
+    assert check["status"] == "unknown"
+    assert check["code"] == "github_rate_limited"
+    assert "rate limit" in check["remedy"].lower()
+    assert PRIVATE not in response.text
+    assert "synthetic provider detail" not in response.text
+    assert "retry-after" not in response.text
+    assert "x-ratelimit" not in response.text
+    assert "30" not in check["remedy"]
+
+
+@pytest.mark.asyncio
+async def test_preflight_permission_denied_403_remains_blocked(client, monkeypatch, tmp_path):
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+
+    async def repository(*_args, **_kwargs):
+        raise _github_status_error(403, message="Resource access denied")
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    response = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+    })
+    assert response.json()["status"] == "blocked"
+    assert response.json()["checks"]["repository_read"]["status"] == "blocked"
+    assert response.json()["checks"]["repository_read"]["code"] == "repository_not_readable"
 
 
 @pytest.mark.asyncio

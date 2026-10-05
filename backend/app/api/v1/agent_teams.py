@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -438,11 +438,48 @@ async def _scope_identity_in_use(db: AsyncSession, scope_id: int) -> bool:
     return active_attempt is not None
 
 
-async def _resolve_scope_app_installation(scope: TeamGithubScope) -> int:
+_SCOPE_CONFIGURATION_FIELDS = (
+    "preset_id", "repo_owner", "repo_name", "repo_path", "dispatch_label", "design_label",
+    "merge_policy", "max_approval_rounds", "max_concurrent_dispatched", "max_verification_retries",
+    "max_auto_merges_per_day", "base_ref", "builds_out_of_tree", "build_dir_template",
+    "build_command_hint", "max_build_parallelism", "github_auth_mode", "github_app_installation_id",
+    "continuation_enabled", "max_continuation_revisions", "max_continuation_failed_heads",
+    "max_failed_heads_per_revision", "max_scope_paths", "max_scope_commands", "enabled",
+)
+
+
+def _scope_configuration(scope: TeamGithubScope) -> tuple[object, ...]:
+    return tuple(getattr(scope, field) for field in _SCOPE_CONFIGURATION_FIELDS)
+
+
+async def _reserve_scope_writer(db: AsyncSession, scope_id: int) -> TeamGithubScope:
+    """Acquire the SQLite writer before authoritative scope-use checks."""
+    if db.get_bind().dialect.name != "sqlite":
+        raise HTTPException(status_code=503, detail="scope_update_serialization_unavailable")
+    try:
+        result = await db.execute(
+            update(TeamGithubScope)
+            .where(TeamGithubScope.id == scope_id)
+            .values(id=TeamGithubScope.id)
+            .execution_options(synchronize_session=False)
+        )
+    except OperationalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
+    if result.rowcount != 1:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    return (await db.execute(
+        select(TeamGithubScope)
+        .where(TeamGithubScope.id == scope_id)
+        .execution_options(populate_existing=True)
+    )).scalar_one()
+
+
+async def _resolve_app_installation_for_repository(owner: str, repo: str) -> int:
     try:
         github_app_auth_service.require_configuration(require_bot_login=True)
         installation_id = await github_app_auth_service.resolve_installation(
-            scope.repo_owner, scope.repo_name
+            owner, repo
         )
     except GithubAppAuthError as exc:
         raise HTTPException(
@@ -458,6 +495,10 @@ async def _resolve_scope_app_installation(scope: TeamGithubScope) -> int:
             },
         )
     return installation_id
+
+
+async def _resolve_scope_app_installation(scope: TeamGithubScope) -> int:
+    return await _resolve_app_installation_for_repository(scope.repo_owner, scope.repo_name)
 
 
 def _apply_scope_create(
@@ -1805,7 +1846,7 @@ async def create_github_scope(
             repo_path="",
         )
         _apply_scope_create(scope, request)
-        if scope.github_auth_mode == "app":
+        if scope.github_auth_mode == "app" and scope.enabled:
             scope.github_app_installation_id = await _resolve_scope_app_installation(scope)
         db.add(scope)
         await db.commit()
@@ -1826,39 +1867,67 @@ async def update_github_scope(
     _operator: None = Depends(require_operator),
     db: AsyncSession = Depends(get_db),
 ):
-    scope = await db.get(TeamGithubScope, scope_id)
-    if scope is None:
+    observed = await db.get(TeamGithubScope, scope_id)
+    if observed is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     try:
+        observed_configuration = _scope_configuration(observed)
+        proposed_owner = _clean_repo_part(request.repo_owner, "Repo owner") if request.repo_owner is not None else observed.repo_owner
+        proposed_repo = _clean_repo_part(request.repo_name, "Repo name") if request.repo_name is not None else observed.repo_name
         identity_change = (
-            (request.repo_owner is not None and _clean_repo_part(request.repo_owner, "Repo owner") != scope.repo_owner)
-            or (request.repo_name is not None and _clean_repo_part(request.repo_name, "Repo name") != scope.repo_name)
+            proposed_owner != observed.repo_owner
+            or proposed_repo != observed.repo_name
             or (
                 request.repo_path is not None
-                and agent_team_service.normalize_repo_path(request.repo_path)[0] != scope.repo_path
+                and agent_team_service.normalize_repo_path(request.repo_path)[0] != observed.repo_path
             )
-            or (request.base_ref is not None and _clean_required(request.base_ref, "Base ref") != scope.base_ref)
+            or (request.base_ref is not None and _clean_required(request.base_ref, "Base ref") != observed.base_ref)
         )
-        if identity_change and await _scope_identity_in_use(db, scope_id):
-            raise HTTPException(status_code=409, detail="scope_identity_in_use")
         auth_change = (
             request.github_auth_mode is not None
-            and request.github_auth_mode != scope.github_auth_mode
+            and request.github_auth_mode != observed.github_auth_mode
         )
+        target_auth_mode = request.github_auth_mode or observed.github_auth_mode
+        target_enabled = observed.enabled if request.enabled is None else request.enabled
+        resolve_app = target_auth_mode == "app" and target_enabled and (
+            auth_change or identity_change or (not observed.enabled and target_enabled)
+        )
+
+        # Remote discovery must finish before reserving the SQLite writer.
+        # Drop the read snapshot so the later reservation sees concurrent commits.
+        await db.rollback()
+        installation_id = None
+        if resolve_app:
+            installation_id = await _resolve_app_installation_for_repository(proposed_owner, proposed_repo)
+
+        scope = await _reserve_scope_writer(db, scope_id)
+        if _scope_configuration(scope) != observed_configuration:
+            raise HTTPException(status_code=409, detail="scope_changed_during_app_lookup")
+        if identity_change and await _scope_identity_in_use(db, scope_id):
+            raise HTTPException(status_code=409, detail="scope_identity_in_use")
         if auth_change and await _scope_identity_in_use(db, scope_id):
             raise HTTPException(status_code=409, detail="scope_auth_in_use")
         _apply_scope_create(scope, request)
-        if scope.github_auth_mode == "app" and (
-            request.github_auth_mode is not None or identity_change
-        ):
-            scope.github_app_installation_id = await _resolve_scope_app_installation(scope)
+        if scope.github_auth_mode == "app":
+            if installation_id is not None:
+                scope.github_app_installation_id = installation_id
+            elif identity_change:
+                # A disabled App scope can retain its dispatch preference while
+                # keeping the installation unresolved for later activation.
+                scope.github_app_installation_id = None
         elif request.github_auth_mode is not None:
             scope.github_app_installation_id = None
         await db.commit()
         await db.refresh(scope)
+    except HTTPException:
+        await db.rollback()
+        raise
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail="GitHub scope already exists for this repo") from exc
+    except OperationalError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
     await _sync_github_jobs(db)
