@@ -13,6 +13,64 @@ from app.models.database import (
 )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overflow_query", range(4))
+async def test_bounded_activity_inputs_refuse_each_complete_query_on_overflow(overflow_query):
+    from types import SimpleNamespace
+    statements = []
+
+    class Database:
+        async def execute(self, statement):
+            statements.append(statement)
+            assert statement._limit_clause.value == 3
+            values = [(None,)] * 3 if len(statements) - 1 == overflow_query else []
+            return SimpleNamespace(all=lambda: values)
+
+    with pytest.raises(ValueError, match="activity_context_limit"):
+        await activity._team_inputs(Database(), 1, 2)
+    assert len(statements) == overflow_query + 1
+    if overflow_query > 0:
+        # Duplicate UUID evidence remains global, including disabled slots.
+        query = str(statements[1])
+        assert "preset_id" not in query and "enabled" not in query
+
+
+@pytest.mark.asyncio
+async def test_bounded_native_worker_keeps_capacity_after_response_timeout(monkeypatch):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    started, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(activity, "_team_inputs", AsyncMock(return_value=[(1, "pi-cli", None, [], False)]))
+
+    def observe(*_args, **_kwargs):
+        started.set()
+        assert release.wait(2)
+        return SimpleNamespace(state="unknown", reason="fixture", observed_at=None)
+
+    monkeypatch.setattr(activity, "_observe", observe)
+    first = asyncio.create_task(activity.observe_private_team(None, 1, 256))
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(first, .01)
+        with pytest.raises(ValueError, match="activity_observation_busy"):
+            await activity.observe_private_team(None, 1, 256)
+    finally:
+        release.set()
+    # The capacity becomes available only after the actual native worker ends.
+    for _ in range(100):
+        if activity._BOUNDED_PRIVATE_WORKERS.acquire(blocking=False):
+            activity._BOUNDED_PRIVATE_WORKERS.release()
+            break
+        await asyncio.sleep(.01)
+    else:
+        pytest.fail("native worker did not release capacity")
+    result = await activity.observe_private_team(None, 1, 256)
+    assert result[1].state == "unknown"
+
+
 @pytest.fixture
 def native(tmp_path, monkeypatch):
     cwd = tmp_path / "project"
