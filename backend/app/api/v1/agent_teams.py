@@ -2584,7 +2584,7 @@ async def resume_github_work_item_attempt(
             reassign_to_slot_id=request.reassign_to_slot_id,
         )
     except ResumeAttemptError as exc:
-        await _observe_resume_rejection(db, work_item_id, exc.block_code)
+        await _observe_resume_rejection(db, item_id, exc.block_code)
         raise _conflict(str(exc), exc.block_code) from exc
     return await _reload_work_item_response(db, item.id)
 
