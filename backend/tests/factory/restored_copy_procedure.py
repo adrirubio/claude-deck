@@ -277,6 +277,10 @@ def run_restored_copy_procedure(
            f"Backup created; source digest unchanged ({source_digest_before}).")
 
     shutil.copy(backup_path, restored_path)
+    if _digest_set(restored_path) != _digest_set(backup_path):
+        unchanged_evidence = {"source_digest": source_digest_after}
+        return refuse("backup_diverged", PROCEDURE_STEPS[3],
+                      "The restored copy does not match the backup snapshot.")
     restored = sqlite3.connect(restored_path)
     try:
         # Step 5: record each explicit assignment against the legacy resolver.
@@ -341,6 +345,17 @@ def run_restored_copy_procedure(
                "Restoring a pre-upgrade database stays a separate release decision; never automatic.")
     finally:
         restored.close()
+
+    # Writer-stop proof through the WAL-aware boundary digests: any source
+    # change after the stop claim, including side-file writes from other
+    # connections, refuses the procedure instead of admitting it.
+    if _digest_set(resolved_source) != source_digest_after:
+        unchanged_evidence = {
+            "source_digest_after_stop_claim": source_digest_after,
+            "source_digest_final": _digest_set(resolved_source),
+        }
+        return refuse("writer_after_stop", PROCEDURE_STEPS[2],
+                      "A writer changed the source or its side files after the stop claim.")
 
     return {
         "procedure": PROCEDURE_NAME,

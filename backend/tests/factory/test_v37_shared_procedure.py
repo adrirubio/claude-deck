@@ -179,3 +179,59 @@ def test_shared_procedure_covers_wal_side_files_at_boundaries(tmp_path):
         assert record["unchanged_evidence"]["source_digest"] == digests
 
     asyncio.run(run())
+
+
+def test_shared_procedure_refuses_writer_after_stop_claim(tmp_path):
+    """C-6: a separate connection writing after the stop claim is refused at
+    the final boundary. A released lock and a main-file digest do not
+    establish stopped writers; WAL-aware boundary digests do."""
+    import asyncio
+    import sqlite3 as _sqlite3
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    import tests.factory.restored_copy_procedure as procedure_module
+    from app.database import Base
+
+    async def run():
+        (tmp_path / DISPOSABLE_MARKER_NAME).write_text("disposable test target")
+        source = tmp_path / "latewriter.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{source}")
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await _v37_seed_authority_records(conn, divergent=False)
+            await _v37_quiesce_and_verify(conn)
+        await engine.dispose()
+
+        original_digest_set = procedure_module._digest_set
+        calls = {"source_reads": 0}
+
+        def intercepting_digest_set(path):
+            if path == source:
+                calls["source_reads"] += 1
+                if calls["source_reads"] == 3:
+                    # The third source digest is the final boundary check. A
+                    # separate disposable connection wrote after the stop
+                    # claim; the boundary must see the change and refuse.
+                    writer = _sqlite3.connect(source)
+                    writer.execute(
+                        "UPDATE agent_team_presets SET name = 'late-writer' WHERE id = 1")
+                    writer.commit()
+                    writer.close()
+            return original_digest_set(path)
+
+        procedure_module._digest_set = intercepting_digest_set
+        try:
+            record = procedure_module.run_restored_copy_procedure(
+                source_path=source, work_root=tmp_path,
+                pause_state={"automation_paused": True})
+        finally:
+            procedure_module._digest_set = original_digest_set
+
+        assert calls["source_reads"] >= 3
+        assert record["outcome"] == "REFUSE"
+        assert record["refusal_code"] == "writer_after_stop"
+        unchanged = record["unchanged_evidence"]
+        assert unchanged["source_digest_after_stop_claim"] != unchanged["source_digest_final"]
+
+    asyncio.run(run())

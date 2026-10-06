@@ -1171,6 +1171,17 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
+        "INSERT INTO mail_messages (id, kind, sender_member_id, recipient_member_id, subject, body_markdown, "
+        "created_at) VALUES (101, 'continuation_request', 8, 7, 'Continuation', 'Fixture continuation request', "
+        "CURRENT_TIMESTAMP)"
+    ))
+    await conn.execute(text(
+        "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, approval_round, "
+        "owner_member_id, leader_member_id, request_fingerprint, status, request_message_id, scope_revision_id, "
+        "created_at) VALUES (2, 1, 'continuation', 'fixture-nonce', 2, 7, 8, 'fixture-continuation-fingerprint', "
+        "'approved', 101, 1, CURRENT_TIMESTAMP)"
+    ))
+    await conn.execute(text(
         "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision, owner_slot_id, "
         "owner_member_id, phase, execution_target, summary, allowed_paths, allowed_actions, allowed_commands, "
         "prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha, originating_escalation_reason, "
@@ -1179,6 +1190,16 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "VALUES (1, 1, 'fixture-nonce', 0, 10, 7, 'implementation', '/work/1', 'fixture summary', '[]', '[]', '[]', "
         "'[]', '{}', :head, :tree, 'fixture', 1, 'fixture-hash', 2, 0, 'active', 0, 1, CURRENT_TIMESTAMP)"
     ), {"head": "a" * 40, "tree": "b" * 40})
+    await conn.execute(text(
+        "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision, owner_slot_id, "
+        "owner_member_id, phase, execution_target, summary, allowed_paths, allowed_actions, allowed_commands, "
+        "prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha, originating_escalation_reason, "
+        "expected_workspace_id, expected_lease_token_hash, max_failed_heads, failed_head_count, status, "
+        "delivery_attempt_count, approval_request_id, created_at) "
+        "VALUES (2, 1, 'fixture-nonce', 1, 10, 7, 'implementation', '/work/1', 'fixture continuation summary', "
+        "'[]', '[]', '[]', '[]', '{}', :head, :tree, 'fixture-continuation', 1, 'fixture-hash', 2, 0, 'completed', "
+        "0, 2, CURRENT_TIMESTAMP)"
+    ), {"head": "c" * 40, "tree": "d" * 40})
     await conn.commit()
 
 
