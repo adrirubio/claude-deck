@@ -1193,6 +1193,9 @@ async def report_dispatch_status(
                 released = await github_workspace_service.release_by_owner(
                     db,
                     item_id,
+                    actor_kind="member",
+                    actor_member_id=getattr(session, "member_id", None),
+                    actor_session_id=getattr(session, "id", None),
                     lease_token=report.lease_token,
                     workspace_id=workspace.id,
                     scope_id=scope.id,
