@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { apiClient } from '@/lib/api'
 import type { AgentActivityObservation, GithubWorkItem } from '@/types/agentTeams'
-import { WorkRemainingSummary, validRemainingWork } from './WorkRemainingSummary'
-import type { RemainingWork } from './WorkRemainingSummary'
+import { WorkRemainingSummary } from './WorkRemainingSummary'
+import { validRemainingWork } from './workRemaining'
+import type { RemainingWork } from './workRemaining'
 
 type Publication = {
   state: 'current' | 'historical' | 'unavailable'
