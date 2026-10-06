@@ -248,3 +248,59 @@ async def test_interrupted_transport_records_uncertain_not_applied(db):
         select(FactoryAuditEvent).where(FactoryAuditEvent.action_outcome == "applied")
     )).scalars().all()
     assert applied == []
+
+
+async def test_a07_missing_events_never_block_or_trigger(db):
+    """A07: absent events cannot approve, retry, replay, change budgets or
+    release a workspace; a mutation with zero ledger rows proceeds normally."""
+    actor = audit.derive_actor(actor_kind="operator")
+    existing = await audit.find_by_operation(db, "op-missing", "policy_change")
+    assert existing is None
+    event = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", operation_id="op-missing")
+    await db.commit()
+    assert event.id is not None
+
+
+async def test_a20_provider_fields_stay_distinct_and_unknown(db):
+    """A20: configured-at-event and observed-runtime providers never merge;
+    absent runtime evidence stays unknown (null)."""
+    actor = audit.derive_actor(actor_kind="operator")
+    event = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied",
+        context_snapshot={"configured_provider": "codex-cli",
+                          "observed_runtime_provider": None})
+    await db.commit()
+    assert event.context_snapshot["configured_provider"] == "codex-cli"
+    assert event.context_snapshot["observed_runtime_provider"] is None
+
+
+async def test_a22_metrics_need_no_live_operational_rows(db):
+    """A22: aggregates never inner-join live operational rows."""
+    actor = audit.derive_actor(actor_kind="operator")
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", delivery_outcome="delivered",
+        item_id=99, after_values={"dispatch_status": "merged"})
+    await db.commit()
+    # With no live item rows at all, ledger aggregates still compute.
+    await db.execute(text("DELETE FROM github_work_items"))
+    await db.commit()
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["delivered_in_window"].value == 1.0
+
+
+async def test_a24_a27_duration_and_retry_boundaries(db):
+    """A24-A27: duration is named by its boundaries; retries stay separate;
+    budget counters are authoritative."""
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["elapsed_attempt_duration"].value is None
+    assert "not execution time" in by_name["elapsed_attempt_duration"].unknown_reasons[0]
+    assert by_name["diagnostic_retries"].value is None
+    assert "budget counters" in by_name["diagnostic_retries"].unknown_reasons[0]

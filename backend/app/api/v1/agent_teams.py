@@ -2106,6 +2106,12 @@ async def update_github_scope(
             occurred_at=datetime.now(timezone.utc),
             actor=_audit.derive_actor(actor_kind="operator"),
             scope_id=scope.id,
+            context_snapshot={
+                "configured_provider": scope.github_auth_mode,
+                "observed_runtime_provider": None,
+                "repo_owner": scope.repo_owner,
+                "repo_name": scope.repo_name,
+            },
             before_values=_policy_before,
             after_values=_policy_after,
             sanitized_reason="scope configuration update",
