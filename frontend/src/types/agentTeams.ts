@@ -345,6 +345,7 @@ export interface GithubWorkItem {
   handoff_target_slot_id?: number | null
   approval_round_count: number
   dispatch_nonce?: string | null
+  ack_evidence_message_id?: number | null
   dispatch_head_ref?: string | null
   pr_number?: number | null
   retry_count: number

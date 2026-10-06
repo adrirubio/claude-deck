@@ -97,7 +97,7 @@ class WorkspaceProgressObserver:
                 executable, "--no-optional-locks", "--no-pager", "--no-replace-objects",
                 "-c", f"safe.directory={path}", "-c", "core.fsmonitor=false",
                 "-c", "core.hooksPath=/dev/null", "-C", path, *args,
-                env=env, stdout=asyncio.subprocess.PIPE,
+                    env=env, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
                 start_new_session=os.name == "posix",
             )
@@ -196,8 +196,14 @@ class WorkspaceProgressObserver:
                 (view / "refs").mkdir()
                 (view / "HEAD").write_text(local_sha + "\n", encoding="ascii")
                 (view / "config").write_text(
-                    "[core]\nrepositoryformatversion = 0\nbare = true\n", encoding="ascii")
+                    "[core]\nrepositoryformatversion = 0\nbare = true\ncommitGraph = false\n", encoding="ascii")
                 (view / "objects").symlink_to(common / "objects", target_is_directory=True)
+                types = await _gather(
+                    self._runner(str(view), ["cat-file", "-t", local_sha]),
+                    self._runner(str(view), ["cat-file", "-t", published_sha]),
+                )
+                if any(code or raw.strip() != b"commit" for code, raw in types):
+                    raise ProgressObservationError("published_object_unavailable")
                 code, raw = await self._runner(str(view), [
                     "rev-list", "--left-right", "--count", f"--max-count={_MAX_COMMITS + 1}",
                     f"{published_sha}...{local_sha}", "--",

@@ -993,7 +993,7 @@ function WorkItemDialog({
                   </div>
                 </dl>
               </div>
-              <WorkPublicationPanel item={item} ownerName={ownerName} />
+              <WorkPublicationPanel item={item} ownerName={ownerName} ownerActivity={ownerActivity} />
               <section className="space-y-3 rounded-lg border p-4" aria-labelledby="attempt-recovery-title">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
