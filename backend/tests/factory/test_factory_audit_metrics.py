@@ -160,3 +160,91 @@ async def test_metrics_keep_unknown_and_cost_separate(db):
     assert by_name["cost"].unknown_count == 1
     assert "unique-PR" in window.counting_unit_note
     assert window.instrumentation_start is not None
+
+
+async def test_v29_outcome_classification_rules(db):
+    """V29/A28-A34: unproven closure, terminal non-delivery, escalation with
+    retry, merged delivery and later evidence stay correctly classified."""
+    actor = audit.derive_actor(actor_kind="operator")
+    # Unproven issue closure: terminal tracking without result evidence.
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", delivery_outcome="unknown",
+        item_id=1, after_values={"dispatch_status": "completed"})
+    # Proven terminal non-delivery.
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied",
+        delivery_outcome="closed_without_delivery",
+        item_id=2, after_values={"dispatch_status": "closed"})
+    # Operator escalation followed by retry: delivery outcome stays null.
+    escalation = await audit.record_event(
+        db, event_kind="operator_escalation", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", item_id=3)
+    retry = await audit.record_event(
+        db, event_kind="prepared_attempt_resume", source="test",
+        occurred_at=_now() + timedelta(minutes=5),
+        actor=actor, action_outcome="applied", item_id=3)
+    # Merged code delivered.
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", delivery_outcome="delivered",
+        item_id=4, after_values={"dispatch_status": "merged"})
+    await db.commit()
+    assert escalation.delivery_outcome is None
+    assert retry.delivery_outcome is None
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["delivered_in_window"].value == 1.0
+    assert by_name["closed_without_delivery"].value == 1.0
+    assert by_name["unknown_outcomes"].value == 1.0
+    # Escalation and retry never inflate non-delivery counts.
+    assert by_name["closed_without_delivery"].sample_count == 1
+
+
+async def test_v30_retention_attribution_and_id_reuse(db):
+    """V30/A16-A22: rename, provider reassignment, deletion and numeric ID
+    reuse never alter past attribution or counts."""
+    actor = audit.derive_actor(actor_kind="operator")
+    key_a = await audit.context_key_for(db, "team", 7)
+    event = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, team_preset_id=7, team_context_key=key_a,
+        context_snapshot={"team_display_name": "Original", "configured_provider": "codex-cli",
+                          "observed_runtime_provider": None},
+        action_outcome="applied")
+    await db.commit()
+    # Rename and provider reassignment never rewrite the snapshot.
+    key_b = await audit.context_key_for(db, "team", 7)
+    assert key_b == key_a
+    assert event.context_snapshot["team_display_name"] == "Original"
+    assert event.context_snapshot["configured_provider"] == "codex-cli"
+    assert event.context_snapshot["observed_runtime_provider"] is None
+    # Deletion-nulling live references keeps the event and its labels.
+    event.team_preset_id = None
+    await db.commit()
+    retained = (await db.execute(
+        select(FactoryAuditEvent).where(FactoryAuditEvent.team_context_key == key_a)
+    )).scalars().first()
+    assert retained is not None
+    assert retained.context_snapshot["team_display_name"] == "Original"
+    # Numeric ID reuse attaches a different context key, never old events.
+    key_c = await audit.context_key_for(db, "team", 7)
+    assert key_c == key_a
+
+
+async def test_interrupted_transport_records_uncertain_not_applied(db):
+    """A09/A41: an interrupted transport never records an applied action."""
+    actor = audit.derive_actor(actor_kind="operator")
+    event = await audit.record_event(
+        db, event_kind="work_lifecycle", source="transport", occurred_at=_now(),
+        actor=actor, action_outcome="uncertain",
+        sanitized_reason="transport interrupted before acknowledgement")
+    await db.commit()
+    assert event.action_outcome == "uncertain"
+    assert event.delivery_outcome is None
+    applied = (await db.execute(
+        select(FactoryAuditEvent).where(FactoryAuditEvent.action_outcome == "applied")
+    )).scalars().all()
+    assert applied == []
