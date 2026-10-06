@@ -96,6 +96,29 @@ from app.services.github_approval_service import (
 from app.services.github_dispatch_scheduler import github_dispatch_scheduler
 from app.services.github_initial_approval_recovery import cancel_stranded_initial_approval
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
+
+
+async def _observe_resume_rejection(db, item_id: int | None, code: str) -> None:
+    """Record a rejected resume outcome in a fresh observation transaction.
+
+    Observation failure never masks the original refusal.
+    """
+    try:
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="prepared_attempt_resume",
+            source="github_dispatch_service.resume_prepared_attempt",
+            occurred_at=datetime.now(timezone.utc),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            item_id=item_id,
+            action_outcome="rejected",
+            sanitized_reason=code,
+            correlation_id=f"prepared-resume:{item_id}:{code}",
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
 from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_app_auth_service import (
     GithubAppAuthError,
@@ -875,6 +898,7 @@ async def report_dispatch_status(
                 target_slot_id=report.reassign_to_slot_id,
             )
         except ResumeAttemptError as exc:
+            await _observe_resume_rejection(db, report.work_item_id if hasattr(report, "work_item_id") else None, exc.block_code)
             status_code = 403 if exc.block_code == "not_item_owner" else 409
             raise HTTPException(status_code=status_code, detail=exc.block_code) from exc
     elif report.status == "handoff_accepted":
@@ -2527,6 +2551,7 @@ async def resume_github_work_item_attempt(
             reassign_to_slot_id=request.reassign_to_slot_id,
         )
     except ResumeAttemptError as exc:
+        await _observe_resume_rejection(db, work_item_id, exc.block_code)
         raise _conflict(str(exc), exc.block_code) from exc
     return await _reload_work_item_response(db, item.id)
 
@@ -2570,6 +2595,23 @@ async def abandon_github_work_item(
         item,
         "abandoned_by_operator",
         note=note,
+    )
+    # A06/A31: the abandon route records an operator escalation with its
+    # action outcome. delivery_outcome stays null: an escalation is never a
+    # terminal delivery outcome and later retries never inflate
+    # non-delivery counts.
+    from app.services import factory_audit_service as _audit
+    await _audit.record_event(
+        db,
+        event_kind="operator_escalation",
+        source="agent_teams.abandon_github_work_item",
+        occurred_at=datetime.now(timezone.utc),
+        actor=_audit.derive_actor(actor_kind="operator"),
+        item_id=item.id,
+        after_values={"status_note": "abandoned_by_operator"},
+        action_outcome="applied",
+        sanitized_reason=note,
+        correlation_id=f"operator-escalation:{item.id}:{item.updated_at.isoformat()}",
     )
     await db.commit()
     return await _reload_work_item_response(db, item.id)

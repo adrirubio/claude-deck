@@ -1290,6 +1290,22 @@ class GithubDispatchService:
             item.owner_slot_id = effective_owner_id
             item.routing_method = "operator_resume"
         item.updated_at = datetime.utcnow()
+        # A06/A08: the resume event commits in the same transaction as the
+        # resume. An audit-write failure rolls back the resume.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="prepared_attempt_resume",
+            source="github_dispatch_service.resume_prepared_attempt",
+            occurred_at=datetime.utcnow(),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            item_id=item.id,
+            after_values={"dispatch_status": item.dispatch_status,
+                          "owner_slot_id": item.owner_slot_id},
+            action_outcome="applied",
+            sanitized_reason="prepared attempt resumed",
+            correlation_id=f"prepared-resume:{item.id}:{item.updated_at.isoformat()}",
+        )
         await db.commit()
 
     def _build_instructions(
