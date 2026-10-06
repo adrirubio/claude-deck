@@ -126,6 +126,31 @@ class PartiallyPreparedAttempt(ValueError):
         super().__init__(f"work item {item_id} has a partial dispatch attempt: {detail}")
 
 
+async def observe_work_lifecycle(
+    db, *, item, from_status: str | None, to_status: str, source: str
+) -> None:
+    """Record one forward lifecycle transition with attempt identity.
+
+    The event is flushed in the caller's transaction and commits with the
+    transition. An audit-write failure surfaces and rolls back the change.
+    """
+    from app.services import factory_audit_service as _audit
+    await _audit.record_event(
+        db,
+        event_kind="work_lifecycle",
+        source=source,
+        occurred_at=datetime.utcnow(),
+        actor=_audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        item_id=item.id,
+        before_values={"dispatch_status": from_status} if from_status else None,
+        after_values={"dispatch_status": to_status,
+                      "active_scope_revision": item.active_scope_revision},
+        action_outcome="applied",
+        sanitized_reason=f"lifecycle transition to {to_status}",
+        correlation_id=f"lifecycle:{item.id}:{to_status}:{datetime.utcnow().isoformat()}",
+    )
+
+
 class ResumeAttemptError(ValueError):
     def __init__(self, block_code: str, detail: str):
         self.block_code = block_code
@@ -975,6 +1000,9 @@ class GithubDispatchService:
             tmux_target = getattr(launch_item, "tmux_target", None)
             if launch_status in _LAUNCH_FAILED_STATUSES:
                 item.dispatch_status = "failed"
+                await observe_work_lifecycle(
+                    db, item=item, from_status=None, to_status="failed",
+                    source="github_dispatch_service.launch")
                 if tmux_target is None:
                     try:
                         await github_workspace_service.release(db, item.id)
@@ -982,6 +1010,9 @@ class GithubDispatchService:
                         item.status_note = str(exc)
             else:
                 item.dispatch_status = "dispatched"
+                await observe_work_lifecycle(
+                    db, item=item, from_status=None, to_status="dispatched",
+                    source="github_dispatch_service.launch")
                 item.dispatched_at = datetime.utcnow()
                 pane_pid = getattr(launch_item, "pane_pid", None) or self._resolve_pane_pid(
                     tmux_target
