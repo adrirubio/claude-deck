@@ -26,6 +26,7 @@ from app.models.database import (
 )
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_verification_service import github_verification_service
+from app.services.github_check_observation import GithubCheckObservationError
 from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_app_auth_service import (
@@ -3394,3 +3395,76 @@ async def test_fresh_dispatch_retry_clears_verification_clock(db):
     await github_dispatch_service.reset_for_retry(db, item)
     assert item.verification_head_sha is None
     assert item.verification_started_at is None
+
+
+class _UnavailableChecksClient(_Client):
+    async def list_check_runs_for_ref(self, owner, repo, ref):
+        raise GithubCheckObservationError("observation_changed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["verifying", "ready_for_review"])
+async def test_ci_observation_error_keeps_budget_and_prevents_merge(db, state):
+    scope = await _scope(db, merge_policy="auto", max_verification_retries=2)
+    item = await _item(db, scope, dispatch_status=state, pr_number=5,
+                       retry_count=2, last_verified_sha="sha")
+    client = _UnavailableChecksClient()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == state
+    assert item.retry_count == 2
+    assert item.last_verified_sha == "sha"
+    assert item.auto_merged_at is None
+    assert item.escalation_reason is None
+    assert client.merge_calls == client.ready_calls == 0
+    assert "checks are unavailable" in item.status_note
+    assert not (await db.execute(select(MailMessage))).scalars().all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["diagnostic", "implementation"])
+async def test_ci_observation_error_preserves_continuation_authority(db, phase):
+    scope = await _scope(db)
+    slot, member = await _owner(db, scope)
+    state = "dispatched" if phase == "diagnostic" else "verifying"
+    item = await _item(db, scope, dispatch_status=state, pr_number=5,
+                       owner_slot_id=slot.id, dispatch_nonce="attempt-unavailable",
+                       active_scope_revision=1, attempt_phase=phase, retry_count=7)
+    helper = _diagnostic_revision if phase == "diagnostic" else _implementation_revision
+    revision, workspace = await helper(db, scope, item, slot, member)
+    authority = (revision.status, revision.failed_head_count, revision.evidence,
+                 workspace.lease_token, workspace.leased_item_id)
+    await github_verification_service.process_scope(db, scope, client=_UnavailableChecksClient())
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(workspace)
+    assert item.dispatch_status == state
+    assert item.retry_count == 7
+    assert item.diagnostic_retry_count == 0
+    assert (revision.status, revision.failed_head_count, revision.evidence,
+            workspace.lease_token, workspace.leased_item_id) == authority
+    assert "checks are unavailable" in item.status_note
+    assert not (await db.execute(select(MailMessage))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_ci_observation_error_does_not_stop_other_items(db):
+    scope = await _scope(db)
+    first = await _item(db, scope, dispatch_status="verifying", pr_number=5)
+    second = await _item(db, scope, issue_number=2, dispatch_status="verifying", pr_number=6)
+    class Client(_Client):
+        checks_calls = 0
+        async def get_pull(self, owner, repo, pr_number):
+            return {**self.pull, "number": pr_number}
+        async def list_check_runs_for_ref(self, owner, repo, ref):
+            self.checks_calls += 1
+            if self.checks_calls == 1:
+                raise GithubCheckObservationError("observation_limit")
+            return [{"name": "ci", "status": "completed", "conclusion": "success"}]
+    client = Client()
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(first)
+    await db.refresh(second)
+    assert first.dispatch_status == "verifying" and first.retry_count == 0
+    assert second.dispatch_status == "ready_for_review" and second.retry_count == 0
+    assert client.ready_calls == 1
