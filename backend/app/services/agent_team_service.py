@@ -660,6 +660,8 @@ class AgentTeamService:
         db: AsyncSession,
         preset_id: int,
         request: AgentTeamLaunchRequest | None = None,
+        *,
+        synchronize: bool = True,
     ) -> AgentTeamLaunchPlan:
         request = request or AgentTeamLaunchRequest()
         preset = await self._require_preset(db, preset_id)
@@ -669,7 +671,8 @@ class AgentTeamService:
             request.slot_ids,
             include_disabled=request.include_disabled,
         )
-        await agent_mail_service.sync_observed_sessions(db)
+        if synchronize:
+            await agent_mail_service.sync_observed_sessions(db)
         discovered = self._discover_sessions()
         install_status = await agent_mail_install_service.get_install_status()
         reuse_group_counts = self._reuse_group_counts(preset_slots)

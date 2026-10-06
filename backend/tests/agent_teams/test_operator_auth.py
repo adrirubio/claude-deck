@@ -190,6 +190,7 @@ def _routes(scope_id: int, workspace_id: int, item_id: int):
          {"name": "Auth bridge import"}),
         ("create-family-duplicate", "post", "/api/v1/agent-teams/presets/999999/duplicate",
          {"name": "Auth duplicate"}),
+        ("configuration-observation", "get", "/api/v1/agent-teams/configuration-observation", None),
     ]
     return [listing, force_release, cancel_active_continuation, abandon, *arming]
 

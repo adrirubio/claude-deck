@@ -141,6 +141,8 @@ function teamMatchesDraft(
   });
 }
 
+class SaveIntentChangedError extends Error {}
+
 function isDefiniteCreateNonWrite(cause: unknown) {
   // Scoped to create requests only. The create-route transaction contract is
   // proven by test_create_route_400_after_partial_work_persists_nothing: a 400
@@ -265,8 +267,11 @@ export function RepositorySetupPage() {
   }
 
   async function refreshConfiguration() {
-    // One bounded bulk observation. No per-preset request fan-out.
-    const observation = await fetchConfigurationObservation();
+    // One bounded bulk observation through the shared protected credential
+    // helper. No per-preset request fan-out. The route keeps operator
+    // authentication (R1).
+    const observation = await withOperatorToken((operatorToken) =>
+      fetchConfigurationObservation(operatorToken));
     setPresets(observation.presets);
     setScopes(observation.scopes);
     return { presets: observation.presets, scopes: observation.scopes, complete: observation.complete };
@@ -367,6 +372,7 @@ export function RepositorySetupPage() {
       } else {
         selected = null;
       }
+      let anyUncertainCreateAttempt = false;
       if (draft.teamMode === "new" && !selected) {
         const names = draft.workerNames.split("\n").map((name) => name.trim()).filter(Boolean);
         const allNames = [draft.leaderName.trim(), ...names];
@@ -388,16 +394,35 @@ export function RepositorySetupPage() {
           selected = await withOperatorToken((operatorToken) => {
             if (intentChanged()) {
               // Checked immediately before the create callback, including any
-              // credential-retry invocation of the same callback.
-              throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+              // credential-retry invocation of the same callback. This is a
+              // pre-send cancellation, not an uncertain transport outcome.
+              throw new SaveIntentChangedError("Inputs changed during the save. Review the saved records before continuing.");
             }
-            return createAgentTeamPreset(input, operatorToken);
+            return Promise.resolve(createAgentTeamPreset(input, operatorToken)).catch((cause: unknown) => {
+              if (!(cause instanceof SaveIntentChangedError) && !isDefiniteCreateNonWrite(cause)) {
+                anyUncertainCreateAttempt = true;
+              }
+              throw cause;
+            });
           });
-          setRecovery(null);
-        } catch (cause) {
-          if (isDefiniteCreateNonWrite(cause)) {
-            // A rejected non-write needs no latch. Safe correction or retry is allowed.
+          if (!anyUncertainCreateAttempt) {
             setRecovery(null);
+          }
+        } catch (cause) {
+          if (cause instanceof SaveIntentChangedError) {
+            // Pre-send cancellation: nothing was written. The request latch is
+            // cleared only when every attempted create is a proven non-write.
+            if (!anyUncertainCreateAttempt) {
+              setRecovery(null);
+            }
+            throw cause;
+          }
+          if (isDefiniteCreateNonWrite(cause)) {
+            // A rejected non-write clears the latch only when no earlier attempt
+            // remains uncertain.
+            if (!anyUncertainCreateAttempt) {
+              setRecovery(null);
+            }
             throw cause;
           }
           await reconcileUnknown("team", undefined, { draft: { ...draft }, routing: { ...slotRouting } });
@@ -443,21 +468,41 @@ export function RepositorySetupPage() {
           savedScope = await withOperatorToken((operatorToken) => {
             if (intentChanged()) {
               // Checked immediately before the scope create callback, including
-              // any credential-retry invocation of the same callback.
-              throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+              // any credential-retry invocation of the same callback. This is a
+              // pre-send cancellation, not an uncertain transport outcome.
+              throw new SaveIntentChangedError("Inputs changed during the save. Review the saved records before continuing.");
             }
-            return createTeamGithubScope(selected.id, {
+            return Promise.resolve(createTeamGithubScope(selected.id, {
             repo_owner: draft.owner.trim(), repo_name: draft.repo.trim(), repo_path: draft.path.trim(),
             dispatch_label: draft.dispatch.trim(), design_label: draft.design.trim(), merge_policy: "human",
             max_approval_rounds: 3, max_concurrent_dispatched: 1, max_verification_retries: 1,
             max_auto_merges_per_day: 0, base_ref: draft.baseRef.trim(), github_auth_mode: draft.authMode === "github_app" ? "app" : "ambient",
             builds_out_of_tree: false, max_build_parallelism: 1, enabled: false,
-          }, operatorToken);
+          }, operatorToken)).catch((cause: unknown) => {
+            if (!(cause instanceof SaveIntentChangedError) && !isDefiniteCreateNonWrite(cause)) {
+              anyUncertainCreateAttempt = true;
+            }
+            throw cause;
           });
-          setRecovery(null);
-        } catch (cause) {
-          if (isDefiniteCreateNonWrite(cause)) {
+          });
+          if (!anyUncertainCreateAttempt) {
             setRecovery(null);
+          }
+        } catch (cause) {
+          if (cause instanceof SaveIntentChangedError) {
+            // Pre-send cancellation: nothing was written. The request latch is
+            // cleared only when every attempted create is a proven non-write.
+            if (!anyUncertainCreateAttempt) {
+              setRecovery(null);
+            }
+            throw cause;
+          }
+          if (isDefiniteCreateNonWrite(cause)) {
+            // A rejected non-write clears the latch only when no earlier attempt
+            // remains uncertain.
+            if (!anyUncertainCreateAttempt) {
+              setRecovery(null);
+            }
             throw cause;
           }
           await reconcileUnknown("scope", selected.id, { draft: { ...draft }, routing: { ...slotRouting } });

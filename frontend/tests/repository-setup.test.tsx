@@ -69,26 +69,32 @@ describe("guided repository setup", () => {
     });
   });
 
-  it("asks for an operator token before preflight when no token is stored", async () => {
-    mocks.getOperatorToken.mockReturnValue(null);
+  it("asks for an operator token before the first protected read when none is stored", async () => {
+    let stored: string | null = null;
+    mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
     mocks.apiClient.mockResolvedValue({
       status: "ready", observed_at: "2026-10-05T00:00:00Z", checks: {},
     });
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
 
-    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
-    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
-    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
-    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
-
+    // The bounded configuration observation is operator-protected (R1): the
+    // shared credential helper prompts before the first protected read.
     const dialog = await screen.findByRole("dialog");
     const tokenInput = within(dialog).getByPlaceholderText("Enter secret value");
+    expect(mocks.fetchConfigurationObservation).not.toHaveBeenCalled();
     expect(mocks.apiClient).not.toHaveBeenCalled();
     fireEvent.change(tokenInput, { target: { value: "fixture-token" } });
     fireEvent.click(screen.getByRole("button", { name: "Use token" }));
 
-    await waitFor(() => expect(mocks.apiClient).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.fetchConfigurationObservation).toHaveBeenCalledTimes(1));
     expect(mocks.setOperatorToken).toHaveBeenCalledWith("fixture-token");
+
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    await waitFor(() => expect(mocks.apiClient).toHaveBeenCalledTimes(1));
   });
 
   it("discards a preflight response when the checked draft changes", async () => {
@@ -1081,37 +1087,35 @@ describe("guided repository setup", () => {
   it("blocks page input while the operator-token prompt is open (V21 unreachability)", async () => {
     let stored: string | null = null;
     mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.clearOperatorToken.mockImplementation(() => { stored = null; });
     mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
     mockReadyPreflightAndRoster();
     mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
     mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
     mocks.createAgentTeamPreset.mockResolvedValue(teamFixture(false));
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+
+    // The credential prompt is modal: page inputs are inaccessible while it is
+    // open, so changed inputs during any credential wait are unreachable. The
+    // live-intent checks remain as defense in depth.
+    const dialog = await screen.findByRole("dialog");
+    expect(screen.queryByRole("button", { name: "Check access and labels" })).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "mount-token" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+
+    // With unchanged inputs the flow continues normally.
     fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
     fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
     fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "preflight-token" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
     fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
     fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
     fireEvent.click(screen.getByLabelText(/Save configuration only/));
-    stored = null;
     fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
-    const saveDialog = await screen.findByRole("dialog");
-
-    // The credential prompt is modal: page inputs are inaccessible while it is
-    // open, so changed inputs during the credential wait are unreachable. The
-    // live-intent checks remain as defense in depth.
-    expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
-    fireEvent.change(within(saveDialog).getByPlaceholderText("Enter secret value"), { target: { value: "save-token" } });
-    fireEvent.click(within(saveDialog).getByRole("button", { name: "Use token" }));
-
-    // With unchanged inputs the save continues normally.
     await screen.findByText(/Saved configuration/);
     expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
   });
@@ -1155,6 +1159,96 @@ describe("guided repository setup", () => {
     expect(screen.queryByText(/Saved configuration/)).not.toBeInTheDocument();
   });
 
+  it("cancels the team-create retry in pre-send after a delayed 401 and changed draft (V21)", async () => {
+    let stored: string | null = "synthetic-operator";
+    mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.clearOperatorToken.mockImplementation(() => { stored = null; });
+    mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    let rejectCreate: ((cause: unknown) => void) | undefined;
+    mocks.createAgentTeamPreset.mockImplementation(() => new Promise((_resolve, reject) => { rejectCreate = reject; }));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await waitFor(() => expect(rejectCreate).toBeDefined());
+
+    // The draft changes while the create is in flight; the delayed 401 then
+    // triggers the replacement credential.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Dispatch label"), { target: { value: "changed-before-401" } });
+    rejectCreate?.(new mocks.ApiHttpError("The operator token was rejected.", 401));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "replacement-token" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+
+    // The retry is a pre-send cancellation: nothing was sent and no uncertain
+    // latch is raised.
+    await screen.findByText(/Inputs changed during the save/);
+    expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Reconcile uncertain create/)).not.toBeInTheDocument();
+    expect(mocks.createTeamGithubScope).not.toHaveBeenCalled();
+  });
+
+  it("cancels the scope-create retry in pre-send after a delayed 401 and changed draft (V21)", async () => {
+    let stored: string | null = "synthetic-operator";
+    mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.clearOperatorToken.mockImplementation(() => { stored = null; });
+    mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    mocks.createAgentTeamPreset.mockResolvedValue(teamFixture(false));
+    let rejectScope: ((cause: unknown) => void) | undefined;
+    mocks.createTeamGithubScope.mockImplementation(() => new Promise((_resolve, reject) => { rejectScope = reject; }));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await waitFor(() => expect(rejectScope).toBeDefined());
+
+    // The draft changes while the scope create is in flight; the delayed 401
+    // then triggers the replacement credential.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Dispatch label"), { target: { value: "changed-before-401" } });
+    rejectScope?.(new mocks.ApiHttpError("The operator token was rejected.", 401));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("Enter secret value"), { target: { value: "replacement-token" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+
+    await screen.findByText(/Inputs changed during the save/);
+    expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Reconcile uncertain create/)).not.toBeInTheDocument();
+  });
+
   it("re-prompts through the shared credential helper after a 401 create (V20)", async () => {
     let stored: string | null = "synthetic-operator";
     mocks.getOperatorToken.mockImplementation(() => stored);
@@ -1167,6 +1261,8 @@ describe("guided repository setup", () => {
     mocks.createAgentTeamPreset
       .mockRejectedValueOnce(new mocks.ApiHttpError("The operator token was rejected.", 401))
       .mockResolvedValue(team);
+    mocks.createTeamGithubScope.mockResolvedValue(
+      scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready"));
     render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
     fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
