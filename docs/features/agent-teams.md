@@ -52,6 +52,27 @@ They must link detailed evidence below the summary. A comment alone does not mee
 Deck supplies this rule in launch and Agent Mail context, work instructions, and review notifications.
 These instructions do not prove summary quality or replace independent review and the configured merge policy.
 
+## Work Remaining
+
+The progress view shows three short lines:
+
+- **Remaining:** The tasks and decisions that still need work.
+- **Estimate:** A range of active effort, with confidence and scope, or **Unknown**.
+- **Next:** The next actor and action.
+
+The owner supplies the estimate. The Leader calls `deck_prepare_work_remaining_summary` after a safe published checkpoint or review handoff.
+The Leader places the returned block near the start of the main issue and PR. Keep the other issue facts and action records.
+The tool formats the block. It does not write to GitHub. Use existing authorized GitHub access.
+
+An estimate excludes waiting for another actor. It is not a promised finish time.
+Do not infer completion from commits, elapsed time, or passing tests. State the unit and scope of any count.
+Put completed work and estimate assumptions in the optional detail fields. The UI keeps them in a closed disclosure.
+
+The report names its author, update time, and source checkpoint. It expires after two hours.
+A changed item, dispatch, owner, scope revision, published source, or phase makes it historical.
+When Deck cannot confirm the source or find a current report, it shows **Unknown** and the current next action.
+Refresh the block after changes or review corrections. A team report does not clear approval, review, CI, merge, or milestone gates.
+
 ## Reported Human Decisions
 
 The **Human actions and decision gates** section appears above the Roster and Autonomy tabs.

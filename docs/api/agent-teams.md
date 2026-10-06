@@ -146,6 +146,34 @@ Use `deck_prepare_operator_action_contexts(scope_id, entries)` for intended Lead
 Use `deck_get_operator_action_contexts(preset_id)` for automatic dispatch review and recovery requests.
 The latter reads `human-actions?include_templates=true`. Ordinary UI reads omit templates to keep responses small.
 
+### Work remaining reports
+
+`GET /api/v1/agent-teams/github-work-items/{item_id}/progress` includes `remaining_work`.
+The view contains three short fields: `remaining`, `estimate`, and `next_action`.
+It includes report state, author, time, source SHA, and optional completed work and assumptions.
+The ordinary progress read makes no GitHub writes and changes no dispatch authority.
+
+The current Leader uses `deck_prepare_work_remaining_summary` to prepare a report.
+The tool reads `/github-work-items/{item_id}/remaining-work-context` with its Agent Mail capability.
+That route requires the current Leader for this item's scope. It checks the Leader again after asynchronous observations.
+An unavailable published source returns `progress_context_unavailable`. It does not create a report for an unconfirmed checkpoint.
+
+Tool inputs are `work_item_id`, `remaining`, and `next_action`.
+For a time estimate, supply ordered `effort_low_minutes` and `effort_high_minutes`, `confidence`, and `effort_scope`.
+Use `low`, `medium`, or `high` confidence. Omit both bounds for **Unknown**.
+Optional `completed` and `assumptions` fields belong in report details.
+Text fields are bounded plain text. Private values, markup, raw logs, and completion percentages are invalid.
+
+Publish the exact returned block in the main issue through existing authorized GitHub access.
+Copy it to the PR when requesting review. Replace only that block and keep other facts.
+The read path accepts one marked, validated block from the exact expected GitHub issue endpoint.
+It caches only the sanitized report, not the issue body.
+
+The report must match item, dispatch, owner, scope revision, source SHA, and phase.
+It becomes historical after a mismatch or two hours. A missing, invalid, or unavailable report has no current estimate.
+The UI shows an explicit **Unknown** and retains the authoritative next action.
+Reports remain advisory. They do not grant execution, recovery, approval, review, merge, or milestone authority.
+
 ### Publication sequence
 
 1. Prepare the intended records. Keep the generated metadata, headings, and labels.

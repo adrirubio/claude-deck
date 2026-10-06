@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { apiClient } from '@/lib/api'
 import type { AgentActivityObservation, GithubWorkItem } from '@/types/agentTeams'
+import { WorkRemainingSummary, validRemainingWork } from './WorkRemainingSummary'
+import type { RemainingWork } from './WorkRemainingSummary'
 
 type Publication = {
   state: 'current' | 'historical' | 'unavailable'
@@ -30,6 +32,7 @@ type Progress = {
   next_poll_expected_at: string | null
   last_check_head: string | null
   publication: Publication
+  remaining_work?: RemainingWork
 }
 
 const phases: Record<string, string> = {
@@ -76,6 +79,7 @@ function valid(data: Progress, itemId: number, nonce: string | null, owner: numb
       .every((sha) => sha === null || typeof sha === 'string' && /^[0-9a-f]{40}$/.test(sha))
     && [publication.unpublished_commits, publication.tracked_changes, publication.untracked_files]
       .every((count) => count === null || Number.isSafeInteger(count) && count >= 0)
+    && (data.remaining_work === undefined || validRemainingWork(data.remaining_work))
 }
 
 type PanelProps = {
@@ -177,6 +181,8 @@ function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
       <p className="text-sm"><span className="font-medium">{current ? 'Phase' : 'Previous phase'}:</span> {phases[data.phase] ?? 'Unknown'}
         {' · '}{current ? 'Next actor' : 'Previous actor'}: {actors[data.next_actor]}</p>
       <p className="text-sm">{current ? data.next_action : `Previous next action: ${data.next_action}`}</p>
+      <WorkRemainingSummary report={data.remaining_work} current={current} complete={data.phase === 'complete'}
+        nextAction={data.next_action} item={item} />
       <p className="text-sm font-medium">{summary}</p>
       <p className="text-xs text-muted-foreground">File-change counts are unavailable in this metadata read. Matching commits do not establish that the workspace has no edits.</p>
       {publication?.reason && <p className="text-sm text-muted-foreground">{reasons[publication.reason] ?? 'The observation is incomplete.'}</p>}

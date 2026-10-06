@@ -12,6 +12,40 @@ def test_mcp_shim_imports_without_app_package_dependency():
     assert callable(shim.deck_whoami)
 
 
+def test_remaining_summary_uses_authenticated_context_and_makes_no_writes(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    from mcp_shim.work_remaining_protocol import parse_report
+    requests = []
+    context = dict(work_item_id=7, dispatch_nonce="dispatch", owner_slot_id=2,
+                   scope_revision=0, source_sha="a" * 40, phase="implementation")
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    monkeypatch.setitem(shim._state, "member_id", 3)
+    def read(method, path, **kwargs):
+        requests.append((method, path, kwargs))
+        return {"ok": True, "data": {"remaining_work_context": context, "remaining_work": {"source_url": "https://github.com/o/r/issues/7#work-remaining"}}}
+    monkeypatch.setattr(shim, "_team_request", read)
+    result = shim.deck_prepare_work_remaining_summary(7, "Fix the interface, then review and merge.", "B2 publishes the next checkpoint.")
+    assert result["ok"]
+    parsed = parse_report(result["body_markdown"])
+    assert parsed.work_item_id == 7 and parsed.reported_by == "Team member 3" and parsed.estimate() == "Unknown."
+    assert requests == [("GET", "/github-work-items/7/remaining-work-context", {})]
+    invalid = shim.deck_prepare_work_remaining_summary(7, "token=private", "Publish.")
+    assert invalid["error"]["code"] == "invalid_remaining_summary" and "private" not in str(invalid)
+    monkeypatch.setattr(shim, "_team_request", lambda *_: {"ok": True, "data": {"remaining_work_context": None}})
+    assert shim.deck_prepare_work_remaining_summary(7, "Corrections.", "Publish.")["error"]["code"] == "progress_context_unavailable"
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": False, "error": {"code": "session_token_stale"}})
+    assert shim.deck_prepare_work_remaining_summary(7, "Corrections.", "Publish.")["error"]["code"] == "session_token_stale"
+
+
+def test_remaining_guidance_applies_to_each_member_writing_style():
+    from app.services.team_communication_policy import team_communication_guidance
+    for controlled in (True, False):
+        text = team_communication_guidance(controlled)
+        assert "three short lines: Remaining, Estimate, Next" in text
+        assert "The owner supplies the estimate" in text
+        assert "satisfies no approval, review, CI or milestone gate" in text
+
+
 def test_backlog_assessment_forwards_optional_private_snapshot_token(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
