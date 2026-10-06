@@ -259,6 +259,22 @@ class AgentTeamService:
                 ))
                 if leader.scalar_one_or_none() is None:
                     raise ValueError("leader_assignment_required")
+            # C09: team autonomy policy changes persist their event in the
+            # same transaction. An audit-write failure rolls back the change.
+            from app.services import factory_audit_service as _audit
+            await _audit.record_event(
+                db,
+                event_kind="policy_change",
+                source="agent_team_service.set_autonomy",
+                occurred_at=datetime.utcnow(),
+                actor=_audit.derive_actor(actor_kind="operator"),
+                team_preset_id=preset.id,
+                before_values={"autonomy_enabled": preset.autonomy_enabled},
+                after_values={"autonomy_enabled": autonomy_enabled},
+                sanitized_reason="team autonomy policy change",
+                action_outcome="applied",
+                correlation_id=f"policy:autonomy:{preset.id}:{int(autonomy_enabled)}",
+            )
             preset.autonomy_enabled = autonomy_enabled
         preset.updated_at = datetime.utcnow()
         await db.commit()

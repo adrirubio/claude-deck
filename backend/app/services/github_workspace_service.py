@@ -698,7 +698,7 @@ class GithubWorkspaceService:
                         event_kind="workspace_release",
                         source="github_workspace_service._release_acquisition",
                         occurred_at=datetime.utcnow(),
-                        actor=_audit.derive_actor(actor_kind="operator"),
+                        actor=_audit.derive_actor(actor_kind=actor_kind),
                         scope_id=scope_id,
                         item_id=item_id,
                         action_outcome="rejected",
@@ -776,7 +776,7 @@ class GithubWorkspaceService:
                     event_kind="workspace_release",
                     source="github_workspace_service._release_acquisition",
                     occurred_at=datetime.utcnow(),
-                    actor=_audit.derive_actor(actor_kind="operator"),
+                    actor=_audit.derive_actor(actor_kind=actor_kind),
                     scope_id=scope_id,
                     item_id=item_id,
                     action_outcome="applied",
@@ -867,7 +867,8 @@ class GithubWorkspaceService:
         ).scalar_one_or_none()
 
     async def release_by_token(
-        self, db: AsyncSession, item_id: int, *, lease_token: str
+        self, db: AsyncSession, item_id: int, *, lease_token: str,
+        actor_kind: str = "member",
     ) -> bool:
         """Release only the workspace acquisition named by the token.
 
@@ -896,6 +897,7 @@ class GithubWorkspaceService:
         self,
         db: AsyncSession,
         item_id: int,
+        actor_kind: str = "member",
         *,
         lease_token: str,
         workspace_id: int,

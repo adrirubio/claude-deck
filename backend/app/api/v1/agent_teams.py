@@ -1425,6 +1425,9 @@ async def cancel_github_work_item_initial_approval(
             dispatch_nonce=request.dispatch_nonce,
             reason=request.reason,
         )
+        await _observe_recovery_cancellation(
+            db, item_id=item_id, revision_id=None, request_id=request_id,
+            outcome="applied", reason="stranded initial approval cancelled")
         return _approval_authority_response(approval)
     except GithubApprovalError as exc:
         await db.rollback()
