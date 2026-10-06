@@ -17,7 +17,8 @@ function fixture() {
     handlers.set(name, callback)
     return () => handlers.delete(name)
   } } as unknown as ExtensionAPI
-  const ctx = { cwd: root, sessionManager: manager } as unknown as ExtensionContext
+  let idle = true
+  const ctx = { cwd: root, sessionManager: manager, isIdle: () => idle } as unknown as ExtensionContext
   const recorder = registerNativeActivity(pi)
   let owned = true
   const emit = (name: string, event: Record<string, unknown> = {}) => {
@@ -29,7 +30,8 @@ function fixture() {
   const read = () => JSON.parse(readFileSync(marker, 'utf8'))
   return { root, manager, pane, handlers, ctx, emit, marker, read, recorder,
     setOwned: (value: boolean) => { owned = value },
-    close: () => rmSync(root, { recursive: true, force: true }) }
+    setIdle: (value: boolean) => { idle = value },
+    close: () => { recorder.stop(); rmSync(root, { recursive: true, force: true }) } }
 }
 
 test('a first pending turn has exact native SDK identity before Pi flushes a file', () => {
@@ -218,4 +220,54 @@ test('a callback from an old session cannot stop the current native run', () => 
     f.handlers.get('agent_settled')?.({} as never, stale)
     assert.equal(f.read().state, 'working')
   } finally { f.close() }
+})
+
+test('UI prompt completion is distinct from SDK agent settlement', () => {
+  const f = fixture()
+  try {
+    f.emit('session_start')
+    f.emit('ui_prompt_start')
+    f.emit('ui_prompt_end')
+    assert.equal(f.read().state, 'idle')
+    assert.equal(f.read().event_source, 'ui_prompt_end')
+    const inputEvent = f.read().event_id
+    f.emit('agent_start')
+    f.emit('message_end', { message: { role: 'assistant', stopReason: 'stop' } })
+    f.emit('agent_settled')
+    assert.equal(f.read().event_source, 'agent_settled')
+    assert.notEqual(f.read().event_id, inputEvent)
+    assert.match(f.read().event_id, /^[0-9a-f-]{36}$/)
+  } finally { f.close() }
+})
+
+test('idle attestation reads SDK state and preserves the actual settlement identity', () => {
+  const f = fixture()
+  const oldNow = Date.now
+  let now = oldNow()
+  Date.now = () => now
+  try {
+    f.emit('session_start')
+    f.emit('agent_start')
+    f.emit('agent_settled')
+    const event = f.read()
+    now += 600000
+    f.recorder.attest()
+    const fresh = f.read()
+    assert.equal(fresh.event_id, event.event_id)
+    assert.equal(fresh.observed_at, event.observed_at)
+    assert.equal(fresh.attestation_source, 'sdk_idle')
+    assert.notEqual(fresh.attested_at, event.attested_at)
+    f.setIdle(false)
+    now += 15000
+    f.recorder.attest()
+    assert.equal(f.read().attested_at, fresh.attested_at)
+    f.setIdle(true)
+    f.emit('ui_prompt_start')
+    const input = f.read()
+    now += 15000
+    f.recorder.attest()
+    assert.equal(f.read().attested_at, input.attested_at)
+    f.setOwned(false)
+    assert.doesNotThrow(() => f.recorder.attest())
+  } finally { Date.now = oldNow; f.close() }
 })

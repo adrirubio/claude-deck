@@ -115,3 +115,18 @@ class OperatorActionContextPreparation(BaseModel):
         if len({e.issue_number for e in self.entries}) != len(self.entries):
             raise ValueError("Issue entries must be unique")
         return self
+
+
+class OwnerFollowupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: int = Field(gt=0, strict=True)
+    action: Literal["watch", "assess"]
+    reason: Literal["unfinished_authorized_work", "next_action_arranged", "blocked", "complete"]
+    expected_sequence: int = Field(ge=0, strict=True)
+    followup_token: str = Field(min_length=1, max_length=2048)
+
+    @model_validator(mode="after")
+    def reason_for_action(self):
+        if (self.action == "watch") != (self.reason == "unfinished_authorized_work"):
+            raise ValueError("Use unfinished_authorized_work only to register a watch")
+        return self

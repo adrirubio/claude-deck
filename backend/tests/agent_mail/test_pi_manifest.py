@@ -27,6 +27,7 @@ def test_manifest_matches_real_mcp_tools_without_registration(sync_module, monke
     assert path.read_text() == expected
     for name in (
         "deck_get_backlog_coordination", "deck_report_backlog_assessment",
+        "deck_report_owner_followup",
         "deck_get_operator_action_contexts", "deck_prepare_operator_action_contexts",
     ):
         assert f'"name": "{name}"' in expected
