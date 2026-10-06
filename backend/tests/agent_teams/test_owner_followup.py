@@ -6,12 +6,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 
 from test_github_coordination import team  # Reuse the isolated coordination seed.
 from app.models.coordination import OwnerFollowupRequest
 from app.models.database import (
-    AgentPaneBinding, GithubOwnerFollowup, GithubWorkItem, MailAgentSession, MailMessage, MailReceipt, TeamGithubScope,
+    AgentPaneBinding, AgentTeamPreset, GithubApprovalRequest, GithubOwnerFollowup, GithubWorkItem,
+    GithubWorkspace, MailAgentSession, MailMessage, MailReceipt, TeamGithubScope,
 )
 from app.services.agent_activity_service import PrivateActivity
 from app.services.agent_mail_service import MailWakeError, agent_mail_service
@@ -580,3 +581,156 @@ async def test_fresh_sdk_idle_attestation_preserves_busy_leader_debt(db, watched
     assert (await row(db, watched)).state == "delivered"
     assert (await row(db, watched)).sequence == 1
     assert await count_notices(db) == 1
+
+
+@pytest.mark.asyncio
+async def test_v17_migrated_valid_authority_runs_full_followup_flow(db, watched):
+    """V17: mapped legacy migration fixture preserves authority through the real
+    followup consumers: context, requests, report, assess, poll and guarded
+    delivery, with refusal while authority is disabled."""
+    from app.database import _run_sqlite_compat_migrations
+
+    preset_id = watched.preset.id
+    scope_id = watched.scope_id
+    leader_slot_id = watched.leader.team_slot_id
+    owner_slot_id = watched.item.owner_slot_id
+    item_id = watched.item.id
+    approval_id = watched.approval.id
+    lease_id = watched.lease.id
+    leader_session_id = watched.leader.id
+    owner_session_id = watched.owner.id
+
+    async def authority_snapshot():
+        slots = [dict(row) for row in (await db.execute(text(
+            "SELECT id, position, enabled, preset_id FROM agent_team_slots WHERE preset_id = :p ORDER BY id"
+        ), {"p": preset_id})).mappings().all()]
+        members = [dict(row) for row in (await db.execute(text(
+            "SELECT id, team_preset_id, team_slot_id, participant_kind FROM mail_team_members "
+            "WHERE team_preset_id = :p ORDER BY id"), {"p": preset_id})).mappings().all()]
+        items = [dict(row) for row in (await db.execute(text(
+            "SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id, handoff_target_slot_id, "
+            "ack_approver_member_id, ack_evidence_message_id, active_scope_revision, approval_round_count "
+            "FROM github_work_items WHERE id = :i"), {"i": item_id})).mappings().all()]
+        approvals = [dict(row) for row in (await db.execute(text(
+            "SELECT id, work_item_id, owner_member_id, leader_member_id, status FROM github_approval_requests "
+            "WHERE id = :a"), {"a": approval_id})).mappings().all()]
+        workspaces = [dict(row) for row in (await db.execute(text(
+            "SELECT id, scope_id, leased_item_id, lease_token, leased_owner_pid, leased_owner_proc_start "
+            "FROM github_workspaces WHERE id = :w"), {"w": lease_id})).mappings().all()]
+        revisions = [dict(row) for row in (await db.execute(text(
+            "SELECT id, work_item_id, owner_slot_id, owner_member_id, status "
+            "FROM github_attempt_scope_revisions WHERE work_item_id = :i"), {"i": item_id})).mappings().all()]
+        preset_row = dict((await db.execute(text(
+            "SELECT id, autonomy_enabled, leader_slot_id FROM agent_team_presets WHERE id = :p"), {"p": preset_id}
+        )).mappings().one())
+        return {"slots": slots, "members": members, "items": items, "approvals": approvals,
+                "workspaces": workspaces, "revisions": revisions, "preset": preset_row}
+
+    before = await authority_snapshot()
+    assert before["preset"]["leader_slot_id"] == leader_slot_id
+
+    # Valid migration equivalence on a tied legacy roster.
+    await db.execute(text("UPDATE agent_team_slots SET position = 0 WHERE preset_id = :p"), {"p": preset_id})
+    await db.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
+    await db.commit()
+    await _run_sqlite_compat_migrations(await db.connection())
+    await db.rollback()
+    db.expire_all()
+    migrated = await db.get(AgentTeamPreset, preset_id, populate_existing=True)
+    assert migrated.leader_slot_id == leader_slot_id
+
+    # Reorder the Leader away from first position. Repeated startup preserves
+    # the explicit assignment.
+    await db.execute(text(
+        "UPDATE agent_team_slots SET position = CASE id WHEN :leader THEN 1 ELSE 0 END WHERE preset_id = :p"
+    ), {"leader": leader_slot_id, "p": preset_id})
+    await db.commit()
+    await _run_sqlite_compat_migrations(await db.connection())
+    await db.rollback()
+    db.expire_all()
+    migrated = await db.get(AgentTeamPreset, preset_id, populate_existing=True)
+    assert migrated.leader_slot_id == leader_slot_id
+
+    # Real consumer refusal while the Leader slot is disabled.
+    await db.execute(text("UPDATE agent_team_slots SET enabled = 0 WHERE id = :leader"), {"leader": leader_slot_id})
+    await db.commit()
+    with pytest.raises(CoordinationError) as refused_disabled:
+        await service.context(db, scope_id, item_id, {})
+    assert refused_disabled.value.code == "leader_unavailable"
+
+    # All-disabled roster on the owner-bearing seed rejects safely too.
+    await db.execute(text("UPDATE agent_team_slots SET enabled = 0 WHERE preset_id = :p"), {"p": preset_id})
+    await db.commit()
+    with pytest.raises(CoordinationError) as refused_all:
+        await service.context(db, scope_id, item_id, {})
+    assert refused_all.value.code == "leader_unavailable"
+
+    # Repeated startup with a disabled roster preserves every authority reference.
+    await _run_sqlite_compat_migrations(await db.connection())
+    await db.rollback()
+    db.expire_all()
+    disabled_refs = await authority_snapshot()
+    assert disabled_refs["items"] == before["items"]
+    assert disabled_refs["approvals"] == before["approvals"]
+    assert disabled_refs["workspaces"] == before["workspaces"]
+    assert disabled_refs["revisions"] == before["revisions"]
+    assert disabled_refs["members"] == before["members"]
+    await db.execute(text("UPDATE agent_team_slots SET enabled = 1 WHERE preset_id = :p"), {"p": preset_id})
+    await db.commit()
+
+    # Reattach fresh rows and run the real consumers with synthetic observations
+    # and synthetic transport.
+    fresh_values = dict(vars(watched))
+    fresh_values.update(
+        preset=await db.get(AgentTeamPreset, preset_id, populate_existing=True),
+        item=await db.get(GithubWorkItem, item_id, populate_existing=True),
+        approval=await db.get(GithubApprovalRequest, approval_id, populate_existing=True),
+        lease=await db.get(GithubWorkspace, lease_id, populate_existing=True),
+        leader=await db.get(MailAgentSession, leader_session_id, populate_existing=True),
+        owner=await db.get(MailAgentSession, owner_session_id, populate_existing=True),
+    )
+    fresh = SimpleNamespace(**fresh_values)
+    value = await read(db, fresh)
+    call = request(value)
+    await service.report(db, scope_id, fresh.leader, call)
+    context_value, _authority, context_leader, context_owner, context_item, _policy = await service.context(
+        db, scope_id, item_id, fresh.activities)
+    assert context_value["leader_session"] == leader_session_id
+    assert context_value["owner_session"] == owner_session_id
+    assert context_leader.member_id == fresh.leader.member_id
+    assert context_owner.member_id == fresh.owner.member_id
+    assert context_item.id == item_id
+    assert {row["id"] for row in context_value["roster"]} == {leader_slot_id, owner_slot_id}
+
+    settle(fresh)
+    await service.poll(db, scope_id)
+    assert fresh.native_wake.await_count >= 1
+    delivered = await db.get(GithubOwnerFollowup, item_id, populate_existing=True)
+    assert delivered.state == "delivered"
+
+    # Real event assessment report path with the resulting disposition. The
+    # delivery receipt must be read before the assessment is accepted.
+    await db.execute(update(MailReceipt).where(MailReceipt.message_id == delivered.message_id)
+                     .values(read_at=datetime.utcnow()))
+    await db.commit()
+    value_after = await read(db, fresh)
+    await service.report(db, scope_id, fresh.leader, request(value_after, "assess", "complete"))
+    watch_row = await db.get(GithubOwnerFollowup, item_id, populate_existing=True)
+    assert watch_row.state == "assessed"
+    assert watch_row.outcome == "complete"
+
+    # Every authority identity is unchanged through the whole flow.
+    after = await authority_snapshot()
+    assert after["preset"]["leader_slot_id"] == leader_slot_id
+    assert after["members"] == before["members"]
+    assert after["items"] == before["items"]
+    assert after["approvals"] == before["approvals"]
+    assert after["workspaces"] == before["workspaces"]
+    assert after["revisions"] == before["revisions"]
+    # Slot identities and team bindings are unchanged. Positions changed only by
+    # the deliberate reorder: the Leader sits away from first position.
+    binding_before = {row["id"]: row["preset_id"] for row in before["slots"]}
+    binding_after = {row["id"]: row["preset_id"] for row in after["slots"]}
+    assert binding_after == binding_before
+    positions = {row["id"]: row["position"] for row in after["slots"]}
+    assert positions[leader_slot_id] == 1 and positions[owner_slot_id] == 0

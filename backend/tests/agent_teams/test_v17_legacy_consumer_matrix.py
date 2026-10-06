@@ -8,6 +8,7 @@ from app.database import Base, _run_sqlite_compat_migrations
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubBacklogCoordination,
     GithubWorkItem,
     GithubWorkspace,
     TeamGithubScope,
@@ -479,5 +480,27 @@ async def test_v17_cold_start_monitor_selection_preserves_authority_on_invalid_a
                 "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE status = 'active'"
             ))).scalar_one()
             assert leader_actions == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_v17_completion_watch_refuses_invalid_assignment(monkeypatch):
+    """V17: the completion-watch Leader consumer fails closed on migrated stores."""
+    from app.services.github_owner_followup_service import github_owner_followup_service
+
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    engine = await _migrated_store()
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            # Automation and coordination policy on: the watch must reach the
+            # Leader consumer and fail closed on the invalid assignment.
+            await session.execute(text(
+                "UPDATE agent_team_presets SET autonomy_enabled = 1 WHERE id = 3"))
+            session.add(GithubBacklogCoordination(scope_id=3, enabled=True, issue_numbers=[3]))
+            await session.commit()
+            with pytest.raises(CoordinationError) as refused:
+                await github_owner_followup_service.context(session, 3, 3, [])
+            assert refused.value.code == "leader_unavailable"
     finally:
         await engine.dispose()
