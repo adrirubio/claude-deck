@@ -1040,7 +1040,7 @@ class GithubVerificationService:
         """Observe at most eight preserved PRs without granting recovery authority."""
         # Existing diagnostic conflict paths can roll back and expire this row.
         await db.refresh(scope)
-        query = select(GithubWorkItem).where(
+        query = select(GithubWorkItem.id).where(
             GithubWorkItem.scope_id == scope.id,
             GithubWorkItem.dispatch_status == "escalated",
             GithubWorkItem.pr_number.is_not(None),
@@ -1051,9 +1051,18 @@ class GithubVerificationService:
         if not items and cursor:
             items = (await db.execute(query)).scalars().all()
         scope_id = scope.id
-        for item in items:
-            self._escalated_merge_cursors[scope_id] = item.id
+        for item_id in items:
+            self._escalated_merge_cursors[scope_id] = item_id
             try:
+                # A prior claim/notification can roll back and expire all rows.
+                await db.refresh(scope)
+                item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+                if (
+                    item is None or item.scope_id != scope_id or item.pr_number is None
+                    or (recovery_only_attempt is not None
+                        and not recovery_only_attempt.matches_item(item))
+                ):
+                    continue
                 await self._reconcile_escalated_merge(
                     db, scope, item, client,
                     notify=recovery_only_attempt is None,
@@ -1062,7 +1071,7 @@ class GithubVerificationService:
                 # Observation failure is not another implementation failure.
                 logger.warning(
                     "Escalated PR merge observation unavailable for work item %s",
-                    item.id,
+                    item_id,
                 )
 
     async def _reconcile_escalated_merge(
@@ -1075,7 +1084,8 @@ class GithubVerificationService:
         notify: bool,
     ) -> None:
         if (
-            item.attempt_phase != "implementation"
+            item.dispatch_status != "escalated"
+            or item.attempt_phase != "implementation"
             or not item.dispatch_nonce
             or not item.dispatch_head_ref
             or not item.dispatch_base_ref
