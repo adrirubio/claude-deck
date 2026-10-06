@@ -42,11 +42,21 @@ class AuditWriteError(RuntimeError):
     """An audit write failed; the caller must roll back its own change."""
 
 
+_CREDENTIAL_SEGMENT = re.compile(
+    r"(?:token|secret|password|credential|capability_hash|lease)\S*\s+\S+",
+    re.IGNORECASE)
+
+
 def sanitize_reason(reason: str | None) -> str | None:
-    """Keep a short sanitized reason with no credential-shaped content."""
+    """Keep a short sanitized reason with no credential-shaped content.
+
+    Credential-shaped keywords remove the keyword and the value token that
+    follows it.
+    """
     if reason is None:
         return None
-    cleaned = _FORBIDDEN_VALUE.sub("[redacted]", str(reason))
+    cleaned = _CREDENTIAL_SEGMENT.sub("[redacted]", str(reason))
+    cleaned = _FORBIDDEN_VALUE.sub("[redacted]", cleaned)
     return cleaned[:500]
 
 
