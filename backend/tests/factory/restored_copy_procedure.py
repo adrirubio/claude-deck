@@ -340,7 +340,7 @@ def run_restored_copy_procedure(
                       if key != "explicit_assignments" and post_scope.get(key) != pre_mutation_scope[key]]
         for pre_row, post_row in zip(pre_mutation_scope["presets"], post_scope["presets"]):
             if pre_row != post_row:
-                mismatches.append(f"preset:{pre_row[0]}")
+                mismatches.append(f"preset:{pre_row['id']}")
         pre_assignments = {row["preset_id"]: row["leader_slot_id"]
                            for row in pre_mutation_scope["explicit_assignments"]}
         for row in post_scope["explicit_assignments"]:

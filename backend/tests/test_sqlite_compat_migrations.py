@@ -1152,7 +1152,7 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "active_scope_revision, approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce, "
         "created_at, updated_at) "
         "VALUES (1, 1, 7, 'title', 'https://example.invalid/7', CURRENT_TIMESTAMP, 'code', "
-        "'verifying', 'implementation', 10, 11, 7, 0, 1, 0, 0, 'fixture-nonce', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        "'verifying', 'implementation', 11, 10, 8, 0, 1, 0, 0, 'fixture-nonce', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, leased_item_id, lease_token, "
@@ -1167,7 +1167,7 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
     await conn.execute(text(
         "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, approval_round, "
         "owner_member_id, leader_member_id, request_fingerprint, status, request_message_id, scope_revision_id, "
-        "created_at) VALUES (1, 1, 'initial', 'fixture-nonce', 1, 7, 8, 'fixture-fingerprint', 'pending', 100, 1, "
+        "created_at) VALUES (1, 1, 'initial_plan', 'fixture-nonce', 1, 7, 8, 'fixture-fingerprint', 'pending', 100, 1, "
         "CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
@@ -1179,7 +1179,7 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, approval_round, "
         "owner_member_id, leader_member_id, request_fingerprint, status, request_message_id, scope_revision_id, "
         "created_at) VALUES (2, 1, 'continuation', 'fixture-nonce', 2, 7, 8, 'fixture-continuation-fingerprint', "
-        "'approved', 101, 1, CURRENT_TIMESTAMP)"
+        "'approved', 101, 2, CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision, owner_slot_id, "
@@ -1187,7 +1187,7 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha, originating_escalation_reason, "
         "expected_workspace_id, expected_lease_token_hash, max_failed_heads, failed_head_count, status, "
         "delivery_attempt_count, approval_request_id, created_at) "
-        "VALUES (1, 1, 'fixture-nonce', 0, 10, 7, 'implementation', '/work/1', 'fixture summary', '[]', '[]', '[]', "
+        "VALUES (1, 1, 'fixture-nonce', 0, 11, 7, 'implementation', '/work/1', 'fixture summary', '[]', '[]', '[]', "
         "'[]', '{}', :head, :tree, 'fixture', 1, 'fixture-hash', 2, 0, 'active', 0, 1, CURRENT_TIMESTAMP)"
     ), {"head": "a" * 40, "tree": "b" * 40})
     await conn.execute(text(
@@ -1196,7 +1196,7 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha, originating_escalation_reason, "
         "expected_workspace_id, expected_lease_token_hash, max_failed_heads, failed_head_count, status, "
         "delivery_attempt_count, approval_request_id, created_at) "
-        "VALUES (2, 1, 'fixture-nonce', 1, 10, 7, 'implementation', '/work/1', 'fixture continuation summary', "
+        "VALUES (2, 1, 'fixture-nonce', 1, 11, 7, 'implementation', '/work/1', 'fixture continuation summary', "
         "'[]', '[]', '[]', '[]', '{}', :head, :tree, 'fixture-continuation', 1, 'fixture-hash', 2, 0, 'completed', "
         "0, 2, CURRENT_TIMESTAMP)"
     ), {"head": "c" * 40, "tree": "d" * 40})

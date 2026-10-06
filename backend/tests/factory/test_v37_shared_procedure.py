@@ -56,8 +56,9 @@ async def test_shared_procedure_admits_representable_with_nine_step_log(tmp_path
     assert all(entry["state"] == "ADMIT" for entry in record["step_log"])
     # AC4: the comparison record covers every reference-scope entry.
     assert set(record["comparison_record"]) == {
-        "explicit_assignments", "members", "sessions", "pane_bindings",
-        "items", "workspaces", "scope_policy", "approval_requests", "revisions"}
+        "explicit_assignments", "slots", "members", "sessions", "pane_bindings",
+        "items", "messages", "presets", "workspaces", "scope_policy",
+        "approval_requests", "revisions"}
     # Synthetic-quiescence and separate-release limits stay explicit.
     assert "not a real" in record["limits"]["synthetic_quiescence"]
     assert record["limits"]["v14"] == "NOT_PERFORMED"
@@ -233,5 +234,63 @@ def test_shared_procedure_refuses_writer_after_stop_claim(tmp_path):
         assert record["refusal_code"] == "writer_after_stop"
         unchanged = record["unchanged_evidence"]
         assert unchanged["source_digest_after_stop_claim"] != unchanged["source_digest_final"]
+
+    asyncio.run(run())
+
+
+def test_shared_procedure_refuses_six_restored_copy_mutations(tmp_path):
+    """C5/R4: injected restored-copy mutations of required authority
+    references each refuse. Only the removed assignment column is
+    normalized."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    import tests.factory.restored_copy_procedure as procedure_module
+    from app.database import Base
+
+    mutations = {
+        "session_pid": "UPDATE mail_agent_sessions SET pid = 5555 WHERE id = 21",
+        "slot_position": "UPDATE agent_team_slots SET position = position + 5 WHERE id = 10",
+        "preset_autonomy": "UPDATE agent_team_presets SET autonomy_enabled = 1 - autonomy_enabled WHERE id = 1",
+        "ack_evidence": "UPDATE github_work_items SET ack_approver_member_id = NULL WHERE id = 1",
+        "decision_link": "UPDATE github_approval_requests SET decision_message_id = 999 WHERE id = 1",
+        "deleted_request_message": "DELETE FROM mail_messages WHERE id = 100",
+    }
+
+    async def run():
+        (tmp_path / DISPOSABLE_MARKER_NAME).write_text("disposable test target")
+        source = tmp_path / "mutations.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{source}")
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await _v37_seed_authority_records(conn, divergent=False)
+            await _v37_quiesce_and_verify(conn)
+        await engine.dispose()
+
+        for name, sql in mutations.items():
+            original_capture = procedure_module.capture_reference_scope
+            calls = {"n": 0}
+
+            def intercepting_capture(conn, _sql=sql, _original=original_capture):
+                calls["n"] += 1
+                if calls["n"] == 3:
+                    # The third capture is the post-downgrade comparison on
+                    # the restored copy (the first is the pre-mutation
+                    # baseline, the second is the assignment record). Inject
+                    # the mutation into that copy before the comparison.
+                    conn.execute(_sql)
+                    conn.commit()
+                return _original(conn)
+
+            procedure_module.capture_reference_scope = intercepting_capture
+            try:
+                record = procedure_module.run_restored_copy_procedure(
+                    source_path=source, work_root=tmp_path,
+                    pause_state={"automation_paused": True})
+            finally:
+                procedure_module.capture_reference_scope = original_capture
+            assert record["outcome"] == "REFUSE", (name, record["outcome"])
+            assert record["refusal_code"] == "restored_copy_diverged", (name, record["refusal_code"])
 
     asyncio.run(run())
