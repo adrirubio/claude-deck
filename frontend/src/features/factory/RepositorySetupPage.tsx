@@ -28,6 +28,10 @@ type Recovery = {
   candidates: Array<{ label: string; id: number }>;
   requestedDraft?: Draft;
   requestedRouting?: Record<string, { areaLabels: string; expertise: string }>;
+  // Complete requested record identity: the record the save asked for, and
+  // whether an older record was confirmed and preserved as explicit partial
+  // state after the intent changed.
+  requestedRecord?: { kind: "team" | "scope"; id: number | null; confirmed: boolean };
 } | null;
 type ScopeOverlap = { key: string; first: TeamGithubScope; second: TeamGithubScope; active: boolean };
 type UncertainLaunch = { slotIds: number[]; planHash: string } | null;
@@ -328,21 +332,31 @@ export function RepositorySetupPage() {
     } finally { setBusy(false); }
   }
 
-  async function reconcileUnknown(kind: "team" | "scope", teamId?: number, requested?: { draft: Draft; routing: Record<string, { areaLabels: string; expertise: string }> }) {
+  async function reconcileUnknown(kind: "team" | "scope", teamId?: number, requested?: { draft: Draft; routing: Record<string, { areaLabels: string; expertise: string }> }, requestedRecord?: { kind: "team" | "scope"; id: number | null; confirmed: boolean }) {
     setBusy(true); setError("");
+    // The complete current recovery intent and requested record identity are
+    // captured before any credential or read await.
+    const intent = { draft: requested?.draft ?? { ...draft }, routing: requested?.routing ?? { ...slotRouting } };
+    const capturedSaveIntent = currentSaveIntent.current;
     try {
       const fresh = await refreshConfiguration();
+      // Recheck the captured intent after the credential and read awaits,
+      // before any recovery or navigation change.
+      const intentChangedNow = currentSaveIntent.current !== capturedSaveIntent;
+      const record = intentChangedNow && requestedRecord
+        ? { ...requestedRecord, confirmed: true }
+        : requestedRecord;
       if (kind === "team") {
         const names = [draft.leaderName.trim(), ...draft.workerNames.split("\n").map((name) => name.trim()).filter(Boolean)];
         const candidates = fresh.presets.filter((item) => item.name === draft.teamName.trim() &&
           item.slots.length === names.length && names.every((name) => item.slots.some((slot) => slot.display_name === name)));
-        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `${item.name} (#${item.id})`, id: item.id })), requestedDraft: requested?.draft, requestedRouting: requested?.routing });
+        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `${item.name} (#${item.id})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record });
       } else {
         const candidates = fresh.scopes.filter((item) => item.preset_id === (teamId ?? team?.id) && item.repo_owner.toLowerCase() === draft.owner.trim().toLowerCase() &&
           item.repo_name.toLowerCase() === draft.repo.trim().toLowerCase() && item.repo_path === draft.path.trim() &&
           item.dispatch_label === draft.dispatch.trim() && item.design_label === draft.design.trim() && item.base_ref === draft.baseRef.trim() &&
           item.github_auth_mode === (draft.authMode === "github_app" ? "app" : "ambient"));
-        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `Scope #${item.id} (${item.enabled ? "enabled" : "disabled"})`, id: item.id })) });
+        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `Scope #${item.id} (${item.enabled ? "enabled" : "disabled"})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record });
       }
       setError("The create response was uncertain. Review fresh matching records and select one, or stop. Do not repeat the create request.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not reconcile the uncertain create result."); }
@@ -434,7 +448,8 @@ export function RepositorySetupPage() {
             }
             throw cause;
           }
-          await reconcileUnknown("team", undefined, { draft: { ...draft }, routing: { ...slotRouting } });
+          await reconcileUnknown("team", undefined, { draft: { ...draft }, routing: { ...slotRouting } },
+            { kind: "team", id: null, confirmed: false });
           throw cause;
         }
         setTeam(selected);
@@ -514,7 +529,8 @@ export function RepositorySetupPage() {
             }
             throw cause;
           }
-          await reconcileUnknown("scope", selected.id, { draft: { ...draft }, routing: { ...slotRouting } });
+          await reconcileUnknown("scope", selected.id, { draft: { ...draft }, routing: { ...slotRouting } },
+            { kind: "scope", id: null, confirmed: false });
           throw cause;
         }
       }
