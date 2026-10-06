@@ -254,6 +254,9 @@ def test_shared_procedure_refuses_six_restored_copy_mutations(tmp_path):
         "slot_position": "UPDATE agent_team_slots SET position = position + 5 WHERE id = 10",
         "preset_autonomy": "UPDATE agent_team_presets SET autonomy_enabled = 1 - autonomy_enabled WHERE id = 1",
         "ack_evidence": "UPDATE github_work_items SET ack_approver_member_id = NULL WHERE id = 1",
+        "ack_evidence_link": "UPDATE github_work_items SET ack_evidence_message_id = 999 WHERE id = 1",
+        "ack_round": "UPDATE github_work_items SET ack_approval_round = 9 WHERE id = 1",
+        "ack_epoch": "UPDATE github_work_items SET ack_enforcement_epoch = 9 WHERE id = 1",
         "decision_link": "UPDATE github_approval_requests SET decision_message_id = 999 WHERE id = 1",
         "deleted_request_message": "DELETE FROM mail_messages WHERE id = 100",
     }

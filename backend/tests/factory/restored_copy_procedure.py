@@ -128,7 +128,8 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
             " FROM agent_pane_bindings ORDER BY preset_id, slot_id, pane_pid")),
         "items": _rows(conn, (
             "SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id,"
-            " handoff_target_slot_id, ack_approver_member_id, active_scope_revision,"
+            " handoff_target_slot_id, ack_approver_member_id, ack_evidence_message_id,"
+            " ack_approval_round, ack_enforcement_epoch, active_scope_revision,"
             " approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce"
             " FROM github_work_items ORDER BY id")),
         "messages": _rows(conn, (

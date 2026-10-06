@@ -1149,10 +1149,11 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
     await conn.execute(text(
         "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, github_updated_at, "
         "issue_type, dispatch_status, attempt_phase, owner_slot_id, handoff_target_slot_id, ack_approver_member_id, "
+        "ack_evidence_message_id, ack_approval_round, ack_enforcement_epoch, "
         "active_scope_revision, approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce, "
         "created_at, updated_at) "
         "VALUES (1, 1, 7, 'title', 'https://example.invalid/7', CURRENT_TIMESTAMP, 'code', "
-        "'verifying', 'implementation', 11, 10, 8, 0, 1, 0, 0, 'fixture-nonce', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        "'verifying', 'implementation', 11, 10, 8, 100, 1, 1, 0, 1, 0, 0, 'fixture-nonce', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, leased_item_id, lease_token, "

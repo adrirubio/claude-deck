@@ -2678,7 +2678,7 @@ async def read_activation_readiness(
     heartbeat_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         seconds=MCP_HEARTBEAT_TTL_SECONDS)
 
-    async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None, int | None]:
+    async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None, int | None, str | None]:
         """Current authenticated binding for one slot from bounded queries only."""
         # Select the latest member by slot first, then validate that member's
         # preset and kind. Prefiltering by preset or kind would skip the
@@ -2689,12 +2689,12 @@ async def read_activation_readiness(
             ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(2)
         )).all())
         if not candidates:
-            return False, "missing", None, None
+            return False, "missing", None, None, None
         member = candidates[0]
         if member.team_preset_id != scope.preset_id:
-            return False, "member_preset", member.id, None
+            return False, "member_preset", member.id, None, None
         if member.participant_kind != "team_slot":
-            return False, "member_kind", member.id, None
+            return False, "member_kind", member.id, None, None
         sessions = list((await db.scalars(
             select(MailAgentSession).where(
                 MailAgentSession.member_id == member.id,
@@ -2708,7 +2708,7 @@ async def read_activation_readiness(
             .execution_options(populate_existing=True)
         )).all())
         if len(sessions) > 8:
-            return False, "context_limit", member.id, None
+            return False, "context_limit", member.id, None, None
         qualifying = []
         for session in sessions:
             if not session.wake_enabled:
@@ -2728,7 +2728,7 @@ async def read_activation_readiness(
                 ).limit(2)
             )).first()
             if binding is None:
-                return False, "native_mismatch", member.id, None
+                return False, "native_mismatch", member.id, None, None
             # Multiple live pane bindings for one member are never resolved
             # silently: the qualifying list below refuses the ambiguity, which
             # also covers replaced or retired panes still bound in records.
@@ -2737,7 +2737,7 @@ async def read_activation_readiness(
             # candidate, capped by the bounded session query.
             from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
             if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
-                return False, "native_lifetime", member.id, None
+                return False, "native_lifetime", member.id, None, None
             # Actual native provider/agent identity from the preserved
             # argument vector. argv[0] must be the registered executable;
             # supported argument positions are exact. Provider text anywhere
@@ -2745,7 +2745,7 @@ async def read_activation_readiness(
             # never confirm identity.
             argv = pane_agent_argv(session.bound_pane_pid, session.bound_pane_proc_start)
             if argv is None:
-                return False, "native_identity", member.id, None
+                return False, "native_identity", member.id, None, None
             argv0 = argv[0].rsplit("/", 1)[-1]
             marker = {
                 "claude-code": "claude",
@@ -2755,7 +2755,7 @@ async def read_activation_readiness(
                 "pi-cli": "pi",
             }.get(slot.provider, slot.provider)
             if argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}:
-                return False, "native_identity", member.id, None
+                return False, "native_identity", member.id, None, None
             if slot.provider in {"pi", "pi-cli"}:
                 # Registered Pi recognizer semantics
                 # (app/services/providers/pi_cli.py::_pi_command): the pi
@@ -2767,9 +2767,9 @@ async def read_activation_readiness(
                     and bool(_re.search(r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
                 )
                 if not pi_identity:
-                    return False, "native_identity", member.id, None
+                    return False, "native_identity", member.id, None, None
             elif not (argv0 == marker or argv0 == slot.provider):
-                return False, "native_identity", member.id, None
+                return False, "native_identity", member.id, None, None
             # Authenticated MCP process: when the session process differs
             # from the pane process it must not be confirmed dead. This is the
             # separate current process check, not connected or heartbeat
@@ -2781,12 +2781,13 @@ async def read_activation_readiness(
             )
             if (session.pid != session.bound_pane_pid
                     and process_is_confirmed_dead(session.pid)):
-                return False, "mcp_process", member.id, None
+                return False, "mcp_process", member.id, None, None
             # C3: bounded positive auxiliary MCP process and lifetime proof.
             # Missing, denied, malformed, oversized or reused process
             # identities refuse with a safe gap. Identity is tied to the
             # authenticated session and the current pane through the bounded
             # parent chain (at most four hops).
+            observed_tick = None
             if session.pid != session.bound_pane_pid:
                 # A2: tie the auxiliary process lifetime to its authenticated
                 # registration evidence. A process that started after the
@@ -2798,33 +2799,34 @@ async def read_activation_readiness(
                     registered_at = registered_at.replace(tzinfo=timezone.utc)
                 first_stat = read_proc_stat(session.pid)
                 if first_stat is None:
-                    return False, "mcp_process_gap", member.id, None
+                    return False, "mcp_process_gap", member.id, None, None
                 first_start = first_stat[1]
+                observed_tick = first_start
                 try:
                     started_at = _process_started_at(first_start)
                 except (OSError, ValueError, TypeError):
-                    return False, "mcp_process_gap", member.id, None
+                    return False, "mcp_process_gap", member.id, None, None
                 if (registered_at is None
                         or registered_at > datetime.now(timezone.utc) + timedelta(seconds=5)
                         or started_at > registered_at):
-                    return False, "mcp_process_gap", member.id, None
+                    return False, "mcp_process_gap", member.id, None, None
                 current_pid = session.pid
                 anchored = False
                 for _hop in range(4):
                     stat = read_proc_stat(current_pid)
                     if stat is None or not isinstance(stat[1], str) or not stat[1]:
-                        return False, "mcp_process_gap", member.id, None
+                        return False, "mcp_process_gap", member.id, None, None
                     ppid, start_time = stat
                     # Retain the first authenticated start tick through the
                     # leaf checks. A reused PID whose tick changed across the
                     # reads refuses; invalid ticks refuse as the safe gap.
                     if current_pid == session.pid and start_time != first_start:
-                        return False, "mcp_process_gap", member.id, None
+                        return False, "mcp_process_gap", member.id, None, None
                     argv = pane_agent_argv(current_pid, start_time)
                     if argv is None:
                         # Oversized, malformed or identity changed across the
                         # bounded read window: refuse with the safe gap.
-                        return False, "mcp_process_gap", member.id, None
+                        return False, "mcp_process_gap", member.id, None, None
                     # Reused or unknown identity: the auxiliary process must
                     # be the registered provider executable family, not
                     # another child that reused the PID. The current start
@@ -2833,7 +2835,7 @@ async def read_activation_readiness(
                     # authenticated session evidence.
                     aux_name = argv[0].rsplit("/", 1)[-1]
                     if aux_name in {"bash", "sh", "zsh", "fish", "dash", "ksh"}:
-                        return False, "mcp_process_gap", member.id, None
+                        return False, "mcp_process_gap", member.id, None, None
                     if slot.provider in {"pi", "pi-cli"}:
                         import re as _re_aux
                         aux_identity = aux_name == "pi" or (
@@ -2844,13 +2846,13 @@ async def read_activation_readiness(
                     else:
                         aux_identity = aux_name == marker or aux_name == slot.provider
                     if not aux_identity:
-                        return False, "mcp_process_gap", member.id, None
+                        return False, "mcp_process_gap", member.id, None, None
                     if ppid == session.bound_pane_pid:
                         anchored = True
                         break
                     current_pid = ppid
                 if not anchored:
-                    return False, "mcp_process_gap", member.id, None
+                    return False, "mcp_process_gap", member.id, None, None
             # Actual lifecycle retirement: a retired pane lifecycle row means
             # the pane is retired. Newest binding order is not equivalent.
             from app.models.database import MailPaneLifecycle
@@ -2862,15 +2864,15 @@ async def read_activation_readiness(
                 ).limit(1)
             )).first()
             if retired is not None:
-                return False, "native_retired", member.id, None
+                return False, "native_retired", member.id, None, None
             qualifying.append(session)
         if len(qualifying) > 1:
             # Two or more simultaneously live bindings are never resolved
             # silently.
-            return False, "ambiguous", member.id, None
+            return False, "ambiguous", member.id, None, None
         if not qualifying:
-            return False, "stale", member.id, None
-        return True, None, member.id, qualifying[0].id
+            return False, "stale", member.id, None, None
+        return True, None, member.id, qualifying[0].id, observed_tick
 
     async def identity_signature(slot: AgentTeamSlot) -> tuple:
         """Fresh bounded immutable identity signature for one slot.
@@ -2937,7 +2939,7 @@ async def read_activation_readiness(
             blockers.append({"code": "binding_changed_during_observation",
                              "message": "The roster changed after the authoritative selection snapshot.",
                              "slot_ids": [slot.id]})
-    states: dict[int, tuple[bool, str | None, int | None, int | None]] = {}
+    states: dict[int, tuple[bool, str | None, int | None, int | None, str | None]] = {}
     signatures: dict[int, tuple] = {}
     for slot in enabled[:64]:
         states[slot.id] = await binding_state(slot)
@@ -2958,7 +2960,7 @@ async def read_activation_readiness(
     owner_slots = [slot for slot in enabled if leader is None or slot.id != leader.id]
     eligible_owner_slot_ids: set[int] = set()
     for slot in owner_slots[:64]:
-        ok, reason, _bound_member_id, _bound_session_id = states[slot.id]
+        ok, reason, _bound_member_id, _bound_session_id, _bound_tick = states[slot.id]
         if ok:
             eligible_owner_slot_ids.add(slot.id)
         elif reason == "ambiguous":
@@ -2995,10 +2997,11 @@ async def read_activation_readiness(
         # and native liveness must all still hold. The final complete snapshot
         # must equal both the post-validation signature and the immutable
         # baseline; scalar-column reads make it fresh, never cached.
-        fresh_ok, _fresh_reason, fresh_member_id, fresh_session_id = await binding_state(slot)
+        fresh_ok, _fresh_reason, fresh_member_id, fresh_session_id, fresh_tick = await binding_state(slot)
         fresh_signature = await identity_signature(slot)
         if (fresh_member_id != states[slot.id][2] or fresh_ok != states[slot.id][0]
                 or fresh_session_id != states[slot.id][3]
+                or fresh_tick != states[slot.id][4]
                 or fresh_signature != signatures[slot.id]
                 or fresh_signature != baselines[slot.id]
                 or fresh_signature[5] != selection_roster):
