@@ -12,6 +12,23 @@ This guide is for the operator of a Deck team. Autonomy is off until you enable 
 
 Deck polls GitHub every 60 seconds by default. The Activity table refreshes every five seconds while open; it does not trigger another GitHub poll. Issues move through queued, dispatched, verifying, and ready for human review or merged. An escalated issue has stopped and needs attention.
 
+### CI polling permissions
+
+The polling credential needs Checks:read and Actions:read for private repositories.
+Deck uses the configured host `github_token` for these reads. App dispatch credentials
+do not replace the polling credential. Do not grant Actions write permission for polling.
+
+Deck reads current workflow runs and jobs before it classifies CI results. It ignores
+an older execution only when the workflow and execution context prove replacement.
+An incomplete or unavailable observation keeps the item unverified. It does not
+consume a verification retry or a diagnostic failure budget. The status note gives
+a short reason. Check credential access if this note persists.
+
+CI observation is bounded to five pages per list, 64 requests and 45 seconds per
+item. More than 16 current execution contexts is unavailable. These limits do not
+establish that an incomplete history is green. Cancellation retains its existing
+conservative accounting for unclassified pushed heads.
+
 ## Build hints
 
 Deck does not run the build command. The optional build settings are instructions in the owner's brief. An out-of-tree build directory may include `{issue_number}`. The command hint may include `{build_dir}` and `{parallelism}`. The parallelism value also tells the agent to cap build jobs.

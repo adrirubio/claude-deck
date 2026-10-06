@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import httpx
 
 from app.config import settings
+from app.services.github_check_observation import observe_checks
 
 _GITHUB_API = "https://api.github.com"
 _GIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -473,20 +474,7 @@ class GithubClient:
     async def list_check_runs_for_ref(self, owner: str, repo: str, ref: str) -> list[dict]:
         client = self._client()
         try:
-            resp = await client.get(
-                f"/repos/{owner}/{repo}/commits/{ref}/check-runs",
-                headers=self._headers(),
-            )
-            resp.raise_for_status()
-            body = self._json_object(resp, "check runs")
-            check_runs = body.get("check_runs", [])
-            if not isinstance(check_runs, list) or not all(
-                isinstance(check, dict) for check in check_runs
-            ):
-                raise GithubClientResponseError(
-                    "GitHub check runs response contained invalid entries"
-                )
-            return check_runs
+            return await observe_checks(client, self._headers(), owner, repo, ref)
         finally:
             if self._http is None:
                 await client.aclose()
