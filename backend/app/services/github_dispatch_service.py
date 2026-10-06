@@ -140,7 +140,7 @@ async def observe_work_lifecycle(
         event_kind="work_lifecycle",
         source=source,
         occurred_at=datetime.utcnow(),
-        actor=_audit.derive_actor(actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler", scheduler="github_dispatch_scheduler"),
+        actor=_audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
         item_id=item.id,
         before_values={"dispatch_status": from_status} if from_status else None,
         after_values={"dispatch_status": to_status,
