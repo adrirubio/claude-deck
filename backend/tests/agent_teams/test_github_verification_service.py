@@ -549,6 +549,16 @@ async def test_escalated_merge_rechecks_recovery_target_after_id_selection(db, m
     assert client.pull_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_escalated_merge_accepts_scope_from_previous_session(db):
+    scope, item, workspace, client = await _escalated_merge_fixture(db)
+    db.expunge(scope)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    assert item.dispatch_status == "merged"
+    assert item.retry_count == 3
+
+
 class _Client:
     def __init__(
         self,
