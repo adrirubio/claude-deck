@@ -2552,3 +2552,92 @@ def test_real_helper_bounds_command_bytes_and_preserves_argv(tmp_path):
         assert peer.pane_agent_argv(4242, "12345") is None
     finally:
         peer._PROC_ROOT = original_root
+
+
+@pytest.mark.asyncio
+async def test_readiness_earliest_roster_disable_refused_by_selection_snapshot(tmp_path, monkeypatch):
+    """C2/R1: an independent disposable writer disabling the only owner slot
+    after the authoritative selection snapshot and before the first baseline
+    is refused. The early gap never becomes an accepted baseline."""
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import app.api.v1.agent_teams as agent_teams_module
+    from app.database import Base
+    from app.models.database import AgentPaneBinding, AgentTeamPreset, AgentTeamSlot
+
+    from tests.agent_teams.test_agent_team_api import _readiness_team, _bind_owner
+
+    def _resolve(path_str):
+        import importlib
+        parts = path_str.split(".")
+        for cut in range(len(parts), 0, -1):
+            try:
+                obj = importlib.import_module(".".join(parts[:cut]))
+            except ImportError:
+                continue
+            for attr in parts[cut:]:
+                obj = getattr(obj, attr)
+            return obj
+        raise ImportError(path_str)
+
+    class MP:
+        def setattr(self, target, name=None, value=None):
+            if isinstance(target, str):
+                parts = target.split(".")
+                setattr(_resolve(".".join(parts[:-1])), parts[-1], name)
+            else:
+                setattr(target, name, value)
+
+    db_path = tmp_path / "early-disable.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
+    writer_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    mp = MP()
+    from unittest.mock import AsyncMock
+    from app.services import agent_team_service
+    from app.services.agent_mail_service import agent_mail_service
+    agent_team_service._fallback_provider = AsyncMock(return_value="codex-cli")
+    agent_mail_service.sync_observed_sessions = AsyncMock()
+    agent_team_service._discover_sessions = lambda: []
+    try:
+        async with maker() as db:
+            import pathlib
+            preset, scope, _repo = await _readiness_team(db, mp, pathlib.Path(str(tmp_path)), "EarlyDisable", 1)
+            await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                             {"slot": preset.slots[0].id, "preset": preset.id})
+            _bind_owner(db, preset, preset.slots[1].id, 1200, 8300, last_seen=datetime.utcnow())
+            _bind_owner(db, preset, preset.slots[0].id, 1201, 8301, last_seen=datetime.utcnow())
+            await db.commit()
+            owner_slot_id = preset.slots[1].id
+
+        async with maker() as db:
+            original_execute = db.execute
+            fired = {"n": 0}
+
+            async def intercepting_execute(query, *args, **kwargs):
+                sql = str(getattr(query, "statement", query))
+                if fired["n"] == 0 and "mail_team_members" in sql:
+                    # The first member read is inside the first baseline
+                    # signature, after the authoritative selection snapshot
+                    # captured by the roster query. The independent writer
+                    # disables the owner slot in that exact gap, before the
+                    # baseline's own roster component read.
+                    fired["n"] = 1
+                    async with writer_engine.begin() as conn:
+                        await conn.exec_driver_sql(
+                            f"UPDATE agent_team_slots SET enabled = 0 WHERE id = {owner_slot_id}")
+                return await original_execute(query, *args, **kwargs)
+
+            monkeypatch.setattr(db, "execute", intercepting_execute)
+            body = await agent_teams_module.read_activation_readiness(scope.id, None, db)
+            codes = {blocker["code"] for blocker in body["blockers"]}
+            assert fired["n"] == 1, "the independent writer fired at the first baseline read"
+            assert body["status"] == "blocked"
+            assert "binding_changed_during_observation" in codes
+    finally:
+        await engine.dispose()
+        await writer_engine.dispose()

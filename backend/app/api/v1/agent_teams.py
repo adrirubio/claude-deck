@@ -2663,6 +2663,10 @@ async def read_activation_readiness(
         slots = slots[:64]
         blockers.append({"code": "readiness_context_limit",
                          "message": "The roster exceeds the bounded readiness observation."})
+    # C2: one immutable authoritative selection snapshot, taken from the
+    # roster query rows themselves. No later read may widen or replace it.
+    selection_roster = tuple(
+        (slot.id, slot.enabled, slot.provider) for slot in slots)
     enabled = [slot for slot in slots if slot.enabled]
     if any(blocker["code"] == "readiness_context_limit" for blocker in blockers):
         # B05: overflow stops member, session and native work entirely.
@@ -2812,12 +2816,14 @@ async def read_activation_readiness(
         ).where(AgentTeamPreset.id == scope.preset_id).limit(1))).first()
         member_row = (await db.execute(select(
             MailTeamMember.id, MailTeamMember.participant_kind, MailTeamMember.updated_at,
+            MailTeamMember.team_preset_id,
         ).where(
             MailTeamMember.team_preset_id == scope.preset_id,
             MailTeamMember.team_slot_id == slot.id,
         ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))).first()
         session_rows = list((await db.execute(select(
-            MailAgentSession.id, MailAgentSession.provider, MailAgentSession.wake_enabled,
+            MailAgentSession.id, MailAgentSession.member_id, MailAgentSession.pid,
+            MailAgentSession.provider, MailAgentSession.wake_enabled,
             MailAgentSession.mailbox_status, MailAgentSession.capability_token_hash,
             MailAgentSession.last_seen_at, MailAgentSession.bound_pane_pid,
             MailAgentSession.bound_pane_proc_start,
@@ -2853,6 +2859,10 @@ async def read_activation_readiness(
     baselines: dict[int, tuple] = {}
     for slot in enabled[:64]:
         baselines[slot.id] = await identity_signature(slot)
+        if baselines[slot.id][5] != selection_roster:
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The roster changed after the authoritative selection snapshot.",
+                             "slot_ids": [slot.id]})
     states: dict[int, tuple[bool, str | None, int | None, int | None]] = {}
     signatures: dict[int, tuple] = {}
     for slot in enabled[:64]:
@@ -2916,7 +2926,8 @@ async def read_activation_readiness(
         if (fresh_member_id != states[slot.id][2] or fresh_ok != states[slot.id][0]
                 or fresh_session_id != states[slot.id][3]
                 or fresh_signature != signatures[slot.id]
-                or fresh_signature != baselines[slot.id]):
+                or fresh_signature != baselines[slot.id]
+                or fresh_signature[5] != selection_roster):
             blockers.append({"code": "binding_changed_during_observation",
                              "message": "The complete binding state changed during the observation.",
                              "slot_ids": [slot.id]})
