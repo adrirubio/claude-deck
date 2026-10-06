@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { AuditMetricsPage } from "@/features/factory/AuditMetricsPanel";
 import * as auditApi from "@/features/factory/auditApi";
+import { setOperatorToken } from "@/features/agent-teams/operatorAuth";
 
 const windowFixture: auditApi.MetricsWindow = {
   window_start: "2026-10-06T00:00:00Z",
@@ -59,6 +60,7 @@ describe("AuditMetricsPage", () => {
   beforeEach(() => {
     vi.spyOn(auditApi, "fetchMetricsWindow").mockResolvedValue(windowFixture);
     vi.spyOn(auditApi, "fetchAuditEvents").mockResolvedValue(pageFixture);
+    setOperatorToken("synthetic-operator");
   });
 
   it("renders metrics with explicit unknown counts, coverage and explanations", async () => {

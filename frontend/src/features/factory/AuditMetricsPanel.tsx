@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AuditEventRead, MetricsWindow } from "./auditApi";
 import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
+import { OperatorTokenDialog } from "@/features/agent-teams/AutonomyPanel";
+import { getOperatorToken } from "@/features/agent-teams/operatorAuth";
 
 const labelClass = "block text-sm font-medium";
 
@@ -23,32 +25,74 @@ export function AuditMetricsPage() {
   const [scopeKey, setScopeKey] = useState("");
   const [status, setStatus] = useState("No audit data loaded yet.");
   const [error, setError] = useState("");
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenError, setTokenError] = useState("");
+  const [operatorToken, setOperatorToken] = useState("");
+  const tokenResolverRef = { current: null as ((value: string | null) => void) | null };
 
   const windowEnd = new Date().toISOString();
   const windowStart = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
 
-  async function loadAll() {
-    setError("");
-    setStatus("Loading audit coverage and metrics.");
+  function requestOperatorToken(): Promise<string | null> {
+    setTokenError("");
+    setTokenDialogOpen(true);
+    return new Promise((resolve) => {
+      tokenResolverRef.current = resolve;
+    });
+  }
+
+  function settleOperatorToken(value: string | null) {
+    if (value) setOperatorToken(value);
+    tokenResolverRef.current?.(value);
+    tokenResolverRef.current = null;
+    setTokenDialogOpen(false);
+    setTokenInput("");
+    setTokenError("");
+  }
+
+  // C01: safe metrics load independently and remain usable when protected
+  // audit access is refused.
+  async function loadMetrics() {
     try {
-      const [windowData, page] = await Promise.all([
-        fetchMetricsWindow({ windowStart, windowEnd, filterScope: "all" }),
-        fetchAuditEvents({
-          page: 1,
-          pageSize: 25,
-          teamContextKey: teamKey || undefined,
-          scopeContextKey: scopeKey || undefined,
-        }),
-      ]);
+      const windowData = await fetchMetricsWindow({ windowStart, windowEnd, filterScope: "all" });
       setMetrics(windowData);
+      setStatus("Safe metrics loaded.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load safe metrics.");
+    }
+  }
+
+  // C01: audit reads use the per-tab operator workflow with the operator
+  // credential header. Exact 503 and 401 refusals surface to the operator.
+  async function loadAudit() {
+    const token = getOperatorToken() || operatorToken || await requestOperatorToken();
+    if (!token) {
+      setStatus("Audit read cancelled. Safe metrics remain available.");
+      return;
+    }
+    try {
+      const page = await fetchAuditEvents({
+        page: 1,
+        pageSize: 25,
+        teamContextKey: teamKey || undefined,
+        scopeContextKey: scopeKey || undefined,
+        operatorToken: token,
+      });
       setEvents(page.items);
       setLabels(page.snapshot_labels);
       setTotal(page.total);
       setStatus(`Loaded ${page.items.length} of ${page.total} audit events.`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not load audit data.");
-      setStatus("Audit data could not be loaded.");
+      setError(cause instanceof Error ? cause.message : "Audit read refused.");
+      setStatus("Audit events could not be loaded. Safe metrics remain available.");
     }
+  }
+
+  async function loadAll() {
+    setError("");
+    await loadMetrics();
+    await loadAudit();
   }
 
   useEffect(() => {
@@ -162,6 +206,7 @@ export function AuditMetricsPage() {
               value={scopeKey} onChange={(event) => setScopeKey(event.target.value)} />
           </label>
           <Button onClick={() => void loadAll()}>Apply filters</Button>
+          <Button variant="outline" onClick={() => void loadMetrics()}>Reload safe metrics</Button>
         </div>
         {labels.length > 0 && (
           <p className="text-xs text-muted-foreground">Snapshot labels in page: {labels.join(", ")}</p>
@@ -231,6 +276,14 @@ export function AuditMetricsPage() {
       </section>
 
       <p className="text-sm">Total audit events matching filters: {total}</p>
+      <OperatorTokenDialog
+        open={tokenDialogOpen}
+        value={tokenInput}
+        error={tokenError}
+        onValueChange={setTokenInput}
+        onSubmit={() => settleOperatorToken(tokenInput)}
+        onCancel={() => settleOperatorToken(null)}
+      />
       <p role="status" className="text-sm">{status}</p>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </section>

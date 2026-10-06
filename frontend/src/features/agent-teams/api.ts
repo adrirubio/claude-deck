@@ -216,7 +216,7 @@ export function deleteTeamGithubScope(scopeId: number, operatorToken: string): P
   })
 }
 
-function operatorHeaders(operatorToken: string): HeadersInit {
+export function operatorHeaders(operatorToken: string): HeadersInit {
   return { 'X-Deck-Operator-Token': operatorToken }
 }
 

@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api";
+import { operatorHeaders } from "@/features/agent-teams/api";
 
 export interface AuditEventRead {
   id: number;
@@ -69,6 +70,7 @@ export async function fetchAuditEvents(params: {
   teamContextKey?: string;
   scopeContextKey?: string;
   itemContextKey?: string;
+  operatorToken: string;
 }): Promise<AuditEventPage> {
   const query = new URLSearchParams();
   if (params.page) query.set("page", String(params.page));
@@ -77,7 +79,9 @@ export async function fetchAuditEvents(params: {
   if (params.teamContextKey) query.set("team_context_key", params.teamContextKey);
   if (params.scopeContextKey) query.set("scope_context_key", params.scopeContextKey);
   if (params.itemContextKey) query.set("item_context_key", params.itemContextKey);
-  return apiClient<AuditEventPage>(`/api/v1/factory/audit-events?${query.toString()}`);
+  return apiClient<AuditEventPage>(`factory/audit-events?${query.toString()}`, {
+    headers: operatorHeaders(params.operatorToken),
+  });
 }
 
 export async function fetchMetricsWindow(params: {
@@ -90,5 +94,5 @@ export async function fetchMetricsWindow(params: {
     window_end: params.windowEnd,
   });
   if (params.filterScope) query.set("filter_scope", params.filterScope);
-  return apiClient<MetricsWindow>(`/api/v1/factory/metrics?${query.toString()}`);
+  return apiClient<MetricsWindow>(`factory/metrics?${query.toString()}`);
 }
