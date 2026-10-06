@@ -35,6 +35,7 @@ from app.services.github_client import (
     GithubTreeEntry,
     github_client,
 )
+from app.services.github_check_observation import GithubCheckObservationError
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_recovery_gate import (
     GithubRecoveryOnlyAttempt,
@@ -1015,6 +1016,14 @@ class GithubVerificationService:
                     )
                 else:
                     await self._process_review_item(db, scope, item, client)
+            except GithubCheckObservationError as exc:
+                # Missing or ambiguous CI evidence must not consume a retry or
+                # diagnostic budget. Continue polling the other work items.
+                self._set_failure_note(
+                    item, f"GitHub checks are unavailable; will poll again: {exc}"
+                )
+                item.updated_at = datetime.utcnow()
+                await db.commit()
             except httpx.HTTPError as exc:
                 logger.exception(
                     "GitHub verification failed for work item %s", item.id
@@ -1208,7 +1217,10 @@ class GithubVerificationService:
 
     @staticmethod
     def _diagnostic_check_evidence(checks: list[dict]) -> list[dict]:
-        fields = ("id", "name", "status", "conclusion", "html_url", "details_url")
+        fields = (
+            "id", "name", "status", "conclusion", "html_url", "details_url",
+            "evidence_source", "workflow_run_id", "run_attempt",
+        )
         return [
             {field: check.get(field) for field in fields if check.get(field) is not None}
             for check in checks
