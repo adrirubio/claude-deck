@@ -206,6 +206,22 @@ class AgentTeamService:
             raise ValueError("leader_assignment_reason_required")
         preset.leader_slot_id = slot.id
         preset.updated_at = datetime.utcnow()
+        # A03: the Leader event persists in the same transaction as the
+        # Leader change. An audit-write failure rolls back the change.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="leader_assignment",
+            source="agent_team_service.set_leader",
+            occurred_at=datetime.utcnow(),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            team_preset_id=preset.id,
+            before_values={"leader_slot_id": expected_leader_slot_id},
+            after_values={"leader_slot_id": slot.id},
+            sanitized_reason=reason,
+            action_outcome="applied",
+            correlation_id=f"leader-assignment:{preset.id}:{slot.id}",
+        )
         await db.commit()
         await db.refresh(preset)
         return await self._preset_response(db, preset)
