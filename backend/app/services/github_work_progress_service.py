@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -20,8 +21,9 @@ from app.models.database import (
 )
 from app.models.github_work_progress import GithubWorkProgressSnapshot
 from app.models.github_work_progress_schemas import (
-    GithubPublicationObservation, GithubWorkProgressResponse,
+    GithubPublicationObservation, GithubWorkProgressResponse, GithubWorkRemainingView,
 )
+from mcp_shim.work_remaining_protocol import RemainingReport, ReportContext, parse_report, report_reason
 from app.services.github_client import GithubClientResponseError, github_client
 from app.services.github_coordination_service import hold_code
 from app.services.github_work_progress_observation import (
@@ -47,6 +49,7 @@ class _SourceTarget:
     head_ref: str | None
     repo_owner: str
     repo_name: str
+    issue_number: int
 
 
 def _utc(value: datetime) -> datetime:
@@ -67,7 +70,8 @@ def _base_identity(item, scope) -> dict:
     return {"scope_id": scope.id, "repo_owner": scope.repo_owner,
             "repo_name": scope.repo_name, "repo_path": scope.repo_path,
             "created_at": _iso(item.created_at), "dispatch_nonce": item.dispatch_nonce,
-            "owner_slot_id": item.owner_slot_id, "head_ref": item.dispatch_head_ref}
+            "owner_slot_id": item.owner_slot_id, "head_ref": item.dispatch_head_ref,
+            "scope_revision": item.active_scope_revision}
 
 
 def _identity(item, scope, workspace) -> dict:
@@ -150,6 +154,57 @@ class GithubWorkProgressService:
             .execution_options(populate_existing=True)
         )).one_or_none()
 
+    async def _read_remaining(self, target, private_values):
+        read = getattr(self.client, "get_issue", None)
+        if (not callable(read) or not all(_REPO_PART.fullmatch(part or "")
+                and part not in {".", ".."} for part in (target.repo_owner, target.repo_name))):
+            return {"reason": "report_unavailable", "report": None}
+        try:
+            issue = await asyncio.wait_for(read(target.repo_owner, target.repo_name,
+                target.issue_number, token=settings.github_token), timeout=4)
+            if issue is None:
+                return {"reason": "report_unavailable", "report": None}
+            if (not isinstance(issue, dict) or type(issue.get("number")) is not int
+                    or issue["number"] != target.issue_number or "pull_request" in issue
+                    or issue.get("html_url") != f"https://github.com/{target.repo_owner}/{target.repo_name}/issues/{target.issue_number}"):
+                return {"reason": "report_invalid", "report": None}
+            body = issue.get("body")
+            report = parse_report(body, private_values)
+            return {"reason": None if report else "report_invalid" if isinstance(body, str)
+                    and "<!-- deck:work-remaining:" in body else "report_missing",
+                    "report": report.model_dump(mode="json") if report else None}
+        except (GithubClientResponseError, httpx.HTTPError, TimeoutError):
+            return {"reason": "report_unavailable", "report": None}
+
+    async def _observe_progress(self, target, previous, now, private_values):
+        results = await asyncio.gather(self._observe(target, previous, now),
+            self._read_remaining(target, private_values), return_exceptions=True)
+        if isinstance(results[0], BaseException):
+            raise results[0]
+        remaining = (results[1] if not isinstance(results[1], BaseException)
+                     else {"reason": "report_unavailable", "report": None})
+        return results[0], remaining
+
+    @staticmethod
+    def _remaining_view(packet, context, now, issue_url, private_values):
+        if not isinstance(packet, dict) or not packet.get("report"):
+            reason = packet.get("reason") if isinstance(packet, dict) else "report_missing"
+            if reason not in {"report_missing", "report_invalid", "report_unavailable"}:
+                reason = "report_invalid"
+            return GithubWorkRemainingView(reason=reason, source_url=issue_url)
+        try:
+            report = RemainingReport.model_validate_json(json.dumps(packet["report"]))
+            if any(value and value in json.dumps(packet["report"]) for value in private_values):
+                raise ValueError("private report value")
+        except (ValidationError, ValueError, TypeError):
+            return GithubWorkRemainingView(reason="report_invalid", source_url=issue_url)
+        reason = report_reason(report, context, now)
+        return GithubWorkRemainingView(state="historical" if reason else "current", reason=reason,
+            remaining=report.remaining, estimate=report.estimate(), next_action=report.next_action,
+            reported_at=report.reported_at, reported_by=report.reported_by,
+            source_sha=report.source_sha, source_url=issue_url,
+            completed=report.completed or None, assumptions=report.assumptions or None)
+
     async def _observe(self, target, previous, now):
         context = target.workspace
         local = await self.observer.read(context)
@@ -212,7 +267,7 @@ class GithubWorkProgressService:
         lease = workspace.lease_token if workspace else None
         target = (_SourceTarget(
             WorkspaceProgressContext(scope.repo_path, workspace.path, workspace.kind),
-            item.dispatch_head_ref, scope.repo_owner, scope.repo_name,
+            item.dispatch_head_ref, scope.repo_owner, scope.repo_name, item.issue_number,
         ) if workspace else None)
         now = datetime.now(timezone.utc)
         cached_row = await db.get(GithubWorkProgressSnapshot, item_id)
@@ -221,6 +276,9 @@ class GithubWorkProgressService:
         matching = (snapshot if snapshot and isinstance(snapshot.identity, dict)
                     and all(snapshot.identity.get(key) == value
                             for key, value in started_identity.items()) else None)
+        remaining_packet = (matching.observation.get("_remaining_report")
+                            if matching and isinstance(matching.observation, dict) else None)
+        private_values = tuple(value for value in (lease, settings.operator_token, settings.github_token) if value)
         if workspace is None or lease is None:
             publication = _historical(matching, "workspace_not_leased")
         elif (matching and matching.identity == workspace_identity
@@ -235,8 +293,8 @@ class GithubWorkProgressService:
             # in an observation, cache identity, log, or API response.
             prior = _historical(matching, "snapshot_unavailable") if matching else None
             try:
-                publication = await asyncio.wait_for(
-                    self._observe(target, prior, now), timeout=8)
+                publication, remaining_packet = await asyncio.wait_for(
+                    self._observe_progress(target, prior, now, private_values), timeout=8)
             except ProgressObservationError as error:
                 publication = _historical(matching, error.reason)
             except (TimeoutError, OSError):
@@ -257,6 +315,7 @@ class GithubWorkProgressService:
                         GithubWorkItem.dispatch_nonce == identity["dispatch_nonce"],
                         GithubWorkItem.owner_slot_id == identity["owner_slot_id"],
                         GithubWorkItem.dispatch_head_ref == identity["head_ref"],
+                        GithubWorkItem.active_scope_revision == identity["scope_revision"],
                         TeamGithubScope.id == identity["scope_id"],
                         TeamGithubScope.repo_owner == identity["repo_owner"],
                         TeamGithubScope.repo_name == identity["repo_name"],
@@ -268,6 +327,7 @@ class GithubWorkProgressService:
                         GithubWorkspace.lease_token == lease,
                     ))
                 data = publication.model_dump(mode="json")
+                data["_remaining_report"] = remaining_packet
                 table = GithubWorkProgressSnapshot.__table__
                 try:
                     if snapshot is None:
@@ -321,6 +381,19 @@ class GithubWorkProgressService:
         check_head = item.last_verified_sha
         if not isinstance(check_head, str) or not _SHA.fullmatch(check_head):
             check_head = None
+        context = None
+        if (publication.state == "current" and publication.local_sha
+                and publication.local_sha == publication.published_sha
+                and item.dispatch_nonce and item.owner_slot_id
+                and _base_identity(item, scope) == started_identity):
+            context = ReportContext(work_item_id=item_id, dispatch_nonce=item.dispatch_nonce,
+                owner_slot_id=item.owner_slot_id, scope_revision=item.active_scope_revision,
+                source_sha=publication.local_sha, phase=phase)
+        issue_url = (f"https://github.com/{scope.repo_owner}/{scope.repo_name}/issues/{item.issue_number}#work-remaining"
+                     if all(_REPO_PART.fullmatch(part or "") and part not in {".", ".."}
+                            for part in (scope.repo_owner, scope.repo_name)) else None)
+        remaining = self._remaining_view(remaining_packet, context, datetime.now(timezone.utc),
+                                         issue_url, private_values)
         return GithubWorkProgressResponse(
             work_item_id=item_id, dispatch_nonce=item.dispatch_nonce,
             owner_slot_id=item.owner_slot_id, checked_at=datetime.now(timezone.utc),
@@ -332,6 +405,7 @@ class GithubWorkProgressService:
             next_poll_expected_at=(_utc(polled_at) + timedelta(
                 seconds=settings.github_dispatch_interval_seconds)) if polled_at else None,
             last_check_head=check_head, publication=publication,
+            remaining_work=remaining, remaining_work_context=context,
         )
 
 

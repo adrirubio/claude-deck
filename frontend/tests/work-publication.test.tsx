@@ -87,7 +87,7 @@ describe('Work publication observations', () => {
   it('distinguishes an ended owner turn from completed work and human review', async () => {
     vi.mocked(apiClient).mockResolvedValue(progress({ phase: 'review', next_actor: 'operator', next_action: 'Read the issue summary.' }))
     render(<WorkPublicationPanel item={{ ...item, dispatch_status: 'ready_for_review' }} ownerActivity={{ slot_id: 2, state: 'idle', reason: 'native_turn_completed', observed_at: new Date().toISOString() }} />)
-    expect(await screen.findByText('Read the issue summary.')).toBeTruthy()
+    expect(await screen.findByText('Read the issue summary.', { selector: 'p' })).toBeTruthy()
     expect(screen.getByText(/completed turn does not establish/)).toBeTruthy()
     expect(screen.getByText(/Next actor/).textContent).toContain('Operator')
   })
@@ -108,6 +108,6 @@ it('does not restore prior current data across A to B to A', async () => {
 it('renders the current design human-review instruction', async () => {
   vi.mocked(apiClient).mockResolvedValue(progress({ phase: 'review', next_actor: 'operator', next_action: 'Read the human summary and review the design PR.' }))
   render(<WorkPublicationPanel item={{ ...item, dispatch_status: 'awaiting_human_review' }} />)
-  expect(await screen.findByText('Read the human summary and review the design PR.')).toBeTruthy()
+  expect(await screen.findByText('Read the human summary and review the design PR.', { selector: 'p' })).toBeTruthy()
   expect(screen.getByText(/Next actor/).textContent).toContain('Operator')
 })

@@ -960,6 +960,60 @@ def deck_launch_team(
 
 
 @mcp.tool()
+def deck_prepare_work_remaining_summary(
+    work_item_id: int,
+    remaining: str,
+    next_action: str,
+    effort_low_minutes: Optional[int] = None,
+    effort_high_minutes: Optional[int] = None,
+    confidence: str = "unknown",
+    effort_scope: str = "",
+    completed: str = "",
+    assumptions: str = "",
+) -> dict:
+    """Leader-only: prepare three short public lines for the main GitHub issue and PR.
+
+    This tool does not publish to GitHub. Use existing authorized GitHub access.
+    State what remains and who acts next. An effort range covers active work only;
+    name its scope and confidence. Omit both bounds when the estimate is unknown.
+    Publish after a safe checkpoint and refresh after source, scope or phase changes.
+    Reports grant no approval and do not satisfy review, CI or milestone gates.
+    Do not include private values, raw output, prompts or an inferred percentage.
+    """
+    identity = _ensure_registered()
+    if not identity.get("ok"):
+        return identity
+    result = _team_request("GET", f"/github-work-items/{work_item_id}/remaining-work-context")
+    if not result.get("ok"):
+        return result
+    context = result["data"].get("remaining_work_context")
+    if context is None:
+        return {"ok": False, "error": {"code": "progress_context_unavailable"},
+                "suggestion": "Reconcile the current item and its published checkpoint first."}
+    try:
+        from datetime import datetime, timezone
+        try:
+            from mcp_shim.work_remaining_protocol import RemainingReport
+        except ModuleNotFoundError as error:
+            if error.name != "mcp_shim":
+                raise
+            from work_remaining_protocol import RemainingReport
+        report = RemainingReport.model_validate({**context,
+            "reported_at": datetime.now(timezone.utc),
+            "reported_by": f"Team member {_state['member_id']}",
+            "remaining": remaining, "next_action": next_action,
+            "effort_low_minutes": effort_low_minutes, "effort_high_minutes": effort_high_minutes,
+            "confidence": confidence, "effort_scope": effort_scope,
+            "completed": completed, "assumptions": assumptions})
+    except ValueError:
+        return {"ok": False, "error": {"code": "invalid_remaining_summary"},
+                "suggestion": "Use short public text and a scoped range with confidence, or Unknown."}
+    return {"ok": True, "body_markdown": report.markdown(),
+            "issue_url": result["data"].get("remaining_work", {}).get("source_url"),
+            "next_action": "Replace only the marked Work remaining block near the start of the main issue and PR."}
+
+
+@mcp.tool()
 def deck_report_dispatch_status(
     work_item_id: int,
     status: str,
