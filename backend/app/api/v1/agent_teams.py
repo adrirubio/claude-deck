@@ -2799,7 +2799,11 @@ async def read_activation_readiness(
                 first_stat = read_proc_stat(session.pid)
                 if first_stat is None:
                     return False, "mcp_process_gap", member.id, None
-                started_at = _process_started_at(first_stat[1])
+                first_start = first_stat[1]
+                try:
+                    started_at = _process_started_at(first_start)
+                except (OSError, ValueError, TypeError):
+                    return False, "mcp_process_gap", member.id, None
                 if (registered_at is None
                         or registered_at > datetime.now(timezone.utc) + timedelta(seconds=5)
                         or started_at > registered_at):
@@ -2811,6 +2815,11 @@ async def read_activation_readiness(
                     if stat is None or not isinstance(stat[1], str) or not stat[1]:
                         return False, "mcp_process_gap", member.id, None
                     ppid, start_time = stat
+                    # Retain the first authenticated start tick through the
+                    # leaf checks. A reused PID whose tick changed across the
+                    # reads refuses; invalid ticks refuse as the safe gap.
+                    if current_pid == session.pid and start_time != first_start:
+                        return False, "mcp_process_gap", member.id, None
                     argv = pane_agent_argv(current_pid, start_time)
                     if argv is None:
                         # Oversized, malformed or identity changed across the

@@ -2982,3 +2982,52 @@ async def test_readiness_counted_growth_at_four_seams(tmp_path, monkeypatch):
         finally:
             await engine.dispose()
             await writer_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_readiness_reused_leaf_pid_across_reads_is_refused(client, db, monkeypatch, tmp_path):
+    """A2 race: a same-provider same-pane auxiliary whose start tick changes
+    across the observation reads is a reused PID and refuses."""
+    import importlib
+    from app.models.database import MailAgentSession as Sess
+
+    peer = importlib.import_module("app.utils.peer_process")
+    real_argv = peer.pane_agent_argv
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "LeafReuse", 1)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 1340, 8440, last_seen=now)
+    row = await db.get(Sess, 8440)
+    row.pid = 5005
+    await db.commit()
+
+    fake = tmp_path / "proc"
+    pane_pid = 1000 + 8440
+    for tree_pid, cmd in ((5005, b"codex\x00mcp\x00"), (pane_pid, b"codex\x00exec\x00")):
+        d = fake / str(tree_pid)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "stat").write_text(
+            f"{tree_pid} (p) S {pane_pid} {tree_pid} {tree_pid} 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0")
+        (d / "cmdline").write_bytes(cmd)
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    real_stat = peer.read_proc_stat
+    calls = {"n": 0}
+
+    def flipping_stat(pid):
+        calls["n"] += 1
+        result = real_stat(pid)
+        if result is not None and pid == 5005 and calls["n"] >= 2:
+            # The leaf PID is reused between the registration read and the
+            # ancestry loop: a different start tick must refuse.
+            return (result[0], "99999")
+        return result
+
+    monkeypatch.setattr(peer, "read_proc_stat", flipping_stat)
+    monkeypatch.setattr(peer, "pane_agent_argv", real_argv)
+    monkeypatch.setattr(peer, "process_is_confirmed_dead", lambda pid: False)
+    try:
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    finally:
+        peer._PROC_ROOT = original_root
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_mcp_process_gap" in codes
