@@ -743,6 +743,48 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_report_owner_followup",
+    "description": "Current Leader: persist or resolve a bounded owner settlement watch.\n\n    Read deck_get_backlog_coordination immediately before this call. Select the\n    current owner_followups entry. Keep its followup_token private and use its\n    event_sequence as expected_sequence. Use action watch and reason\n    unfinished_authorized_work before ending a turn with unfinished initial\n    implementation. Watch supports current revision0 work with a tracked PR.\n    Arrange the next authorized action before ending your turn.\n\n    For an observed pending event, use action assess and reason\n    next_action_arranged, blocked, or complete. This records only a coordination\n    disposition. A Mail read or an older backlog assessment does not resolve it.\n    If work remains, read again and register the next watch. Changed authority,\n    event, binding, policy, expired challenges and OFF/HOLD refuse stale writes.\n    A watch never wakes the owner, renews a lease, resets budgets, approves work,\n    merges a PR, or satisfies a review or milestone gate.\n    ",
+    "inputSchema": {
+      "properties": {
+        "scope_id": {
+          "title": "Scope Id",
+          "type": "integer"
+        },
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "action": {
+          "title": "Action",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "expected_sequence": {
+          "title": "Expected Sequence",
+          "type": "integer"
+        },
+        "followup_token": {
+          "title": "Followup Token",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope_id",
+        "work_item_id",
+        "action",
+        "reason",
+        "expected_sequence",
+        "followup_token"
+      ],
+      "title": "deck_report_owner_followupArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_request_context",
     "description": "Ask another Agent Mail participant a non-authoritative structured question.\n\n    Creates a pending context request they will be nudged to answer. For initial-plan\n    approval, use deck_request_work_item_approval instead; a context answer cannot\n    authorize implementation.\n    ",
     "inputSchema": {

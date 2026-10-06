@@ -1448,6 +1448,17 @@ class GithubDispatchService:
             "- Track review disposition by full PR head SHA. A changed head needs "
             "fresh independent review and CI; an older acceptance or ready state "
             "does not accept it."
+            "\n\nUNFINISHED OWNER WORK (leader duty):\n"
+            "- Record the remaining authorized task and its next trigger before ending your turn. "
+            "When backlog coordination is enabled, read deck_get_backlog_coordination. "
+            "For current initial implementation, use its private owner_followups challenge with "
+            "deck_report_owner_followup(action=\"watch\", reason=\"unfinished_authorized_work\"). "
+            "This covers an owner that finishes after your last observation.\n"
+            "- On an owner settlement notice, read current authority and evidence. Arrange the next "
+            "permitted action or report the specific blocker or evidenced completion. Assess the "
+            "exact event through deck_report_owner_followup. If work remains, register its next "
+            "watch after arranging the action. A Mail read is not an event assessment. "
+            "A watch grants no approval, retry, lease, merge or milestone authority. Stop on OFF/HOLD."
             "\n\n" + HUMAN_REVIEW_SUMMARY_GUIDANCE
         )
 
