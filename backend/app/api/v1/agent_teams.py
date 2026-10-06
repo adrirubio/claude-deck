@@ -2729,40 +2729,42 @@ async def read_activation_readiness(
             # silently: the qualifying list below refuses the ambiguity, which
             # also covers replaced or retired panes still bound in records.
             # Strict native identity: confirm the pane process start-time
-            # lifetime against the live process, not a lenient liveness guess.
-            # One probe per candidate, capped by the bounded session query.
-            from app.utils.peer_process import pane_agent_command, pane_is_alive_strict
+            # lifetime before and after a bounded command read. One probe per
+            # candidate, capped by the bounded session query.
+            from app.utils.peer_process import pane_agent_argv, pane_is_alive_strict
             if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
                 return False, "native_lifetime", member.id, None
-            # Actual native provider/agent identity: the pane process command
-            # line must confirm the provider family. Stored provider strings
-            # and pane liveness alone cannot establish identity. A shell or an
-            # unreadable process refuses rather than inferring.
-            command = pane_agent_command(session.bound_pane_pid, session.bound_pane_proc_start)
+            # Actual native provider/agent identity from the preserved
+            # argument vector. argv[0] must be the registered executable;
+            # supported argument positions are exact. Provider text anywhere
+            # else, shell wrappers, arbitrary scripts and oversized commands
+            # never confirm identity.
+            argv = pane_agent_argv(session.bound_pane_pid, session.bound_pane_proc_start)
+            if argv is None:
+                return False, "native_identity", member.id, None
+            argv0 = argv[0].rsplit("/", 1)[-1]
             marker = {
                 "claude-code": "claude",
                 "codex-cli": "codex",
                 "copilot-cli": "copilot",
                 "opencode-cli": "opencode",
+                "pi-cli": "pi",
             }.get(slot.provider, slot.provider)
-            # Recognized executable identity: argv[0] must be the provider
-            # family executable. Provider text in any argument, a shell with a
-            # provider argument, or an unrelated executable never confirms
-            # identity.
-            argv0 = command.split()[0].rsplit("/", 1)[-1] if command else ""
-            # Exact executable identity only. Arbitrary prefixes or
-            # substrings cannot establish identity. Supported Pi identities
-            # are the pi executable and the recognized Node CLI form.
-            exact_identity = command is not None and (
-                argv0 == marker or argv0 == slot.provider)
-            if slot.provider == "pi" and command is not None:
-                parts = command.split()
-                node_cli = (parts[0].rsplit("/", 1)[-1] == "node"
-                            and any("pi" in part and part.endswith((".js", ".mjs", ".cjs"))
-                                    for part in parts[1:]))
-                exact_identity = exact_identity or node_cli or parts[0].rsplit("/", 1)[-1] == "pi"
-            if (not exact_identity
-                    or argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}):
+            if argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}:
+                return False, "native_identity", member.id, None
+            if slot.provider in {"pi", "pi-cli"}:
+                # Registered Pi recognizer semantics
+                # (app/services/providers/pi_cli.py::_pi_command): the pi
+                # executable, or node with the registered CLI script exactly
+                # at argument position 1.
+                import re as _re
+                pi_identity = argv0 == "pi" or (
+                    argv0 == "node" and len(argv) > 1
+                    and bool(_re.search(r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
+                )
+                if not pi_identity:
+                    return False, "native_identity", member.id, None
+            elif not (argv0 == marker or argv0 == slot.provider):
                 return False, "native_identity", member.id, None
             # Authenticated MCP process: when the session process differs
             # from the pane process it must not be confirmed dead. This is the

@@ -334,30 +334,39 @@ def pane_is_alive_strict(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
         return None
 
 
-def pane_agent_command(pane_pid: int, pane_proc_start: str) -> Optional[str]:
-    """Return the pane process command line when its start-time identity is
-    confirmed; otherwise None.
+PANE_COMMAND_BYTE_CAP = 4096
 
-    Bounded observational native evidence: one /proc stat read for the
-    lifetime check and one /proc cmdline read for the actual agent/provider
-    identity. A shell command line or an unreadable process yields None; the
-    caller must refuse rather than infer identity from stored fields alone.
+
+def pane_agent_argv(pane_pid: int, pane_proc_start: str) -> Optional[list[str]]:
+    """Return the pane process argument vector when its lifetime identity is
+    confirmed before and after the read; otherwise None.
+
+    NUL argument boundaries are preserved. At most PANE_COMMAND_BYTE_CAP
+    command bytes are read (cap plus one probe byte); an oversized command
+    refuses with None and is never silently truncated. A missing, denied or
+    malformed process also returns None; callers refuse rather than infer.
     """
     stat = read_proc_stat(pane_pid)
     if stat is None:
         return None
     # read_proc_stat returns (ppid, starttime). Only the start-time field
-    # establishes the process lifetime identity; the parent PID is not the
-    # process identity and must not gate the command read.
+    # establishes the process lifetime identity.
     _ppid, current_start = stat
     if current_start != pane_proc_start:
         return None
     try:
-        raw = Path(f"/proc/{pane_pid}/cmdline").read_bytes()
+        with open(f"{_PROC_ROOT}/{pane_pid}/cmdline", "rb") as handle:
+            raw = handle.read(PANE_COMMAND_BYTE_CAP + 1)
     except OSError:
         return None
-    command = raw.replace(b"\x00", b" ").decode("utf-8", "replace").strip()
-    return command or None
+    if len(raw) > PANE_COMMAND_BYTE_CAP:
+        return None
+    # Post-read lifetime recheck: the process must be the same one.
+    stat_after = read_proc_stat(pane_pid)
+    if stat_after is None or stat_after[1] != pane_proc_start:
+        return None
+    argv = [part for part in raw.split(b"\x00") if part]
+    return [part.decode("utf-8", "replace") for part in argv] or None
 
 
 def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:

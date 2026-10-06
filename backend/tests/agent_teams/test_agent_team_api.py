@@ -1294,8 +1294,8 @@ async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
                         lambda pane_pid, proc_start: True)
     from app.config import settings as app_settings
     monkeypatch.setattr(app_settings, "mail_capability_tokens_required", True)
-    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
-                        lambda pane_pid, proc_start: "codex exec --yolo")
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                        lambda pane_pid, proc_start: ["codex", "exec", "--yolo"])
     from unittest.mock import AsyncMock
 
     from app.models.database import MailAgentSession, MailTeamMember
@@ -2302,8 +2302,8 @@ async def test_readiness_native_agent_identity_mismatch_is_refused(client, db, m
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "AgentId", 1)
     _bind_owner(db, preset, preset.slots[1].id, 1002, 8102, last_seen=datetime.utcnow())
     # Wrong provider family in the native command line.
-    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
-                        lambda pane_pid, proc_start: "claude --model x")
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                        lambda pane_pid, proc_start: ["claude", "--model", "x"])
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
@@ -2316,8 +2316,8 @@ async def test_readiness_unconfirmed_native_identity_refuses(client, db, monkeyp
     instead of inferring it."""
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ShellPane", 1)
     _bind_owner(db, preset, preset.slots[1].id, 1003, 8103, last_seen=datetime.utcnow())
-    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
-                        lambda pane_pid, proc_start: "bash")
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                        lambda pane_pid, proc_start: ["bash"])
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
@@ -2333,8 +2333,8 @@ async def test_readiness_provider_text_in_argument_does_not_confirm_identity(
     confirms native identity."""
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ArgText", 1)
     _bind_owner(db, preset, preset.slots[1].id, 1004, 8104, last_seen=datetime.utcnow())
-    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
-                        lambda pane_pid, proc_start: "/usr/bin/yes codex")
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                        lambda pane_pid, proc_start: ["/usr/bin/yes", "codex"])
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
@@ -2348,8 +2348,8 @@ async def test_readiness_shell_with_provider_argument_does_not_confirm_identity(
     """I06: a shell with a provider argument never confirms native identity."""
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ShellArg", 1)
     _bind_owner(db, preset, preset.slots[1].id, 1005, 8105, last_seen=datetime.utcnow())
-    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
-                        lambda pane_pid, proc_start: "bash -c codex")
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                        lambda pane_pid, proc_start: ["bash", "-c", "codex"])
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
@@ -2481,3 +2481,74 @@ async def test_readiness_collection_growth_keeps_bounds_and_refuses_partial_stat
         "leader_binding_ambiguous", "provider_mail_not_ready",
         "capability_tokens_not_required", "readiness_context_limit",
     } for blocker in body["blockers"])
+
+
+@pytest.mark.asyncio
+async def test_readiness_recognizes_all_five_provider_families(client, db, monkeypatch, tmp_path):
+    """C1: real route complete-ready positives for all five registered
+    provider families with their exact supported command forms."""
+    from app.models.database import MailAgentSession as Sess
+
+    forms = [
+        ("claude-code", ["claude"]),
+        ("codex-cli", ["codex"]),
+        ("copilot-cli", ["copilot"]),
+        ("opencode-cli", ["opencode"]),
+        ("pi-cli", ["pi"]),
+        ("pi-cli", ["node", "/srv/app/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"]),
+    ]
+    for index, (provider, argv) in enumerate(forms):
+        preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, f"Family{index}", 1)
+        await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                         {"slot": preset.slots[0].id, "preset": preset.id})
+        await db.execute(text("UPDATE agent_team_slots SET provider = :p WHERE preset_id = :preset"),
+                         {"p": provider, "preset": preset.id})
+        _bind_owner(db, preset, preset.slots[1].id, 1100 + index, 8200 + index, last_seen=datetime.utcnow())
+        _bind_owner(db, preset, preset.slots[0].id, 1120 + index, 8220 + index, last_seen=datetime.utcnow())
+        for sid in (8200 + index, 8220 + index):
+            row = await db.get(Sess, sid)
+            row.provider = provider
+        await db.commit()
+        monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                            lambda pane_pid, proc_start, _argv=list(argv): _argv)
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+        body = readiness.json()
+        assert body["status"] == "ready", (provider, argv, body)
+
+
+@pytest.mark.asyncio
+async def test_readiness_spaced_executable_name_never_confirms_identity(client, db, monkeypatch, tmp_path):
+    """C8/R3: a preserved argv with a spaced executable name is not the
+    provider executable."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "SpacedExec", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1140, 8240, last_seen=datetime.utcnow())
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                        lambda pane_pid, proc_start: ["/tmp/codex helper", "--idle"])
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_identity" in codes
+
+
+def test_real_helper_bounds_command_bytes_and_preserves_argv(tmp_path):
+    """C8: the real helper reads at most the documented byte cap plus one,
+    refuses overflow and preserves NUL argument boundaries."""
+    import importlib
+
+    peer = importlib.import_module("app.utils.peer_process")
+    fake = tmp_path / "proc"
+    pid_dir = fake / "4242"
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "stat").write_text(
+        "4242 (proc) S 1 4242 4242 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345 0 0")
+    (pid_dir / "cmdline").write_bytes(b"/tmp/codex\x00helper\x00--idle\x00")
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    try:
+        argv = peer.pane_agent_argv(4242, "12345")
+        assert argv == ["/tmp/codex", "helper", "--idle"]
+        assert peer.pane_agent_argv(4242, "99999") is None
+        (pid_dir / "cmdline").write_bytes(b"x" * (peer.PANE_COMMAND_BYTE_CAP + 10))
+        assert peer.pane_agent_argv(4242, "12345") is None
+    finally:
+        peer._PROC_ROOT = original_root
