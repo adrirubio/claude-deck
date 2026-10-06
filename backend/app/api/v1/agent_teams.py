@@ -149,10 +149,25 @@ def _policy_event_snapshot(scope, request) -> dict:
     }
 
 
-async def _observe_resume_rejection(db, item_id: int | None, code: str) -> None:
+def _audit_handoff_actor(session):
+    """C08: a member handoff attempt is attributed to its authenticated
+    member, never to the shared operator credential."""
+    from app.services import factory_audit_service as _audit
+    slot_id = None
+    try:
+        from app.api.v1.deps import require_session_slot
+        slot_id = require_session_slot(session)
+    except Exception:
+        slot_id = None
+    return _audit.derive_actor(actor_kind="member", session_id=slot_id)
+
+
+async def _observe_resume_rejection(db, item_id: int | None, code: str, actor=None) -> None:
     """Record a rejected resume outcome in a fresh observation transaction.
 
-    Observation failure never masks the original refusal.
+    The actor comes from the actual authenticated call path; client-supplied
+    role claims are never trusted. Observation failure never masks the
+    original refusal.
     """
     try:
         from app.services import factory_audit_service as _audit
@@ -161,7 +176,7 @@ async def _observe_resume_rejection(db, item_id: int | None, code: str) -> None:
             event_kind="prepared_attempt_resume",
             source="github_dispatch_service.resume_prepared_attempt",
             occurred_at=datetime.now(timezone.utc),
-            actor=_audit.derive_actor(actor_kind="operator"),
+            actor=actor or _audit.derive_actor(actor_kind="operator"),
             item_id=item_id,
             action_outcome="rejected",
             sanitized_reason=code,
@@ -949,7 +964,11 @@ async def report_dispatch_status(
                 target_slot_id=report.reassign_to_slot_id,
             )
         except ResumeAttemptError as exc:
-            await _observe_resume_rejection(db, report.work_item_id if hasattr(report, "work_item_id") else None, exc.block_code)
+            await _observe_resume_rejection(
+                db,
+                report.work_item_id if hasattr(report, "work_item_id") else None,
+                exc.block_code,
+                actor=_audit_handoff_actor(session))
             status_code = 403 if exc.block_code == "not_item_owner" else 409
             raise HTTPException(status_code=status_code, detail=exc.block_code) from exc
     elif report.status == "handoff_accepted":

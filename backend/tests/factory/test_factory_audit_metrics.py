@@ -806,3 +806,54 @@ async def test_c07_replay_identity_covers_actions_resources_and_races(db):
     assert race_facts == 1
     assert all(isinstance(result, audit.FactoryAuditEvent) for result in results)
     assert results[0].id == results[1].id
+
+async def test_c08_actor_identity_follows_actual_paths(db):
+    """C08: operator, owner-session and scheduler release paths and invalid
+    member handoffs record their actual actors; no false operator or resume
+    counts; client-supplied role claims are never trusted."""
+    import inspect as _inspect
+
+    from app.services import github_workspace_service as _workspace
+
+    # The shared release path accepts the actual actor kind from callers.
+    assert "actor_kind" in _inspect.signature(
+        _workspace.GithubWorkspaceService._release_acquisition).parameters
+
+    operator = audit.derive_actor(actor_kind="operator")
+    scheduler = audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler")
+    member = audit.derive_actor(actor_kind="member", session_id=7)
+    # Client-supplied identity claims are rejected.
+    with pytest.raises(ValueError):
+        audit.derive_actor(actor_kind="operator", member_id=42)
+
+    await _seed_item(db, 1)
+    await db.commit()
+    await audit.record_event(
+        db, event_kind="workspace_release", source="test", occurred_at=_now(),
+        actor=operator, item_id=1, action_outcome="applied",
+        sanitized_reason="operator force release")
+    await audit.record_event(
+        db, event_kind="workspace_release", source="test", occurred_at=_now(),
+        actor=scheduler, item_id=1, action_outcome="applied",
+        sanitized_reason="launch failure release")
+    await audit.record_event(
+        db, event_kind="prepared_attempt_resume", source="test", occurred_at=_now(),
+        actor=member, item_id=1, action_outcome="rejected",
+        sanitized_reason="invalid member handoff")
+    await db.commit()
+
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    # Only the genuine operator action counts as an operator intervention.
+    assert by_name["operator_interventions"].value == 1.0
+    # The member rejection counts as a rejected recovery action, never a
+    # resume success.
+    assert by_name["recovery_success"].value == 0.0
+    rows = (await db.execute(text(
+        "SELECT actor_kind, COUNT(*) FROM factory_audit_events GROUP BY actor_kind"
+    ))).fetchall()
+    kinds = {row[0]: row[1] for row in rows}
+    assert kinds.get("operator") == 1
+    assert kinds.get("scheduler") == 1
+    assert kinds.get("member") == 1

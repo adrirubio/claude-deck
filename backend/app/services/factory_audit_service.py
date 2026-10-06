@@ -89,6 +89,10 @@ def derive_actor(
     """
     if actor_kind not in {"operator", "member", "scheduler", "system"}:
         raise ValueError(f"unsupported actor kind: {actor_kind}")
+    # C08: client-supplied identity claims are never trusted. The shared
+    # operator credential cannot also assert a personal member identity.
+    if actor_kind == "operator" and (member_id is not None or session_id is not None):
+        raise ValueError("operator_role_cannot_assert_identity")
     reference = None
     if actor_kind == "operator":
         reference = "shared-operator-credential"

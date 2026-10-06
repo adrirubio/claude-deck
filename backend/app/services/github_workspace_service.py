@@ -621,6 +621,7 @@ class GithubWorkspaceService:
         workspace_id: int,
         scope_id: int,
         item_id: int,
+        actor_kind: str = "operator",
         expected_leased_at: datetime | None,
         lease_token: str | None,
         owner_slot_id: int | None = None,
@@ -818,6 +819,7 @@ class GithubWorkspaceService:
             return False
         return await self._release_acquisition(
             db,
+            actor_kind="scheduler",
             workspace_id=workspace.id,
             scope_id=workspace.scope_id,
             item_id=item_id,
@@ -832,6 +834,7 @@ class GithubWorkspaceService:
         workspace_id: int,
         scope_id: int,
         item_id: int,
+        actor_kind: str = "operator",
         expected_leased_at: datetime,
         lease_token: str | None,
     ) -> bool:
@@ -844,6 +847,7 @@ class GithubWorkspaceService:
         """
         return await self._release_acquisition(
             db,
+            actor_kind=actor_kind,
             workspace_id=workspace_id,
             scope_id=scope_id,
             item_id=item_id,
@@ -880,6 +884,7 @@ class GithubWorkspaceService:
             )
         return await self._release_acquisition(
             db,
+            actor_kind=actor_kind,
             workspace_id=workspace.id,
             scope_id=workspace.scope_id,
             item_id=item_id,
@@ -901,6 +906,7 @@ class GithubWorkspaceService:
         """Release only while acquisition and item ownership still match."""
         return await self._release_acquisition(
             db,
+            actor_kind=actor_kind,
             workspace_id=workspace_id,
             scope_id=scope_id,
             item_id=item_id,
