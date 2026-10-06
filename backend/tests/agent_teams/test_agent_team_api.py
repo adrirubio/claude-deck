@@ -2414,3 +2414,21 @@ async def test_readiness_owner_disabled_between_baseline_and_validation_is_refus
     assert "binding_changed_during_observation" in codes
     assert "owner_binding_stale" in codes
     assert state["started"] is True
+
+
+@pytest.mark.asyncio
+async def test_readiness_two_distinct_owners_complete_ready(client, db, monkeypatch, tmp_path):
+    """I02: two distinct valid owners with the Leader yield the complete ready
+    result: status ready and zero blockers, not merely one code absent."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "TwoOwners", 2)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 1020, 8120, last_seen=now)
+    _bind_owner(db, preset, preset.slots[2].id, 1021, 8121, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 1022, 8122, last_seen=now)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    body = readiness.json()
+    assert body["status"] == "ready"
+    assert body["blockers"] == []

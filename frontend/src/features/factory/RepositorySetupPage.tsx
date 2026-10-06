@@ -282,6 +282,12 @@ export function RepositorySetupPage() {
 
   useEffect(() => {
     void refreshConfiguration().catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not load teams."));
+    // Explicit disposition (P04 lint warning): this effect is the mount-only
+    // initial configuration load. `refreshConfiguration` is recreated on
+    // every render and depends on the credential prompt chain; listing it
+    // would refetch configuration on every render. The lint rule is disabled
+    // for this line only, with the reason recorded in the P04 evidence index.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => () => {
