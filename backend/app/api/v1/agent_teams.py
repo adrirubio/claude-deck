@@ -2804,7 +2804,7 @@ async def read_activation_readiness(
                 observed_tick = first_start
                 try:
                     started_at = _process_started_at(first_start)
-                except (OSError, ValueError, TypeError):
+                except (OSError, ValueError, TypeError, OverflowError):
                     return False, "mcp_process_gap", member.id, None, None
                 if (registered_at is None
                         or registered_at > datetime.now(timezone.utc) + timedelta(seconds=5)

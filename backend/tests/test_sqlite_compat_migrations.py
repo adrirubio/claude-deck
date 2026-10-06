@@ -1153,7 +1153,7 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "active_scope_revision, approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce, "
         "created_at, updated_at) "
         "VALUES (1, 1, 7, 'title', 'https://example.invalid/7', CURRENT_TIMESTAMP, 'code', "
-        "'verifying', 'implementation', 11, 10, 8, 100, 1, 1, 0, 1, 0, 0, 'fixture-nonce', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        "'verifying', 'implementation', 11, 10, 8, 102, 1, 1, 0, 1, 0, 0, 'fixture-nonce', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, leased_item_id, lease_token, "
@@ -1175,6 +1175,11 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "INSERT INTO mail_messages (id, kind, sender_member_id, recipient_member_id, subject, body_markdown, "
         "created_at) VALUES (101, 'continuation_request', 8, 7, 'Continuation', 'Fixture continuation request', "
         "CURRENT_TIMESTAMP)"
+    ))
+    await conn.execute(text(
+        "INSERT INTO mail_messages (id, kind, sender_member_id, recipient_member_id, subject, body_markdown, "
+        "approval_round, decision, created_at) VALUES (102, 'answer', 8, 7, 'ACK', 'Leader ACK evidence', "
+        "1, 'approve', CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, approval_round, "

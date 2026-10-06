@@ -3059,9 +3059,13 @@ async def test_readiness_reused_leaf_pid_across_reads_is_refused(client, db, mon
     calls = {"n": 0}
 
     def flipping_stat(pid):
-        calls["n"] += 1
         result = real_stat(pid)
-        if result is not None and pid == 5005 and calls["n"] >= 2:
+        if pid != 5005:
+            return result
+        # Count only the intended leaf observations in this exact-node
+        # regression; pane reads must not advance the counter.
+        calls["n"] += 1
+        if result is not None and calls["n"] >= 2:
             # The leaf PID is reused between the registration read and the
             # ancestry loop: a different start tick must refuse.
             return (result[0], "99999")
