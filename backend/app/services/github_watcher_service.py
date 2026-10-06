@@ -24,7 +24,7 @@ def _parse_gh_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
-async def observe_notification_uncertainty(db, *, item_id: int) -> None:
+async def observe_notification_uncertainty(db, *, item_id: int, revision_id: int | None = None) -> None:
     """C09: the production notification failure observer.
 
     The action is committed but its notification transport is unsettled.
@@ -44,8 +44,8 @@ async def observe_notification_uncertainty(db, *, item_id: int) -> None:
             item_id=item_id,
             action_outcome="uncertain",
             sanitized_reason="notification transport unsettled after commit",
-            operation_id=f"notification-uncertain:{item_id}",
-            correlation_id=f"notification-uncertain:{item_id}",
+            operation_id=f"notification-uncertain:{item_id}:{revision_id}",
+            correlation_id=f"notification-uncertain:{item_id}:{revision_id}",
         )
         await db.commit()
     except Exception:
@@ -230,7 +230,8 @@ class GithubWatcherService:
             logger.exception(
                 "Failed to send blocker-merged notification for work item %s", item.id
             )
-            await observe_notification_uncertainty(db, item_id=item.id)
+            await observe_notification_uncertainty(
+                db, item_id=item.id, revision_id=item.active_scope_revision)
             await db.rollback()
 
 

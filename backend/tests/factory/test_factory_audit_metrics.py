@@ -61,15 +61,15 @@ async def _seed_scope(db, scope_id: int, preset_id: int = 1) -> None:
          "owner": f"owner-{scope_id}", "path": f"/repo-{scope_id}"})
 
 
-async def _seed_workspace(db, workspace_id: int = 1, scope_id: int = 1) -> None:
+async def _seed_workspace(db, workspace_id: int = 1, scope_id: int = 1, path: str = "/w") -> None:
     """Seed a minimal workspace row for revision workspace references."""
     await db.execute(text(
         "INSERT OR IGNORE INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled,"
         " leased_item_id, lease_token, leased_owner_pid, leased_owner_proc_start,"
         " push_token_expires_at, leased_at, released_at, created_at, updated_at)"
-        " VALUES (:workspace, :scope, '/w', 'worktree', 1, 1, NULL, NULL, NULL, NULL, NULL,"
+        " VALUES (:workspace, :scope, :path, 'primary', 1, 1, NULL, NULL, NULL, NULL, NULL,"
         " NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
-        {"workspace": workspace_id, "scope": scope_id})
+        {"workspace": workspace_id, "scope": scope_id, "path": path})
 
 
 async def _seed_slot_member(db, slot_id: int = 1, member_id: int = 1, preset_id: int = 1) -> None:
@@ -912,7 +912,7 @@ async def test_c09_commit_and_send_boundaries_record_actual_results(db, monkeypa
     assert uncertain.action_outcome == "uncertain"
     replay = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_audit_events"
-        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
+        " WHERE operation_id = 'notification-uncertain:1:None'"))).scalar_one()
     assert replay == 1
 
     # CAS refusal records a rejected outcome; no authority replay follows.
@@ -1049,33 +1049,39 @@ def _workspace_service():
 
 
 @pytest.mark.xfail(
-    reason="C08 item 4 in progress: the release guard chain still refuses this "
-           "synthetic acquisition; exact guard diagnosis continues",
+    reason="C08 item 4 in progress: fixture uses a real workspace directory "
+           "and typed lease values; the remaining refusal is at the "
+           "worktree-config guard (_worktree_config_unavailable) in "
+           "github_workspace_service; guard diagnosis continues without "
+           "relaxing production guards",
     strict=False)
-async def test_c08_owner_release_records_exact_actor_identity(db):
+async def test_c08_owner_release_records_exact_actor_identity(db, tmp_path):
     """C08 item 2/4: the real owner release consumer records the exact
     authenticated member and session references and an exact outcome;
     guarded authority, retry and budget state is unchanged."""
     from app.services.github_workspace_service import github_workspace_service as _ws
 
     await _seed_scope(db, 1, preset_id=7)
-    await _seed_slot_member(db, slot_id=1, member_id=1, preset_id=7)
-    await _seed_workspace(db)
+    await _seed_slot_member(db, slot_id=5, member_id=8, preset_id=7)
+    await _seed_workspace(db, path=str(tmp_path / "ws"))
+    (tmp_path / "ws").mkdir()
     await _seed_item(db, 1)
     await db.execute(text(
-        "UPDATE github_work_items SET dispatch_status = 'dispatched', owner_slot_id = 1 WHERE id = 1"))
+        "UPDATE github_work_items SET dispatch_status = 'dispatched', owner_slot_id = 5, retry_count = 2,"
+        " approval_round_count = 3, diagnostic_retry_count = 1 WHERE id = 1"))
     await db.execute(text(
         "UPDATE github_workspaces SET leased_item_id = 1, lease_token = 'synthetic-token',"
         " leased_at = CURRENT_TIMESTAMP WHERE id = 1"))
     await db.commit()
 
     before = (await db.execute(text(
-        "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE failed_head_count != 0"))).scalar_one()
+        "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count,"
+        " owner_slot_id FROM github_work_items WHERE id = 1"))).first()
     from app.models.database import GithubWorkspace as _WS
     leased_at = (await db.get(_WS, 1)).leased_at
     released = await _ws.release_by_owner(
-        db, 1, actor_kind="member", actor_member_id=1, actor_session_id=9,
-        lease_token="synthetic-token", workspace_id=1, scope_id=1, owner_slot_id=1,
+        db, 1, actor_kind="member", actor_member_id=8, actor_session_id=9,
+        lease_token="synthetic-token", workspace_id=1, scope_id=1, owner_slot_id=5,
         expected_leased_at=leased_at)
     await db.commit()
     assert released is True
@@ -1084,14 +1090,15 @@ async def test_c08_owner_release_records_exact_actor_identity(db):
         " FROM factory_audit_events WHERE event_kind = 'workspace_release'"
         " ORDER BY id DESC LIMIT 1"))).first()
     assert row[0] == "member"
-    assert row[1] == 1
+    assert row[1] == 8
     assert row[2] == 9
     assert row[3] == "applied"
     assert row[4] == "workspace_release"
-    # Guarded state unchanged.
+    # Exact guarded state unchanged: authority, retry and budget rows.
     after = (await db.execute(text(
-        "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE failed_head_count != 0"))).scalar_one()
-    assert after == before
+        "SELECT dispatch_status, retry_count, approval_round_count, diagnostic_retry_count,"
+        " owner_slot_id FROM github_work_items WHERE id = 1"))).first()
+    assert tuple(after) == tuple(before)
     workspace = (await db.execute(text(
         "SELECT leased_item_id, lease_token FROM github_workspaces WHERE id = 1"))).first()
     assert workspace[0] is None and workspace[1] is None
@@ -1108,9 +1115,9 @@ async def test_c09_production_notification_observer_records_uncertainty(db):
     await _watcher.observe_notification_uncertainty(db, item_id=1)
     rows = (await db.execute(text(
         "SELECT COUNT(*) FROM factory_audit_events"
-        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
+        " WHERE operation_id = 'notification-uncertain:1:None'"))).scalar_one()
     assert rows == 1
     outcome = (await db.execute(text(
         "SELECT action_outcome FROM factory_audit_events"
-        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
+        " WHERE operation_id = 'notification-uncertain:1:None'"))).scalar_one()
     assert outcome == "uncertain"

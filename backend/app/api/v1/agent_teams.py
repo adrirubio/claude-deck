@@ -176,13 +176,10 @@ def _audit_handoff_actor(session):
     """C08: a member handoff attempt is attributed to its authenticated
     member, never to the shared operator credential."""
     from app.services import factory_audit_service as _audit
-    slot_id = None
-    try:
-        from app.api.v1.deps import require_session_slot
-        slot_id = require_session_slot(session)
-    except Exception:
-        slot_id = None
-    return _audit.derive_actor(actor_kind="member", session_id=slot_id)
+    return _audit.derive_actor(
+        actor_kind="member",
+        member_id=getattr(session, "member_id", None),
+        session_id=getattr(session, "id", None))
 
 
 async def _observe_resume_rejection(db, item_id: int | None, code: str, actor=None,

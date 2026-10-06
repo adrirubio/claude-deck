@@ -825,7 +825,7 @@ class GithubWorkspaceService:
             return False
         return await self._release_acquisition(
             db,
-            actor_kind="scheduler",
+            actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
             workspace_id=workspace.id,
             scope_id=workspace.scope_id,
             item_id=item_id,
