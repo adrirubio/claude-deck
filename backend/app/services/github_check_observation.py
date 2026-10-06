@@ -184,8 +184,12 @@ class _Reader:
     async def observe(self) -> list[dict]:
         checks_path = self.prefix + f"/commits/{self.sha}/check-runs"
         checks = await self.pages(checks_path, "check_runs", {"filter": "all"})
+        latest_checks = await self.pages(checks_path, "check_runs", {"filter": "latest"})
         runs = await self.runs()
         suites = {run.suite: run for run in runs}
+        all_checks = {check["id"]: check for check in checks}
+        _require(all(all_checks.get(check["id"]) == check for check in latest_checks), "observation_changed")
+        latest_ids = {check["id"] for check in latest_checks}
         external: list[dict] = []
         action_checks: dict[int, dict] = {}
         for check in checks:
@@ -197,7 +201,10 @@ class _Reader:
             is_actions = app_id == _ACTIONS_APP_ID
             _require(is_actions == (app.get("slug") == "github-actions"), "invalid_actions_application")
             if not is_actions:
-                external.append(check)
+                # Preserve GitHub's existing latest-check policy for other
+                # applications. Actions need their separate execution proof.
+                if check["id"] in latest_ids:
+                    external.append(check)
                 continue
             suite_row = check.get("check_suite")
             _require(isinstance(suite_row, dict), "invalid_check_suite")
@@ -276,6 +283,7 @@ class _Reader:
         _require(sorted(runs, key=lambda r: r.id) == sorted(await self.runs(), key=lambda r: r.id), "observation_changed")
         final_checks = await self.pages(checks_path, "check_runs", {"filter": "all"})
         _require(checks == final_checks, "observation_changed")
+        _require(latest_checks == await self.pages(checks_path, "check_runs", {"filter": "latest"}), "observation_changed")
         return effective
 
 
