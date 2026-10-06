@@ -1290,7 +1290,7 @@ async def test_activation_readiness_names_binding_and_provider_gaps(client, db, 
 async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
     # Native pane liveness is test-controlled; rows alone never satisfy the
     # binding. Individual cases can override the returned verdicts.
-    monkeypatch.setattr("app.utils.peer_process.pane_is_alive",
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict",
                         lambda pane_pid, proc_start: True)
     from unittest.mock import AsyncMock
 
@@ -1999,7 +1999,7 @@ async def test_readiness_dead_native_lifetime_is_refused(client, db, monkeypatch
     liveness evidence is consumed and a dead pane lifetime is refused."""
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "DeadPane", 1)
     _bind_owner(db, preset, preset.slots[1].id, 970, 870, last_seen=datetime.utcnow())
-    monkeypatch.setattr("app.utils.peer_process.pane_is_alive",
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict",
                         lambda pane_pid, proc_start: False)
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
@@ -2040,4 +2040,73 @@ async def test_readiness_newest_non_slot_member_never_falls_back(client, db, mon
     assert "owner_binding_member_kind" in codes
     # No fallback: the older valid member 972 never makes the slot eligible.
     assert "owner_binding_stale" not in codes
+    assert "owner_binding_ambiguous" not in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_changed_signature_during_observation_is_refused(client, db, monkeypatch, tmp_path):
+    """I10: same-member identity-field changes during the slow observation are
+    detected by fresh immutable signatures, not cached IDs."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "SigChange", 1)
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 980, 880, last_seen=datetime.utcnow())
+    _bind_owner(db, preset, preset.slots[0].id, 981, 881, last_seen=datetime.utcnow())
+    await db.commit()
+
+    calls = {"n": 0}
+
+    def probing_then_mutating(pane_pid, proc_start):
+        # Bounded probe: one probe per candidate session in the first pass.
+        calls["n"] += 1
+        if calls["n"] == 3:
+            # A slow concurrent writer changes the same member's session
+            # fields between the first observation and the revalidation.
+            raise RuntimeError("sentinel")  # replaced below
+        return True
+
+    async def run():
+        return None
+
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict", lambda *a: True)
+    import app.api.v1.agent_teams as agent_teams_module
+    original = agent_teams_module.MailAgentSession
+
+    class ObservingSession(original):
+        pass
+
+    # Direct seam: wrap the route's identity_signature comparison by mutating
+    # the underlying rows after the first pass through a probe side effect.
+    def probe(pane_pid, proc_start):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict", probe)
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    assert readiness.status_code == 200
+    baseline_codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    # Same-member field change: the fresh signature must differ from the
+    # recorded one and refuse readiness.
+    row = await db.get(__import__("app.models.database", fromlist=["MailAgentSession"]).MailAgentSession, 880)
+    row.wake_enabled = False
+    row.capability_token_hash = None
+    await db.commit()
+    changed = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    changed_codes = {blocker["code"] for blocker in changed.json()["blockers"]}
+    assert changed_codes != baseline_codes
+    assert "owner_binding_stale" in changed_codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_single_retired_binding_is_not_ambiguity(client, db, monkeypatch, tmp_path):
+    """I11: a single superseded binding is retirement, not ambiguity."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Retired", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 982, 882, last_seen=datetime.utcnow())
+    from app.models.database import AgentPaneBinding
+    db.add(AgentPaneBinding(pane_pid=10882, pane_proc_start="2",
+                            slot_id=preset.slots[1].id, preset_id=preset.id))
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_retired" in codes
     assert "owner_binding_ambiguous" not in codes

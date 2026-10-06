@@ -2720,21 +2720,76 @@ async def read_activation_readiness(
             # Multiple live pane bindings for one member are never resolved
             # silently: the qualifying list below refuses the ambiguity, which
             # also covers replaced or retired panes still bound in records.
-            # Bounded native liveness evidence: stored rows alone are not
-            # sufficient. One pane probe per candidate, capped by the query.
-            from app.utils.peer_process import pane_is_alive
-            if pane_is_alive(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
+            # Strict native identity: confirm the pane process start-time
+            # lifetime against the live process, not a lenient liveness guess.
+            # One probe per candidate, capped by the bounded session query.
+            from app.utils.peer_process import pane_is_alive_strict
+            if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
                 return False, "native_lifetime", member.id, None
             qualifying.append(session)
         if len(qualifying) > 1:
+            # Two or more simultaneously live bindings are never resolved
+            # silently. A single superseded binding is retirement, not
+            # ambiguity, and is classified below.
             return False, "ambiguous", member.id, None
         if not qualifying:
             return False, "stale", member.id, None
+        # Retirement: the single qualifying binding must still be the current
+        # binding row for this slot. A superseded row describes a retired pane.
+        newest_binding = (await db.scalars(
+            select(AgentPaneBinding).where(
+                AgentPaneBinding.slot_id == slot.id,
+                AgentPaneBinding.preset_id == scope.preset_id,
+            ).order_by(AgentPaneBinding.id.desc()).limit(1)
+        )).first()
+        if newest_binding is not None and newest_binding.pane_pid != qualifying[0].bound_pane_pid:
+            return False, "native_retired", member.id, None
         return True, None, member.id, qualifying[0].id
 
-    states: dict[int, tuple[bool, str | None, int | None]] = {}
+    async def identity_signature(slot: AgentTeamSlot) -> tuple:
+        """Fresh bounded immutable identity signature for one slot.
+
+        Covers preset Leader assignment, roster slot state, current member
+        identity and kind, complete session capability/wake/provider/freshness
+        and pane lifetime fields, and pane binding rows with retirement order.
+        """
+        slot_row = (await db.scalars(
+            select(AgentTeamSlot).where(AgentTeamSlot.id == slot.id).limit(1))).first()
+        preset_row = await db.get(AgentTeamPreset, scope.preset_id)
+        member_row = (await db.scalars(
+            select(MailTeamMember).where(
+                MailTeamMember.team_preset_id == scope.preset_id,
+                MailTeamMember.team_slot_id == slot.id,
+            ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))).first()
+        session_rows = list((await db.scalars(
+            select(MailAgentSession).where(
+                MailAgentSession.team_preset_id == scope.preset_id,
+                MailAgentSession.team_slot_id == slot.id,
+                MailAgentSession.closed_at.is_(None),
+            ).order_by(MailAgentSession.id).limit(9))).all())
+        binding_rows = list((await db.scalars(
+            select(AgentPaneBinding).where(
+                AgentPaneBinding.slot_id == slot.id,
+                AgentPaneBinding.preset_id == scope.preset_id,
+            ).order_by(AgentPaneBinding.id.desc()).limit(3))).all())
+        return (
+            slot_row.enabled if slot_row else None,
+            slot_row.provider if slot_row else None,
+            getattr(preset_row, "leader_slot_id", None),
+            member_row.id if member_row else None,
+            member_row.participant_kind if member_row else None,
+            member_row.updated_at if member_row else None,
+            tuple((s.id, s.provider, s.wake_enabled, s.mailbox_status,
+                   s.capability_token_hash is not None, s.last_seen_at,
+                   s.bound_pane_pid, s.bound_pane_proc_start) for s in session_rows),
+            tuple((b.id, b.pane_pid, b.pane_proc_start) for b in binding_rows),
+        )
+
+    states: dict[int, tuple[bool, str | None, int | None, int | None]] = {}
+    signatures: dict[int, tuple] = {}
     for slot in enabled[:64]:
         states[slot.id] = await binding_state(slot)
+        signatures[slot.id] = await identity_signature(slot)
 
     leader = next((slot for slot in enabled if preset is not None and slot.id == preset.leader_slot_id), None)
     if leader is None:
@@ -2789,8 +2844,10 @@ async def read_activation_readiness(
         # capability, provider, heartbeat freshness, pane identity, binding row
         # and native liveness must all still hold.
         fresh_ok, _fresh_reason, fresh_member_id, fresh_session_id = await binding_state(slot)
+        fresh_signature = await identity_signature(slot)
         if (fresh_member_id != states[slot.id][2] or fresh_ok != states[slot.id][0]
-                or fresh_session_id != states[slot.id][3]):
+                or fresh_session_id != states[slot.id][3]
+                or fresh_signature != signatures[slot.id]):
             blockers.append({"code": "binding_changed_during_observation",
                              "message": "The complete binding state changed during the observation.",
                              "slot_ids": [slot.id]})
