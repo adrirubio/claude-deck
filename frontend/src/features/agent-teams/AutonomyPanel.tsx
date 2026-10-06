@@ -48,6 +48,7 @@ import type {
 import { clearOperatorToken, getOperatorToken, setOperatorToken } from './operatorAuth'
 import { AgentActivityBadge } from './AgentActivityBadge'
 import { BacklogCoordination } from './BacklogCoordination'
+import { WorkPublicationPanel } from './WorkPublicationPanel'
 import { workItemAttention, workItemStatusLabel } from './workItemAttention'
 import {
   abandonGithubWorkItem, cancelGithubActiveRevision, fetchGithubRecoveryGate,
@@ -992,6 +993,7 @@ function WorkItemDialog({
                   </div>
                 </dl>
               </div>
+              <WorkPublicationPanel item={item} ownerName={ownerName} />
               <section className="space-y-3 rounded-lg border p-4" aria-labelledby="attempt-recovery-title">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
