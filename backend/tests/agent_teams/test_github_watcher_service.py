@@ -67,15 +67,23 @@ async def test_list_issues_with_label_builds_request():
 
 @pytest.mark.asyncio
 async def test_github_client_pr_check_and_merge_requests():
+    sha = "a" * 40
+
     def handler(request):
         if request.url.path == "/repos/o/r/pulls/5" and request.method == "GET":
             return httpx.Response(
                 200,
-                json={"number": 5, "node_id": "PR_node", "head": {"sha": "abc"}, "merged": False},
+                json={"number": 5, "node_id": "PR_node", "head": {"sha": sha}, "merged": False},
             )
-        if request.url.path == "/repos/o/r/commits/abc/check-runs":
-            return httpx.Response(200, json={"check_runs": [{"name": "ci", "conclusion": "success"}]})
-        if request.url.path == "/repos/o/r/commits/abc/status":
+        if request.url.path == f"/repos/o/r/commits/{sha}/check-runs":
+            return httpx.Response(200, json={"total_count": 1, "check_runs": [{
+                "id": 1, "head_sha": sha, "name": "ci", "status": "completed",
+                "conclusion": "success", "app": {"id": 2, "slug": "external-ci"},
+            }]})
+        if request.url.path == "/repos/o/r/actions/runs":
+            assert request.url.params["head_sha"] == sha
+            return httpx.Response(200, json={"total_count": 0, "workflow_runs": []})
+        if request.url.path == f"/repos/o/r/commits/{sha}/status":
             return httpx.Response(200, json={"state": "success", "statuses": [{"context": "ci"}]})
         if request.url.path == "/graphql":
             return httpx.Response(200, json={"data": {"markPullRequestReadyForReview": {"pullRequest": {"id": "PR_node"}}}})
@@ -89,17 +97,20 @@ async def test_github_client_pr_check_and_merge_requests():
     ) as http:
         client = GithubClient(http=http, token="tok")
         pull = await client.get_pull("o", "r", 5)
-        checks = await client.list_check_runs_for_ref("o", "r", "abc")
-        status = await client.get_combined_status_for_ref("o", "r", "abc")
+        checks = await client.list_check_runs_for_ref("o", "r", sha)
+        status = await client.get_combined_status_for_ref("o", "r", sha)
         ready = await client.mark_pull_ready_for_review("PR_node")
-        merged = await client.merge_pull("o", "r", 5, expected_head_sha="abc")
+        merged = await client.merge_pull("o", "r", 5, expected_head_sha=sha)
 
-    assert pull["head"]["sha"] == "abc"
+    assert pull["head"]["sha"] == sha
     assert checks[0]["name"] == "ci"
     assert status["state"] == "success"
     assert ready["data"]["markPullRequestReadyForReview"]["pullRequest"]["id"] == "PR_node"
     assert merged["merged"] is True
-    assert json.loads(transport.requests[-1].content) == {"sha": "abc"}
+    assert json.loads(transport.requests[-1].content) == {"sha": sha}
+    check_reads = [request for request in transport.requests if request.url.path.endswith("/check-runs")]
+    assert [request.url.params["filter"] for request in check_reads] == ["all", "latest", "all", "latest"]
+    assert all(request.headers["Authorization"] == "Bearer tok" for request in transport.requests)
 
 
 @pytest_asyncio.fixture
