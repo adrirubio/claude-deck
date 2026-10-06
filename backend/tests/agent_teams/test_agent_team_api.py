@@ -2729,3 +2729,111 @@ async def test_readiness_auxiliary_mcp_process_gaps_refuse(client, db, monkeypat
             b["code"] for b in readiness.json()["blockers"]}
     finally:
         peer._PROC_ROOT = original_root
+
+
+def test_real_helper_preserves_argv_positions_and_refuses_empty_argv0(tmp_path):
+    """A3: interior empty arguments keep their positions; only the final NUL
+    terminator is removed; an empty argv[0] refuses."""
+    import importlib
+
+    peer = importlib.import_module("app.utils.peer_process")
+    fake = tmp_path / "proc"
+    pid_dir = fake / "6001"
+    pid_dir.mkdir(parents=True)
+    (pid_dir / "stat").write_text(
+        "6001 (proc) S 1 6001 6001 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 12345 0 0")
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    try:
+        # Interior empty argument preserved at position 1: the Pi script must
+        # not slide into argv[1].
+        (pid_dir / "cmdline").write_bytes(b"node\x00\x00/srv/x/@earendil-works/pi-coding-agent/dist/bundle/cli.js\x00")
+        argv = peer.pane_agent_argv(6001, "12345")
+        assert argv == ["node", "", "/srv/x/@earendil-works/pi-coding-agent/dist/bundle/cli.js"]
+        # Trailing terminator removed exactly once.
+        (pid_dir / "cmdline").write_bytes(b"codex\x00exec\x00")
+        assert peer.pane_agent_argv(6001, "12345") == ["codex", "exec"]
+        # Empty argv[0] refuses: no identifier is taken from later arguments.
+        (pid_dir / "cmdline").write_bytes(b"\x00codex\x00")
+        assert peer.pane_agent_argv(6001, "12345") is None
+        (pid_dir / "cmdline").write_bytes(b"")
+        assert peer.pane_agent_argv(6001, "12345") is None
+    finally:
+        peer._PROC_ROOT = original_root
+
+
+@pytest.mark.asyncio
+async def test_readiness_reused_auxiliary_pid_of_same_pane_is_refused(client, db, monkeypatch, tmp_path):
+    """A2: a same-pane child that reused the auxiliary PID with a foreign
+    command identity is refused."""
+    import importlib
+    from app.models.database import MailAgentSession as Sess
+
+    peer = importlib.import_module("app.utils.peer_process")
+    real_argv = peer.pane_agent_argv
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ReusedPid", 1)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 1320, 8420, last_seen=now)
+    row = await db.get(Sess, 8420)
+    row.pid = 5003
+    await db.commit()
+
+    fake = tmp_path / "proc"
+    pane_pid = 1000 + 8420
+    for tree_pid, cmd in ((5003, b"helper\x00daemon\x00"), (pane_pid, b"codex\x00exec\x00")):
+        d = fake / str(tree_pid)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "stat").write_text(
+            f"{tree_pid} (p) S {pane_pid} {tree_pid} {tree_pid} 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0")
+        (d / "cmdline").write_bytes(cmd)
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    monkeypatch.setattr(peer, "pane_agent_argv", real_argv)
+    monkeypatch.setattr(peer, "process_is_confirmed_dead", lambda pid: False)
+    try:
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    finally:
+        peer._PROC_ROOT = original_root
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_mcp_process_gap" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_post_registration_auxiliary_process_is_refused(client, db, monkeypatch, tmp_path):
+    """A2: a process that started after the authenticated session
+    registration is a post-registration reuse and refuses."""
+    import importlib
+    from datetime import timedelta, timezone
+    from app.models.database import MailAgentSession as Sess
+
+    peer = importlib.import_module("app.utils.peer_process")
+    activity = importlib.import_module("app.services.agent_activity_service")
+    real_argv = peer.pane_agent_argv
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "LateProc", 1)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 1330, 8430, last_seen=now)
+    row = await db.get(Sess, 8430)
+    row.pid = 5004
+    await db.commit()
+
+    fake = tmp_path / "proc"
+    pane_pid = 1000 + 8430
+    for tree_pid, cmd in ((5004, b"codex\x00mcp\x00"), (pane_pid, b"codex\x00exec\x00")):
+        d = fake / str(tree_pid)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "stat").write_text(
+            f"{tree_pid} (p) S {pane_pid} {tree_pid} {tree_pid} 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0")
+        (d / "cmdline").write_bytes(cmd)
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    monkeypatch.setattr(peer, "pane_agent_argv", real_argv)
+    monkeypatch.setattr(peer, "process_is_confirmed_dead", lambda pid: False)
+    # The observed process start is after the session registration.
+    monkeypatch.setattr(activity, "_process_started_at",
+                        lambda start: datetime.now(timezone.utc) + timedelta(seconds=60))
+    try:
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    finally:
+        peer._PROC_ROOT = original_root
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_mcp_process_gap" in codes

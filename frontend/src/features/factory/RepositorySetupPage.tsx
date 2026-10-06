@@ -32,6 +32,7 @@ type Recovery = {
   // whether an older record was confirmed and preserved as explicit partial
   // state after the intent changed.
   requestedRecord?: { kind: "team" | "scope"; id: number | null; confirmed: boolean };
+  requestedIntentKey?: symbol | string | number;
 } | null;
 type ScopeOverlap = { key: string; first: TeamGithubScope; second: TeamGithubScope; active: boolean };
 type UncertainLaunch = { slotIds: number[]; planHash: string } | null;
@@ -338,6 +339,7 @@ export function RepositorySetupPage() {
     // captured before any credential or read await.
     const intent = { draft: requested?.draft ?? { ...draft }, routing: requested?.routing ?? { ...slotRouting } };
     const capturedSaveIntent = currentSaveIntent.current;
+    const requestedIntentKey = capturedSaveIntent;
     try {
       const fresh = await refreshConfiguration();
       // Recheck the captured intent after the credential and read awaits,
@@ -350,13 +352,13 @@ export function RepositorySetupPage() {
         const names = [draft.leaderName.trim(), ...draft.workerNames.split("\n").map((name) => name.trim()).filter(Boolean)];
         const candidates = fresh.presets.filter((item) => item.name === draft.teamName.trim() &&
           item.slots.length === names.length && names.every((name) => item.slots.some((slot) => slot.display_name === name)));
-        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `${item.name} (#${item.id})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record });
+        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `${item.name} (#${item.id})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record, requestedIntentKey });
       } else {
         const candidates = fresh.scopes.filter((item) => item.preset_id === (teamId ?? team?.id) && item.repo_owner.toLowerCase() === draft.owner.trim().toLowerCase() &&
           item.repo_name.toLowerCase() === draft.repo.trim().toLowerCase() && item.repo_path === draft.path.trim() &&
           item.dispatch_label === draft.dispatch.trim() && item.design_label === draft.design.trim() && item.base_ref === draft.baseRef.trim() &&
           item.github_auth_mode === (draft.authMode === "github_app" ? "app" : "ambient"));
-        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `Scope #${item.id} (${item.enabled ? "enabled" : "disabled"})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record });
+        setRecovery({ kind, candidates: candidates.map((item) => ({ label: `Scope #${item.id} (${item.enabled ? "enabled" : "disabled"})`, id: item.id })), requestedDraft: intent.draft, requestedRouting: intent.routing, requestedRecord: record, requestedIntentKey });
       }
       setError("The create response was uncertain. Review fresh matching records and select one, or stop. Do not repeat the create request.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not reconcile the uncertain create result."); }
@@ -552,13 +554,43 @@ export function RepositorySetupPage() {
 
   async function resolveCandidate(id: number) {
     setBusy(true); setError("");
+    // Capture the complete current save intent and the requested record
+    // identity before any credential or configuration await.
+    const capturedSaveIntent = currentSaveIntent.current;
+    const capturedRecovery = recovery;
+    const requestedIntent = {
+      draft: capturedRecovery?.requestedDraft ?? { ...draft },
+      routing: capturedRecovery?.requestedRouting ?? { ...slotRouting },
+    };
     try {
       const fresh = await refreshConfiguration();
-      if (recovery?.kind === "team") {
+      // Recheck the live intent and the requested record identity after the
+      // credential and configuration awaits, before any recovery or
+      // navigation change.
+      if (currentSaveIntent.current !== capturedSaveIntent ||
+          (capturedRecovery?.requestedIntentKey !== undefined &&
+           currentSaveIntent.current !== capturedRecovery.requestedIntentKey)) {
+        // The confirmed partial record is preserved explicitly in the
+        // recovery record; the uncertain-create safeguards stay latched.
+        if (capturedRecovery) {
+          setRecovery({ ...capturedRecovery,
+            requestedRecord: { kind: capturedRecovery.kind, id, confirmed: true } });
+        }
+        throw new Error("The selected record no longer matches this draft or the recorded create request. The selected record is preserved. Keep setup blocked and make a separately reviewed edit or an explicit reviewed selection.");
+      }
+      if (capturedRecovery?.requestedRecord && capturedRecovery.requestedRecord.id !== null &&
+          capturedRecovery.requestedRecord.id !== id) {
+        if (capturedRecovery) {
+          setRecovery({ ...capturedRecovery,
+            requestedRecord: { ...capturedRecovery.requestedRecord, confirmed: true } });
+        }
+        throw new Error("The requested record identity changed during the save. The confirmed record is preserved. Review the saved records before continuing.");
+      }
+      if (capturedRecovery?.kind === "team") {
         const recovered = fresh.presets.find((item) => item.id === id);
         if (!recovered) throw new Error("The selected team is no longer present. Refresh and review the records again.");
-        const requestedDraft = recovery.requestedDraft ?? draft;
-        const requestedRouting = recovery.requestedRouting ?? slotRouting;
+        const requestedDraft = requestedIntent.draft;
+        const requestedRouting = requestedIntent.routing;
         if (!teamMatchesDraft(recovered, requestedDraft, requestedRouting) ||
             !teamMatchesDraft(recovered, draft, slotRouting)) {
           throw new Error("The selected team no longer matches this draft or the recorded create request. Keep setup blocked and make a separately reviewed edit or an explicit reviewed selection.");

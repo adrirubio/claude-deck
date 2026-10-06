@@ -108,10 +108,13 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
         "members": _rows(conn, (
             "SELECT id, identity_key, display_name, participant_kind,"
             " team_preset_id, team_slot_id FROM mail_team_members ORDER BY id")),
+        "slots": _rows(conn, (
+            "SELECT id, preset_id, position, display_name, provider, repo_id, repo_path,"
+            " repo_name, launch_mode, enabled FROM agent_team_slots ORDER BY id")),
         "sessions": _rows(conn, (
-            "SELECT id, member_id, provider, source, session_key, wake_enabled, mailbox_status,"
-            " team_preset_id, team_slot_id, bound_pane_pid, bound_pane_proc_start,"
-            " capability_token_hash, last_seen_at, closed_at, created_at"
+            "SELECT id, member_id, pid, provider, source, session_key, wake_enabled,"
+            " mailbox_status, team_preset_id, team_slot_id, bound_pane_pid,"
+            " bound_pane_proc_start, capability_token_hash, last_seen_at, closed_at, created_at"
             " FROM mail_agent_sessions ORDER BY id")),
         "pane_bindings": _rows(conn, (
             "SELECT pane_pid, pane_proc_start, slot_id, preset_id, tmux_target"
@@ -119,7 +122,15 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
         "items": _rows(conn, (
             "SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id,"
             " handoff_target_slot_id, ack_approver_member_id, active_scope_revision,"
-            " approval_round_count, dispatch_nonce FROM github_work_items ORDER BY id")),
+            " approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce"
+            " FROM github_work_items ORDER BY id")),
+        "messages": _rows(conn, (
+            "SELECT id, thread_root_id, kind, sender_member_id, approval_round, decision,"
+            " audience_type, audience_id, recipient_member_id, subject, body_markdown,"
+            " request_status, created_at FROM mail_messages ORDER BY id")),
+        "presets": _rows(conn, (
+            "SELECT id, name, autonomy_enabled, created_at, updated_at"
+            " FROM agent_team_presets ORDER BY id")),
         "workspaces": _rows(conn, (
             "SELECT id, scope_id, kind, dispatchable, enabled, leased_item_id, lease_token,"
             " leased_owner_pid, leased_owner_proc_start, push_token_expires_at,"
@@ -136,7 +147,8 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
         "approval_requests": _rows(conn, (
             "SELECT id, work_item_id, request_kind, dispatch_nonce, approval_round,"
             " owner_member_id, leader_member_id, request_fingerprint, status,"
-            " request_message_id, scope_revision_id FROM github_approval_requests ORDER BY id")),
+            " request_message_id, decision_message_id, scope_revision_id"
+            " FROM github_approval_requests ORDER BY id")),
         "revisions": _rows(conn, (
             "SELECT id, work_item_id, dispatch_nonce, revision, owner_slot_id, owner_member_id,"
             " phase, execution_target, status, approval_request_id, expected_workspace_id,"
@@ -326,6 +338,9 @@ def run_restored_copy_procedure(
         # survive through the legacy resolver instead.
         mismatches = [key for key in pre_mutation_scope
                       if key != "explicit_assignments" and post_scope.get(key) != pre_mutation_scope[key]]
+        for pre_row, post_row in zip(pre_mutation_scope["presets"], post_scope["presets"]):
+            if pre_row != post_row:
+                mismatches.append(f"preset:{pre_row[0]}")
         pre_assignments = {row["preset_id"]: row["leader_slot_id"]
                            for row in pre_mutation_scope["explicit_assignments"]}
         for row in post_scope["explicit_assignments"]:

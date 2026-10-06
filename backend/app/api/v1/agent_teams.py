@@ -2788,6 +2788,22 @@ async def read_activation_readiness(
             # authenticated session and the current pane through the bounded
             # parent chain (at most four hops).
             if session.pid != session.bound_pane_pid:
+                # A2: tie the auxiliary process lifetime to its authenticated
+                # registration evidence. A process that started after the
+                # session registration is a post-registration reuse; an
+                # uncertain clock identity refuses as well.
+                from app.services.agent_activity_service import _process_started_at
+                registered_at = session.created_at
+                if registered_at is not None and registered_at.tzinfo is None:
+                    registered_at = registered_at.replace(tzinfo=timezone.utc)
+                first_stat = read_proc_stat(session.pid)
+                if first_stat is None:
+                    return False, "mcp_process_gap", member.id, None
+                started_at = _process_started_at(first_stat[1])
+                if (registered_at is None
+                        or registered_at > datetime.now(timezone.utc) + timedelta(seconds=5)
+                        or started_at > registered_at):
+                    return False, "mcp_process_gap", member.id, None
                 current_pid = session.pid
                 anchored = False
                 for _hop in range(4):
@@ -2799,6 +2815,26 @@ async def read_activation_readiness(
                     if argv is None:
                         # Oversized, malformed or identity changed across the
                         # bounded read window: refuse with the safe gap.
+                        return False, "mcp_process_gap", member.id, None
+                    # Reused or unknown identity: the auxiliary process must
+                    # be the registered provider executable family, not
+                    # another child that reused the PID. The current start
+                    # tick alone cannot authenticate an older Mail session;
+                    # the command identity is required alongside the
+                    # authenticated session evidence.
+                    aux_name = argv[0].rsplit("/", 1)[-1]
+                    if aux_name in {"bash", "sh", "zsh", "fish", "dash", "ksh"}:
+                        return False, "mcp_process_gap", member.id, None
+                    if slot.provider in {"pi", "pi-cli"}:
+                        import re as _re_aux
+                        aux_identity = aux_name == "pi" or (
+                            aux_name == "node" and len(argv) > 1
+                            and bool(_re_aux.search(
+                                r"/@earendil-works/pi-coding-agent/dist/bundle/cli\.js$", argv[1]))
+                        )
+                    else:
+                        aux_identity = aux_name == marker or aux_name == slot.provider
+                    if not aux_identity:
                         return False, "mcp_process_gap", member.id, None
                     if ppid == session.bound_pane_pid:
                         anchored = True
@@ -2851,6 +2887,7 @@ async def read_activation_readiness(
         ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))).first()
         session_rows = list((await db.execute(select(
             MailAgentSession.id, MailAgentSession.member_id, MailAgentSession.pid,
+            MailAgentSession.created_at,
             MailAgentSession.provider, MailAgentSession.wake_enabled,
             MailAgentSession.mailbox_status, MailAgentSession.capability_token_hash,
             MailAgentSession.last_seen_at, MailAgentSession.bound_pane_pid,

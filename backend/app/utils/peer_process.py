@@ -365,8 +365,16 @@ def pane_agent_argv(pane_pid: int, pane_proc_start: str) -> Optional[list[str]]:
     stat_after = read_proc_stat(pane_pid)
     if stat_after is None or stat_after[1] != pane_proc_start:
         return None
-    argv = [part for part in raw.split(b"\x00") if part]
-    return [part.decode("utf-8", "replace") for part in argv] or None
+    # A3: preserve every argument position. Only the final NUL record
+    # terminator is removed; interior empty arguments stay in place. An empty
+    # argv[0] refuses.
+    parts = raw.split(b"\x00")
+    if parts and parts[-1] == b"":
+        parts = parts[:-1]
+    argv = [part.decode("utf-8", "replace") for part in parts]
+    if not argv or not argv[0]:
+        return None
+    return argv
 
 
 def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:

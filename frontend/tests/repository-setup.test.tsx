@@ -1566,4 +1566,91 @@ describe("guided repository setup", () => {
     expect(mocks.createTeamGithubScope).not.toHaveBeenCalled();
   });
 
+
+  it("refuses a recovered scope selection at resolveCandidate after a changed draft (C4/A1)", async () => {
+    const team = teamFixture(true);
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    let saved = false;
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: (saved ? [newScope] : []).filter((item) => item.preset_id === teamId) }));
+    mocks.createTeamGithubScope.mockImplementation(() => {
+      saved = true;
+      return Promise.reject(new mocks.ApiHttpError("transport reset", 0));
+    });
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team setup"), { target: { value: "existing" } });
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/Reconcile uncertain create/);
+
+    // The draft changes before the recovery selection at resolveCandidate.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Dispatch label"), { target: { value: "changed-before-selection" } });
+    fireEvent.click(screen.getByRole("button", { name: /Use Scope #55/ }));
+
+    await screen.findByText(/The selected record is preserved/);
+    expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers at resolveCandidate with unchanged intent after a credential retry (C4/A1)", async () => {
+    let stored: string | null = "synthetic-operator";
+    mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.clearOperatorToken.mockImplementation(() => { stored = null; });
+    mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
+    mockReadyPreflightAndRoster();
+    const team = teamFixture(false);
+    let retried = false;
+    mocks.fetchAgentTeamPresets.mockImplementation(() =>
+      Promise.resolve({ presets: (retried ? [team] : []) }));
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    let rejectCreate: ((cause: unknown) => void) | undefined;
+    mocks.createAgentTeamPreset.mockImplementation(() => new Promise((_resolve, reject) => { rejectCreate = reject; }));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await waitFor(() => expect(rejectCreate).toBeDefined());
+
+    // A definite 401 opens the credential prompt; a valid token retries the
+    // same create once through the shared helper. The retry outcome is
+    // unknown.
+    rejectCreate?.(new mocks.ApiHttpError("The operator token was rejected.", 401));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/operator token/i), { target: { value: "replacement-token" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Use token" }));
+    await waitFor(() => expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(2));
+    retried = true;
+    rejectCreate?.(new mocks.ApiHttpError("transport reset", 0));
+
+    // Unchanged intent: the recovery selection succeeds at resolveCandidate.
+    await screen.findByText(/Reconcile uncertain create/);
+    fireEvent.click(screen.getByRole("button", { name: /Use Synthetic team/ }));
+    await screen.findByText(/Team recovered and bound to its confirmed ID/);
+    expect(mocks.createTeamGithubScope).not.toHaveBeenCalled();
+  });
+
 });
