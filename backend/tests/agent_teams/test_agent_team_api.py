@@ -2626,6 +2626,7 @@ async def test_readiness_auxiliary_mcp_process_positive(client, db, monkeypatch,
     """C3: a bounded positive auxiliary MCP process tied to the current pane
     through its parent chain satisfies the process/lifetime proof."""
     import importlib
+    from datetime import timezone
     from app.models.database import MailAgentSession as Sess
 
     peer = importlib.import_module("app.utils.peer_process")
@@ -2633,6 +2634,11 @@ async def test_readiness_auxiliary_mcp_process_positive(client, db, monkeypatch,
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "AuxProc", 1)
     monkeypatch.setattr(peer, "pane_agent_argv", real_argv)
     now = datetime.utcnow()
+    # Keep the synthetic process start before registration on every host.
+    monkeypatch.setattr(
+        "app.services.agent_activity_service._process_started_at",
+        lambda _tick: (now - timedelta(seconds=60)).replace(tzinfo=timezone.utc),
+    )
     await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
                      {"slot": preset.slots[0].id, "preset": preset.id})
     _bind_owner(db, preset, preset.slots[1].id, 1300, 8400, last_seen=now)
