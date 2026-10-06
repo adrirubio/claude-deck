@@ -13,6 +13,32 @@ TREE_SHA = "b" * 40
 BLOB_SHA = "c" * 40
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["valid", "missing", "wrong_number", "boolean", "pull", "foreign_url", "foreign_endpoint", "malformed"])
+async def test_exact_progress_issue_endpoint(case):
+    seen = []
+    def handler(request):
+        seen.append(request)
+        payload = {"number": 7, "html_url": "https://github.com/owner/repo/issues/7", "body": "Public issue facts."}
+        if case == "missing": return httpx.Response(404, request=request)
+        if case == "wrong_number": payload["number"] = 8
+        if case == "boolean": payload["number"] = True
+        if case == "pull": payload["pull_request"] = {}
+        if case == "foreign_url": payload["html_url"] = "https://github.com/other/repo/issues/7"
+        if case == "malformed": return httpx.Response(200, request=request, content=b"not JSON")
+        return httpx.Response(200, request=request, json=payload)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.invalid" if case == "foreign_endpoint" else "https://api.github.com") as http:
+        client = GithubClient(http=http)
+        if case not in {"valid", "missing"}:
+            with pytest.raises(GithubClientResponseError):
+                await client.get_issue("owner", "repo", 7, token="explicit-token")
+        else:
+            result = await client.get_issue("owner", "repo", 7, token="explicit-token")
+            assert result is None if case == "missing" else result["number"] == 7
+    assert seen[0].method == "GET" and seen[0].url.path == "/repos/owner/repo/issues/7"
+    assert seen[0].headers["Authorization"] == "Bearer explicit-token"
+
+
 def test_explicit_authorization_does_not_mutate_ambient_token():
     client = GithubClient(token="ambient-token")
 

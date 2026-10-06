@@ -32,6 +32,20 @@ After editing the issue, read fresh coordination before reporting its assessment
 Missing or stale instructions remain visible as Action details pending.
 These records grant no approval, retry, lease, merge, or milestone authority."""
 
+WORK_REMAINING_GUIDANCE = """Brief work remaining summary
+Keep the operator's remaining-work summary to three short lines: Remaining, Estimate, Next.
+State the remaining tasks and gates. Name the next actor and action.
+An estimate is a scoped range of active effort with confidence. Exclude unestimated waiting time.
+Use Unknown when no responsible agent can give a reliable range.
+Do not infer a percentage or completion time from commits, elapsed time or passing tests.
+The Leader calls deck_prepare_work_remaining_summary after each safe published checkpoint and at review handoffs.
+The owner supplies the estimate. Put completed work and assumptions in the tool's optional details fields.
+Publish its marked block near the start of the main GitHub issue and PR with existing authorized access.
+Replace only that block. Preserve other facts and all operator-action records.
+Refresh the block when source, scope, phase or review findings change.
+Put technical details and evidence behind links. Never publish private values, prompts or raw command output.
+The report is a team claim. It grants no authority and satisfies no approval, review, CI or milestone gate."""
+
 HUMAN_REVIEW_SUMMARY_GUIDANCE = """Summary for human review
 PR means GitHub pull request. CI means automatic checks.
 Before you request human review or merge, add a brief Human review summary.
@@ -43,7 +57,7 @@ Keep the summary brief. Link detailed evidence below it.
 Preserve the original issue facts and existing PR metadata. Update a clearly marked summary section.
 Update the summary when the PR head, results, or requested action changes.
 Do not use a comment as the only summary. Do not claim completion without evidence.
-The summary does not replace approval, independent review, or the configured merge policy.""" + "\n\n" + OPERATOR_ACTION_CONTEXT_GUIDANCE
+The summary does not replace approval, independent review, or the configured merge policy.""" + "\n\n" + WORK_REMAINING_GUIDANCE + "\n\n" + OPERATOR_ACTION_CONTEXT_GUIDANCE
 
 
 def team_communication_guidance(controlled_language_enabled: bool = True) -> str:

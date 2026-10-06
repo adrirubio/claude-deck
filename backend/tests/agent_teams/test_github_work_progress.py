@@ -20,6 +20,7 @@ from app.services.github_work_progress_observation import (
 )
 from app.services.github_work_progress_service import GithubWorkProgressService, _next_step
 from app.api.v1 import github_work_progress as api
+from mcp_shim.work_remaining_protocol import RemainingReport
 
 SHA = "a" * 40
 REMOTE = "b" * 40
@@ -501,3 +502,127 @@ def test_review_and_planning_variants_retain_existing_gates(status, merge, attem
                            handoff_state=None, ack_received_at=datetime.utcnow() if ack else None)
     scope = SimpleNamespace(enabled=True, merge_policy=merge)
     assert _next_step(item, scope, SimpleNamespace(autonomy_enabled=True), pending, None)[:2] == expected
+
+
+class ReportClient(Client):
+    sha = SHA
+    issue_calls = 0
+    def __init__(self, item, **changes):
+        self.report = RemainingReport(work_item_id=item.id, dispatch_nonce=item.dispatch_nonce,
+            owner_slot_id=item.owner_slot_id, scope_revision=item.active_scope_revision, source_sha=SHA,
+            phase="implementation", reported_at=datetime.now(timezone.utc), reported_by="Team member 2",
+            remaining="Fix the interface, then review and merge.", next_action="B2 publishes the next checkpoint.",
+            **changes)
+        self.body = self.report.markdown()
+    async def get_issue(self, owner, repo, number, **kwargs):
+        self.issue_calls += 1
+        return {"number": number, "html_url": f"https://github.com/{owner}/{repo}/issues/{number}", "body": self.body}
+
+
+@pytest.mark.asyncio
+async def test_remaining_report_current_cache_and_phase_change(db):
+    item, scope, preset, workspace = await seed(db)
+    client = ReportClient(item, effort_low_minutes=30, effort_high_minutes=60, confidence="low", effort_scope="interface fixes")
+    service = GithubWorkProgressService(Observer(), client)
+    first = await service.summary(db, item.id)
+    assert first.remaining_work.state == "current"
+    assert first.remaining_work.estimate == "About 30–60 minutes of active work (low confidence; interface fixes)."
+    assert first.remaining_work_context.source_sha == SHA
+    saved = await db.get(GithubWorkProgressSnapshot, item.id)
+    assert saved.observation["_remaining_report"]["report"]["remaining"] == client.report.remaining
+    assert client.body not in str(saved.observation)
+    assert (await service.summary(db, item.id)).remaining_work.state == "current"
+    assert client.issue_calls == 1
+    item.dispatch_status = "ready_for_review"
+    await db.commit()
+    changed = await service.summary(db, item.id)
+    assert (changed.phase, changed.next_actor) == ("review", "operator")
+    assert changed.remaining_work.state == "historical" and changed.remaining_work.reason == "context_changed"
+    assert item.retry_count == 0 and item.approval_round_count == 0 and preset.autonomy_enabled
+    assert workspace.lease_token == "private-lease-value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "invalid", "private", "wrong_issue", "unavailable", "old", "ahead"])
+async def test_remaining_reports_do_not_manufacture_current_estimates(db, failure):
+    item, *_ = await seed(db)
+    client = ReportClient(item)
+    if failure == "missing": client.body = "Original issue facts."
+    if failure == "invalid": client.body = client.body.replace("Unknown.", "Almost done.")
+    if failure == "private": client.body = client.body.replace(client.report.remaining, "private-lease-value")
+    if failure == "old":
+        client.body = client.report.model_copy(update={"reported_at": datetime.now(timezone.utc) - timedelta(hours=3)}).markdown()
+    if failure == "ahead": client.sha = REMOTE
+    if failure == "wrong_issue":
+        async def bad_issue(*args, **kwargs): return {"number": 2, "html_url": "https://github.com/owner/repo/issues/2", "body": client.body}
+        client.get_issue = bad_issue
+    if failure == "unavailable":
+        async def unavailable(*args, **kwargs): raise httpx.ConnectError("unavailable")
+        client.get_issue = unavailable
+    value = await GithubWorkProgressService(Observer(), client).summary(db, item.id)
+    assert value.remaining_work.state != "current"
+    assert "private-lease-value" not in value.model_dump_json()
+    if failure in {"old", "ahead"}:
+        assert value.remaining_work.state == "historical"
+    else:
+        assert value.remaining_work.estimate is None
+
+
+@pytest.mark.asyncio
+async def test_remaining_report_scope_race_is_not_cached(db):
+    item, *_ = await seed(db)
+    class Race(ReportClient):
+        async def get_issue(self, *args, **kwargs):
+            await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(active_scope_revision=1))
+            await db.commit()
+            return await super().get_issue(*args, **kwargs)
+    value = await GithubWorkProgressService(Observer(), Race(item)).summary(db, item.id)
+    assert value.remaining_work_context is None and value.remaining_work.state != "current"
+    assert await db.get(GithubWorkProgressSnapshot, item.id) is None
+
+
+@pytest.mark.asyncio
+async def test_remaining_context_requires_current_scoped_leader_and_rechecks_after_reads(db, monkeypatch):
+    from app.config import settings
+    from app.models.database import MailAgentSession, MailTeamMember
+    from app.services.agent_mail_service import agent_mail_service
+    item, scope, preset, workspace = await seed(db)
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive", lambda *_: True)
+    owner_slot = await db.get(AgentTeamSlot, item.owner_slot_id)
+    owner_slot.position = 1
+    slot = AgentTeamSlot(preset_id=preset.id, position=0, display_name="Leader", role="Leader",
+        provider="codex-cli", repo_id="repo", repo_path="/safe/leader", repo_name="repo")
+    db.add(slot); await db.flush()
+    preset.leader_slot_id = slot.id
+    member = MailTeamMember(identity_key="leader", repo_id="repo", repo_path=slot.repo_path,
+        repo_name="repo", display_name="Leader", participant_kind="team_slot", team_preset_id=preset.id, team_slot_id=slot.id)
+    db.add(member); await db.flush()
+    leader = MailAgentSession(member_id=member.id, provider="codex-cli", source="mcp", session_key="leader",
+        team_preset_id=preset.id, team_slot_id=slot.id, capability_token_hash=agent_mail_service.hash_capability_token("leader-token"),
+        bound_pane_pid=1234, bound_pane_proc_start="1", wake_enabled=True)
+    outsider = MailAgentSession(member_id=member.id, provider="codex-cli", source="mcp", session_key="outsider",
+        capability_token_hash=agent_mail_service.hash_capability_token("other-token"))
+    db.add_all([leader, outsider]); await db.commit()
+    app = FastAPI(); app.include_router(api.router)
+    async def session(): yield db
+    app.dependency_overrides[get_db] = session
+    observer = Observer()
+    monkeypatch.setattr(api, "github_work_progress_service", GithubWorkProgressService(observer, ReportClient(item)))
+    path = f"/github-work-items/{item.id}/remaining-work-context"
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
+        assert (await http.get(path)).status_code == 401
+        assert (await http.get(path, headers={"X-Deck-Session-Token": "other-token"})).status_code == 403
+        response = await http.get(path, headers={"X-Deck-Session-Token": "leader-token"})
+        assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+        assert response.json()["remaining_work_context"]["owner_slot_id"] == item.owner_slot_id
+        await db.execute(update(GithubWorkProgressSnapshot).values(observed_at=datetime.utcnow() - timedelta(seconds=30)))
+        await db.commit()
+        class ClosingObserver(Observer):
+            async def read(self, context):
+                await db.execute(update(MailAgentSession).where(MailAgentSession.id == leader.id).values(closed_at=datetime.utcnow()))
+                await db.commit()
+                return await super().read(context)
+        monkeypatch.setattr(api, "github_work_progress_service", GithubWorkProgressService(ClosingObserver(), ReportClient(item)))
+        closed = await http.get(path, headers={"X-Deck-Session-Token": "leader-token"})
+        assert closed.status_code == 409 and closed.json()["detail"] == "leader_unavailable"
