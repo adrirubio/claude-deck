@@ -122,6 +122,32 @@ async def _observe_recovery_cancellation(db, *, item_id: int | None, revision_id
         await db.rollback()
 
 
+def _policy_event_snapshot(scope, request) -> dict:
+    """C06: event-time identity and provider labels for a policy change.
+
+    GitHub authentication mode is recorded as its own label and is never a
+    harness provider. The configured harness provider is the event-time
+    leader slot provider. The observed runtime provider stays null without
+    runtime evidence. Creation times and non-secret identity are preserved.
+    """
+    configured_provider = None
+    for attribute in ("provider", "harness_provider"):
+        if hasattr(request, attribute) and getattr(request, attribute):
+            configured_provider = getattr(request, attribute)
+            break
+    return {
+        "github_auth_mode": scope.github_auth_mode,
+        "configured_provider": configured_provider,
+        "observed_runtime_provider": None,
+        "repo_owner": scope.repo_owner,
+        "repo_name": scope.repo_name,
+        "scope_created_at": scope.created_at.isoformat() if scope.created_at else None,
+        "scope_updated_at": scope.updated_at.isoformat() if scope.updated_at else None,
+        "event_time_labels": ("github_auth_mode", "configured_provider",
+                              "observed_runtime_provider", "repo_owner", "repo_name"),
+    }
+
+
 async def _observe_resume_rejection(db, item_id: int | None, code: str) -> None:
     """Record a rejected resume outcome in a fresh observation transaction.
 
@@ -2106,12 +2132,7 @@ async def update_github_scope(
             occurred_at=datetime.now(timezone.utc),
             actor=_audit.derive_actor(actor_kind="operator"),
             scope_id=scope.id,
-            context_snapshot={
-                "configured_provider": scope.github_auth_mode,
-                "observed_runtime_provider": None,
-                "repo_owner": scope.repo_owner,
-                "repo_name": scope.repo_name,
-            },
+            context_snapshot=_policy_event_snapshot(scope, request),
             before_values=_policy_before,
             after_values=_policy_after,
             sanitized_reason="scope configuration update",

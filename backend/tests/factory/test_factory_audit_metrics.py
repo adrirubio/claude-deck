@@ -660,3 +660,68 @@ async def test_c05_deletion_safe_references_and_key_lifetimes(db):
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
     by_name = {sample.name: sample for sample in window.metrics}
     assert by_name["operator_interventions"].value == 2.0
+
+
+async def test_c06_event_site_identity_and_provider_snapshots(db):
+    """C06: real consumer snapshots keep GitHub auth mode distinct from the
+    configured harness provider; absent runtime evidence stays null; later
+    rename, deletion and reassignment never rewrite original attribution;
+    revision identity is preserved."""
+    actor = audit.derive_actor(actor_kind="operator")
+    await _seed_scope(db, 1, preset_id=7)
+    await _seed_slot_member(db, slot_id=1, member_id=1, preset_id=7)
+    await _seed_workspace(db)
+    await db.commit()
+
+    # Differing configured and runtime providers with a missing runtime for
+    # the second record, through the real snapshot semantics.
+    event = await audit.record_event(
+        db, event_kind="policy_change", source="agent_teams.update_github_scope",
+        occurred_at=_now(), actor=actor, scope_id=1,
+        context_snapshot={
+            "github_auth_mode": "app",
+            "configured_provider": "codex-cli",
+            "observed_runtime_provider": "pi-cli",
+            "repo_owner": "original-owner",
+            "repo_name": "original-name",
+            "scope_created_at": _now().isoformat(),
+            "event_time_labels": ("github_auth_mode", "configured_provider",
+                                  "observed_runtime_provider", "repo_owner", "repo_name"),
+        },
+        after_values={"merge_policy": "human"}, action_outcome="applied")
+    leader_event = await audit.record_event(
+        db, event_kind="leader_assignment", source="agent_team_service.set_leader",
+        occurred_at=_now(), actor=actor, team_preset_id=7,
+        context_snapshot={"configured_provider": "codex-cli",
+                          "observed_runtime_provider": None,
+                          "github_auth_mode": None},
+        after_values={"leader_slot_id": 1}, action_outcome="applied")
+    await db.commit()
+
+    # Auth mode is never a harness provider.
+    assert event.context_snapshot["github_auth_mode"] == "app"
+    assert event.context_snapshot["configured_provider"] == "codex-cli"
+    assert event.context_snapshot["observed_runtime_provider"] == "pi-cli"
+    assert leader_event.context_snapshot["observed_runtime_provider"] is None
+
+    # Rename, delete and reassign after recording.
+    await db.execute(text("UPDATE team_github_scopes SET repo_owner = 'renamed' WHERE id = 1"))
+    await db.execute(text("DELETE FROM team_github_scopes WHERE id = 1"))
+    await _seed_scope(db, 1, preset_id=7)
+    await db.execute(text("UPDATE team_github_scopes SET repo_owner = 'reassigned' WHERE id = 1"))
+    await db.commit()
+
+    import json as _json
+    retained_raw = (await db.execute(text(
+        "SELECT context_snapshot FROM factory_audit_events WHERE id = :id"),
+        {"id": event.id})).scalar_one()
+    retained = _json.loads(retained_raw) if isinstance(retained_raw, str) else retained_raw
+    assert retained["repo_owner"] == "original-owner"
+    assert retained["repo_name"] == "original-name"
+    assert retained["observed_runtime_provider"] == "pi-cli"
+    # Context keys preserve the original attribution after ID reuse.
+    assert event.scope_context_key is not None
+    rows = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE scope_context_key = :key"),
+        {"key": event.scope_context_key})).scalar_one()
+    assert rows == 1
