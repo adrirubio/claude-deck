@@ -415,3 +415,37 @@ async def test_v13_preflight_logs_and_response_expose_no_secret_values(client, m
     for secret in (PRIVATE, OPERATOR, "/synthetic/private/key"):
         assert secret not in response.text
         assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_r3_checkout_subprocess_timeout_is_safe_unknown(client, monkeypatch, tmp_path):
+    """R3: a bounded Git subprocess timeout returns unknown, not a 500."""
+    import subprocess as subprocess_module
+
+    checkout = _init_checkout(tmp_path / "synthetic-repo")
+    monkeypatch.setattr(settings, "github_token", PRIVATE)
+
+    async def repository(*_args, **_kwargs):
+        return {"name": "synthetic-repo", "default_branch": "main"}
+
+    async def labels(*_args, **_kwargs):
+        return ["dispatch", "design"]
+
+    def slow_git(*_args, **_kwargs):
+        raise subprocess_module.TimeoutExpired(cmd=["git"], timeout=2)
+
+    monkeypatch.setattr("app.api.v1.factory.github_client.get_repository", repository)
+    monkeypatch.setattr("app.api.v1.factory.github_client.list_repo_labels", labels)
+    monkeypatch.setattr("app.utils.repo_utils.subprocess.run", slow_git)
+    response = await client.post("/api/v1/factory/setup-preflight", json={
+        "repo_owner": "example", "repo_name": "synthetic-repo", "repo_path": str(checkout),
+        "dispatch_label": "dispatch", "design_label": "design", "dispatch_auth_mode": "token",
+    })
+    body = response.json()
+    assert response.status_code == 200
+    assert body["checks"]["checkout_identity"]["status"] == "unknown"
+    assert body["checks"]["checkout_identity"]["code"] == "checkout_check_timeout"
+    assert body["checks"]["checkout_identity"]["remedy"]
+    # Independent observations keep their own results.
+    assert body["checks"]["repository_read"]["status"] == "ready"
+    assert body["checks"]["labels"]["status"] == "ready"

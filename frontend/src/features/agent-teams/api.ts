@@ -170,6 +170,15 @@ export function launchAgentTeam(
   })
 }
 
+export function fetchConfigurationObservation(): Promise<{
+  observed_at: string;
+  complete: boolean;
+  presets: AgentTeamPreset[];
+  scopes: TeamGithubScope[];
+}> {
+  return apiClient('agent-teams/configuration-observation')
+}
+
 export function fetchTeamGithubScopes(presetId: number): Promise<TeamGithubScopeListResponse> {
   return apiClient<TeamGithubScopeListResponse>(`agent-teams/presets/${presetId}/github-scopes`)
 }

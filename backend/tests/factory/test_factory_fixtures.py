@@ -13,22 +13,34 @@ from app.models.database import GithubWorkItem, MailAgentSession, TeamGithubScop
 from app.services import factory_projection_service as projection
 
 pytestmark = pytest.mark.asyncio
-FIXTURES = Path(__file__).parent / "fixtures" / "v1"
-FRONTEND_FIXTURES = Path(__file__).resolve().parents[3] / "frontend" / "tests" / "fixtures" / "factory" / "v1"
+FIXTURES = Path(__file__).parent / "fixtures" / "v1-p04"
+LEGACY_FIXTURES = Path(__file__).parent / "fixtures" / "v1"
+FRONTEND_FIXTURES = Path(__file__).resolve().parents[3] / "frontend" / "tests" / "fixtures" / "factory" / "v1-p04"
 NOW = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
 
 
+FRONTEND_LEGACY_FIXTURES = FRONTEND_FIXTURES.parent / "v1"
+
+
 async def test_frontend_backend_fixture_parity():
-    """Both frozen contract copies must stay identical (cross-lane parity)."""
-    backend_files = sorted(path.name for path in FIXTURES.glob("*.json"))
-    frontend_files = sorted(path.name for path in FRONTEND_FIXTURES.glob("*.json"))
-    assert backend_files == frontend_files
-    for name in backend_files:
-        assert json.loads((FRONTEND_FIXTURES / name).read_text()) == json.loads((FIXTURES / name).read_text()), f"Fixture parity changed: {name}"
+    """Both frozen contract copies must stay identical (cross-lane parity).
+
+    The P01 v1 copies and the P04 v1-p04 copies are each compared across lanes.
+    """
+    for backend_dir, frontend_dir in ((LEGACY_FIXTURES, FRONTEND_LEGACY_FIXTURES),
+                                      (FIXTURES, FRONTEND_FIXTURES)):
+        backend_files = sorted(path.name for path in backend_dir.glob("*.json"))
+        frontend_files = sorted(path.name for path in frontend_dir.glob("*.json"))
+        assert backend_files == frontend_files
+        for name in backend_files:
+            assert json.loads((frontend_dir / name).read_text()) == json.loads((backend_dir / name).read_text()), f"Fixture parity changed: {name}"
     for name in ("work-item.json", "work-items.json"):
-        text = (FRONTEND_FIXTURES / name).read_text()
-        assert '"source": "explicit_assignment"' in text
-        assert "first_enabled_slot" not in text
+        p04_text = (FRONTEND_FIXTURES / name).read_text()
+        assert '\"source\": \"explicit_assignment\"' in p04_text
+        assert "first_enabled_slot" not in p04_text
+        p01_text = (FRONTEND_LEGACY_FIXTURES / name).read_text()
+        assert "first_enabled_slot" in p01_text
+        assert "explicit_assignment" not in p01_text
 
 
 async def test_frozen_response_contract(factory_client, factory_store, monkeypatch, request):
@@ -222,3 +234,27 @@ async def test_v13_frozen_responses_enforce_explicit_field_allowlist():
     for scenario in work_list.values():
         for projection in scenario["response"]["items"]:
             assert set(projection["item"]) == safe_item_keys
+
+
+
+async def test_contract_versions_manifest_hashes():
+    """Finding 8: every versioned artifact hash is verified against its manifest.
+
+    The P01 v1 manifest stays immutable with its original identity. The P04
+    v1-p04 manifest verifies each artifact hash in both lanes.
+    """
+    import hashlib
+
+    legacy_manifest = json.loads((LEGACY_FIXTURES / "manifest.json").read_text())
+    assert legacy_manifest["source_sha"] == "eb31749bcae8f456d6df6709273afd5921d094ad"
+    legacy_digest = hashlib.sha256((LEGACY_FIXTURES / "manifest.json").read_bytes()).hexdigest()
+    assert legacy_digest == "b17dea10bb7c2f9ac2047c35f5921b9adb0dacc85b71fdc700849913471d9706"
+    for directory in (FIXTURES, FRONTEND_FIXTURES):
+        manifest = json.loads((directory / "manifest.json").read_text())
+        assert manifest["contract_version"] == "p04"
+        assert manifest["reviewed_head"] == "7a032daf3147c03f0c030137973b292d05224bf6"
+        assert manifest["p01_source_sha"] == "eb31749bcae8f456d6df6709273afd5921d094ad"
+        assert manifest["changed_from_p01"] == ["work-item.json", "work-items.json"]
+        for name, digest in manifest["artifact_sha256"].items():
+            actual = hashlib.sha256((directory / name).read_bytes()).hexdigest()
+            assert actual == digest, f"Artifact hash mismatch: {directory}/{name}"

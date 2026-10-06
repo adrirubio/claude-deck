@@ -182,6 +182,14 @@ def _routes(scope_id: int, workspace_id: int, item_id: int):
         ("leader-update", "put", "/api/v1/agent-teams/presets/999999/leader",
          {"leader_slot_id": 1, "expected_leader_slot_id": None,
           "expected_updated_at": "2000-01-01T00:00:00", "reason": "operator auth boundary test"}),
+        ("create-family-ordinary", "post", "/api/v1/agent-teams/presets",
+         {"name": "Auth create family", "slots": []}),
+        ("create-family-mail-import", "post", "/api/v1/agent-teams/presets/from-agent-mail",
+         {"name": "Auth mail import", "member_ids": [999999]}),
+        ("create-family-bridge-import", "post", "/api/v1/agent-teams/presets/from-agent-bridge",
+         {"name": "Auth bridge import"}),
+        ("create-family-duplicate", "post", "/api/v1/agent-teams/presets/999999/duplicate",
+         {"name": "Auth duplicate"}),
     ]
     return [listing, force_release, cancel_active_continuation, abandon, *arming]
 

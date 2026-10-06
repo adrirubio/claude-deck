@@ -1,11 +1,11 @@
 """HTTP contract tests for Agent Team presets."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.database import get_db
 from app.api.v1.agent_teams import _scope_auth_configured
@@ -1112,3 +1112,774 @@ async def test_v18_leader_update_quiescence_blockers_and_competing_updates(clien
 
     # Concurrent writer acquisition is covered by
     # test_leader_mutation_rechecks_assignment_after_waiting_for_sqlite_writer.
+
+
+@pytest.mark.asyncio
+async def test_create_route_400_after_partial_work_persists_nothing(client, db, tmp_path):
+    """Finding 4: a create-route 400 is a proven non-write.
+
+    The validation failure happens after the preset is added to the session and
+    after all slots are normalized but before any slot is added. The request
+    must persist nothing, so a 400 from these routes proves
+    no write happened and safe correction is allowed.
+    """
+    repo = tmp_path / "contract-repo"
+    repo.mkdir()
+    response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": "Contract team", "slots": [
+            {"display_name": "Good slot", "repo_path": str(repo)},
+            {"display_name": "Bad slot", "repo_path": "/outside/any/allowed/root"},
+        ]},
+    )
+    assert response.status_code == 400
+    # Evidence boundary: this test proves the route performs no commit before
+    # the validation refusal, even with the preset already added in-session.
+    # All slots are normalized before any slot is added, so the partial state is
+    # the preset row only. Production teardown evidence is separate source
+    # evidence: `get_db` commits only on normal return and closes the session
+    # otherwise, discarding uncommitted rows. Rollback here discards that state.
+    await db.rollback()
+    presets = (await db.execute(text("SELECT COUNT(*) FROM agent_team_presets"))).scalar_one()
+    slots = (await db.execute(text("SELECT COUNT(*) FROM agent_team_slots"))).scalar_one()
+    assert presets == 0
+    assert slots == 0
+
+
+@pytest.mark.asyncio
+async def test_launch_unknown_plan_hash_is_structured_proven_non_write(client, db, monkeypatch, tmp_path):
+    """An unknown plan hash refuses before any launch write.
+
+    This is unknown-hash refusal, not expiration of a valid issued plan.
+    """
+    repo = tmp_path / "plan-conflict-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    preset_response = await client.post(
+        "/api/v1/agent-teams/presets",
+        json={"name": "Plan conflict team", "slots": [
+            {"display_name": "PC Leader", "repo_path": str(repo), "role": "Leader"},
+        ]},
+    )
+    preset_id = preset_response.json()["id"]
+    launch = await client.post(
+        f"/api/v1/agent-teams/presets/{preset_id}/launch",
+        json={"slot_ids": [preset_response.json()["slots"][0]["id"]],
+              "confirm_plan_hash": "expired-plan-hash", "reuse_existing": True},
+    )
+    assert launch.status_code == 409
+    detail = launch.json()["detail"]
+    assert detail["code"] == "plan_conflict"
+    assert detail["proven_non_write"] is True
+    assert detail["message"]
+    launches = (await db.execute(text("SELECT COUNT(*) FROM agent_team_launches"))).scalar_one()
+    assert launches == 0
+
+
+@pytest.mark.asyncio
+async def test_launch_later_conflict_after_session_action_is_not_proven_non_write(
+    client, db, monkeypatch, tmp_path
+):
+    """A conflict raised while executing plan items can follow session actions.
+
+    Controlled multi-slot regression, not a live session trial: the first slot's
+    session action is a recorded attach stub in a controlled sequence; the second
+    slot hits the real pane-changed conflict. The conflict must not claim a proven
+    non-write.
+    """
+    from unittest.mock import AsyncMock
+
+    from app.models.database import AgentPaneBinding, AgentTeamLaunch
+    from app.models.schemas import AgentTeamLaunchPlanItem
+    from app.services import agent_team_service as service_module
+
+    repo = tmp_path / "later-conflict-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Later conflict team",
+        slots=[
+            AgentTeamSlotCreate(display_name="LC First", provider="codex-cli", repo_path=str(repo)),
+            AgentTeamSlotCreate(display_name="LC Second", provider="codex-cli", repo_path=str(repo)),
+        ],
+    ))
+    first, second = preset.slots[0], preset.slots[1]
+    launch_row = AgentTeamLaunch(preset_id=preset.id, plan_hash="later-conflict-plan")
+    db.add(launch_row)
+    db.add(AgentPaneBinding(pane_pid=111, pane_proc_start="1", slot_id=first.id, preset_id=preset.id))
+    await db.commit()
+
+    def fake_stat(pid):
+        return (0, "1" if pid == 111 else "2")
+
+    monkeypatch.setattr(service_module, "read_proc_stat", fake_stat)
+    actions = []
+    async def fake_attach(_self, _db, slot, session, **_kwargs):
+        actions.append(slot.id)
+        return None
+    monkeypatch.setattr(
+        "app.services.agent_team_service.AgentTeamService._attach_team_context_to_existing_session",
+        fake_attach)
+
+    def plan_item(slot, pid):
+        return AgentTeamLaunchPlanItem(
+            slot_id=slot.id, slot_name=slot.display_name, provider=slot.provider,
+            repo_id=slot.repo_id, repo_path=slot.repo_path, repo_name=slot.repo_name,
+            action="reuse", status="ready",
+            matching_session={"pid": pid, "pane_proc_start": "1", "session_name": "s",
+                              "tmux_target": "t:0.0"},
+        )
+
+    service = agent_team_service
+    await service._execute_plan_item(db, launch_row.id, preset, first, plan_item(first, 111))
+    assert actions == [first.id], "the first slot must complete its session action first"
+    with pytest.raises(ValueError) as refused:
+        await service._execute_plan_item(db, launch_row.id, preset, second, plan_item(second, 222))
+    assert "The selected pane changed" in str(refused.value)
+    assert refused.value.proven_non_write is False
+
+
+@pytest.mark.asyncio
+async def test_activation_readiness_names_binding_and_provider_gaps(client, db, monkeypatch, tmp_path):
+    """Finding 3: server-derived readiness names each binding gap safely."""
+    repo = tmp_path / "readiness-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_service.sync_observed_sessions",
+        AsyncMock())
+    monkeypatch.setattr("app.services.agent_team_service.discover_agent_sessions", lambda: [])
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Readiness team",
+        slots=[
+            AgentTeamSlotCreate(display_name="R Leader", provider="codex-cli", repo_path=str(repo), role="Leader"),
+            AgentTeamSlotCreate(display_name="R Worker", provider="codex-cli", repo_path=str(repo)),
+        ],
+    ))
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="readiness",
+                            repo_path=str(repo))
+    db.add(scope)
+    await db.commit()
+
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    assert readiness.status_code == 200
+    body = readiness.json()
+    assert body["status"] == "blocked"
+    codes = {blocker["code"] for blocker in body["blockers"]}
+    assert "leader_assignment_missing" in codes
+    assert "owner_binding_missing" in codes
+    assert "provider_mail_not_ready" in codes
+    assert body["observed_at"]
+    for blocker in body["blockers"]:
+        assert blocker["message"]
+
+
+async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
+    from unittest.mock import AsyncMock
+
+    from app.models.database import MailAgentSession, MailTeamMember
+    from app.utils import peer_process
+
+    repo = tmp_path / name
+    repo.mkdir()
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_service.sync_observed_sessions", AsyncMock())
+    monkeypatch.setattr("app.services.agent_team_service.discover_agent_sessions", lambda: [])
+    monkeypatch.setattr(peer_process, "pane_is_alive", lambda *_args: True)
+    slots = [AgentTeamSlotCreate(display_name=f"{name} Leader", provider="codex-cli",
+                                 repo_path=str(repo), role="Leader")]
+    slots += [AgentTeamSlotCreate(display_name=f"{name} W{i}", provider="codex-cli",
+                                  repo_path=str(repo)) for i in range(workers)]
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name=name, slots=slots))
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name=name,
+                            repo_path=str(repo))
+    db.add(scope)
+    await db.flush()
+    return preset, scope, repo
+
+
+def _bind_owner(db, preset, slot_id, member_id, session_id, *, last_seen):
+    from app.models.database import MailAgentSession, MailTeamMember
+
+    db.add(MailTeamMember(
+        id=member_id, identity_key=f"slot:{member_id}", repo_id="r", repo_path="/r",
+        repo_name="r", display_name=f"Owner {member_id}", participant_kind="team_slot",
+        team_preset_id=preset.id, team_slot_id=slot_id))
+    db.add(MailAgentSession(
+        id=session_id, member_id=member_id, provider="codex-cli", source="mcp",
+        session_key=f"mcp:ready-{session_id}", wake_enabled=True,
+        mailbox_status="connected", last_seen_at=last_seen,
+        team_preset_id=preset.id, team_slot_id=slot_id,
+        bound_pane_pid=1000 + session_id, bound_pane_proc_start="1",
+        capability_token_hash=f"cap-{session_id}"))
+
+
+@pytest.mark.asyncio
+async def test_activation_readiness_rejects_stale_owner_heartbeat(client, db, monkeypatch, tmp_path):
+    """Finding 3: an owner session with a stale heartbeat is a named blocker."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "StaleHB", 1)
+    stale = datetime.utcnow() - timedelta(hours=1)
+    _bind_owner(db, preset, preset.slots[1].id, 910, 810, last_seen=stale)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_stale" in codes
+    assert "owner_binding_missing" in codes
+
+
+@pytest.mark.asyncio
+async def test_activation_readiness_rejects_ambiguous_owner_binding(client, db, monkeypatch, tmp_path):
+    """Finding 3: one member with several live bound lifetimes is ambiguous."""
+    from app.models.database import MailAgentSession
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Ambiguous", 1)
+    now = datetime.utcnow()
+    # One member with two live bound lifetimes on the same slot.
+    _bind_owner(db, preset, preset.slots[1].id, 911, 811, last_seen=now)
+    db.add(MailAgentSession(
+        id=812, member_id=911, provider="codex-cli", source="mcp",
+        session_key="mcp:ready-812", wake_enabled=True,
+        mailbox_status="connected", last_seen_at=now,
+        team_preset_id=preset.id, team_slot_id=preset.slots[1].id,
+        bound_pane_pid=1002, bound_pane_proc_start="1",
+        capability_token_hash="cap-812"))
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_ambiguous" in codes
+    assert "owner_binding_missing" in codes
+
+
+@pytest.mark.asyncio
+async def test_activation_readiness_accepts_two_distinct_valid_owners(client, db, monkeypatch, tmp_path):
+    """Finding 3: distinct valid owners on different slots are normal."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "TwoOwners", 2)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 913, 813, last_seen=now)
+    _bind_owner(db, preset, preset.slots[2].id, 914, 814, last_seen=now)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_ambiguous" not in codes
+    assert "owner_binding_stale" not in codes
+    assert "owner_binding_missing" not in codes
+
+
+@pytest.mark.asyncio
+async def test_configuration_observation_is_bounded_and_flags_incomplete(client, db, monkeypatch, tmp_path):
+    """Finding 7: the bulk observation is finite and incomplete reads are named."""
+    from unittest.mock import AsyncMock
+
+    import app.api.v1.agent_teams as agent_teams_module
+
+    repo = tmp_path / "bounded-repo"
+    repo.mkdir()
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", AsyncMock())
+    for index in range(3):
+        await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+            name=f"Bounded team {index}",
+            slots=[AgentTeamSlotCreate(display_name=f"B{index}", provider="codex-cli", repo_path=str(repo))],
+        ))
+    projected = []
+    original_projection = agent_team_service.bounded_slots_for_preset
+
+    async def spy_projection(_db, preset_id, limit):
+        projected.append(preset_id)
+        return await original_projection(_db, preset_id, limit)
+
+    monkeypatch.setattr(agent_team_service, "bounded_slots_for_preset", spy_projection)
+    monkeypatch.setattr(agent_teams_module, "_CONFIGURATION_OBSERVATION_PRESET_LIMIT", 2)
+    observation = await client.get("/api/v1/agent-teams/configuration-observation")
+    body = observation.json()
+    assert observation.status_code == 200
+    assert body["complete"] is False
+    assert len(body["presets"]) == 2
+    assert body["observed_at"]
+
+    monkeypatch.setattr(agent_teams_module, "_CONFIGURATION_OBSERVATION_PRESET_LIMIT", 64)
+    complete = await client.get("/api/v1/agent-teams/configuration-observation")
+    assert complete.json()["complete"] is True
+    assert len(complete.json()["presets"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_activation_readiness_reports_bounded_context(client, db, monkeypatch, tmp_path):
+    """Finding 7: oversized readiness context is a named incomplete blocker."""
+    from unittest.mock import AsyncMock
+
+    repo = tmp_path / "bounded-ready"
+    repo.mkdir()
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_service.sync_observed_sessions", AsyncMock())
+    monkeypatch.setattr("app.services.agent_team_service.discover_agent_sessions", lambda: [])
+    slots = [AgentTeamSlotCreate(display_name=f"BR {i}", provider="codex-cli", repo_path=str(repo)) for i in range(65)]
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Bounded readiness", slots=slots))
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="bounded-ready",
+                            repo_path=str(repo))
+    db.add(scope)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "readiness_context_limit" in codes
+    assert "leader_assignment_missing" in codes
+
+
+@pytest.mark.asyncio
+async def test_configuration_observation_skips_hydration_for_oversized_rosters(client, db, monkeypatch, tmp_path):
+    """Finding 7: an oversized roster is never hydrated; it is omitted truthfully."""
+    from unittest.mock import AsyncMock
+
+    import app.api.v1.agent_teams as agent_teams_module
+
+    repo = tmp_path / "oversized-repo"
+    repo.mkdir()
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", AsyncMock())
+    slots = [AgentTeamSlotCreate(display_name=f"OS {i}", provider="codex-cli", repo_path=str(repo)) for i in range(65)]
+    oversized = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Oversized team", slots=slots))
+    small = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Small team",
+        slots=[AgentTeamSlotCreate(display_name="Small", provider="codex-cli", repo_path=str(repo))],
+    ))
+    projected_slots = []
+    original_slot_response = agent_team_service._slot_response
+
+    def spy_slot_response(slot):
+        projected_slots.append((slot.preset_id, slot.id))
+        return original_slot_response(slot)
+
+    monkeypatch.setattr(agent_team_service, "_slot_response", spy_slot_response)
+    observation = await client.get("/api/v1/agent-teams/configuration-observation")
+    body = observation.json()
+    assert body["complete"] is False
+    oversized_rows = [entry for entry in projected_slots if entry[0] == oversized.id]
+    assert len(oversized_rows) <= 64, "projection work for an oversized roster must stay bounded"
+    assert any(entry[0] == small.id for entry in projected_slots)
+    assert body["incomplete_presets"] == [
+        {"id": oversized.id, "roster_omitted": True, "slot_bound": 64},
+    ]
+    assert [preset["id"] for preset in body["presets"]] == [small.id]
+
+
+@pytest.mark.asyncio
+async def test_configuration_observation_bounds_projection_under_concurrent_growth(tmp_path, monkeypatch):
+    """Finding 7: a separate writer growing the roster cannot widen projection
+    work or let the observation claim complete evidence."""
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import app.api.v1.agent_teams as agent_teams_module
+    from app.database import Base
+    from app.models.database import AgentTeamSlot
+
+    db_path = tmp_path / "growth.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
+    writer_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as seed:
+            preset = AgentTeamPreset(name="Growth team")
+            seed.add(preset)
+            await seed.flush()
+            seed.add(AgentTeamSlot(
+                preset_id=preset.id, position=0, display_name="G0", provider="codex-cli",
+                repo_id="g", repo_path="/tmp/g", repo_name="g"))
+            await seed.commit()
+            preset_id = preset.id
+
+        async with maker() as reader:
+            original = agent_team_service.bounded_slots_for_preset
+            grew = False
+
+            async def racing_projection(db_ignored, observed_preset_id, limit):
+                nonlocal grew
+                if not grew:
+                    grew = True
+                    # A separate writer adds 65 rows in the count-to-hydration
+                    # window with an independent connection.
+                    async with writer_engine.begin() as writer:
+                        for index in range(65):
+                            await writer.execute(sql_text(
+                                "INSERT INTO agent_team_slots (preset_id, position, display_name, "
+                                "provider, repo_id, repo_path, repo_name, launch_mode, enabled, "
+                                "created_at, updated_at) VALUES (:p, :i, :n, 'codex-cli', 'g', "
+                                "'/tmp/g', 'g', 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                            ), {"p": observed_preset_id, "i": index + 1, "n": f"G{index + 1}"})
+                rows, bound_hit = await original(db_ignored, observed_preset_id, limit)
+                assert len(rows) <= limit, "projection work must stay bounded"
+                return rows, bound_hit
+
+            monkeypatch.setattr(agent_team_service, "bounded_slots_for_preset", racing_projection)
+            body = await agent_teams_module.read_configuration_observation(_operator=None, db=reader)
+
+        assert body["complete"] is False
+        assert body["incomplete_presets"] == [
+            {"id": preset_id, "roster_omitted": True, "slot_bound": 64},
+        ]
+        assert [entry["id"] for entry in body["presets"]] == []
+    finally:
+        await engine.dispose()
+        await writer_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_v21_valid_issued_plan_is_invalidated_through_covered_state_change(
+    client, db, monkeypatch, tmp_path
+):
+    """V21: a once-valid issued plan is invalidated through the actual contract.
+
+    State-based invalidation, not time-based expiry: the plan hash covers preset
+    and slot update stamps. A covered-state change after issuance invalidates the
+    issued hash; launching with it is refused before any launch write and a fresh
+    plan is required.
+    """
+    from unittest.mock import AsyncMock
+
+    repo = tmp_path / "expiring-plan-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    monkeypatch.setattr(
+        "app.services.agent_team_service.agent_mail_service.sync_observed_sessions", AsyncMock())
+    monkeypatch.setattr("app.services.agent_team_service.discover_agent_sessions", lambda: [])
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Expiring plan team",
+        slots=[AgentTeamSlotCreate(display_name="EP Worker", provider="codex-cli", repo_path=str(repo))],
+    ))
+
+    issued = await client.post(f"/api/v1/agent-teams/presets/{preset.id}/plan-launch", json={})
+    assert issued.status_code == 200
+    issued_hash = issued.json()["plan_hash"]
+    assert issued_hash
+    # The issued plan is a once-valid LAUNCHABLE plan under synthetic readiness.
+    assert issued.json()["can_launch"] is True
+
+    # Expiry through the actual contract: a covered-state change after issuance.
+    await agent_team_service.update_preset(db, preset.id, name="Expiring plan team renamed")
+
+    expired = await client.post(
+        f"/api/v1/agent-teams/presets/{preset.id}/launch",
+        json={"confirm_plan_hash": issued_hash},
+    )
+    assert expired.status_code == 409
+    detail = expired.json()["detail"]
+    assert detail["code"] == "plan_conflict"
+    assert detail["proven_non_write"] is True
+    assert "Launch plan changed" in detail["message"]
+    launches = (await db.execute(text("SELECT COUNT(*) FROM agent_team_launches"))).scalar_one()
+    assert launches == 0
+
+    # A fresh plan is required and issues a different hash.
+    refreshed = await client.post(f"/api/v1/agent-teams/presets/{preset.id}/plan-launch", json={})
+    assert refreshed.status_code == 200
+    assert refreshed.json()["plan_hash"] != issued_hash
+
+
+@pytest.mark.asyncio
+async def test_scope_update_guards_effective_changes_under_residual_workspace_authority(
+    client, db, monkeypatch, tmp_path
+):
+    """Finding 1: residual workspace authority blocks effective changes.
+
+    Identity, auth and effective App installation changes are refused under
+    residual lease authority. Unchanged safe resumes still succeed.
+    """
+    from app.models.database import GithubWorkspace as WorkspaceRow
+
+    repo = tmp_path / "residual-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    monkeypatch.setattr(github_app_auth_service, "require_configuration", lambda **_kwargs: None)
+
+    async def resolve_installation(_owner, _repo):
+        return 73
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", resolve_installation)
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Residual authority team",
+        slots=[AgentTeamSlotCreate(display_name="RW", provider="codex-cli", repo_path=str(repo))],
+    ))
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="residual",
+                            repo_path=str(repo), github_auth_mode="ambient")
+    db.add(scope)
+    await db.flush()
+    db.add(WorkspaceRow(scope_id=scope.id, path=str(tmp_path / "residual-work"),
+                        lease_token="residual-lease-token"))
+    await db.commit()
+    scope_id = scope.id
+
+    # Effective installation change under residual authority: refused.
+    refused_installation = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}",
+        json={"github_auth_mode": "app"},
+    )
+    assert refused_installation.status_code == 409
+    assert refused_installation.json()["detail"] == "scope_workspace_authority_in_use"
+
+    # Identity change under residual authority: refused.
+    refused_identity = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}",
+        json={"repo_name": "renamed-under-residual"},
+    )
+    assert refused_identity.status_code == 409
+    assert refused_identity.json()["detail"] == "scope_workspace_authority_in_use"
+
+    # Configuration is unchanged by both refusals.
+    stored = await db.get(TeamGithubScope, scope_id, populate_existing=True)
+    assert stored.github_auth_mode == "ambient"
+    assert stored.repo_name == "residual"
+
+    # Unchanged safe resume under residual authority: allowed.
+    safe_resume = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}",
+        json={"build_command_hint": "make check"},
+    )
+    assert safe_resume.status_code == 200
+    assert safe_resume.json()["build_command_hint"] == "make check"
+
+
+@pytest.mark.asyncio
+async def test_scope_effective_installation_change_refused_under_active_use(
+    client, db, monkeypatch, tmp_path
+):
+    """Finding 1: effective App installation replacement is an authority change.
+
+    Active work without a workspace lease blocks it. Identity and auth stay
+    unchanged in the request; only the newly resolved installation differs.
+    """
+    repo = tmp_path / "active-install-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    monkeypatch.setattr(github_app_auth_service, "require_configuration", lambda **_kwargs: None)
+
+    async def resolve_installation(_owner, _repo):
+        return 73
+
+    monkeypatch.setattr(github_app_auth_service, "resolve_installation", resolve_installation)
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="Active install team",
+        slots=[AgentTeamSlotCreate(display_name="AI", provider="codex-cli", repo_path=str(repo))],
+    ))
+    scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="active-install",
+                            repo_path=str(repo), github_auth_mode="app",
+                            github_app_installation_id=72, enabled=False)
+    db.add(scope)
+    await db.flush()
+    # Active authority WITHOUT a workspace lease.
+    db.add(GithubWorkItem(scope_id=scope.id, issue_number=3, issue_title="active",
+                          issue_url="https://example.invalid/3",
+                          github_updated_at=datetime.utcnow(), dispatch_status="dispatched"))
+    await db.commit()
+    scope_id = scope.id
+
+    # Re-enable the disabled scope with unchanged identity and auth; the
+    # installation resolves to a different id. The effective change is refused
+    # under active use without a workspace lease.
+    refused = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{scope_id}",
+        json={"enabled": True},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "scope_auth_in_use"
+
+    stored = await db.get(TeamGithubScope, scope_id, populate_existing=True)
+    assert stored.github_app_installation_id == 72
+    assert stored.github_auth_mode == "app"
+    assert stored.repo_name == "active-install"
+
+
+@pytest.mark.asyncio
+async def test_v28_active_team_third_scope_save_preserves_authority_and_intake(
+    client, db, monkeypatch, tmp_path
+):
+    """V28: an active team recovers a disabled third-scope save intact.
+
+    Discarded-response reconciliation simulation: the create succeeds and its
+    response is discarded, then recovery reconciles through fresh reads and
+    explicit selection. This is not executed transport interruption; the
+    frontend combined fixture proves the client-side interrupted path. Two
+    existing scopes with full policies, intake work, and populated member,
+    session and pane authority are compared before and after. Recovery finds
+    exactly one created scope; no duplicate creation occurs and unrelated state
+    is unchanged. A refused role edit never pauses the team. Scope-only
+    activation changes only the third scope.
+    """
+    from unittest.mock import AsyncMock
+
+    from app.models.database import AgentPaneBinding, MailAgentSession, MailTeamMember
+
+    repo = tmp_path / "v28-repo"
+    repo.mkdir()
+
+    async def fake_sync(_db):
+        return None
+
+    monkeypatch.setattr("app.api.v1.agent_teams._sync_github_jobs", fake_sync)
+    preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(
+        name="V28 active team",
+        slots=[
+            AgentTeamSlotCreate(display_name="V28 Leader", provider="codex-cli", repo_path=str(repo), role="Leader"),
+            AgentTeamSlotCreate(display_name="V28 Worker", provider="codex-cli", repo_path=str(repo)),
+        ],
+    ))
+    leader_slot, worker_slot = preset.slots[0], preset.slots[1]
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot, autonomy_enabled = 1 WHERE id = :preset"),
+                     {"slot": leader_slot.id, "preset": preset.id})
+    leader_member = MailTeamMember(identity_key="slot:v28-leader", repo_id="v28", repo_path=str(repo),
+                                   repo_name="v28", display_name="V28 leader", team_preset_id=preset.id,
+                                   team_slot_id=leader_slot.id)
+    owner_member = MailTeamMember(identity_key="slot:v28-owner", repo_id="v28", repo_path=str(repo),
+                                  repo_name="v28", display_name="V28 owner", team_preset_id=preset.id,
+                                  team_slot_id=worker_slot.id)
+    db.add_all([leader_member, owner_member])
+    await db.flush()
+    db.add_all([
+        MailAgentSession(member_id=leader_member.id, provider="codex-cli", source="mcp",
+                         session_key="mcp:v28-leader", team_preset_id=preset.id,
+                         team_slot_id=leader_slot.id, mailbox_status="connected",
+                         bound_pane_pid=3001, bound_pane_proc_start="1",
+                         capability_token_hash="v28-cap-leader"),
+        MailAgentSession(member_id=owner_member.id, provider="codex-cli", source="mcp",
+                         session_key="mcp:v28-owner", team_preset_id=preset.id,
+                         team_slot_id=worker_slot.id, mailbox_status="connected",
+                         bound_pane_pid=3002, bound_pane_proc_start="1",
+                         capability_token_hash="v28-cap-owner"),
+    ])
+    await db.flush()
+    db.add_all([
+        AgentPaneBinding(pane_pid=3001, pane_proc_start="1", slot_id=leader_slot.id, preset_id=preset.id),
+        AgentPaneBinding(pane_pid=3002, pane_proc_start="1", slot_id=worker_slot.id, preset_id=preset.id),
+    ])
+    for repo_name, label in (("existing-a", "label-a"), ("existing-b", "label-b")):
+        db.add(TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name=repo_name,
+                               repo_path=str(repo), dispatch_label=label, design_label="design-x",
+                               merge_policy="human", github_auth_mode="ambient",
+                               max_concurrent_dispatched=2, max_approval_rounds=3,
+                               max_verification_retries=1, max_auto_merges_per_day=0,
+                               base_ref="origin/main", enabled=True))
+    await db.flush()
+    scopes = (await db.scalars(select(TeamGithubScope).where(TeamGithubScope.preset_id == preset.id))).all()
+    first_scope, second_scope = scopes[0], scopes[1]
+    db.add(GithubWorkItem(scope_id=first_scope.id, issue_number=1, issue_title="intake",
+                          issue_url="https://example.invalid/1", github_updated_at=datetime.utcnow(),
+                          dispatch_status="pending", dispatch_nonce="v28-intake"))
+    db.add(GithubWorkItem(scope_id=second_scope.id, issue_number=2, issue_title="authority",
+                          issue_url="https://example.invalid/2", github_updated_at=datetime.utcnow(),
+                          dispatch_status="completed", attempt_phase="verification",
+                          owner_slot_id=worker_slot.id, handoff_target_slot_id=leader_slot.id,
+                          ack_approver_member_id=leader_member.id, active_scope_revision=1,
+                          dispatch_nonce="v28-authority"))
+    await db.commit()
+
+    async def full_state():
+        rows = {}
+        for key, sql in {
+            "presets": "SELECT id, autonomy_enabled, leader_slot_id FROM agent_team_presets ORDER BY id",
+            "slots": "SELECT id, preset_id, position, enabled FROM agent_team_slots ORDER BY id",
+            "members": "SELECT id, team_preset_id, team_slot_id FROM mail_team_members ORDER BY id",
+            "sessions": "SELECT id, member_id, team_preset_id, team_slot_id, mailbox_status, "
+                        "bound_pane_pid, bound_pane_proc_start, capability_token_hash "
+                        "FROM mail_agent_sessions ORDER BY id",
+            "pane_bindings": "SELECT pane_pid, pane_proc_start, slot_id, preset_id FROM agent_pane_bindings ORDER BY pane_pid",
+            "scopes": "SELECT id, preset_id, repo_owner, repo_name, repo_path, dispatch_label, design_label, "
+                      "merge_policy, github_auth_mode, base_ref, max_approval_rounds, "
+                      "max_concurrent_dispatched, max_verification_retries, max_auto_merges_per_day, "
+                      "builds_out_of_tree, build_dir_template, build_command_hint, max_build_parallelism, "
+                      "continuation_enabled, max_continuation_revisions, max_continuation_failed_heads, "
+                      "max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled "
+                      "FROM team_github_scopes ORDER BY id",
+            "items": "SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id, handoff_target_slot_id, "
+                     "ack_approver_member_id, active_scope_revision, dispatch_nonce "
+                     "FROM github_work_items ORDER BY id",
+        }.items():
+            rows[key] = [dict(row) for row in (await db.execute(text(sql))).mappings().all()]
+        return rows
+
+    before = await full_state()
+
+    # Discarded-response reconciliation simulation: the create succeeds and
+    # the response is discarded, as if the client never received it.
+    created = await client.post(
+        f"/api/v1/agent-teams/presets/{preset.id}/github-scopes",
+        json={"repo_owner": "example", "repo_name": "third-repo", "repo_path": str(repo),
+              "dispatch_label": "label-c", "design_label": "design-c", "base_ref": "origin/main",
+              "merge_policy": "human", "enabled": False},
+    )
+    assert created.status_code == 200
+    _lost_response = created.json()  # discarded: the client never received it
+
+    # Recovery reconciles through fresh reads and explicit selection.
+    fresh = await client.get(f"/api/v1/agent-teams/presets/{preset.id}/github-scopes")
+    candidates = [row for row in fresh.json()["scopes"]
+                  if row["repo_name"] == "third-repo" and row["enabled"] is False]
+    assert len(candidates) == 1, "recovery must find exactly one created scope"
+    third_id = candidates[0]["id"]
+
+    after = await full_state()
+    for key in ("presets", "slots", "members", "sessions", "pane_bindings", "items"):
+        assert after[key] == before[key], key
+    existing_scopes = [row for row in after["scopes"] if row["id"] != third_id]
+    assert existing_scopes == before["scopes"]
+    new_rows = [row for row in after["scopes"] if row["id"] == third_id]
+    assert len(new_rows) == 1
+    assert not new_rows[0]["enabled"]
+
+    # A refused role edit is compared against full required state immediately.
+    refused = await client.put(
+        f"/api/v1/agent-teams/presets/{preset.id}/leader",
+        json={"leader_slot_id": worker_slot.id, "expected_leader_slot_id": leader_slot.id,
+              "expected_updated_at": "2000-01-01T00:00:00", "reason": "V28 role edit"},
+    )
+    assert refused.status_code == 409
+    after_refusal = await full_state()
+    assert after_refusal == after
+    still_active = await client.get("/api/v1/agent-teams/presets")
+    active_ids = {row["id"]: row["autonomy_enabled"] for row in still_active.json()["presets"]}
+    assert active_ids[preset.id] is True
+
+    # Scope-only activation: only the third scope changes, only in enabled.
+    enabled = await client.patch(
+        f"/api/v1/agent-teams/github-scopes/{third_id}",
+        json={"enabled": True},
+    )
+    assert enabled.status_code == 200
+    final = await full_state()
+    for key in ("presets", "slots", "members", "sessions", "pane_bindings", "items"):
+        assert final[key] == after[key], key
+    final_scopes = {row["id"]: row for row in final["scopes"]}
+    expected_third = {k: v for k, v in new_rows[0].items() if k != "enabled"}
+    assert {k: v for k, v in final_scopes[third_id].items() if k != "enabled"} == expected_third
+    assert final_scopes[third_id]["enabled"]
+    for scope_row in after["scopes"]:
+        if scope_row["id"] != third_id:
+            assert final_scopes[scope_row["id"]] == scope_row
+
+    # Stubbed scheduler sync and no live human trial are explicit limits.

@@ -504,3 +504,234 @@ async def test_v17_completion_watch_refuses_invalid_assignment(monkeypatch):
             assert refused.value.code == "leader_unavailable"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def _authority_references(connection):
+    """Full authority reference snapshot for migration and decision comparisons."""
+
+    async def rows(sql):
+        return [dict(row) for row in (await connection.execute(text(sql))).mappings().all()]
+
+    columns = {row[1] for row in (await connection.execute(text("PRAGMA table_info(agent_team_presets)"))).all()}
+    explicit = None
+    if "leader_slot_id" in columns:
+        explicit = {row[0]: row[1] for row in (await connection.execute(text(
+            "SELECT id, leader_slot_id FROM agent_team_presets ORDER BY id"
+        ))).all()}
+    return {
+        "presets": await rows("SELECT id, name, autonomy_enabled FROM agent_team_presets ORDER BY id"),
+        "slots": await rows("SELECT id, preset_id, position, enabled FROM agent_team_slots ORDER BY id"),
+        "members": await rows("SELECT id, identity_key, display_name, participant_kind, team_preset_id, team_slot_id "
+                              "FROM mail_team_members ORDER BY id"),
+        "sessions": await rows("SELECT id, member_id, provider, source, session_key, mailbox_status, "
+                               "team_preset_id, team_slot_id, bound_pane_pid, bound_pane_proc_start, "
+                               "capability_token_hash FROM mail_agent_sessions ORDER BY id"),
+        "pane_bindings": await rows("SELECT pane_pid, pane_proc_start, slot_id, preset_id "
+                                    "FROM agent_pane_bindings ORDER BY pane_pid"),
+        "items": await rows("SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id, "
+                            "handoff_target_slot_id, ack_approver_member_id, active_scope_revision, "
+                            "approval_round_count, dispatch_nonce FROM github_work_items ORDER BY id"),
+        "workspaces": await rows("SELECT id, scope_id, leased_item_id, lease_token, leased_owner_pid, "
+                                 "leased_owner_proc_start FROM github_workspaces ORDER BY id"),
+        "approval_requests": await rows(
+            "SELECT id, work_item_id, request_kind, dispatch_nonce, approval_round, owner_member_id, "
+            "leader_member_id, request_fingerprint, status, request_message_id, scope_revision_id "
+            "FROM github_approval_requests ORDER BY id"),
+        "revisions": await rows(
+            "SELECT id, work_item_id, dispatch_nonce, approval_request_id, revision, owner_slot_id, "
+            "owner_member_id, phase, execution_target, baseline_head_sha, baseline_tree_sha, "
+            "expected_workspace_id, expected_lease_token_hash, status "
+            "FROM github_attempt_scope_revisions ORDER BY id"),
+        "explicit": explicit,
+        "legacy": await rows(
+            "SELECT p.id, (SELECT s.id FROM agent_team_slots s WHERE s.preset_id = p.id AND s.enabled = 1 "
+            " ORDER BY s.position, s.id LIMIT 1) AS legacy_id FROM agent_team_presets p ORDER BY p.id"),
+    }
+
+
+async def test_v17_populated_decisions_through_real_entries_on_migrated_store():
+    """V17: populated pre-migration approvals survive migration and real decisions.
+
+    Initial_plan and continuation approvals, members, sessions, items and leases
+    are seeded before the real migration. Successful decisions change authorized
+    decision fields only; stable identity is compared separately.
+    """
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(text("ALTER TABLE agent_team_presets DROP COLUMN leader_slot_id"))
+            await conn.execute(text(
+                "INSERT INTO agent_team_presets (id, name, created_at, updated_at, autonomy_enabled) VALUES "
+                "(1, 'decisions', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO agent_team_slots (id, preset_id, position, display_name, provider, repo_id, "
+                "repo_path, repo_name, launch_mode, enabled, created_at, updated_at) VALUES "
+                "(10, 1, 0, 'leader-slot', 'codex-cli', 'a', '/a', 'a', 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(11, 1, 0, 'owner-slot', 'codex-cli', 'b', '/b', 'b', 'plain', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO mail_team_members (id, identity_key, repo_id, repo_path, repo_name, display_name, "
+                "participant_kind, team_preset_id, team_slot_id, created_at, updated_at) VALUES "
+                "(7, 'slot:7', 'b', '/b', 'b', 'owner-member', 'team_slot', 1, 11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "(8, 'slot:8', 'a', '/a', 'a', 'leader-member', 'team_slot', 1, 10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO mail_agent_sessions (id, member_id, provider, source, session_key, wake_enabled, "
+                "mailbox_status, last_seen_at, team_preset_id, team_slot_id, bound_pane_pid, "
+                "bound_pane_proc_start, capability_token_hash, created_at) VALUES "
+                "(21, 7, 'codex-cli', 'mcp', 'mcp:21', 1, 'connected', CURRENT_TIMESTAMP, 1, 11, 1001, '1', "
+                "'test-cap-owner', CURRENT_TIMESTAMP), "
+                "(22, 8, 'codex-cli', 'mcp', 'mcp:22', 1, 'connected', CURRENT_TIMESTAMP, 1, 10, 1002, '1', "
+                "'test-cap-leader', CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO agent_pane_bindings (pane_pid, pane_proc_start, slot_id, preset_id, "
+                "created_at) VALUES "
+                "(1001, '1', 11, 1, CURRENT_TIMESTAMP), "
+                "(1002, '1', 10, 1, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO mail_messages (id, kind, sender_member_id, recipient_member_id, subject, body_markdown, "
+                "created_at) VALUES "
+                "(100, 'question', 7, 8, 'Plan', 'Fixture plan', CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path, dispatch_label, "
+                "design_label, merge_policy, github_auth_mode, base_ref, max_approval_rounds, "
+                "max_concurrent_dispatched, max_verification_retries, max_auto_merges_per_day, "
+                "max_build_parallelism, builds_out_of_tree, continuation_enabled, max_continuation_revisions, "
+                "max_continuation_failed_heads, max_failed_heads_per_revision, max_scope_paths, "
+                "max_scope_commands, enabled, created_at, updated_at) "
+                "VALUES (1, 1, 'example', 'a', '/a', 'ready', 'design', 'human', 'ambient', 'origin/main', "
+                "3, 1, 1, 0, 1, 0, 0, 6, 8, 2, 32, 16, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, "
+                "github_updated_at, issue_type, dispatch_status, attempt_phase, owner_slot_id, "
+                "active_scope_revision, approval_round_count, retry_count, diagnostic_retry_count, "
+                "dispatch_nonce, created_at, updated_at) VALUES "
+                "(1, 1, 7, 'title', 'https://example.invalid/7', CURRENT_TIMESTAMP, 'code', "
+                "'pending', 'implementation', 11, 0, 0, 0, 0, 'v17d', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, "
+                "github_updated_at, issue_type, dispatch_status, attempt_phase, owner_slot_id, "
+                "active_scope_revision, approval_round_count, retry_count, diagnostic_retry_count, "
+                "dispatch_nonce, escalation_reason, pr_number, created_at, updated_at) VALUES "
+                "(2, 1, 8, 'title-2', 'https://example.invalid/8', CURRENT_TIMESTAMP, 'code', "
+                "'escalated', 'implementation', 11, 0, 0, 0, 0, 'v17d', 'plan_blocked', 25, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, "
+                "approval_round, owner_member_id, leader_member_id, request_fingerprint, status, "
+                "request_message_id, scope_revision_id, created_at) VALUES "
+                "(50, 1, 'initial_plan', 'v17d', 0, 7, 8, 'fp-initial', 'pending', 100, NULL, CURRENT_TIMESTAMP), "
+                "(51, 2, 'continuation', 'v17d', 0, 7, 8, 'fp-cont', 'pending', 100, 2, CURRENT_TIMESTAMP)"
+            ))
+            await conn.execute(text(
+                "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision, "
+                "owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths, allowed_actions, "
+                "allowed_commands, prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha, "
+                "originating_escalation_reason, expected_workspace_id, expected_lease_token_hash, max_failed_heads, "
+                "failed_head_count, status, delivery_attempt_count, approval_request_id, created_at) "
+                "VALUES (2, 2, 'v17d', 0, 11, 7, 'implementation', '/work', 'cont revision', '[]', '[]', '[]', "
+                "'[]', '{}', :head, :tree, 'plan_blocked', 1, :lease_hash, 2, 0, 'proposed', 0, 51, CURRENT_TIMESTAMP)"
+            ), {"head": "a" * 40, "tree": "b" * 40,
+                "lease_hash": github_approval_service.lease_token_hash("hash-2")})
+            await conn.execute(text(
+                "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, leased_item_id, "
+                "lease_token, created_at, updated_at) VALUES "
+                "(1, 1, '/work/1', 'worktree', 1, 1, 2, 'hash-2', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ))
+            await conn.commit()
+
+            before = await _authority_references(conn)
+            await _run_sqlite_compat_migrations(conn)
+            await conn.rollback()
+            after_migration = await _authority_references(conn)
+            # Populated pre-migration authority is preserved by the migration.
+            for key in ("presets", "slots", "members", "sessions", "pane_bindings", "items",
+                        "workspaces", "approval_requests", "revisions"):
+                assert after_migration[key] == before[key], key
+            # A real tied roster resolves through the migration to the lower id.
+            assert after_migration["explicit"] == {1: 10}
+            assert after_migration["legacy"] == [{"id": 1, "legacy_id": 10}]
+
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            item = await session.get(GithubWorkItem, 1, populate_existing=True)
+            # Negative case retained: a non-designated member cannot decide.
+            # The precise refusal code is asserted and complete authority is
+            # unchanged after the refusal.
+            with pytest.raises(GithubApprovalError) as refused:
+                await github_approval_service.decide(
+                    session, item, authenticated_leader_member_id=7,
+                    decision="approved", reason="v17 decision", request_id=50)
+            assert refused.value.status_code == 403
+            assert refused.value.detail == "not_designated_leader"
+            session.expire_all()
+            after_refusal = await _authority_references(session)
+            for key in ("presets", "slots", "members", "sessions", "pane_bindings",
+                        "items", "workspaces", "approval_requests", "revisions"):
+                assert after_refusal[key] == after_migration[key], key
+            # Reattach the item after the snapshot read.
+            item = await session.get(GithubWorkItem, 1, populate_existing=True)
+
+            # Successful real initial-plan decision.
+            request, applied = await github_approval_service.decide(
+                session, item, authenticated_leader_member_id=8,
+                decision="approved", reason="v17 decision", request_id=50)
+            assert applied is True
+            assert request.status == "approved"
+
+            # Successful real continuation decision on its own work item.
+            item_two = await session.get(GithubWorkItem, 2, populate_existing=True)
+            cont_request, _cont_revision, cont_applied = await github_approval_service.decide_continuation(
+                session, item_two, authenticated_leader_member_id=8,
+                decision="approved", reason="v17 continuation", request_id=51)
+            assert cont_applied is True
+            assert cont_request.status == "approved"
+
+            # Authorized decision fields changed; stable identity did not.
+            session.expire_all()
+            stable = await _authority_references(session)
+            assert stable["slots"] == before["slots"]
+            assert stable["members"] == before["members"]
+            assert stable["sessions"] == before["sessions"]
+            assert stable["workspaces"] == before["workspaces"]
+            # Authorized decision fields change; stable revision identity does not.
+            stable_revisions = [{k: v for k, v in row.items() if k != "status"} for row in stable["revisions"]]
+            before_revisions = [{k: v for k, v in row.items() if k != "status"} for row in before["revisions"]]
+            assert stable_revisions == before_revisions
+            revision_statuses = {row["id"]: row["status"] for row in stable["revisions"]}
+            assert revision_statuses == {2: "approved"}
+            stable_items = [{k: v for k, v in row.items() if k in (
+                "id", "scope_id", "owner_slot_id", "handoff_target_slot_id", "active_scope_revision",
+                "dispatch_nonce")}
+                for row in stable["items"]]
+            before_items = [{k: v for k, v in row.items() if k in (
+                "id", "scope_id", "owner_slot_id", "handoff_target_slot_id", "active_scope_revision",
+                "dispatch_nonce")}
+                for row in before["items"]]
+            assert stable_items == before_items
+            # Pane bindings are unchanged after both successful decisions.
+            assert stable["pane_bindings"] == after_migration["pane_bindings"]
+            # The explicit Leader map equals the migrated baseline; the
+            # pre-migration map is None and the migration change is intended.
+            assert stable["explicit"] == after_migration["explicit"]
+            assert after_refusal["explicit"] == after_migration["explicit"]
+            authorized_fields = {"status", "reason", "decision_message_id", "decided_at"}
+            stable_approvals = [
+                {k: v for k, v in row.items() if k not in authorized_fields}
+                for row in stable["approval_requests"]]
+            before_approvals = [
+                {k: v for k, v in row.items() if k not in authorized_fields}
+                for row in before["approval_requests"]]
+            assert stable_approvals == before_approvals
+            statuses = {row["id"]: row["status"] for row in stable["approval_requests"]}
+            assert statuses == {50: "approved", 51: "approved"}
+    finally:
+        await engine.dispose()

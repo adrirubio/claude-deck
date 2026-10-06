@@ -91,7 +91,9 @@ async def setup_preflight(
             if not matches:
                 return SetupPreflightCheck(status="blocked", code="checkout_identity_mismatch")
             return SetupPreflightCheck(status="ready", code="checkout_identity_matches")
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, subprocess.TimeoutExpired):
+            # A bounded Git subprocess timeout is a dated safe unknown, not a
+            # server failure. Independent checks keep their own results.
             return SetupPreflightCheck(status="unknown", code="checkout_check_timeout")
         except (OSError, ValueError, KeyError):
             return SetupPreflightCheck(status="unknown", code="checkout_check_failed")

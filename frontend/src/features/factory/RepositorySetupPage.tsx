@@ -5,8 +5,7 @@ import { ApiHttpError, apiClient } from "@/lib/api";
 import {
   createAgentTeamPreset,
   createTeamGithubScope,
-  fetchAgentTeamPresets,
-  fetchTeamGithubScopes,
+  fetchConfigurationObservation,
   launchAgentTeam,
   planAgentTeamLaunch,
   updateAgentTeamLeader,
@@ -30,7 +29,6 @@ type Recovery = {
   requestedDraft?: Draft;
   requestedRouting?: Record<string, { areaLabels: string; expertise: string }>;
 } | null;
-type MailTeam = { members: Array<{ id: number; status: string; team_preset_id?: number | null; team_slot_id?: number | null; sessions: Array<{ team_preset_id?: number | null; team_slot_id?: number | null; mailbox_status: string }> }> };
 type ScopeOverlap = { key: string; first: TeamGithubScope; second: TeamGithubScope; active: boolean };
 type UncertainLaunch = { slotIds: number[]; planHash: string } | null;
 const initial: Draft = {
@@ -144,8 +142,13 @@ function teamMatchesDraft(
 }
 
 function isDefiniteCreateNonWrite(cause: unknown) {
-  // Only 401 and 422 prove the create was rejected before any write.
-  return cause instanceof ApiHttpError && (cause.status === 401 || cause.status === 422);
+  // Scoped to create requests only. The create-route transaction contract is
+  // proven by test_create_route_400_after_partial_work_persists_nothing: a 400
+  // validation refusal, 401 authentication refusal, or 422 schema refusal never
+  // commits a write, even after partial in-session work. Transport and server
+  // errors stay uncertain and keep the no-duplicate-create latch.
+  return cause instanceof ApiHttpError &&
+    (cause.status === 400 || cause.status === 401 || cause.status === 422);
 }
 
 export function RepositorySetupPage() {
@@ -185,32 +188,28 @@ export function RepositorySetupPage() {
   const currentPreflight = preflight?.key === inputKey ? preflight.value : null;
   const currentKey = useRef(inputKey);
   currentKey.current = inputKey;
+  const saveIntentKey = JSON.stringify({
+    ...JSON.parse(normalized(draft)),
+    teamMode: draft.teamMode, teamId: draft.teamId, teamName: draft.teamName,
+    leaderName: draft.leaderName, workerNames: draft.workerNames, provider: draft.provider,
+    slotRouting,
+  });
+  const currentSaveIntent = useRef(saveIntentKey);
+  currentSaveIntent.current = saveIntentKey;
+  const liveLaunchSlots = useRef<number[]>([]);
+  liveLaunchSlots.current = launchSlots;
 
-  async function readTeamActivationBlockers(currentTeam: AgentTeamPreset, operatorToken: string): Promise<string[]> {
-    const [roster, plan] = await Promise.all([
-      apiClient<MailTeam>("agent-mail/team?sync=false", { cache: "no-store" }),
-      planAgentTeamLaunch(currentTeam.id, {
-        slot_ids: currentTeam.slots.filter((slot) => slot.enabled).map((slot) => slot.id),
-        reuse_existing: true,
-      }, operatorToken),
-    ]);
-    const blockers: string[] = [];
-    const leader = currentTeam.slots.find((slot) => slot.id === currentTeam.leader_slot_id && slot.enabled);
-    const isConnectedForSlot = (member: MailTeam["members"][number], slotId: number) =>
-      member.team_preset_id === currentTeam.id && member.team_slot_id === slotId && member.status === "connected" &&
-      member.sessions.some((session) => session.team_preset_id === currentTeam.id && session.team_slot_id === slotId && session.mailbox_status === "connected");
-    const leaderMember = leader ? roster.members.find((member) => isConnectedForSlot(member, leader.id)) : undefined;
-    if (!leader || !leaderMember) blockers.push("A connected Agent Mail Leader is required.");
-    const connectedWorker = currentTeam.slots.filter((slot) => slot.enabled && slot.id !== currentTeam.leader_slot_id)
-      .flatMap((slot) => roster.members.filter((member) => member.id !== leaderMember?.id && isConnectedForSlot(member, slot.id)));
-    if (!connectedWorker.length) blockers.push("A distinct connected worker is required for owner and approver separation.");
-    if (!plan.can_launch) {
-      const blocked = plan.items.filter((item) => item.action === "blocked");
-      blockers.push(blocked.length
-        ? `Provider and Agent Mail readiness is blocked for ${blocked.map((item) => `${item.slot_name} (${item.block_code ?? "not_ready"})`).join(", ")}.`
-        : "Provider and Agent Mail readiness is not confirmed.");
-    }
-    return blockers;
+  async function readTeamActivationBlockers(currentScope: TeamGithubScope, operatorToken: string): Promise<string[]> {
+    // Server-derived authenticated bindings. Hook sessions and spawn-only
+    // plans are not readiness. The route names stale, ambiguous,
+    // unauthenticated and wrong-member bindings as blockers.
+    const readiness = await apiClient<{
+      status: string;
+      blockers: Array<{ code: string; message: string }>;
+    }>(`agent-teams/github-scopes/${currentScope.id}/activation-readiness`, {
+      headers: { "X-Deck-Operator-Token": operatorToken },
+    });
+    return readiness.blockers.map((blocker) => `${blocker.message} (${blocker.code})`);
   }
 
   function applyActivationReview(fresh: { presets: AgentTeamPreset[]; scopes: TeamGithubScope[] }, freshTeam: AgentTeamPreset, freshScope: TeamGithubScope) {
@@ -266,11 +265,11 @@ export function RepositorySetupPage() {
   }
 
   async function refreshConfiguration() {
-    const nextPresets = (await fetchAgentTeamPresets()).presets;
-    const nextScopes = (await Promise.all(nextPresets.map((item) => fetchTeamGithubScopes(item.id)))).flatMap((list) => list.scopes);
-    setPresets(nextPresets);
-    setScopes(nextScopes);
-    return { presets: nextPresets, scopes: nextScopes };
+    // One bounded bulk observation. No per-preset request fan-out.
+    const observation = await fetchConfigurationObservation();
+    setPresets(observation.presets);
+    setScopes(observation.scopes);
+    return { presets: observation.presets, scopes: observation.scopes, complete: observation.complete };
   }
 
   useEffect(() => {
@@ -338,11 +337,22 @@ export function RepositorySetupPage() {
 
   async function saveSetup() {
     if (recovery || !confirmSave || (draft.teamMode === "existing" && !draft.teamId)) return;
+    const requestedIntent = currentSaveIntent.current;
+    const intentChanged = () => currentSaveIntent.current !== requestedIntent;
     const saveToken = await requestOperatorToken();
     if (!saveToken) { setError("The operator token is required. The draft remains available."); return; }
+    if (intentChanged()) {
+      // A refusal before the save body must display safely and return normally.
+      setError("Inputs changed during the save. Review the saved records before continuing.");
+      return;
+    }
     setBusy(true); setError("");
     try {
       const fresh = await refreshConfiguration();
+      if (intentChanged()) {
+        // A stale save must not create records for changed inputs.
+        throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+      }
       let selected: AgentTeamPreset | null;
       if (draft.teamMode === "existing") {
         selected = fresh.presets.find((item) => item.id === draft.teamId) ?? null;
@@ -375,7 +385,14 @@ export function RepositorySetupPage() {
         };
         setRecovery({ kind: "team", candidates: [], requestedDraft: { ...draft }, requestedRouting: { ...slotRouting } });
         try {
-          selected = await withOperatorToken((operatorToken) => createAgentTeamPreset(input, operatorToken));
+          selected = await withOperatorToken((operatorToken) => {
+            if (intentChanged()) {
+              // Checked immediately before the create callback, including any
+              // credential-retry invocation of the same callback.
+              throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+            }
+            return createAgentTeamPreset(input, operatorToken);
+          });
           setRecovery(null);
         } catch (cause) {
           if (isDefiniteCreateNonWrite(cause)) {
@@ -389,11 +406,20 @@ export function RepositorySetupPage() {
         setTeam(selected);
       }
       if (!selected) throw new Error("Select an existing team or create a new team.");
+      if (intentChanged()) {
+        // A stale save must not write further records for changed inputs.
+        throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+      }
       if (draft.teamMode === "new") {
         const leaderSlot = selected.slots.find((slot) => slot.display_name === draft.leaderName.trim());
         if (!leaderSlot) throw new Error("The saved team has no matching Leader slot. Review the team before setup continues.");
         if (selected.leader_slot_id !== leaderSlot.id) {
           selected = await updateAgentTeamLeader(selected.id, { leader_slot_id: leaderSlot.id, expected_leader_slot_id: selected.leader_slot_id ?? null, expected_updated_at: selected.updated_at, reason: "Set the explicit Leader during guided repository setup." }, saveToken);
+          if (intentChanged()) {
+            // The Leader change is a persisted known record. Do not continue
+            // with stale writes or overwrite newer selection or recovery state.
+            throw new Error("Inputs changed during the save. The Leader record is saved. Review the saved records before continuing.");
+          }
         }
       } else if (!selected.leader_slot_id) {
         throw new Error("The existing team has no explicit Leader assignment. Keep its settings unchanged and resolve its authority separately.");
@@ -408,15 +434,26 @@ export function RepositorySetupPage() {
         throw new Error("This team already has a scope for the repository with different saved settings. The existing scope remains unchanged. Review it in Agent Teams before making a separate edit.");
       }
       if (!savedScope) {
+        if (intentChanged()) {
+          // A stale save must not issue a scope create for changed inputs.
+          throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+        }
         setRecovery({ kind: "scope", candidates: [], requestedDraft: { ...draft }, requestedRouting: { ...slotRouting } });
         try {
-          savedScope = await withOperatorToken((operatorToken) => createTeamGithubScope(selected.id, {
+          savedScope = await withOperatorToken((operatorToken) => {
+            if (intentChanged()) {
+              // Checked immediately before the scope create callback, including
+              // any credential-retry invocation of the same callback.
+              throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+            }
+            return createTeamGithubScope(selected.id, {
             repo_owner: draft.owner.trim(), repo_name: draft.repo.trim(), repo_path: draft.path.trim(),
             dispatch_label: draft.dispatch.trim(), design_label: draft.design.trim(), merge_policy: "human",
             max_approval_rounds: 3, max_concurrent_dispatched: 1, max_verification_retries: 1,
             max_auto_merges_per_day: 0, base_ref: draft.baseRef.trim(), github_auth_mode: draft.authMode === "github_app" ? "app" : "ambient",
             builds_out_of_tree: false, max_build_parallelism: 1, enabled: false,
-          }, operatorToken));
+          }, operatorToken);
+          });
           setRecovery(null);
         } catch (cause) {
           if (isDefiniteCreateNonWrite(cause)) {
@@ -427,8 +464,16 @@ export function RepositorySetupPage() {
           throw cause;
         }
       }
+      if (intentChanged()) {
+        // A stale save must not persist further state for changed inputs.
+        throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+      }
       setScope(savedScope);
       await refreshConfiguration();
+      if (intentChanged()) {
+        // A stale save must not navigate to the saved step for changed inputs.
+        throw new Error("Inputs changed during the save. Review the saved records before continuing.");
+      }
       setStep(5);
     } catch (cause) {
       setError((existing) => existing || (cause instanceof Error ? cause.message : "Setup could not be saved. The draft remains available here."));
@@ -473,7 +518,11 @@ export function RepositorySetupPage() {
       setScope(freshScope);
       applyActivationReview(fresh, freshTeam, freshScope);
       setTeamActivationAck(false);
-      setActivationReadiness(await withOperatorToken((operatorToken) => readTeamActivationBlockers(freshTeam, operatorToken)));
+      const reviewBlockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(freshScope, operatorToken));
+      if (!fresh.complete) {
+        reviewBlockers.push("The configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+      }
+      setActivationReadiness(reviewBlockers);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not refresh activation checks."); }
     finally { setBusy(false); }
   }
@@ -488,31 +537,49 @@ export function RepositorySetupPage() {
         body: JSON.stringify(scopePreflightInput(scope)),
       });
       if (checkedKey !== currentKey.current || check.status !== "ready") { setPreflight({ key: checkedKey, value: check }); setActivationSnapshot(null); setError("Inputs changed or current checks are not ready. Review the new result before activation."); return; }
-      const fresh = await refreshConfiguration();
-      const freshTeam = fresh.presets.find((item) => item.id === team.id);
-      const freshScope = fresh.scopes.find((item) => item.id === scope.id);
-      if (!freshTeam || !freshScope) throw new Error("The selected team or scope is no longer available.");
-      if (freshScope.preset_id !== freshTeam.id || !scopeMatchesDraft(freshScope, draft)) throw new Error("The selected saved scope changed. Review it again before activation.");
-      if (freshScope.enabled) {
-        setTeam(freshTeam); setScope(freshScope); setActivationSnapshot(null);
+      const initial = await refreshConfiguration();
+      const initialTeam = initial.presets.find((item) => item.id === team.id);
+      const initialScope = initial.scopes.find((item) => item.id === scope.id);
+      if (!initialTeam || !initialScope) throw new Error("The selected team or scope is no longer available.");
+      if (initialScope.preset_id !== initialTeam.id || !scopeMatchesDraft(initialScope, draft)) throw new Error("The selected saved scope changed. Review it again before activation.");
+      if (initialScope.enabled) {
+        setTeam(initialTeam); setScope(initialScope); setActivationSnapshot(null);
         setError("Fresh reads confirm that this scope is already enabled. No activation request was repeated.");
         return;
       }
-      // Re-read configuration after the GitHub checks and compare the reviewed set.
-      const snapshot = buildActivationSnapshot(fresh.scopes, fresh.presets, freshTeam);
+      // Readiness runs before the final comparison so the configuration and
+      // overlap recheck follows the last slow await (R2).
+      const blockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(scope, operatorToken));
+      if (!initial.complete) {
+        blockers.push("The configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+      }
+      // Re-read configuration after the GitHub checks and readiness wait, then
+      // compare the reviewed set and invalidate stale acknowledgements.
+      const fresh = await refreshConfiguration();
+      if (!fresh.complete) {
+        // A final incomplete observation blocks the write even when the
+        // truncated snapshot matches the reviewed set.
+        blockers.push("The final configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+      }
+      setActivationReadiness(blockers);
+      if (blockers.length) throw new Error("Shared readiness requirements are not met. Resolve the listed blockers before activation.");
+      const refreshedTeam = fresh.presets.find((item) => item.id === team.id);
+      const refreshedScope = fresh.scopes.find((item) => item.id === scope.id);
+      if (!refreshedTeam || !refreshedScope || refreshedScope.preset_id !== refreshedTeam.id
+          || !scopeMatchesDraft(refreshedScope, draft)) {
+        throw new Error("The selected saved scope changed after the readiness wait. Review it again before activation.");
+      }
+      const snapshot = buildActivationSnapshot(fresh.scopes, fresh.presets, refreshedTeam);
       if (snapshot !== activationSnapshot) {
-        applyActivationReview(fresh, freshTeam, freshScope);
+        applyActivationReview(fresh, refreshedTeam, refreshedScope);
         setTeamActivationAck(false);
         throw new Error("The reviewed configuration changed after the checks. Review the refreshed state and confirm the acknowledgements again.");
       }
       if (scopeOverlaps.some((item) => !scopeOverlapAcks.includes(item.key))) {
         throw new Error("Acknowledge each listed overlap, active collisions and prospective overlaps, before activation.");
       }
-      if (!freshTeam.autonomy_enabled) throw new Error("Enable team automation as a separate reviewed action before enabling this scope.");
-      const blockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(freshTeam, operatorToken));
-      setActivationReadiness(blockers);
-      if (blockers.length) throw new Error("Shared readiness requirements are not met. Resolve the listed blockers before activation.");
-      const updatedScope = await updateTeamGithubScope(freshScope.id, { enabled: true }, token);
+      if (!refreshedTeam.autonomy_enabled) throw new Error("Enable team automation as a separate reviewed action before enabling this scope.");
+      const updatedScope = await updateTeamGithubScope(refreshedScope.id, { enabled: true }, token);
       setScope(updatedScope); await refreshConfiguration();
       setActivationSnapshot(null); setError("Scope activated after current access, label, readiness, and overlap checks.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Activation could not be completed."); }
@@ -521,8 +588,22 @@ export function RepositorySetupPage() {
 
   async function reviewLaunch() {
     if (!team || !token || launchSlots.length === 0) return;
+    const requestedSlots = [...launchSlots];
+    const requestedKey = currentKey.current;
     setBusy(true); setError("");
-    try { setLaunchPlan(await planAgentTeamLaunch(team.id, { slot_ids: launchSlots, reuse_existing: true }, token)); }
+    try {
+      const planned = await planAgentTeamLaunch(team.id, { slot_ids: requestedSlots, reuse_existing: true }, token);
+      // A late plan response for stale inputs or a changed selection is
+      // discarded (R2 family).
+      const live = liveLaunchSlots.current;
+      const selectionChanged = requestedSlots.length !== live.length
+        || requestedSlots.some((slotId) => !live.includes(slotId));
+      if (currentKey.current !== requestedKey || selectionChanged) {
+        setError("Inputs changed while the launch plan was built. Review a new launch plan.");
+        return;
+      }
+      setLaunchPlan(planned);
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not build a current launch plan."); }
     finally { setBusy(false); }
   }
@@ -538,19 +619,49 @@ export function RepositorySetupPage() {
       if (freshTeam.autonomy_enabled) { setTeam(freshTeam); setActivationSnapshot(null); setError("Fresh reads show that team automation is already enabled."); return; }
       const siblings = fresh.scopes.filter((item) => item.preset_id === freshTeam.id && item.enabled);
       const activationTargets = [...new Map([freshScope, ...siblings].map((item) => [item.id, item])).values()];
+      if (!fresh.complete) {
+        // The initial observation gate blocks before any remote work.
+        throw new Error("The initial configuration observation is incomplete. Collisions may be missing. No remote checks were made. (configuration_observation_incomplete)");
+      }
       // Remote observations run first. Configuration is re-read after these HTTP checks.
-      const observations = await Promise.all(activationTargets.map(async (item) => ({
-        scopeId: item.id,
-        result: await apiClient<Preflight>("factory/setup-preflight", {
-          method: "POST", headers: { "X-Deck-Operator-Token": token },
-          body: JSON.stringify(scopePreflightInput(item)),
-        }),
-      })));
+      // Bounded remote work: at most 16 targets in batches of 4. Oversize or
+      // incomplete observations block readiness before further remote calls.
+      const observations: Array<{ scopeId: number; result: Preflight }> = [];
+      let boundedWork = false;
+      if (activationTargets.length > 16) {
+        boundedWork = true;
+      } else {
+        for (let start = 0; start < activationTargets.length; start += 4) {
+          const batch = activationTargets.slice(start, start + 4);
+          const results = await Promise.all(batch.map(async (item) => ({
+            scopeId: item.id,
+            result: await apiClient<Preflight>("factory/setup-preflight", {
+              method: "POST", headers: { "X-Deck-Operator-Token": token },
+              body: JSON.stringify(scopePreflightInput(item)),
+            }),
+          })));
+          observations.push(...results);
+          if (results.some(({ result }) => result.status !== "ready")) {
+            break;
+          }
+        }
+      }
       const incomplete = observations.filter(({ result }) => result.status !== "ready");
+      if (boundedWork) {
+        throw new Error("Team activation is blocked. The sibling set exceeds the bounded activation observation. Observed collisions are kept; no further remote checks were made.");
+      }
       if (incomplete.length) {
         throw new Error(`Team activation remains blocked. Recheck scope ${incomplete.map(({ scopeId, result }) => `${scopeId} (${result.status} at ${result.observed_at}: ${Object.values(result.checks).filter((check) => check.status !== "ready").map((check) => `${check.code}: ${check.remedy}`).join("; ")})`).join(", ")}.`);
       }
+      // Readiness runs before the final comparison so the configuration and
+      // overlap recheck follows the last slow await (R2).
+      const blockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(scope, operatorToken));
       const reviewed = await refreshConfiguration();
+      if (!reviewed.complete) {
+        blockers.push("The final configuration observation is incomplete. Collisions may be missing. (configuration_observation_incomplete)");
+      }
+      setActivationReadiness(blockers);
+      if (blockers.length) throw new Error("Shared readiness requirements are not met. Resolve the listed blockers before activation.");
       const reviewedTeam = reviewed.presets.find((item) => item.id === team.id);
       const reviewedScope = reviewed.scopes.find((item) => item.id === scope.id);
       if (!reviewedTeam || !reviewedScope || reviewedScope.preset_id !== reviewedTeam.id || !scopeMatchesDraft(reviewedScope, draft)) throw new Error("The selected team or saved scope changed after the checks. Review activation again.");
@@ -564,9 +675,6 @@ export function RepositorySetupPage() {
         throw new Error("Acknowledge each listed overlap, active collisions and prospective overlaps, before enabling team automation.");
       }
       if (!teamActivationAck) throw new Error("Confirm team activation and review every enabled sibling scope first.");
-      const blockers = await withOperatorToken((operatorToken) => readTeamActivationBlockers(reviewedTeam, operatorToken));
-      setActivationReadiness(blockers);
-      if (blockers.length) throw new Error("Shared readiness requirements are not met. Resolve the listed blockers before activation.");
       const updatedTeam = await updateAgentTeamPreset(reviewedTeam.id, { autonomy_enabled: true }, token);
       setTeam(updatedTeam); setActivationSnapshot(null); setTeamActivationAck(false);
       setError("Team automation enabled. Review scope activation separately before enabling this scope.");
@@ -586,6 +694,15 @@ export function RepositorySetupPage() {
       setUncertainLaunch(null);
       setLaunchReconciliationReady(false);
     } catch (cause) {
+      if (cause instanceof ApiHttpError && cause.status === 409 && cause.code === "plan_conflict"
+          && cause.provenNonWrite === true) {
+        // Proven pre-write plan conflict: nothing launched. A fresh reviewed
+        // plan is required; there is no uncertain outcome to reconcile.
+        setLaunchPlan(null); setLaunchUncertain(false); setUncertainLaunch(null);
+        setLaunchReconciliationReady(false);
+        setError("Launch plan changed or needs confirmation. Review a new launch plan before launching.");
+        return;
+      }
       setError(`Launch outcome is uncertain. Do not launch again until an operator reconciles the team sessions. ${cause instanceof Error ? cause.message : "No safe result was returned."}`);
       setUncertainLaunch({ slotIds: [...launchSlots], planHash: launchPlan.plan_hash });
       setLaunchPlan(null); setLaunchUncertain(true);
@@ -634,7 +751,16 @@ export function RepositorySetupPage() {
     {step === 2 && <div className={panelClass}><p>Repository dispatch and design labels apply to the scope. Worker routes are separate for each slot. The Leader has no worker route.</p>{draft.teamMode === "new" ? draft.workerNames.split("\n").map((rawName) => rawName.trim()).filter(Boolean).map((name) => <fieldset key={name} className="space-y-2 rounded border p-3"><legend className="font-medium">{name}</legend><label className={labelClass}>Area labels, comma separated<input className={inputClass} value={slotRouting[name]?.areaLabels ?? ""} onChange={(e) => { setConfirmSave(false); setSlotRouting((current) => ({ ...current, [name]: { areaLabels: e.target.value, expertise: current[name]?.expertise ?? "" } })); }} /></label><label className={labelClass}>Expertise<input className={inputClass} value={slotRouting[name]?.expertise ?? ""} onChange={(e) => { setConfirmSave(false); setSlotRouting((current) => ({ ...current, [name]: { areaLabels: current[name]?.areaLabels ?? "", expertise: e.target.value } })); }} /></label></fieldset>) : <p>Existing team routing stays unchanged.</p>}<p>Potential enabled overlaps: {matchingOverlap.map((item) => `team ${item.preset_id}/scope ${item.id}`).join(", ") || "none found in loaded data"}.</p><Button onClick={() => setStep(3)}>Continue</Button></div>}
     {step === 3 && <div className={panelClass}><h3 className="font-semibold">Policy</h3><p>Merge policy: human approval.</p><p>New scope limits: concurrency 1; verification retries 1; automatic merges 0.</p><p>Base branch: {draft.baseRef}. Scope is saved disabled, even when checks have gaps.</p><p>Existing team settings remain unchanged. Launch and activation require separate choices.</p><Button onClick={() => setStep(4)}>Review setup</Button></div>}
     {step === 4 && <div className={panelClass}><h3 className="font-semibold">Review</h3><p>Repository: {draft.owner}/{draft.repo}</p><p>Checkout: {draft.path}</p><p>Base: {draft.baseRef}</p><p>Labels: {draft.dispatch} / {draft.design}</p><p>Authentication: {draft.authMode}; credentials are not stored in this draft.</p><p>Preflight: {currentPreflight?.status ?? "not checked or stale"}. Saving remains disabled and does not need ready checks.</p>{currentPreflight && <p className="text-sm">Configuration presence, boolean only: {Object.entries(currentPreflight.configuration_presence ?? {}).map(([name, present]) => `${name}: ${present ? "present" : "missing"}`).join(", ") || "not reported"}.</p>}{(currentPreflight?.host_guidance ?? []).length > 0 && <div className="text-sm"><p className="font-medium">Host procedure</p><ol className="list-decimal pl-5">{(currentPreflight?.host_guidance ?? []).map((line) => <li key={line}>{line}</li>)}</ol></div>}<p className="text-sm">Runtime recovery-only restrictions are separate from credential readiness. Activation needs every required check ready in a fresh observation.</p><p>Team: {draft.teamMode === "existing" ? presets.find((item) => item.id === draft.teamId)?.name ?? "Select a team" : draft.teamName || "New team"}; Leader: {draft.teamMode === "new" ? draft.leaderName : "preserved"}; worker slots: {draft.teamMode === "new" ? draft.workerNames.split("\n").filter((name) => name.trim()).length : "preserved"}.</p><p>Potential overlap: {matchingOverlap.map((item) => `team ${item.preset_id}/scope ${item.id}`).join(", ") || "none found"}.</p><label className="flex gap-2 text-sm"><input type="checkbox" checked={confirmSave} onChange={(e) => setConfirmSave(e.target.checked)} />Save configuration only. Keep launch, team activation, scope activation, and merge decisions separate.</label><div className="flex flex-wrap gap-2"><Button disabled={busy || Boolean(recovery) || !confirmSave || (draft.teamMode === "existing" && !draft.teamId)} onClick={() => void saveSetup()}>{busy ? "Saving…" : "Save configuration"}</Button><Link className="self-center underline" to="/teams">Manage teams</Link></div></div>}
-    {step === 5 && team && scope && <div className={panelClass}><h3 className="font-semibold">Saved configuration</h3><p>Team {team.name} (#{team.id}) is {team.autonomy_enabled ? "active" : "paused"}. Scope #{scope.id} is {scope.enabled ? "enabled" : "disabled"}.</p><p>Saving did not launch workers or activate this scope.</p><p>Confirmed values bound to team #{team.id} and scope #{scope.id}: provider {team.slots.find((slot) => slot.id === team.leader_slot_id)?.provider ?? "unknown"}; Leader {team.slots.find((slot) => slot.id === team.leader_slot_id)?.display_name ?? "unassigned"}; slots {team.slots.length}. A cached fallback is not current evidence. Make a separately reviewed edit to change these saved values.</p>
+    {step === 5 && team && scope && <div className={panelClass}><h3 className="font-semibold">Saved configuration</h3><p>Team {team.name} (#{team.id}) is {team.autonomy_enabled ? "active" : "paused"}. Scope #{scope.id} is {scope.enabled ? "enabled" : "disabled"}.</p><p>Saving did not launch workers or activate this scope.</p>
+      <section className="space-y-2 rounded border p-3" aria-live="polite"><h4 className="font-semibold">Saved-stage preflight</h4>
+        {preflight ? (<>
+          <p className="text-sm">{currentPreflight ? "Current result" : "Stale result"}; observed {new Date(preflight.value.observed_at ?? preflight.value.checked_at ?? "").toLocaleString()}; status {preflight.value.status}.</p>
+          {Object.entries(preflight.value.checks).map(([name, check]) => <p key={name} className="text-sm">{name}: {check.status} ({check.code}). Remedy: {check.remedy}</p>)}
+          {Object.values(preflight.value.checks).some((check) => check.status !== "ready") && (
+            <p className="text-sm">Gaps remain in the checks above. Complete each remedy, then repeat the check before activation.</p>
+          )}
+        </>) : (<p className="text-sm">No preflight result is saved for this stage. Run the access and label check to record one.</p>)}
+      </section><p>Confirmed values bound to team #{team.id} and scope #{scope.id}: provider {team.slots.find((slot) => slot.id === team.leader_slot_id)?.provider ?? "unknown"}; Leader {team.slots.find((slot) => slot.id === team.leader_slot_id)?.display_name ?? "unassigned"}; slots {team.slots.length}. A cached fallback is not current evidence. Make a separately reviewed edit to change these saved values.</p>
       <section className="space-y-2 border-t pt-3"><h4 className="font-semibold">Separate worker launch</h4>{team.slots.filter((slot) => slot.id === team.leader_slot_id && slot.enabled).map((slot) => <label key={slot.id} className="flex gap-2 text-sm"><input type="checkbox" checked={includeLeader} onChange={(event) => { if (launchUncertain) return; setIncludeLeader(event.target.checked); setLaunchPlan(null); setLaunchReconciliationReady(false); setLaunchSlots((current) => event.target.checked ? [...new Set([...current, slot.id])] : current.filter((id) => id !== slot.id)); }} />Include Leader {slot.display_name} in this reviewed launch plan</label>)}{team.slots.filter((slot) => slot.enabled && slot.id !== team.leader_slot_id).map((slot) => <label key={slot.id} className="flex gap-2 text-sm"><input type="checkbox" checked={launchSlots.includes(slot.id)} onChange={(event) => { if (launchUncertain) return; setLaunchPlan(null); setLaunchReconciliationReady(false); setLaunchSlots((current) => event.target.checked ? [...new Set([...current, slot.id])] : current.filter((id) => id !== slot.id)); }} />{slot.display_name} ({slot.provider})</label>)}<Button disabled={busy || launchUncertain || launchSlots.length === 0} onClick={() => void reviewLaunch()}>Review current launch plan</Button>{launchUncertain && <><p role="status">Launch outcome needs operator reconciliation. This flow will not repeat the launch request.</p><Button disabled={busy || !uncertainLaunch} onClick={() => void reconcileLaunch()}>Reconcile current sessions</Button>{launchReconciliationReady && <Button disabled={busy} onClick={() => { setLaunchUncertain(false); setUncertainLaunch(null); setLaunchReconciliationReady(false); setLaunchPlan(null); setError("Current sessions were reconciled. Review a new launch plan before any further launch action."); }}>Confirm reconciled sessions</Button>}</>}{launchPlan && <div className="rounded border p-3"><p>Plan {launchPlan.can_launch ? "ready" : "blocked"}: spawn {launchPlan.spawn_count}, reuse {launchPlan.reuse_count}, blocked {launchPlan.blocked_count}.</p>{launchPlan.items.map((item) => <p key={item.slot_id}>{item.slot_name}: {item.action}{item.reasons.length ? ` (${item.reasons.join(", ")})` : ""}</p>)}<Button disabled={busy || launchUncertain || !launchPlan.can_launch} onClick={() => void launchSelected()}>Launch reviewed slots</Button></div>}</section>
       <section className="space-y-2 border-t pt-3"><h4 className="font-semibold">Separate activation</h4><p>Run a current ready access and label check before activation. Overlap detection is advisory. It is not an atomic cross-scope ownership guarantee.</p><Button disabled={busy} onClick={() => void checkPrerequisites()}>Refresh access and label check</Button><Button disabled={busy || currentPreflight?.status !== "ready"} onClick={() => void reviewActivation()}>Review current activation and overlap</Button>{activationSnapshot && <div className="space-y-2 rounded border p-3"><p>Scopes affected or overlapping: {activationScopes.map((item) => `team ${item.preset_id}/scope ${item.id} (${item.repo_owner}/${item.repo_name}, ${item.dispatch_label})`).join(", ") || "none"}.</p>
       {activationReadiness.length > 0 && <div className="rounded border p-2" role="status"><p className="font-medium">Shared readiness blockers</p>{activationReadiness.map((item) => <p key={item} className="text-sm">{item}</p>)}</div>}

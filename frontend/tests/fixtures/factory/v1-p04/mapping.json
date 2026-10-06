@@ -1,0 +1,124 @@
+{
+  "action_sources": {
+    "cancel_active_revision": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "cancel_active_github_work_item_scope_revision",
+      "states": [
+        "unknown"
+      ]
+    },
+    "cancel_continuation_request": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "owner",
+      "source": "cancel_github_work_item_continuation_request / GithubApprovalService.cancel",
+      "states": [
+        "unknown"
+      ]
+    },
+    "escalate_attempt": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "abandon_github_work_item",
+      "states": [
+        "unknown"
+      ]
+    },
+    "release_recovery_checkpoint": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "release_github_recovery_checkpoint",
+      "states": [
+        "unknown"
+      ]
+    },
+    "resume_attempt": {
+      "block_code": "unknown",
+      "eligibility": "protected existing route; full preconditions not evaluated by read",
+      "path": "backend/app/api/v1/agent_teams.py",
+      "reason": "Open attempt recovery to check available actions.",
+      "required_actor": "operator",
+      "source": "resume_github_work_item_attempt",
+      "states": [
+        "unknown"
+      ]
+    },
+    "retry": {
+      "path": "backend/app/services/github_dispatch_service.py",
+      "projection": "shared legacy _work_item_response.retry_allowed/retry_block_code",
+      "required_actor": "leader",
+      "source": "GithubDispatchService.retry_eligibility",
+      "states": [
+        "eligible",
+        "blocked",
+        "unknown"
+      ]
+    }
+  },
+  "categories": {
+    "active": [
+      "dispatched",
+      "verifying"
+    ],
+    "attention": [
+      "escalated",
+      "failed"
+    ],
+    "finished": [
+      "merged",
+      "completed"
+    ],
+    "queued": [
+      "pending"
+    ],
+    "review": [
+      "awaiting_human_review",
+      "ready_for_review"
+    ]
+  },
+  "fallback_category": "unknown",
+  "reason_summaries": {
+    "abandoned_by_operator": "Operator requested stop. Retry may remain available.",
+    "active_continuation": "Resolve the active continuation before retrying.",
+    "approval_pending": "Waiting for the designated Leader's decision.",
+    "attempt_escalated": "The attempt is stopped in factory tracking and needs attention.",
+    "checks_running": "Checks are being verified.",
+    "continuation_ack_required": "The owner must acknowledge the approved continuation.",
+    "continuation_budget_exhausted": "The existing continuation budget is exhausted.",
+    "continuation_delivery_pending": "The approved continuation is awaiting delivery.",
+    "continuation_disabled": "Continuation is disabled for this repository.",
+    "continuation_not_escalated": "Recovery requires an escalated attempt.",
+    "continuation_pr_required": "Recovery requires the preserved PR.",
+    "continuation_reason_not_allowed": "The existing recovery route does not permit this reason.",
+    "human_review": "Ready for human review.",
+    "intake_eligible": "Configured intake is available; work eligibility still applies.",
+    "job_not_scheduled": "Repository intake is not scheduled.",
+    "not_escalated": "Only escalated work can be retried.",
+    "owner_ack_required": "Waiting for the assigned owner to acknowledge the plan.",
+    "pr_preserved": "Resolve the preserved PR before retrying.",
+    "recovery_only_gate": "Normal intake is blocked while recovery mode is active.",
+    "retry_eligible": "The existing retry state checks permit retry.",
+    "runtime_not_observed": "Runtime availability has not been observed.",
+    "scheduler_stopped": "The scheduler is stopped.",
+    "scope_paused": "Repository intake is paused.",
+    "team_paused": "Team automation is paused.",
+    "unknown": "State needs inspection.",
+    "work_assigned": "Work is assigned to the owner.",
+    "work_queued": "Waiting for dispatch.",
+    "workspace_lease_required": "Recovery requires the current workspace lease."
+  },
+  "schema_version": 1,
+  "unknown_reason_summary": "State needs inspection."
+}

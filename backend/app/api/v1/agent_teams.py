@@ -452,6 +452,25 @@ def _scope_configuration(scope: TeamGithubScope) -> tuple[object, ...]:
     return tuple(getattr(scope, field) for field in _SCOPE_CONFIGURATION_FIELDS)
 
 
+async def _scope_residual_workspace_authority(db: AsyncSession, scope_id: int) -> bool:
+    """Residual workspace lease authority for a scope.
+
+    A released workspace with residual lease fields, or an unreleased lease,
+    is residual authority that must block effective changes.
+    """
+    residual = (await db.execute(select(GithubWorkspace.id).where(
+        GithubWorkspace.scope_id == scope_id,
+        or_(GithubWorkspace.leased_item_id.is_not(None),
+            GithubWorkspace.lease_token.is_not(None),
+            GithubWorkspace.leased_owner_pid.is_not(None),
+            GithubWorkspace.leased_owner_proc_start.is_not(None),
+            GithubWorkspace.push_token_expires_at.is_not(None),
+            and_(GithubWorkspace.leased_at.is_not(None),
+                 GithubWorkspace.released_at.is_(None))),
+    ).limit(1))).scalar_one_or_none()
+    return residual is not None
+
+
 async def _reserve_scope_writer(db: AsyncSession, scope_id: int) -> TeamGithubScope:
     """Acquire the SQLite writer before authoritative scope-use checks."""
     if db.get_bind().dialect.name != "sqlite":
@@ -1683,6 +1702,100 @@ async def claim_github_work_item_continuation(
     return result
 
 
+_CONFIGURATION_OBSERVATION_PRESET_LIMIT = 64
+_CONFIGURATION_OBSERVATION_SCOPE_LIMIT = 256
+_CONFIGURATION_OBSERVATION_SLOT_LIMIT = 64
+
+
+@router.get("/configuration-observation")
+async def read_configuration_observation(
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Bounded bulk configuration observation for overlap review. Read-only.
+
+    Row bounds keep the read finite. An incomplete or failed read is reported
+    as incomplete and must block readiness without omitting observed rows.
+    """
+    observed_at = datetime.now(timezone.utc).isoformat()
+    complete = True
+    presets: list = []
+    scopes: list = []
+    scope_payload: list = []
+    try:
+        presets = list((await db.scalars(
+            select(AgentTeamPreset)
+            .order_by(AgentTeamPreset.id)
+            .limit(_CONFIGURATION_OBSERVATION_PRESET_LIMIT + 1)
+        )).all())
+        if len(presets) > _CONFIGURATION_OBSERVATION_PRESET_LIMIT:
+            complete = False
+            presets = presets[:_CONFIGURATION_OBSERVATION_PRESET_LIMIT]
+        # Nested roster projection is bounded by the per-preset query itself.
+        # No count step exists, so concurrent roster growth cannot widen work.
+        hydrate_presets = list(presets)
+        preset_ids = [preset.id for preset in presets]
+        scopes = list((await db.scalars(
+            select(TeamGithubScope)
+            .where(TeamGithubScope.preset_id.in_(preset_ids))
+            .order_by(TeamGithubScope.id)
+            .limit(_CONFIGURATION_OBSERVATION_SCOPE_LIMIT + 1)
+        )).all()) if preset_ids else []
+        if len(scopes) > _CONFIGURATION_OBSERVATION_SCOPE_LIMIT:
+            complete = False
+            scopes = scopes[:_CONFIGURATION_OBSERVATION_SCOPE_LIMIT]
+        scope_payload = [_scope_response(scope) for scope in scopes]
+    except Exception:
+        # Partial failure: keep the rows already observed and mark incomplete.
+        return {
+            "observed_at": observed_at,
+            "complete": False,
+            "presets": [],
+            "scopes": [_scope_response(scope) for scope in scopes],
+        }
+    incomplete_presets: list = []
+    try:
+        preset_payload = []
+        for preset in hydrate_presets:
+            bounded_slots, bound_hit = await agent_team_service.bounded_slots_for_preset(
+                db, preset.id, _CONFIGURATION_OBSERVATION_SLOT_LIMIT)
+            if bound_hit:
+                complete = False
+                incomplete_presets.append({
+                    "id": preset.id,
+                    "roster_omitted": True,
+                    "slot_bound": _CONFIGURATION_OBSERVATION_SLOT_LIMIT,
+                })
+                continue
+            preset_payload.append(AgentTeamPresetResponse(
+                id=preset.id,
+                name=preset.name,
+                description=preset.description,
+                created_by=preset.created_by,
+                created_at=preset.created_at,
+                updated_at=preset.updated_at,
+                autonomy_enabled=preset.autonomy_enabled,
+                leader_slot_id=preset.leader_slot_id,
+                slots=[agent_team_service._slot_response(slot) for slot in bounded_slots],
+            ))
+    except Exception:
+        # Preset projection failed; the observed scopes are preserved truthfully.
+        return {
+            "observed_at": observed_at,
+            "complete": False,
+            "presets": [],
+            "incomplete_presets": incomplete_presets,
+            "scopes": scope_payload,
+        }
+    return {
+        "observed_at": observed_at,
+        "complete": complete,
+        "presets": preset_payload,
+        "incomplete_presets": incomplete_presets,
+        "scopes": scope_payload,
+    }
+
+
 @router.get("/presets", response_model=AgentTeamPresetListResponse)
 async def list_presets(db: AsyncSession = Depends(get_db)):
     return AgentTeamPresetListResponse(presets=await agent_team_service.list_presets(db))
@@ -1907,6 +2020,19 @@ async def update_github_scope(
             raise HTTPException(status_code=409, detail="scope_identity_in_use")
         if auth_change and await _scope_identity_in_use(db, scope_id):
             raise HTTPException(status_code=409, detail="scope_auth_in_use")
+        effective_installation_change = (
+            installation_id is not None and installation_id != scope.github_app_installation_id
+        )
+        if effective_installation_change and await _scope_identity_in_use(db, scope_id):
+            # Effective App installation replacement is an authority change.
+            # Active attempts, approvals and revisions block it even without a
+            # workspace lease.
+            raise HTTPException(status_code=409, detail="scope_auth_in_use")
+        if (identity_change or auth_change or effective_installation_change) \
+                and await _scope_residual_workspace_authority(db, scope_id):
+            # Residual workspace authority blocks effective changes. Unchanged
+            # safe resumes are not affected.
+            raise HTTPException(status_code=409, detail="scope_workspace_authority_in_use")
         _apply_scope_create(scope, request)
         if scope.github_auth_mode == "app":
             if installation_id is not None:
@@ -2501,6 +2627,136 @@ def _require_safe_agent_launch(
         )
 
 
+@router.get("/github-scopes/{scope_id}/activation-readiness")
+async def read_activation_readiness(
+    scope_id: int,
+    _operator: None = Depends(require_operator),
+    db: AsyncSession = Depends(get_db),
+):
+    """Server-derived shared readiness for guided activation. Read-only.
+
+    Leader and owner readiness use authenticated current bindings. A spawn-only
+    launch plan is not readiness. Ambiguous, stale, unauthenticated and
+    wrong-member bindings are named blockers. This route observes only.
+    """
+    from app.services.github_coordination_service import (
+        MCP_HEARTBEAT_TTL_SECONDS,
+        CoordinationError,
+        github_coordination_service,
+    )
+    from app.utils import peer_process
+
+    scope = await db.get(TeamGithubScope, scope_id)
+    if scope is None:
+        raise HTTPException(status_code=404, detail="GitHub scope not found")
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    slots = list((await db.scalars(
+        select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id)
+        .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+    )).all())
+    enabled = [slot for slot in slots if slot.enabled]
+    blockers: list[dict[str, object]] = []
+    now = datetime.now(timezone.utc).isoformat()
+
+    leader = next(
+        (slot for slot in enabled if preset is not None and slot.id == preset.leader_slot_id),
+        None,
+    )
+    leader_member_id = None
+    if leader is None:
+        blockers.append({"code": "leader_assignment_missing",
+                         "message": "An enabled explicit Leader assignment is required."})
+    else:
+        try:
+            leader_session, _leader_slots = await github_coordination_service.current_leader(db, scope)
+            leader_member_id = leader_session.member_id
+        except CoordinationError as exc:
+            blockers.append({"code": f"leader_{exc.code}",
+                             "message": "The current authenticated Leader binding is not confirmed."})
+
+    if len(enabled) > 64:
+        blockers.append({"code": "readiness_context_limit",
+                         "message": "The roster exceeds the bounded readiness observation."})
+    owner_slot_ids = [slot.id for slot in enabled if leader is None or slot.id != leader.id]
+    owner_candidates = list((await db.scalars(
+        select(MailTeamMember).where(
+            MailTeamMember.team_preset_id == scope.preset_id,
+            MailTeamMember.team_slot_id.in_(owner_slot_ids),
+            MailTeamMember.participant_kind == "team_slot",
+        ).order_by(MailTeamMember.id).limit(65)
+    )).all()) if owner_slot_ids else []
+    if len(owner_candidates) > 64:
+        owner_candidates = owner_candidates[:64]
+        blockers.append({"code": "readiness_context_limit",
+                         "message": "Owner membership exceeds the bounded readiness observation."})
+    heartbeat_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        seconds=MCP_HEARTBEAT_TTL_SECONDS)
+    eligible_owner_member_ids: set[int] = set()
+    for member in owner_candidates:
+        sessions = list((await db.scalars(
+            select(MailAgentSession).where(
+                MailAgentSession.member_id == member.id,
+                MailAgentSession.team_preset_id == scope.preset_id,
+                MailAgentSession.team_slot_id == member.team_slot_id,
+                MailAgentSession.source == "mcp",
+                MailAgentSession.closed_at.is_(None),
+                MailAgentSession.mailbox_status == "connected",
+                MailAgentSession.capability_token_hash.is_not(None),
+            ).order_by(MailAgentSession.id).limit(9)
+        )).all())
+        if len(sessions) > 8:
+            sessions = sessions[:8]
+            blockers.append({"code": "readiness_context_limit",
+                             "message": "One owner binding exceeds the bounded readiness observation.",
+                             "slot_ids": [member.team_slot_id]})
+        current = [
+            session for session in sessions
+            if session.last_seen_at is not None and session.last_seen_at >= heartbeat_cutoff
+        ]
+        live = [
+            session for session in current
+            if session.bound_pane_pid is not None and session.bound_pane_proc_start
+            and peer_process.pane_is_alive(session.bound_pane_pid, session.bound_pane_proc_start) is True
+        ]
+        if len(live) > 1:
+            # One member with several live bound lifetimes is an ambiguous
+            # binding even if a live session exists.
+            blockers.append({"code": "owner_binding_ambiguous",
+                             "message": "One member has more than one live owner binding.",
+                             "slot_ids": [member.team_slot_id]})
+            continue
+        if live:
+            if member.id != leader_member_id:
+                eligible_owner_member_ids.add(member.id)
+            continue
+        if sessions:
+            blockers.append({"code": "owner_binding_stale",
+                             "message": "An owner session binding is stale or its heartbeat is not current.",
+                             "slot_ids": [member.team_slot_id]})
+    # Several distinct eligible owners on different slots are normal. At least
+    # one distinct eligible owner with a unique current binding is required.
+    if not eligible_owner_member_ids:
+        blockers.append({"code": "owner_binding_missing",
+                         "message": "A distinct eligible owner binding is required."})
+
+    plan = await agent_team_service.plan_launch(db, scope.preset_id)
+    spawn_only = [
+        item.slot_name for item in plan.items
+        if item.action in {"spawn", "skip", "blocked"}
+        or not item.matching_session
+    ]
+    if spawn_only:
+        blockers.append({"code": "provider_mail_not_ready",
+                         "message": "Provider and Agent Mail readiness require existing sessions.",
+                         "slot_names": spawn_only})
+
+    return {
+        "status": "blocked" if blockers else "ready",
+        "observed_at": now,
+        "blockers": blockers,
+    }
+
+
 @router.post("/presets/{preset_id}/plan-launch", response_model=AgentTeamLaunchPlan)
 async def plan_launch(
     preset_id: int,
@@ -2540,7 +2796,13 @@ async def launch_preset(
     try:
         return await agent_team_service.launch(db, preset_id, request)
     except PlanConflictError as exc:
-        detail: dict[str, object] = {"message": str(exc)}
+        # The plan check refuses before any launch row or session action. The
+        # structured marker makes this a proven non-write for clients.
+        detail: dict[str, object] = {
+            "message": str(exc),
+            "code": "plan_conflict",
+            "proven_non_write": bool(exc.proven_non_write),
+        }
         if exc.plan is not None:
             detail["plan"] = jsonable_encoder(exc.plan)
         raise HTTPException(status_code=409, detail=detail) from exc

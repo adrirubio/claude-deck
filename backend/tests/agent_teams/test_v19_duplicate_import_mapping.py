@@ -68,13 +68,26 @@ async def test_v19_duplicate_maps_non_first_tied_and_unassigned_leaders(db, tmp_
     assert bare_clone.autonomy_enabled is False
 
 
-async def test_v19_mail_import_creates_new_unassigned_inactive_ids(db, tmp_path):
-    member_ids = []
+async def test_v19_mail_import_creates_new_unassigned_inactive_ids(db, tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from app.models.database import MailAgentSession
+    from app.services.agent_mail_service import agent_mail_service
+
+    # Synthetic provider discovery and synthetic provider readiness: no host
+    # harness is read or contacted in a CI-like environment.
+    monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", AsyncMock())
+    monkeypatch.setattr(agent_team_service, "_fallback_provider", AsyncMock(return_value="codex-cli"))
     for member_id, name in ((901, "Imported owner"), (902, "Imported worker")):
         db.add(MailTeamMember(
             id=member_id, identity_key=f"slot:v19-{member_id}", repo_id="v19",
             repo_path=str(tmp_path), repo_name="v19", display_name=name,
             participant_kind="team_slot", team_preset_id=None, team_slot_id=None))
+    for session_id, member_id, provider in ((801, 901, "codex-cli"), (802, 902, "pi-cli")):
+        db.add(MailAgentSession(
+            id=session_id, member_id=member_id, provider=provider, source="mcp",
+            session_key=f"mcp:v19-{session_id}", wake_enabled=True,
+            mailbox_status="connected", last_seen_at=datetime.utcnow()))
     await db.flush()
     member_ids = [901, 902]
 
@@ -82,7 +95,10 @@ async def test_v19_mail_import_creates_new_unassigned_inactive_ids(db, tmp_path)
         db, AgentTeamCreateFromMailRequest(name="V19 mail import", member_ids=member_ids))
 
     slot_ids = [slot.id for slot in preset.slots]
+    # The import must create real slots from the synthetic sessions.
+    assert len(slot_ids) == 2
     assert set(slot_ids).isdisjoint(member_ids)
+    assert [slot.provider for slot in preset.slots] == ["codex-cli", "pi-cli"]
     assert preset.leader_slot_id is None
     assert preset.autonomy_enabled is False
     # Source member identities are preserved unchanged.
@@ -154,17 +170,19 @@ async def test_v19_reordered_authority_consumers_follow_explicit_assignment(db, 
     ]))
     slot_ids = [slot.id for slot in team.slots]
     await _assign(db, team.id, slot_ids[1])
-    # Reorder so the assigned Leader moves away from first position.
+    # The assigned Leader starts in the middle. Reorder moves it away from
+    # first position to last.
     await db.execute(text("UPDATE agent_team_slots SET position = CASE id WHEN :a THEN 2 WHEN :b THEN 0 "
                           "ELSE 1 END WHERE preset_id = :preset"),
-                     {"a": slot_ids[0], "b": slot_ids[1], "preset": team.id})
+                     {"a": slot_ids[1], "b": slot_ids[0], "preset": team.id})
     await db.commit()
 
     slots = list((await db.scalars(
         select(AgentTeamSlot).where(AgentTeamSlot.preset_id == team.id)
         .order_by(AgentTeamSlot.position, AgentTeamSlot.id))).all())
     leader_id = slot_ids[1]
-    assert slots[0].id == slot_ids[1]
+    assert slots[-1].id == slot_ids[1], "the explicit Leader must remain non-first"
+    assert slots[0].id != slot_ids[1]
     # Real consumers follow the explicit assignment after the reorder.
     assert github_dispatch_service._leader_slot(slots, leader_id).id == leader_id
     preset = await agent_team_service.get_preset(db, team.id)

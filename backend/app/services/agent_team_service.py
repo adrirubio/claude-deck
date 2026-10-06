@@ -62,11 +62,18 @@ from app.services.team_communication_policy import team_communication_guidance
 
 
 class PlanConflictError(ValueError):
-    """Raised when a launch request confirms an outdated launch plan."""
+    """Raised when a launch request confirms an outdated launch plan.
 
-    def __init__(self, message: str, plan: AgentTeamLaunchPlan | None = None):
+    proven_non_write is True only for refusals checked before any launch
+    action. Conflicts raised while executing plan items can follow session
+    actions and must never claim a proven non-write.
+    """
+
+    def __init__(self, message: str, plan: AgentTeamLaunchPlan | None = None,
+                 proven_non_write: bool = False):
         super().__init__(message)
         self.plan = plan
+        self.proven_non_write = proven_non_write
 
 
 class TeamDeletionConflictError(ValueError):
@@ -740,9 +747,13 @@ class AgentTeamService:
 
         if not request.skip_plan_confirmation:
             if not request.confirm_plan_hash:
-                raise PlanConflictError("confirm_plan_hash is required unless skip_plan_confirmation is true")
+                raise PlanConflictError(
+                    "confirm_plan_hash is required unless skip_plan_confirmation is true",
+                    proven_non_write=True)
             if request.confirm_plan_hash != plan.plan_hash:
-                raise PlanConflictError("Launch plan changed; review the latest plan before launching", plan)
+                raise PlanConflictError(
+                    "Launch plan changed; review the latest plan before launching", plan,
+                    proven_non_write=True)
         if not plan.can_launch:
             raise ValueError("Launch plan is blocked; resolve blocked slots before launching")
 
@@ -1740,6 +1751,22 @@ class AgentTeamService:
             await db.rollback()
             raise ValueError("Agent team slot not found")
         return slot, preset
+
+    async def bounded_slots_for_preset(
+        self, db: AsyncSession, preset_id: int, limit: int
+    ) -> tuple[list[AgentTeamSlot], bool]:
+        """Bounded roster projection. The query itself carries the bound.
+
+        Returns the observed slots within the bound and whether the bound was
+        hit. Work is bounded regardless of concurrent roster growth.
+        """
+        rows = list((await db.scalars(
+            select(AgentTeamSlot)
+            .where(AgentTeamSlot.preset_id == preset_id)
+            .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+            .limit(limit + 1)
+        )).all())
+        return rows[:limit], len(rows) > limit
 
     async def _slots_for_preset(self, db: AsyncSession, preset_id: int) -> list[AgentTeamSlot]:
         return (
