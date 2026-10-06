@@ -19,6 +19,17 @@ type Observation = {
   work_status: string | null
   pr_number: number | null
 }
+type OwnerFollowup = {
+  work_item_id: number
+  issue_number: number
+  state: string
+  event_sequence: number
+  settled_at: string | null
+  current: boolean
+  history_reason: string | null
+  required_actor: 'leader' | null
+  notification_limit: 'daily' | 'snapshot' | 'delivery' | 'unknown' | null
+}
 type Summary = {
   scope_id: number
   repo: string
@@ -45,6 +56,7 @@ type Summary = {
   notification_cap_reason?: 'daily' | 'snapshot' | null
   notification_budget_resets_at?: string | null
   assessment_age_seconds?: number | null
+  owner_followups?: OwnerFollowup[]
 }
 type Policy = Pick<Summary, 'enabled' | 'issue_numbers' | 'fallback_seconds' | 'max_daily_requests'>
 
@@ -79,6 +91,26 @@ function timestamp(value: string | null | undefined) {
   if (!value) return NaN
   return Date.parse(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`)
 }
+const followupStates = ['waiting', 'pending', 'notified', 'delivered', 'capped', 'delivery_failed', 'delivery_unknown', 'assessed', 'paused', 'invalidated']
+const followupHistory = ['no_outstanding_event', 'paused', 'observation_unavailable', 'authority_changed', 'changed_during_read']
+function validFollowups(values: unknown): values is OwnerFollowup[] {
+  if (!Array.isArray(values) || values.length > 32) return false
+  const ids = new Set<number>()
+  return values.every((value) => {
+    if (!value || !Number.isSafeInteger(value.work_item_id) || value.work_item_id <= 0 || ids.has(value.work_item_id)
+      || !Number.isSafeInteger(value.issue_number) || value.issue_number <= 0
+      || !Number.isSafeInteger(value.event_sequence) || value.event_sequence < 0
+      || !followupStates.includes(value.state) || typeof value.current !== 'boolean'
+      || !(value.settled_at === null || typeof value.settled_at === 'string' && Number.isFinite(timestamp(value.settled_at)))
+      || !(value.history_reason === null || followupHistory.includes(value.history_reason))
+      || ![null, 'leader'].includes(value.required_actor)
+      || ![null, 'daily', 'snapshot', 'delivery', 'unknown'].includes(value.notification_limit)) return false
+    ids.add(value.work_item_id)
+    return !value.current || value.required_actor === 'leader' && value.history_reason === null
+      && value.event_sequence > 0 && value.settled_at !== null
+      && ['pending', 'notified', 'delivered', 'capped', 'delivery_failed', 'delivery_unknown'].includes(value.state)
+  })
+}
 
 export function BacklogCoordination({ scopeId, withOperatorToken }: {
   scopeId: number
@@ -111,7 +143,9 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
         timeout = setTimeout(() => { timedOut = true; abort.abort() }, 10000)
       })
       const next = await Promise.race([apiClient<Summary>(path, { signal: abort.signal, cache: 'no-store' }), deadline])
-      if (next?.scope_id !== scopeId || !Array.isArray(next.entries) || !Array.isArray(next.issue_numbers)) throw new Error('Invalid coordination response')
+      if (next?.scope_id !== scopeId || !Array.isArray(next.entries) || !Array.isArray(next.issue_numbers)
+        || typeof next.repo !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(next.repo)
+        || next.owner_followups !== undefined && !validFollowups(next.owner_followups)) throw new Error('Invalid coordination response')
       if (request === serial.current && !abort.signal.aborted) { setData(next); setClock(Date.now()); setError(null) }
     } catch {
       if (request === serial.current && (timedOut || !abort.signal.aborted)) setError('Unable to refresh coordination. Any retained assessment is historical.')
@@ -121,6 +155,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
     }
   }, [path, scopeId])
   useEffect(() => {
+    setData(null); setError(null)
     let active = true
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
@@ -180,6 +215,11 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
   const assessedAt = timestamp(data?.last_assessed_at)
   const assessmentAge = Number.isFinite(assessedAt) ? Math.max(0, Math.floor((clock - assessedAt) / 60000)) : null
   const observations = data?.observations ?? []
+  const followups = data?.owner_followups ?? []
+  const followupsFresh = Boolean(data && data.scope_id === scopeId && !error && !expired
+    && data.enabled && data.autonomy_enabled === true
+    && ['assessed', 'awaiting_assessment', 'coordination_capped'].includes(data.status))
+  const needsLeader = followupsFresh && followups.some((value) => value.current)
   const heading = error ? 'Coordination status is unavailable' : current
     ? data?.eligible_count === 0 ? 'No eligible implementation work' : `${data?.eligible_count} ${data?.eligible_count === 1 ? 'item' : 'items'} assessed as eligible`
     : data?.assessment_current && expired ? statuses.stale
@@ -212,6 +252,30 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
             : 'Autonomy is off. Assessment publication remains paused.'}</p>
         {!current && <p className="mt-1 text-muted-foreground">The retained assessment is historical. A notification limit alone does not require a human decision.</p>}
       </div>}
+      {followups.length > 0 && <section aria-label="Owner follow-ups" className="mt-3 rounded border p-3">
+        <h5 className="font-medium">{needsLeader ? 'Owner completion needs Leader disposition' : 'Owner follow-ups'}</h5>
+        <p className="mt-1 text-muted-foreground">These records are separate from backlog eligibility. They do not establish that an agent is idle or that its work is accepted.</p>
+        <ul className="mt-2 space-y-2">{followups.map((value) => {
+          const active = followupsFresh && value.current
+          return <li key={value.work_item_id}>
+            <a className="underline" href={`https://github.com/${data.repo}/issues/${value.issue_number}`} target="_blank" rel="noreferrer">Issue #{value.issue_number}</a>
+            {' · Event '}{value.event_sequence}{' · Recorded state: '}{value.state}
+            {value.settled_at && ` · Completion recorded: ${date(value.settled_at)}`}
+            {active ? <>
+              <p className="mt-1">Next actor: Leader. The Leader must assess this recorded completion.</p>
+              {value.state === 'capped' && <p>{value.notification_limit === 'delivery'
+                ? 'Automatic follow-up reached its delivery limit.'
+                : value.notification_limit === 'daily' ? 'Automatic follow-up reached the shared daily notification limit.'
+                  : value.notification_limit === 'snapshot' ? 'Automatic follow-up reached the unchanged snapshot notification limit.'
+                    : 'Automatic follow-up reached a notification limit.'}</p>}
+              {value.state === 'delivery_unknown' && <p>Delivery is uncertain. This notice does not authorize an automatic retry.</p>}
+              <p className="text-muted-foreground">A supervisor can contact the Leader through the existing channel. This is not a human approval request.</p>
+            </> : <p className="mt-1 text-muted-foreground">Historical or inactive record. No current next action is established.
+              {['hold', 'hold_unavailable', 'recovery_only'].includes(data.status) && ' Coordination remains paused by its safety or recovery gate.'}
+            </p>}
+          </li>
+        })}</ul>
+      </section>}
       {observations.length > 0 && <div className="mt-3">
         <p className="font-medium">{expired || error || !['assessed', 'awaiting_assessment', 'coordination_capped'].includes(data.status)
           ? 'Previous observed states' : 'Latest observed issue and tracking states'}</p>
