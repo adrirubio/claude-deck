@@ -1177,9 +1177,9 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
-        "INSERT INTO mail_messages (id, kind, sender_member_id, recipient_member_id, subject, body_markdown, "
-        "approval_round, decision, created_at) VALUES (102, 'answer', 8, 7, 'ACK', 'Leader ACK evidence', "
-        "1, 'approve', CURRENT_TIMESTAMP)"
+        "INSERT INTO mail_messages (id, thread_root_id, kind, sender_member_id, recipient_member_id, subject, "
+        "body_markdown, approval_round, decision, created_at) VALUES (102, 100, 'answer', 8, 7, 'ACK', "
+        "'Leader ACK evidence', 1, 'approved', CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, approval_round, "

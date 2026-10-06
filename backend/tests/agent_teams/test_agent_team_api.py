@@ -2578,9 +2578,9 @@ async def test_readiness_earliest_roster_disable_refused_by_selection_snapshot(t
     from unittest.mock import AsyncMock
     from app.services import agent_team_service
     from app.services.agent_mail_service import agent_mail_service
-    agent_team_service._fallback_provider = AsyncMock(return_value="codex-cli")
-    agent_mail_service.sync_observed_sessions = AsyncMock()
-    agent_team_service._discover_sessions = lambda: []
+    monkeypatch.setattr(agent_team_service, "_fallback_provider", AsyncMock(return_value="codex-cli"), raising=False)
+    monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", AsyncMock())
+    monkeypatch.setattr(agent_team_service, "_discover_sessions", lambda: [], raising=False)
     try:
         async with maker() as db:
             import pathlib
@@ -2876,9 +2876,9 @@ async def test_readiness_counted_growth_at_four_seams(tmp_path, monkeypatch):
             else:
                 setattr(target, name, value)
 
-    agent_team_service._fallback_provider = AsyncMock(return_value="codex-cli")
-    agent_mail_service.sync_observed_sessions = AsyncMock()
-    agent_team_service._discover_sessions = lambda: []
+    monkeypatch.setattr(agent_team_service, "_fallback_provider", AsyncMock(return_value="codex-cli"), raising=False)
+    monkeypatch.setattr(agent_mail_service, "sync_observed_sessions", AsyncMock())
+    monkeypatch.setattr(agent_team_service, "_discover_sessions", lambda: [], raising=False)
 
     scenarios = [
         ("member", {"owner_binding_stale", "owner_binding_missing", "provider_mail_not_ready"},
@@ -3040,14 +3040,18 @@ async def test_readiness_reused_leaf_pid_across_reads_is_refused(client, db, mon
     real_argv = peer.pane_agent_argv
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "LeafReuse", 1)
     now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
     _bind_owner(db, preset, preset.slots[1].id, 1340, 8440, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 1341, 8441, last_seen=now)
     row = await db.get(Sess, 8440)
     row.pid = 5005
     await db.commit()
 
     fake = tmp_path / "proc"
     pane_pid = 1000 + 8440
-    for tree_pid, cmd in ((5005, b"codex\x00mcp\x00"), (pane_pid, b"codex\x00exec\x00")):
+    for tree_pid, cmd in ((5005, b"codex\x00mcp\x00"), (pane_pid, b"codex\x00exec\x00"),
+                          (1000 + 8441, b"codex\x00exec\x00")):
         d = fake / str(tree_pid)
         d.mkdir(parents=True, exist_ok=True)
         (d / "stat").write_text(
