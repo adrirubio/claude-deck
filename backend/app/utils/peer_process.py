@@ -346,8 +346,11 @@ def pane_agent_command(pane_pid: int, pane_proc_start: str) -> Optional[str]:
     stat = read_proc_stat(pane_pid)
     if stat is None:
         return None
-    current_pid, current_start = stat
-    if current_pid != pane_pid or current_start != pane_proc_start:
+    # read_proc_stat returns (ppid, starttime). Only the start-time field
+    # establishes the process lifetime identity; the parent PID is not the
+    # process identity and must not gate the command read.
+    _ppid, current_start = stat
+    if current_start != pane_proc_start:
         return None
     try:
         raw = Path(f"/proc/{pane_pid}/cmdline").read_bytes()

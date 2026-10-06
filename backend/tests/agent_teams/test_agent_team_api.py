@@ -1292,6 +1292,8 @@ async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
     # binding. Individual cases can override the returned verdicts.
     monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict",
                         lambda pane_pid, proc_start: True)
+    from app.config import settings as app_settings
+    monkeypatch.setattr(app_settings, "mail_capability_tokens_required", True)
     monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
                         lambda pane_pid, proc_start: "codex exec --yolo")
     from unittest.mock import AsyncMock
@@ -1439,6 +1441,8 @@ async def test_activation_readiness_reports_bounded_context(client, db, monkeypa
         "app.services.agent_team_service.agent_mail_service.sync_observed_sessions", AsyncMock())
     monkeypatch.setattr("app.services.agent_team_service.discover_agent_sessions", lambda: [])
     slots = [AgentTeamSlotCreate(display_name=f"BR {i}", provider="codex-cli", repo_path=str(repo)) for i in range(65)]
+    from app.config import settings as app_settings
+    monkeypatch.setattr(app_settings, "mail_capability_tokens_required", True)
     preset = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="Bounded readiness", slots=slots))
     scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="bounded-ready",
                             repo_path=str(repo))
@@ -2265,10 +2269,10 @@ async def test_readiness_observation_leaves_stored_state_unchanged(client, db, m
         # Complete row and value equality, including timestamps and identity
         # fields; equal counts alone cannot detect mutations.
         rows = {}
-        for table in ("mail_team_members", "mail_agent_sessions", "agent_pane_bindings",
-                      "agent_team_slots", "team_github_scopes", "github_work_items",
-                      "github_approval_requests", "github_attempt_scope_revisions",
-                      "github_workspaces"):
+        for table in ("agent_team_presets", "mail_team_members", "mail_agent_sessions",
+                      "agent_pane_bindings", "agent_team_slots", "team_github_scopes",
+                      "github_work_items", "github_approval_requests",
+                      "github_attempt_scope_revisions", "github_workspaces"):
             result = await db.execute(text(f"SELECT * FROM {table}"))
             rows[table] = [tuple(row) for row in result.all()]
         return rows
@@ -2350,3 +2354,23 @@ async def test_readiness_shell_with_provider_argument_does_not_confirm_identity(
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
     assert "owner_binding_native_identity" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_requires_capability_token_enforcement(client, db, monkeypatch, tmp_path):
+    """I05: stored capability hashes never prove enforcement; the current
+    capability-token enforcement requirement must hold."""
+    from app.config import settings as app_settings
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "CapReq", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1006, 8106, last_seen=datetime.utcnow())
+    await db.commit()
+    enabled = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    enabled_codes = {blocker["code"] for blocker in enabled.json()["blockers"]}
+    assert "capability_tokens_not_required" not in enabled_codes
+
+    monkeypatch.setattr(app_settings, "mail_capability_tokens_required", False)
+    disabled = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in disabled.json()["blockers"]}
+    assert "capability_tokens_not_required" in codes
+    assert disabled.json()["status"] == "blocked"

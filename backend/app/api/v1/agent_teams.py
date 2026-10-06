@@ -2647,6 +2647,11 @@ async def read_activation_readiness(
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     preset = await db.get(AgentTeamPreset, scope.preset_id)
     blockers: list[dict[str, object]] = []
+    # Stored capability hashes do not prove enforcement remains enabled.
+    from app.config import settings as app_settings
+    if not app_settings.mail_capability_tokens_required:
+        blockers.append({"code": "capability_tokens_not_required",
+                         "message": "Mail capability-token enforcement must be enabled."})
     observed_at = datetime.now(timezone.utc).isoformat()
 
     # Bounded roster query first: nothing hydrates before this bound.
@@ -2671,17 +2676,19 @@ async def read_activation_readiness(
 
     async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None, int | None]:
         """Current authenticated binding for one slot from bounded queries only."""
-        # Select the newest member first, then validate its kind. Never fall
-        # back to an older member when the newest is not a slot member.
+        # Select the latest member by slot first, then validate that member's
+        # preset and kind. Prefiltering by preset or kind would skip the
+        # newest invalid member and accept historical authority.
         candidates = list((await db.scalars(
             select(MailTeamMember).where(
-                MailTeamMember.team_preset_id == scope.preset_id,
                 MailTeamMember.team_slot_id == slot.id,
             ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(2)
         )).all())
         if not candidates:
             return False, "missing", None, None
         member = candidates[0]
+        if member.team_preset_id != scope.preset_id:
+            return False, "member_preset", member.id, None
         if member.participant_kind != "team_slot":
             return False, "member_kind", member.id, None
         sessions = list((await db.scalars(
@@ -2743,7 +2750,18 @@ async def read_activation_readiness(
             # provider argument, or an unrelated executable never confirms
             # identity.
             argv0 = command.split()[0].rsplit("/", 1)[-1] if command else ""
-            if (command is None or marker not in argv0
+            # Exact executable identity only. Arbitrary prefixes or
+            # substrings cannot establish identity. Supported Pi identities
+            # are the pi executable and the recognized Node CLI form.
+            exact_identity = command is not None and (
+                argv0 == marker or argv0 == slot.provider)
+            if slot.provider == "pi" and command is not None:
+                parts = command.split()
+                node_cli = (parts[0].rsplit("/", 1)[-1] == "node"
+                            and any("pi" in part and part.endswith((".js", ".mjs", ".cjs"))
+                                    for part in parts[1:]))
+                exact_identity = exact_identity or node_cli or parts[0].rsplit("/", 1)[-1] == "pi"
+            if (not exact_identity
                     or argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}):
                 return False, "native_identity", member.id, None
             # Authenticated MCP process: when the session process differs

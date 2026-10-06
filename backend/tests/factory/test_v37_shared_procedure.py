@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.database import Base
 from tests.factory.restored_copy_procedure import (
+    DISPOSABLE_MARKER_NAME,
     PROCEDURE_STEPS,
     run_restored_copy_procedure,
 )
@@ -28,6 +29,7 @@ from tests.test_sqlite_compat_migrations import (
 
 
 async def _prepare(tmp_path: Path, *, name: str, divergent: bool, quiesce: bool):
+    (tmp_path / DISPOSABLE_MARKER_NAME).write_text("disposable test target")
     source = tmp_path / name
     engine = create_async_engine(f"sqlite+aiosqlite:///{source}")
     async with engine.connect() as conn:
@@ -66,7 +68,8 @@ async def test_shared_procedure_admits_representable_with_nine_step_log(tmp_path
 async def test_shared_procedure_refuses_divergent_assignments_before_any_mutation(tmp_path):
     """The divergent and unrepresentable case returns REFUSE unchanged."""
     source = await _prepare(tmp_path, name="refuse.db", divergent=True, quiesce=True)
-    digest_before = hashlib.sha256(source.read_bytes()).hexdigest()
+    from tests.factory.restored_copy_procedure import _digest_set
+    digest_before = _digest_set(source)
     record = run_restored_copy_procedure(
         source_path=source, work_root=tmp_path,
         pause_state={"automation_paused": True})
@@ -83,7 +86,7 @@ async def test_shared_procedure_refuses_divergent_assignments_before_any_mutatio
     unchanged = record["unchanged_evidence"]
     assert unchanged["source_digest"] == digest_before
     assert unchanged["reference_scope"] == unchanged["pre_mutation_reference_scope"]
-    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest_before
+    assert _digest_set(source) == digest_before
     restored = tmp_path / "procedure-restored.db"
     columns = {row[1] for row in sqlite3.connect(restored).execute(
         "PRAGMA table_info(agent_team_presets)").fetchall()}
@@ -108,7 +111,8 @@ async def test_shared_procedure_refuses_unverified_pause_without_backup(tmp_path
 async def test_shared_procedure_refuses_residual_authority_before_backup(tmp_path):
     """S2/AC5: quiescence covers residual authority fields, not only leases."""
     source = await _prepare(tmp_path, name="residual.db", divergent=False, quiesce=False)
-    digest_before = hashlib.sha256(source.read_bytes()).hexdigest()
+    from tests.factory.restored_copy_procedure import _digest_set
+    digest_before = _digest_set(source)
     record = run_restored_copy_procedure(
         source_path=source, work_root=tmp_path,
         pause_state={"automation_paused": True})
@@ -121,12 +125,15 @@ async def test_shared_procedure_refuses_residual_authority_before_backup(tmp_pat
         assert label in detail
     assert record["step_log"][2]["state"] == "NOT_REACHED", "no backup after refusal"
     assert record["unchanged_evidence"]["source_digest"] == digest_before
-    assert hashlib.sha256(source.read_bytes()).hexdigest() == digest_before
+    assert _digest_set(source) == digest_before
 
 
 @pytest.mark.asyncio
 async def test_shared_procedure_refuses_non_disposable_target_at_interface(tmp_path):
     """S9/AC6: any non-disposable target is refused at the procedure interface."""
+    # The target sits next to the checked-in tests, which may live under a
+    # temp directory. Without the explicit disposable marker the procedure
+    # must refuse regardless of path heuristics.
     repo_target = Path(__file__).resolve().parent / "v37-production-target.db"
     repo_target.write_bytes(b"not a disposable copy")
     try:
@@ -141,3 +148,34 @@ async def test_shared_procedure_refuses_non_disposable_target_at_interface(tmp_p
     assert record["step_log"][8]["step"] == PROCEDURE_STEPS[8]
     assert record["step_log"][8]["state"] == "REFUSE"
     assert record["limits"]["real_restore_or_downgrade"] == "NOT_PERFORMED"
+
+
+def test_shared_procedure_covers_wal_side_files_at_boundaries(tmp_path):
+    """C-6: side files are digested at boundaries; a WAL change cannot hide
+    behind a released lock and an unchanged main-file digest."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.database import Base
+    from tests.factory.restored_copy_procedure import _digest_set
+
+    async def run():
+        (tmp_path / DISPOSABLE_MARKER_NAME).write_text("disposable test target")
+        source = tmp_path / "wal.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{source}")
+        async with engine.connect() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await _v37_seed_authority_records(conn, divergent=False)
+            await _v37_quiesce_and_verify(conn)
+        await engine.dispose()
+        digests = _digest_set(source)
+        # The helper tracks main and any side files as one boundary record.
+        assert set(digests) == {"main"} or set(digests) == {"main", "-wal", "-shm"}
+        record = run_restored_copy_procedure(
+            source_path=source, work_root=tmp_path,
+            pause_state={"automation_paused": True})
+        assert record["outcome"] == "ADMIT"
+        assert record["unchanged_evidence"]["source_digest"] == digests
+
+    asyncio.run(run())

@@ -47,6 +47,8 @@ PROCEDURE_STEPS = (
     "9. restored pre-upgrade database is a separate release decision, never automatic",
 )
 
+DISPOSABLE_MARKER_NAME = ".disposable-restored-copy-target"
+
 PROCEDURE_LIMITS = {
     "synthetic_quiescence": (
         "Quiescence in disposable fixtures is synthetic. It is not a real "
@@ -61,6 +63,20 @@ PROCEDURE_LIMITS = {
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _digest_set(path: Path) -> dict[str, str]:
+    """Digest the main database and any WAL or SHM side files.
+
+    A released lock and a main-file digest do not establish stopped writers;
+    WAL side files carry committed changes that the main file alone misses.
+    """
+    digests = {"main": _digest(path)}
+    for suffix in ("-wal", "-shm"):
+        side = path.with_name(path.name + suffix)
+        if side.exists():
+            digests[suffix] = _digest(side)
+    return digests
 
 
 def _rows(conn: sqlite3.Connection, sql: str) -> list[dict[str, object]]:
@@ -122,9 +138,11 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
             " owner_member_id, leader_member_id, request_fingerprint, status,"
             " request_message_id, scope_revision_id FROM github_approval_requests ORDER BY id")),
         "revisions": _rows(conn, (
-            "SELECT id, work_item_id, dispatch_nonce, revision, status, approval_request_id,"
-            " expected_workspace_id, expected_lease_token_hash, baseline_head_sha,"
-            " baseline_tree_sha FROM github_attempt_scope_revisions ORDER BY id")),
+            "SELECT id, work_item_id, dispatch_nonce, revision, owner_slot_id, owner_member_id,"
+            " phase, execution_target, status, approval_request_id, expected_workspace_id,"
+            " expected_lease_token_hash, baseline_head_sha, baseline_tree_sha,"
+            " originating_escalation_reason, max_failed_heads, failed_head_count,"
+            " delivery_attempt_count FROM github_attempt_scope_revisions ORDER BY id")),
     }
 
 
@@ -194,18 +212,20 @@ def run_restored_copy_procedure(
     unchanged_evidence: dict[str, object] = {}
 
     # Step 9 guard first: the procedure interface refuses any target that is
-    # not a disposable copy under the system temp directory.
-    temp_root = Path(tempfile.gettempdir()).resolve()
+    # not an explicitly marked disposable copy. Path heuristics cannot prove
+    # disposability; a checkout under a temp directory is not disposable.
     resolved_root = Path(work_root).resolve()
     resolved_source = Path(source_path).resolve()
-    if not resolved_root.is_relative_to(temp_root) or not resolved_source.is_relative_to(resolved_root):
+    marker = resolved_root / DISPOSABLE_MARKER_NAME
+    if (not marker.is_file()
+            or not resolved_source.is_relative_to(resolved_root)):
         unchanged_evidence = {"refused_target": str(resolved_source)}
         return refuse("production_target_refused", PROCEDURE_STEPS[8],
-                      "The target is not a disposable copy under the system temp directory.")
+                      "The target is not an explicitly marked disposable copy.")
 
     # Step 1: pause automation before downgrade.
     if not pause_state.get("automation_paused"):
-        unchanged_evidence = {"source_digest": _digest(resolved_source)}
+        unchanged_evidence = {"source_digest": _digest_set(resolved_source)}
         return refuse("pause_unverified", PROCEDURE_STEPS[0],
                       "Pause state cannot be verified. No backup is taken.")
     record(PROCEDURE_STEPS[0], "ADMIT", "Pause state recorded and verified.")
@@ -216,7 +236,7 @@ def run_restored_copy_procedure(
         findings = _quiescence_findings(conn)
         if findings:
             unchanged_evidence = {
-                "source_digest": _digest(resolved_source),
+                "source_digest": _digest_set(resolved_source),
                 "reference_scope": capture_reference_scope(conn),
             }
             return refuse("quiescence_residual", PROCEDURE_STEPS[1],
@@ -224,13 +244,17 @@ def run_restored_copy_procedure(
         record(PROCEDURE_STEPS[1], "ADMIT",
                "No nonterminal attempt, pending approval, nonterminal revision, active lease or residual authority.")
 
+        # C-6: force rollback journal mode on the disposable copy so the
+        # exclusive stop proof covers writers; WAL side files cannot then
+        # carry unaccounted changes.
+        conn.execute("PRAGMA journal_mode=DELETE")
         # Step 3: stop relevant writers after quiescence (exclusive lock proof).
         try:
             conn.execute("BEGIN EXCLUSIVE")
             conn.execute("COMMIT")
         except sqlite3.OperationalError as exc:
             unchanged_evidence = {
-                "source_digest": _digest(resolved_source),
+                "source_digest": _digest_set(resolved_source),
                 "reference_scope": capture_reference_scope(conn),
             }
             return refuse("writer_open", PROCEDURE_STEPS[2], f"A writer remains open: {exc}")
@@ -240,15 +264,15 @@ def run_restored_copy_procedure(
     finally:
         conn.close()
 
-    # Step 4: back up the database.
+    # Step 4: back up the database, digesting main and side files.
     backup_path = resolved_root / "procedure-backup.db"
     restored_path = resolved_root / "procedure-restored.db"
-    source_digest_before = _digest(resolved_source)
+    source_digest_before = _digest_set(resolved_source)
     shutil.copy(resolved_source, backup_path)
-    source_digest_after = _digest(resolved_source)
+    source_digest_after = _digest_set(resolved_source)
     if source_digest_after != source_digest_before:
         unchanged_evidence = {"source_digest": source_digest_before}
-        return refuse("backup_diverged", PROCEDURE_STEPS[3], "The source digest changed during the copy.")
+        return refuse("backup_diverged", PROCEDURE_STEPS[3], "The source digests changed during the copy.")
     record(PROCEDURE_STEPS[3], "ADMIT",
            f"Backup created; source digest unchanged ({source_digest_before}).")
 
