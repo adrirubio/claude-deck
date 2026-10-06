@@ -2432,3 +2432,52 @@ async def test_readiness_two_distinct_owners_complete_ready(client, db, monkeypa
     body = readiness.json()
     assert body["status"] == "ready"
     assert body["blockers"] == []
+
+
+@pytest.mark.asyncio
+async def test_readiness_collection_growth_keeps_bounds_and_refuses_partial_state(
+    client, db, monkeypatch, tmp_path
+):
+    """B12: concurrent collection growth does not widen the bounded queries
+    and cannot produce a silent partial observation."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Growth", 1)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 1030, 8130, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 1031, 8131, last_seen=now)
+    await db.commit()
+
+    original_scalars = db.scalars
+    state = {"grown": False}
+
+    async def growing_scalars(query, *args, **kwargs):
+        sql = str(getattr(query, "statement", query))
+        if not state["grown"] and "mail_team_members" in sql:
+            state["grown"] = True
+            # Independent collection growth mid-observation: many historical
+            # members and sessions appear for the same slot.
+            for index in range(300):
+                await db.execute(text(
+                    "INSERT INTO mail_team_members (identity_key, repo_id, repo_path, repo_name,"
+                    " display_name, participant_kind, team_preset_id, team_slot_id, created_at,"
+                    " updated_at) VALUES (:key, 'r', '/r', 'r', :name, 'team_slot', :preset, :slot,"
+                    " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+                    {"key": f"slot:growth-{index}", "name": f"Growth {index}",
+                     "preset": preset.id, "slot": preset.slots[1].id})
+            await db.execute(text("COMMIT"))
+        return await original_scalars(query, *args, **kwargs)
+
+    monkeypatch.setattr(db, "scalars", growing_scalars)
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    body = readiness.json()
+    assert state["grown"] is True
+    assert body["status"] in {"ready", "blocked"}
+    # The observation stays bounded and explicit: no silent partial result.
+    assert all(blocker["code"] in {
+        "binding_changed_during_observation", "owner_binding_stale",
+        "owner_binding_ambiguous", "owner_binding_missing",
+        "leader_binding_stale", "leader_binding_missing",
+        "leader_binding_ambiguous", "provider_mail_not_ready",
+        "capability_tokens_not_required", "readiness_context_limit",
+    } for blocker in body["blockers"])
