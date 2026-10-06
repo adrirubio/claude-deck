@@ -24,6 +24,34 @@ def _parse_gh_ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
 
 
+async def observe_notification_uncertainty(db, *, item_id: int) -> None:
+    """C09: the production notification failure observer.
+
+    The action is committed but its notification transport is unsettled.
+    The outcome stays explicitly uncertain; the action is never replayed
+    because its audit fact is absent. Observation failure never masks the
+    original failure.
+    """
+    try:
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="work_lifecycle",
+            source="github_watcher_service.notify_blocker_merged",
+            occurred_at=datetime.utcnow(),
+            actor=_audit.derive_actor(
+                actor_kind="scheduler", scheduler="github_watcher"),
+            item_id=item_id,
+            action_outcome="uncertain",
+            sanitized_reason="notification transport unsettled after commit",
+            operation_id=f"notification-uncertain:{item_id}",
+            correlation_id=f"notification-uncertain:{item_id}",
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+
 class GithubWatcherService:
     async def poll_scope(
         self, db: AsyncSession, scope: TeamGithubScope, client: GithubClient | None = None
@@ -202,27 +230,7 @@ class GithubWatcherService:
             logger.exception(
                 "Failed to send blocker-merged notification for work item %s", item.id
             )
-            # C09: the action is committed but its notification transport is
-            # unsettled. The outcome stays explicitly uncertain; the action is
-            # never replayed because its audit fact is absent.
-            try:
-                from app.services import factory_audit_service as _audit
-                await _audit.record_event(
-                    db,
-                    event_kind="work_lifecycle",
-                    source="github_watcher_service.notify_blocker_merged",
-                    occurred_at=datetime.utcnow(),
-                    actor=_audit.derive_actor(
-                        actor_kind="scheduler", scheduler="github_watcher"),
-                    item_id=item.id,
-                    action_outcome="uncertain",
-                    sanitized_reason="notification transport unsettled after commit",
-                    operation_id=f"notification-uncertain:{item.id}",
-                    correlation_id=f"notification-uncertain:{item.id}",
-                )
-                await db.commit()
-            except Exception:
-                await db.rollback()
+            await observe_notification_uncertainty(db, item_id=item.id)
             await db.rollback()
 
 

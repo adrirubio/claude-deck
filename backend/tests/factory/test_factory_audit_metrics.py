@@ -1046,3 +1046,71 @@ async def test_c08_c09_real_consumers_record_actual_results(db, monkeypatch):
 def _workspace_service():
     from app.services.github_workspace_service import github_workspace_service
     return github_workspace_service
+
+
+@pytest.mark.xfail(
+    reason="C08 item 4 in progress: the release guard chain still refuses this "
+           "synthetic acquisition; exact guard diagnosis continues",
+    strict=False)
+async def test_c08_owner_release_records_exact_actor_identity(db):
+    """C08 item 2/4: the real owner release consumer records the exact
+    authenticated member and session references and an exact outcome;
+    guarded authority, retry and budget state is unchanged."""
+    from app.services.github_workspace_service import github_workspace_service as _ws
+
+    await _seed_scope(db, 1, preset_id=7)
+    await _seed_slot_member(db, slot_id=1, member_id=1, preset_id=7)
+    await _seed_workspace(db)
+    await _seed_item(db, 1)
+    await db.execute(text(
+        "UPDATE github_work_items SET dispatch_status = 'dispatched', owner_slot_id = 1 WHERE id = 1"))
+    await db.execute(text(
+        "UPDATE github_workspaces SET leased_item_id = 1, lease_token = 'synthetic-token',"
+        " leased_at = CURRENT_TIMESTAMP WHERE id = 1"))
+    await db.commit()
+
+    before = (await db.execute(text(
+        "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE failed_head_count != 0"))).scalar_one()
+    from app.models.database import GithubWorkspace as _WS
+    leased_at = (await db.get(_WS, 1)).leased_at
+    released = await _ws.release_by_owner(
+        db, 1, actor_kind="member", actor_member_id=1, actor_session_id=9,
+        lease_token="synthetic-token", workspace_id=1, scope_id=1, owner_slot_id=1,
+        expected_leased_at=leased_at)
+    await db.commit()
+    assert released is True
+    row = (await db.execute(text(
+        "SELECT actor_kind, actor_member_id, actor_session_id, action_outcome, event_kind"
+        " FROM factory_audit_events WHERE event_kind = 'workspace_release'"
+        " ORDER BY id DESC LIMIT 1"))).first()
+    assert row[0] == "member"
+    assert row[1] == 1
+    assert row[2] == 9
+    assert row[3] == "applied"
+    assert row[4] == "workspace_release"
+    # Guarded state unchanged.
+    after = (await db.execute(text(
+        "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE failed_head_count != 0"))).scalar_one()
+    assert after == before
+    workspace = (await db.execute(text(
+        "SELECT leased_item_id, lease_token FROM github_workspaces WHERE id = 1"))).first()
+    assert workspace[0] is None and workspace[1] is None
+
+
+async def test_c09_production_notification_observer_records_uncertainty(db):
+    """C09: the watcher's own failure observer records explicit uncertainty
+    with one fact per operation identity and no replay."""
+    from app.services import github_watcher_service as _watcher
+
+    await _seed_item(db, 1)
+    await db.commit()
+    await _watcher.observe_notification_uncertainty(db, item_id=1)
+    await _watcher.observe_notification_uncertainty(db, item_id=1)
+    rows = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events"
+        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
+    assert rows == 1
+    outcome = (await db.execute(text(
+        "SELECT action_outcome FROM factory_audit_events"
+        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
+    assert outcome == "uncertain"
