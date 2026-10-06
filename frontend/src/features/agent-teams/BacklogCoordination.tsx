@@ -251,6 +251,7 @@ export function BacklogCoordination({ scopeId, withOperatorToken }: {
             ? 'Notification limits do not pause autonomy, dispatch or team Mail. The active Leader can refresh its assessment when coordination is available.'
             : 'Autonomy is off. Assessment publication remains paused.'}</p>
         {!current && <p className="mt-1 text-muted-foreground">The retained assessment is historical. A notification limit alone does not require a human decision.</p>}
+        {followupsFresh && !current && <p className="mt-1">Next actor: Team Leader. Refresh the assessment through the existing team channel. The budget reset time is not a promised assessment time.</p>}
       </div>}
       {followups.length > 0 && <section aria-label="Owner follow-ups" className="mt-3 rounded border p-3">
         <h5 className="font-medium">{needsLeader ? 'Owner completion needs Leader disposition' : 'Owner follow-ups'}</h5>

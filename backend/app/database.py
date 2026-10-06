@@ -1088,6 +1088,9 @@ async def _run_sqlite_compat_migrations(conn) -> None:
 
 async def init_db() -> None:
     """Initialize database tables."""
+    # Register the derived observation table for CLI and HTTP startup alike.
+    from app.models import database, github_work_progress  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     if settings.database_url.startswith("sqlite"):
