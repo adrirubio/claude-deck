@@ -381,6 +381,168 @@ async def test_public_summary_omits_private_authority_and_challenges(db, watched
         assert private not in public
 
 
+async def capped_event(db, watched, cap="snapshot"):
+    await arm(db, watched)
+    policy = await github_coordination_service.state(db, watched.scope_id)
+    policy.budget_day = datetime.utcnow().strftime("%Y-%m-%d")
+    policy.max_daily_requests = 24
+    policy.daily_requests = 24 if cap == "daily" else 9
+    policy.snapshot_requests = 3 if cap == "snapshot" else 0
+    if cap == "delivery":
+        (await row(db, watched)).delivery_attempts = 3
+    await db.commit()
+    settle(watched)
+    await service.poll(db, watched.scope_id)
+    assert (await row(db, watched)).state == "capped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap", ["daily", "snapshot", "delivery"])
+async def test_public_capped_event_is_current_without_spending_budget_or_minting_token(db, watched, cap):
+    import json
+    from sqlalchemy import event
+    from app.database import Base
+    await capped_event(db, watched, cap)
+    # Recorded debt does not depend on the Leader remaining idle.
+    watched.activities[watched.leader.team_slot_id] = replace(
+        watched.activities[watched.leader.team_slot_id], state="working", reason="native_progress")
+    before = (await row(db, watched)).version
+    policy = await github_coordination_service.state(db, watched.scope_id)
+    budget = (policy.daily_requests, policy.snapshot_requests, policy.version, policy.generation)
+    async def snapshot():
+        return {name: (await db.execute(table.select().order_by(*table.primary_key.columns))).all()
+                for name, table in Base.metadata.tables.items()}
+    rows_before = await snapshot()
+    writes = []
+    def record_write(_connection, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+            writes.append(statement)
+    event.listen(db.bind.sync_engine, "before_cursor_execute", record_write)
+    for _ in range(2):
+        value, = await service.summary(db, watched.scope_id)
+        assert value["current"] is True and value["required_actor"] == "leader"
+        assert value["event_sequence"] == 1 and value["notification_limit"] == cap
+        assert value["history_reason"] is None
+        assert "followup_token" not in value
+        public = json.dumps(value, default=str)
+        for private in ("fixture-nonce", "fixture-lease", "fixture-owner-capability", "owner-native", "leader-native", "context"):
+            assert private not in public
+    assert (await row(db, watched)).version == before
+    assert (policy.daily_requests, policy.snapshot_requests, policy.version, policy.generation) == budget
+    assert await count_notices(db) == 0
+    watched.native_wake.assert_not_awaited()
+    assert await snapshot() == rows_before
+    event.remove(db.bind.sync_engine, "before_cursor_execute", record_write)
+    assert writes == []
+
+
+@pytest.mark.asyncio
+async def test_public_assessment_and_rearm_clear_recorded_completion(db, watched):
+    await capped_event(db, watched)
+    await service.report(db, watched.scope_id, watched.leader,
+                         request(await read(db, watched), "assess", "next_action_arranged"))
+    value, = await service.summary(db, watched.scope_id)
+    assert value["current"] is False and value["required_actor"] is None
+    await arm(db, watched)
+    value, = await service.summary(db, watched.scope_id)
+    assert value["state"] == "waiting" and value["current"] is False
+    assert value["settled_at"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["attempt", "binding", "approval", "workspace", "policy", "roster",
+                                    "off", "hold", "terminal", "escalation", "recovery", "removed"])
+async def test_public_projection_rejects_changed_context_before_scheduler_poll(db, watched, monkeypatch, change):
+    from app.models.database import AgentTeamSlot
+    await capped_event(db, watched)
+    version = (await row(db, watched)).version
+    if change == "attempt":
+        watched.item.dispatch_nonce = "new-attempt-with-same-dispatched-status"
+    elif change == "binding":
+        watched.owner.bound_pane_proc_start = "new-start"
+    elif change == "approval":
+        watched.approval.status = "rejected"
+    elif change == "workspace":
+        watched.lease.lease_token = "new-acquisition"
+    elif change == "policy":
+        (await github_coordination_service.state(db, watched.scope_id)).policy_revision += 1
+    elif change == "roster":
+        db.add(AgentTeamSlot(preset_id=watched.preset.id, position=2, display_name="New owner",
+                            provider="pi-cli", repo_id="r", repo_path="/tmp/new", repo_name="r"))
+    elif change == "off":
+        watched.preset.autonomy_enabled = False
+    elif change == "hold":
+        monkeypatch.setattr(module, "hold_code", lambda: "hold")
+    elif change == "terminal":
+        watched.item.dispatch_status = "merged"
+    elif change == "escalation":
+        watched.item.escalation_reason = "fixture escalation"
+    elif change == "recovery":
+        watched.item.retry_requested_at = datetime.utcnow()
+    elif change == "removed":
+        (await github_coordination_service.state(db, watched.scope_id)).issue_numbers = [8]
+    await db.commit()
+    values = await service.summary(db, watched.scope_id)
+    assert not any(value["current"] for value in values)
+    assert not any(value["required_actor"] for value in values)
+    assert (await row(db, watched)).version == version  # Read did not invalidate or assess.
+    assert watched.item.dispatch_status == ("merged" if change == "terminal" else "dispatched")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["assess", "rearm", "policy", "off", "hold"])
+async def test_public_projection_rechecks_after_async_observation(db, watched, monkeypatch, change):
+    await capped_event(db, watched)
+
+    async def observe(*_args):
+        watch = await row(db, watched)
+        if change == "assess":
+            watch.state = "assessed"; watch.version += 1
+        elif change == "rearm":
+            watch.settlement_id = None; watch.settled_at = None; watch.version += 1
+        elif change == "policy":
+            (await github_coordination_service.state(db, watched.scope_id)).policy_revision += 1
+        elif change == "off":
+            watched.preset.autonomy_enabled = False
+        elif change == "hold":
+            monkeypatch.setattr(module, "hold_code", lambda: "hold")
+        await db.commit()
+        return dict(watched.activities)
+
+    monkeypatch.setattr(module, "observe_private_team", observe)
+    value, = await service.summary(db, watched.scope_id)
+    assert value["current"] is False and value["required_actor"] is None
+
+
+@pytest.mark.asyncio
+async def test_public_projection_native_failure_is_unavailable(db, watched, monkeypatch):
+    await capped_event(db, watched)
+    monkeypatch.setattr(module, "observe_private_team", AsyncMock(side_effect=ValueError("activity_context_limit")))
+    value, = await service.summary(db, watched.scope_id)
+    assert value["current"] is False and value["history_reason"] == "observation_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["disabled", "revision", "issues"])
+async def test_public_projection_rechecks_policy_after_context_read(db, watched, monkeypatch, change):
+    await capped_event(db, watched)
+    original = service.context
+    async def context(*args):
+        result = await original(*args)
+        policy = await github_coordination_service.state(db, watched.scope_id)
+        if change == "disabled":
+            policy.enabled = False
+        elif change == "revision":
+            policy.policy_revision += 1
+        else:
+            policy.issue_numbers = [8]
+        await db.commit()
+        return result
+    monkeypatch.setattr(service, "context", context)
+    value, = await service.summary(db, watched.scope_id)
+    assert value["current"] is False and value["history_reason"] == "changed_during_read"
+
+
 @pytest.mark.asyncio
 async def test_watch_registration_retains_owner_settlement_during_read_and_write(db, watched):
     initial = request(await read(db, watched))

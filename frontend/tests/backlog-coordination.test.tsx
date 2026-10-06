@@ -18,10 +18,87 @@ const summary = {
   ],
 }
 const withToken = <T,>(action: (token: string) => Promise<T>) => action('fixture-token')
+const followup = { work_item_id: 10, issue_number: 9, state: 'capped', event_sequence: 18,
+  settled_at: '2026-10-06T09:08:52Z', current: true, history_reason: null,
+  required_actor: 'leader', notification_limit: 'snapshot' }
+const ownerSummary = { ...summary, issue_numbers: [9], entries: [], autonomy_enabled: true,
+  requests_today: 9, max_daily_requests: 24, notifications_remaining: 15,
+  notification_cap_reason: 'snapshot', owner_followups: [followup] }
 beforeEach(() => { vi.mocked(apiClient).mockReset(); vi.mocked(apiClient).mockResolvedValue(summary) })
 afterEach(() => vi.useRealTimers())
 
 describe('Leader backlog coordination', () => {
+  it('shows capped owner debt beside a valid assessment without a human approval gate', async () => {
+    vi.mocked(apiClient).mockResolvedValue(ownerSummary)
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText('Owner completion needs Leader disposition')).toBeTruthy()
+    expect(screen.getByText('No eligible implementation work')).toBeTruthy()
+    expect(screen.getByText(/Next actor: Leader/)).toBeTruthy()
+    expect(screen.getByText(/unchanged snapshot notification limit/)).toBeTruthy()
+    expect(screen.getByText(/Remaining: 15/)).toBeTruthy()
+    expect(screen.getByText(/This is not a human approval request/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Issue #9' }).getAttribute('href')).toBe('https://github.com/o/r/issues/9')
+    expect(apiClient).toHaveBeenCalledTimes(1)
+  })
+  it.each([
+    { status: 'hold' }, { status: 'hold_unavailable' }, { status: 'recovery_only' },
+    { status: 'stale' }, { enabled: false }, { autonomy_enabled: false },
+    { owner_followups: [{ ...followup, current: false, history_reason: 'authority_changed', required_actor: null }] },
+    { owner_followups: [{ ...followup, state: 'waiting', settled_at: null, current: false, history_reason: 'no_outstanding_event', required_actor: null }] },
+  ])('shows historical guidance when current follow-up evidence is unavailable: %j', async (change) => {
+    vi.mocked(apiClient).mockResolvedValue({ ...ownerSummary, ...change })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText(/Historical or inactive record/)).toBeTruthy()
+    expect(screen.queryByText(/Next actor: Leader/)).toBeNull()
+    expect(screen.queryByText(/A supervisor can contact/)).toBeNull()
+  })
+  it.each(['daily', 'delivery', 'unknown'])('distinguishes the %s limit without changing quotas', async (limit) => {
+    vi.mocked(apiClient).mockResolvedValue({ ...ownerSummary, owner_followups: [{ ...followup, notification_limit: limit }] })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    await screen.findByText('Owner completion needs Leader disposition')
+    expect(screen.getByText(limit === 'daily' ? 'Automatic follow-up reached the shared daily notification limit.'
+      : limit === 'delivery' ? 'Automatic follow-up reached its delivery limit.'
+        : 'Automatic follow-up reached a notification limit.')).toBeTruthy()
+    expect(screen.getByText(/Remaining: 15/)).toBeTruthy()
+  })
+  it('does not turn uncertain delivery into a retry action', async () => {
+    vi.mocked(apiClient).mockResolvedValue({ ...ownerSummary, owner_followups: [{ ...followup, state: 'delivery_unknown', notification_limit: null }] })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText(/Delivery is uncertain/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /retry|wake/i })).toBeNull()
+  })
+  it('expires owner guidance during a hanging refresh and preserves the existing poll cadence', async () => {
+    vi.useFakeTimers()
+    vi.mocked(apiClient).mockResolvedValueOnce({ ...ownerSummary, observation_expires_at: new Date(Date.now() + 16000).toISOString() })
+      .mockImplementation(() => new Promise(() => {}))
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByText(/Next actor: Leader/)).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(16001) })
+    expect(screen.queryByText(/Next actor: Leader/)).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(screen.queryByText(/A supervisor can contact/)).toBeNull()
+    expect(screen.getByText('Coordination status is unavailable')).toBeTruthy()
+    expect(apiClient).toHaveBeenCalledTimes(2)
+  })
+  it('does not restore retained A guidance after an A to B to A selection', async () => {
+    vi.mocked(apiClient).mockResolvedValueOnce(ownerSummary).mockImplementation(() => new Promise(() => {}))
+    const view = render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    await screen.findByText(/Next actor: Leader/)
+    view.rerender(<BacklogCoordination scopeId={2} withOperatorToken={withToken} />)
+    view.rerender(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(screen.queryByText(/Next actor: Leader/)).toBeNull()
+  })
+  it.each([
+    [{ ...followup, work_item_id: -1 }], [{ ...followup, state: 'uncontrolled' }],
+    [{ ...followup, event_sequence: 0 }], [{ ...followup, current: false, history_reason: 'private-nonce-value' }],
+    Array.from({ length: 33 }, (_, index) => ({ ...followup, work_item_id: index + 1 })),
+  ])('rejects malformed follow-up projections', async (...values) => {
+    vi.mocked(apiClient).mockResolvedValue({ ...ownerSummary, owner_followups: values })
+    render(<BacklogCoordination scopeId={1} withOperatorToken={withToken} />)
+    expect(await screen.findByText('Coordination status is unavailable')).toBeTruthy()
+    expect(screen.queryByText(/Next actor: Leader/)).toBeNull()
+  })
   it('keeps current eligibility visible at the daily notification cap', async () => {
     vi.mocked(apiClient).mockResolvedValue({ ...summary, requests_today: 12,
       notifications_remaining: 0, notification_cap_reason: 'daily', autonomy_enabled: true,
