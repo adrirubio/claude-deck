@@ -10,6 +10,8 @@ import os
 import pathlib
 import re
 import signal
+import shutil
+import tempfile
 from dataclasses import dataclass
 
 _SHA = re.compile(r"[0-9a-f]{40}")
@@ -48,37 +50,10 @@ class WorkspaceProgressContext:
 class LocalProgressObservation:
     sha: str
     branch: str | None
-    tracked_changes: int
-    untracked_files: int
-    # Used only to detect changes during the read. Never saved or returned.
-    status_bytes: bytes
+    # Status can execute repository filters. This read never executes them.
+    tracked_changes: int | None = None
+    untracked_files: int | None = None
 
-
-def status_counts(raw: bytes) -> tuple[int, int]:
-    """Count porcelain-v1 NUL records, including the second rename path."""
-    if raw and not raw.endswith(b"\0"):
-        raise ProgressObservationError("invalid_git_observation")
-    records = raw.split(b"\0")[:-1]
-    tracked = untracked = index = 0
-    while index < len(records):
-        record = records[index]
-        if len(record) < 4 or record[2:3] != b" ":
-            raise ProgressObservationError("invalid_git_observation")
-        state = record[:2]
-        if any(value not in b" MADRCU?!" for value in state):
-            raise ProgressObservationError("invalid_git_observation")
-        if state == b"??":
-            untracked += 1
-        elif state == b"!!":
-            raise ProgressObservationError("invalid_git_observation")
-        else:
-            tracked += 1
-        if b"R" in state or b"C" in state:
-            index += 1
-            if index >= len(records) or not records[index]:
-                raise ProgressObservationError("invalid_git_observation")
-        index += 1
-    return tracked, untracked
 
 
 class WorkspaceProgressObserver:
@@ -110,13 +85,16 @@ class WorkspaceProgressObserver:
 
     @staticmethod
     async def _run_git(path: str, args: list[str]) -> tuple[int, bytes]:
-        env = {key: value for key, value in os.environ.items()
-               if not key.startswith("GIT_")}
+        executable = shutil.which("git", path=os.defpath)
+        if executable is None:
+            raise ProgressObservationError("git_unavailable")
+        env = {"PATH": os.defpath, "LC_ALL": "C"}
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                   GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+                   GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0",
+                   GIT_NO_LAZY_FETCH="1")
         try:
             process = await asyncio.create_subprocess_exec(
-                "git", "--no-optional-locks", "--no-pager", "--no-replace-objects",
+                executable, "--no-optional-locks", "--no-pager", "--no-replace-objects",
                 "-c", f"safe.directory={path}", "-c", "core.fsmonitor=false",
                 "-c", "core.hooksPath=/dev/null", "-C", path, *args,
                 env=env, stdout=asyncio.subprocess.PIPE,
@@ -167,25 +145,20 @@ class WorkspaceProgressObserver:
             raise ProgressObservationError("workspace_identity_unavailable") from None
 
     async def _state(self, path: str) -> LocalProgressObservation:
-        head, branch, status = await _gather(
-            self._runner(path, ["rev-parse", "--verify", "HEAD^{commit}"]),
+        head, branch = await _gather(
+            self._runner(path, ["rev-parse", "--verify", "HEAD"]),
             self._runner(path, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
-            self._runner(path, ["status", "--porcelain=v1", "-z",
-                                "--untracked-files=all", "--ignore-submodules=none"]),
         )
         try:
             sha = head[1].decode("ascii", "strict").strip()
             branch_name = branch[1].decode("utf-8", "strict").strip()
         except UnicodeError:
             raise ProgressObservationError("invalid_git_observation") from None
-        if head[0] or not _SHA.fullmatch(sha) or status[0]:
+        if head[0] or not _SHA.fullmatch(sha):
             raise ProgressObservationError("invalid_git_observation")
         if branch[0] not in (0, 1) or branch[0] == 0 and not branch_name:
             raise ProgressObservationError("invalid_git_observation")
-        tracked, untracked = status_counts(status[1])
-        return LocalProgressObservation(
-            sha, branch_name if branch[0] == 0 else None, tracked, untracked, status[1],
-        )
+        return LocalProgressObservation(sha, branch_name if branch[0] == 0 else None)
 
     async def read(self, context: WorkspaceProgressContext) -> LocalProgressObservation:
         self._allowed(context)
@@ -210,10 +183,27 @@ class WorkspaceProgressObserver:
             raise ProgressObservationError("invalid_git_observation")
         if local_sha == published_sha:
             return "synchronized", 0
-        code, raw = await self._runner(context.workspace_path, [
-            "rev-list", "--left-right", "--count", f"--max-count={_MAX_COMMITS + 1}",
-            f"{published_sha}...{local_sha}", "--",
-        ])
+        self._allowed(context)
+        common = pathlib.Path((await self._identity(context.scope_path))[1])
+        # A private bare view reads local objects without repository config,
+        # remotes, filters, hooks, replacements or shallow boundaries. Older
+        # Git versions do not honor GIT_NO_LAZY_FETCH.
+        if (common / "shallow").exists():
+            raise ProgressObservationError("ancestry_unavailable")
+        try:
+            with tempfile.TemporaryDirectory(prefix="deck-progress-") as directory:
+                view = pathlib.Path(directory)
+                (view / "refs").mkdir()
+                (view / "HEAD").write_text(local_sha + "\n", encoding="ascii")
+                (view / "config").write_text(
+                    "[core]\nrepositoryformatversion = 0\nbare = true\n", encoding="ascii")
+                (view / "objects").symlink_to(common / "objects", target_is_directory=True)
+                code, raw = await self._runner(str(view), [
+                    "rev-list", "--left-right", "--count", f"--max-count={_MAX_COMMITS + 1}",
+                    f"{published_sha}...{local_sha}", "--",
+                ])
+        except OSError:
+            raise ProgressObservationError("published_object_unavailable") from None
         parts = raw.split()
         if code or len(parts) != 2 or not all(value.isdigit() for value in parts):
             raise ProgressObservationError("published_object_unavailable")
