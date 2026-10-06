@@ -98,7 +98,7 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
             " capability_token_hash, last_seen_at, closed_at, created_at"
             " FROM mail_agent_sessions ORDER BY id")),
         "pane_bindings": _rows(conn, (
-            "SELECT pane_pid, pane_proc_start, slot_id, preset_id"
+            "SELECT pane_pid, pane_proc_start, slot_id, preset_id, tmux_target"
             " FROM agent_pane_bindings ORDER BY preset_id, slot_id, pane_pid")),
         "items": _rows(conn, (
             "SELECT id, scope_id, dispatch_status, attempt_phase, owner_slot_id,"

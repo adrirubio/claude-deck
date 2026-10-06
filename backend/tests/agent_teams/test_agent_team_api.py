@@ -2243,13 +2243,16 @@ async def test_readiness_observation_leaves_stored_state_unchanged(client, db, m
     await db.commit()
 
     async def snapshot():
-        counts = {}
+        # Complete row and value equality, including timestamps and identity
+        # fields; equal counts alone cannot detect mutations.
+        rows = {}
         for table in ("mail_team_members", "mail_agent_sessions", "agent_pane_bindings",
                       "agent_team_slots", "team_github_scopes", "github_work_items",
                       "github_approval_requests", "github_attempt_scope_revisions",
                       "github_workspaces"):
-            counts[table] = (await db.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one()
-        return counts
+            result = await db.execute(text(f"SELECT * FROM {table}"))
+            rows[table] = [tuple(row) for row in result.all()]
+        return rows
 
     before = await snapshot()
     await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
@@ -2297,3 +2300,34 @@ async def test_readiness_unconfirmed_native_identity_refuses(client, db, monkeyp
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
     assert "owner_binding_native_identity" in codes
     assert readiness.json()["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_readiness_provider_text_in_argument_does_not_confirm_identity(
+    client, db, monkeypatch, tmp_path
+):
+    """I06: an unrelated executable with provider text in an argument never
+    confirms native identity."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ArgText", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1004, 8104, last_seen=datetime.utcnow())
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
+                        lambda pane_pid, proc_start: "/usr/bin/yes codex")
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_identity" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_shell_with_provider_argument_does_not_confirm_identity(
+    client, db, monkeypatch, tmp_path
+):
+    """I06: a shell with a provider argument never confirms native identity."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ShellArg", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1005, 8105, last_seen=datetime.utcnow())
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
+                        lambda pane_pid, proc_start: "bash -c codex")
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_identity" in codes

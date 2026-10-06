@@ -2737,7 +2737,13 @@ async def read_activation_readiness(
                 "copilot-cli": "copilot",
                 "opencode-cli": "opencode",
             }.get(slot.provider, slot.provider)
-            if command is None or marker not in command:
+            # Recognized executable identity: argv[0] must be the provider
+            # family executable. Provider text in any argument, a shell with a
+            # provider argument, or an unrelated executable never confirms
+            # identity.
+            argv0 = command.split()[0].rsplit("/", 1)[-1] if command else ""
+            if (command is None or marker not in argv0
+                    or argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}):
                 return False, "native_identity", member.id, None
             qualifying.append(session)
         if len(qualifying) > 1:
