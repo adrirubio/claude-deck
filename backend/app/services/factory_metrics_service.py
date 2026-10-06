@@ -116,6 +116,16 @@ async def build_metrics_window(
         sample("closed_without_delivery", "tracked_attempts", float(non_delivery), non_delivery),
         sample("unknown_outcomes", "tracked_attempts", float(terminal_unknown), terminal_unknown,
                reasons=["terminal status without result evidence"] if terminal_unknown else []),
+        sample("elapsed_attempt_duration", "tracked_attempts", None,
+               0, unknown=max(total_attempts, 1),
+               reasons=["recorded start and stop events for the same attempt "
+                        "are required; elapsed time is not execution time or "
+                        "operator hands-on time"],
+               coverage="named boundaries only"),
+        sample("diagnostic_retries", "retry_events", None, 0, unknown=1,
+               reasons=["diagnostic and implementation retries stay separate; "
+                        "authoritative budget counters retain their semantics"],
+               coverage="counters authoritative"),
         sample("recovery_success", "recovery_actions", float(recovery_applied),
                recovery_applied + recovery_rejected + recovery_uncertain,
                unknown=recovery_uncertain,
