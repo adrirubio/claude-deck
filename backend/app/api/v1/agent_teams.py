@@ -2635,69 +2635,50 @@ async def read_activation_readiness(
 ):
     """Server-derived shared readiness for guided activation. Read-only.
 
-    Leader and owner readiness use authenticated current bindings. A spawn-only
-    launch plan is not readiness. Ambiguous, stale, unauthenticated and
-    wrong-member bindings are named blockers. This route observes only.
+    Pure and bounded: every identity-set query is capped before any hydration,
+    fanout or native work. Native evidence is matched from recorded pane binding
+    rows. No planner execution and no session synchronization run here. An
+    incomplete observation blocks readiness and omits nothing silently.
     """
-    from app.services.github_coordination_service import (
-        MCP_HEARTBEAT_TTL_SECONDS,
-        CoordinationError,
-        github_coordination_service,
-    )
-    from app.utils import peer_process
+    from app.services.github_coordination_service import MCP_HEARTBEAT_TTL_SECONDS
 
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
     preset = await db.get(AgentTeamPreset, scope.preset_id)
+    blockers: list[dict[str, object]] = []
+    observed_at = datetime.now(timezone.utc).isoformat()
+
+    # Bounded roster query first: nothing hydrates before this bound.
     slots = list((await db.scalars(
         select(AgentTeamSlot).where(AgentTeamSlot.preset_id == scope.preset_id)
-        .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
+        .order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(65)
     )).all())
-    enabled = [slot for slot in slots if slot.enabled]
-    blockers: list[dict[str, object]] = []
-    now = datetime.now(timezone.utc).isoformat()
-
-    leader = next(
-        (slot for slot in enabled if preset is not None and slot.id == preset.leader_slot_id),
-        None,
-    )
-    leader_member_id = None
-    if leader is None:
-        blockers.append({"code": "leader_assignment_missing",
-                         "message": "An enabled explicit Leader assignment is required."})
-    else:
-        try:
-            leader_session, _leader_slots = await github_coordination_service.current_leader(db, scope)
-            leader_member_id = leader_session.member_id
-        except CoordinationError as exc:
-            blockers.append({"code": f"leader_{exc.code}",
-                             "message": "The current authenticated Leader binding is not confirmed."})
-
-    if len(enabled) > 64:
+    if len(slots) > 64:
+        slots = slots[:64]
         blockers.append({"code": "readiness_context_limit",
                          "message": "The roster exceeds the bounded readiness observation."})
-    owner_slot_ids = [slot.id for slot in enabled if leader is None or slot.id != leader.id]
-    owner_candidates = list((await db.scalars(
-        select(MailTeamMember).where(
-            MailTeamMember.team_preset_id == scope.preset_id,
-            MailTeamMember.team_slot_id.in_(owner_slot_ids),
-            MailTeamMember.participant_kind == "team_slot",
-        ).order_by(MailTeamMember.id).limit(65)
-    )).all()) if owner_slot_ids else []
-    if len(owner_candidates) > 64:
-        owner_candidates = owner_candidates[:64]
-        blockers.append({"code": "readiness_context_limit",
-                         "message": "Owner membership exceeds the bounded readiness observation."})
+    enabled = [slot for slot in slots if slot.enabled]
     heartbeat_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         seconds=MCP_HEARTBEAT_TTL_SECONDS)
-    eligible_owner_member_ids: set[int] = set()
-    for member in owner_candidates:
+
+    async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None]:
+        """Current authenticated binding for one slot from bounded queries only."""
+        candidates = list((await db.scalars(
+            select(MailTeamMember).where(
+                MailTeamMember.team_preset_id == scope.preset_id,
+                MailTeamMember.team_slot_id == slot.id,
+                MailTeamMember.participant_kind == "team_slot",
+            ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(2)
+        )).all())
+        if not candidates:
+            return False, "missing", None
+        member = candidates[0]
         sessions = list((await db.scalars(
             select(MailAgentSession).where(
                 MailAgentSession.member_id == member.id,
                 MailAgentSession.team_preset_id == scope.preset_id,
-                MailAgentSession.team_slot_id == member.team_slot_id,
+                MailAgentSession.team_slot_id == slot.id,
                 MailAgentSession.source == "mcp",
                 MailAgentSession.closed_at.is_(None),
                 MailAgentSession.mailbox_status == "connected",
@@ -2705,54 +2686,91 @@ async def read_activation_readiness(
             ).order_by(MailAgentSession.id).limit(9)
         )).all())
         if len(sessions) > 8:
-            sessions = sessions[:8]
-            blockers.append({"code": "readiness_context_limit",
-                             "message": "One owner binding exceeds the bounded readiness observation.",
-                             "slot_ids": [member.team_slot_id]})
-        current = [
-            session for session in sessions
-            if session.last_seen_at is not None and session.last_seen_at >= heartbeat_cutoff
-        ]
-        live = [
-            session for session in current
-            if session.bound_pane_pid is not None and session.bound_pane_proc_start
-            and peer_process.pane_is_alive(session.bound_pane_pid, session.bound_pane_proc_start) is True
-        ]
-        if len(live) > 1:
-            # One member with several live bound lifetimes is an ambiguous
-            # binding even if a live session exists.
+            return False, "context_limit", member.id
+        qualifying = []
+        for session in sessions:
+            if not session.wake_enabled:
+                continue
+            if session.provider != slot.provider:
+                continue
+            if session.last_seen_at is None or session.last_seen_at < heartbeat_cutoff:
+                continue
+            if session.bound_pane_pid is None or session.bound_pane_proc_start is None:
+                continue
+            binding = (await db.scalars(
+                select(AgentPaneBinding).where(
+                    AgentPaneBinding.pane_pid == session.bound_pane_pid,
+                    AgentPaneBinding.pane_proc_start == session.bound_pane_proc_start,
+                    AgentPaneBinding.slot_id == slot.id,
+                    AgentPaneBinding.preset_id == scope.preset_id,
+                ).limit(2)
+            )).first()
+            if binding is None:
+                return False, "native_mismatch", member.id
+            qualifying.append(session)
+        if len(qualifying) > 1:
+            return False, "ambiguous", member.id
+        if not qualifying:
+            return False, "stale", member.id
+        return True, None, member.id
+
+    states: dict[int, tuple[bool, str | None, int | None]] = {}
+    for slot in enabled[:64]:
+        states[slot.id] = await binding_state(slot)
+
+    leader = next((slot for slot in enabled if preset is not None and slot.id == preset.leader_slot_id), None)
+    if leader is None:
+        blockers.append({"code": "leader_assignment_missing",
+                         "message": "An enabled explicit Leader assignment is required."})
+    elif not states[leader.id][0]:
+        blockers.append({"code": f"leader_binding_{states[leader.id][1]}",
+                         "message": "The current authenticated Leader binding is not confirmed."})
+
+    owner_slots = [slot for slot in enabled if leader is None or slot.id != leader.id]
+    eligible_owner_slot_ids: set[int] = set()
+    for slot in owner_slots[:64]:
+        ok, reason, _bound_member_id = states[slot.id]
+        if ok:
+            eligible_owner_slot_ids.add(slot.id)
+        elif reason == "ambiguous":
             blockers.append({"code": "owner_binding_ambiguous",
                              "message": "One member has more than one live owner binding.",
-                             "slot_ids": [member.team_slot_id]})
-            continue
-        if live:
-            if member.id != leader_member_id:
-                eligible_owner_member_ids.add(member.id)
-            continue
-        if sessions:
-            blockers.append({"code": "owner_binding_stale",
-                             "message": "An owner session binding is stale or its heartbeat is not current.",
-                             "slot_ids": [member.team_slot_id]})
-    # Several distinct eligible owners on different slots are normal. At least
-    # one distinct eligible owner with a unique current binding is required.
-    if not eligible_owner_member_ids:
+                             "slot_ids": [slot.id]})
+        elif reason != "missing":
+            # A slot with no member is covered by the aggregate eligibility
+            # blocker below; other gaps are named per slot.
+            blockers.append({"code": f"owner_binding_{reason}",
+                             "message": "An owner session binding is not current and authenticated.",
+                             "slot_ids": [slot.id]})
+    if not eligible_owner_slot_ids and owner_slots:
         blockers.append({"code": "owner_binding_missing",
                          "message": "A distinct eligible owner binding is required."})
 
-    plan = await agent_team_service.plan_launch(db, scope.preset_id)
-    spawn_only = [
-        item.slot_name for item in plan.items
-        if item.action in {"spawn", "skip", "blocked"}
-        or not item.matching_session
-    ]
-    if spawn_only:
+    unbound_slots = [slot.display_name for slot in enabled[:64] if not states[slot.id][0]]
+    if unbound_slots:
         blockers.append({"code": "provider_mail_not_ready",
-                         "message": "Provider and Agent Mail readiness require existing sessions.",
-                         "slot_names": spawn_only})
+                         "message": "Provider and Agent Mail readiness require existing authenticated sessions.",
+                         "slot_names": sorted(set(unbound_slots))})
+
+    # Post-observation revalidation: bindings must not change during the reads.
+    for slot in enabled[:64]:
+        current_member = (await db.scalars(
+            select(MailTeamMember).where(
+                MailTeamMember.team_preset_id == scope.preset_id,
+                MailTeamMember.team_slot_id == slot.id,
+                MailTeamMember.participant_kind == "team_slot",
+            ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1)
+        )).first()
+        expected_member_id = states[slot.id][2]
+        current_member_id = current_member.id if current_member is not None else None
+        if expected_member_id != current_member_id:
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The membership binding changed during the observation.",
+                             "slot_ids": [slot.id]})
 
     return {
         "status": "blocked" if blockers else "ready",
-        "observed_at": now,
+        "observed_at": observed_at,
         "blockers": blockers,
     }
 

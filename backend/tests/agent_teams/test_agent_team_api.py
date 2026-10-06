@@ -1313,7 +1313,7 @@ async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
 
 
 def _bind_owner(db, preset, slot_id, member_id, session_id, *, last_seen):
-    from app.models.database import MailAgentSession, MailTeamMember
+    from app.models.database import AgentPaneBinding, MailAgentSession, MailTeamMember
 
     db.add(MailTeamMember(
         id=member_id, identity_key=f"slot:{member_id}", repo_id="r", repo_path="/r",
@@ -1326,6 +1326,8 @@ def _bind_owner(db, preset, slot_id, member_id, session_id, *, last_seen):
         team_preset_id=preset.id, team_slot_id=slot_id,
         bound_pane_pid=1000 + session_id, bound_pane_proc_start="1",
         capability_token_hash=f"cap-{session_id}"))
+    db.add(AgentPaneBinding(pane_pid=1000 + session_id, pane_proc_start="1",
+                            slot_id=slot_id, preset_id=preset.id))
 
 
 @pytest.mark.asyncio
@@ -1350,6 +1352,7 @@ async def test_activation_readiness_rejects_ambiguous_owner_binding(client, db, 
     now = datetime.utcnow()
     # One member with two live bound lifetimes on the same slot.
     _bind_owner(db, preset, preset.slots[1].id, 911, 811, last_seen=now)
+    from app.models.database import AgentPaneBinding
     db.add(MailAgentSession(
         id=812, member_id=911, provider="codex-cli", source="mcp",
         session_key="mcp:ready-812", wake_enabled=True,
@@ -1357,6 +1360,8 @@ async def test_activation_readiness_rejects_ambiguous_owner_binding(client, db, 
         team_preset_id=preset.id, team_slot_id=preset.slots[1].id,
         bound_pane_pid=1002, bound_pane_proc_start="1",
         capability_token_hash="cap-812"))
+    db.add(AgentPaneBinding(pane_pid=1002, pane_proc_start="1",
+                            slot_id=preset.slots[1].id, preset_id=preset.id))
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
@@ -1883,3 +1888,102 @@ async def test_v28_active_team_third_scope_save_preserves_authority_and_intake(
             assert final_scopes[scope_row["id"]] == scope_row
 
     # Stubbed scheduler sync and no live human trial are explicit limits.
+
+
+@pytest.mark.asyncio
+async def test_readiness_positive_ready_with_full_bindings(client, db, monkeypatch, tmp_path):
+    """F3: a fully bound team is ready with no blockers."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ReadyTeam", 1)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 920, 820, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 921, 821, last_seen=now)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    body = readiness.json()
+    assert body["status"] == "ready"
+    assert body["blockers"] == []
+    assert body["observed_at"]
+
+
+@pytest.mark.asyncio
+async def test_readiness_superseded_member_binding_does_not_qualify(client, db, monkeypatch, tmp_path):
+    """F3: a superseded member's binding never satisfies readiness."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Superseded", 1)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 930, 830, last_seen=now)
+    # A newer member supersedes 930 but has no qualifying binding.
+    _bind_owner(db, preset, preset.slots[1].id, 931, 831, last_seen=now)
+    from app.models.database import MailAgentSession as _Sess
+    row = await db.get(_Sess, 831)
+    row.bound_pane_pid = None
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_stale" in codes
+    assert "owner_binding_ambiguous" not in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_wake_disabled_session_does_not_qualify(client, db, monkeypatch, tmp_path):
+    """F3: wake-disabled sessions never satisfy readiness."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "WakeOff", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 940, 840, last_seen=datetime.utcnow())
+    from app.models.database import MailAgentSession as _Sess
+    row = await db.get(_Sess, 840)
+    row.wake_enabled = False
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_stale" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_native_mismatch_is_named(client, db, monkeypatch, tmp_path):
+    """F3: a session without a matching native pane binding is refused."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "NativeMis", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 950, 850, last_seen=datetime.utcnow())
+    from app.models.database import MailAgentSession as _Sess
+    row = await db.get(_Sess, 850)
+    row.bound_pane_pid = 9999
+    row.bound_pane_proc_start = "9"
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_mismatch" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_overflow_roster_and_unrelated_history_are_bounded(
+    client, db, monkeypatch, tmp_path
+):
+    """F2: roster overflow blocks readiness; unrelated history cannot widen work."""
+    import app.api.v1.agent_teams as agent_teams_module
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Overflow", 1)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 960, 860, last_seen=now)
+    # Large unrelated histories on another preset cannot affect the observation.
+    from app.models.database import AgentTeamSlot, MailTeamMember
+    for index in range(200):
+        db.add(MailTeamMember(
+            identity_key=f"slot:noise-{index}", repo_id="n", repo_path="/n", repo_name="n",
+            display_name=f"Noise {index}", participant_kind="team_slot",
+            team_preset_id=999, team_slot_id=9000 + index))
+    await db.commit()
+    baseline = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+
+    # Enabled and disabled overflow: the bounded roster query hits its cap.
+    for index in range(70):
+        db.add(AgentTeamSlot(
+            preset_id=preset.id, position=10 + index, display_name=f"OV {index}",
+            provider="codex-cli", repo_id="ov", repo_path="/ov", repo_name="ov",
+            enabled=(index % 2 == 0)))
+    await db.commit()
+    overflow = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in overflow.json()["blockers"]}
+    assert "readiness_context_limit" in codes
+    # The unrelated-history observation is unchanged and complete for its roster.
+    baseline_codes = {blocker["code"] for blocker in baseline.json()["blockers"]}
+    assert baseline_codes == {"leader_assignment_missing", "provider_mail_not_ready"}
