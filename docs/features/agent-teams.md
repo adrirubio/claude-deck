@@ -4,11 +4,11 @@ Agent Teams are saved rosters of local Claude Code, Codex, and Copilot sessions.
 
 ## Teams inside the work flow
 
-Teams retains saved rosters and manual launch planning alongside factory work. Overview/Work span teams; here configure a roster and its repositories. The first enabled slot supplies Leader authority; Role text is descriptive.
+Teams retains saved rosters and manual launch planning alongside factory work. Overview/Work span teams; here configure a roster and its repositories. The preset's `leader_slot_id` supplies Leader authority. Slot order and descriptive Role text do not select the Leader.
 
 ## Current autonomy and repository setup
 
-Autonomy configures watched repositories, existing primary checkout, labels, merge policy and finite dispatch/recovery limits. GitHub polling uses host access separately from operator authorization; GitHub App dispatch settings alone do not authenticate polling. Existing host/label setup remains necessary; no guided wizard or explicit-role authority redesign is included.
+Autonomy configures watched repositories, existing primary checkout, labels, merge policy and finite dispatch/recovery limits. GitHub polling uses host access separately from operator authorization; GitHub App dispatch settings alone do not authenticate polling. Repository setup checks access and labels without creating records or labels. New teams start with automation off; new repository scopes start disabled. Explicit Leader changes require operator authority, a disabled team, and a quiescent team.
 
 Team/scope enablement controls intake. Pausing retains configuration; inspect current attempts/processes separately. Code follows configured merge policy with the rolling automatic-merge cap; design-labelled work always requires human PR review. Leader plan approval, operator intervention and human PR review are separate.
 

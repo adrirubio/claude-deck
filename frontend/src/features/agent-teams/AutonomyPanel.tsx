@@ -1533,14 +1533,14 @@ export function AutonomyPanel({
     if (scopes.some((scope) => scope.enabled && scope.merge_policy === 'auto')) {
       warnings.push('At least one watched repo can auto-merge code PRs after verification.')
     }
-    const leader = [...preset.slots].filter((slot) => slot.enabled).sort((first, second) => first.position - second.position)[0]
+    const leader = preset.slots.find((slot) => slot.id === preset.leader_slot_id && slot.enabled)
     if (!leader) {
       warnings.push('No enabled Leader slot exists; dispatched work will not have an approver.')
     } else {
       try {
         const team = await fetchAgentMailTeam(false)
         if (!team.members.some((member) => member.team_slot_id === leader.id && member.status === 'connected')) {
-          warnings.push('The Leader is not currently connected in Agent Mail. Launch the first enabled slot from Roster before enabling autonomy.')
+          warnings.push('The Leader is not currently connected in Agent Mail. Launch the assigned Leader slot from Roster before enabling autonomy.')
         }
       } catch {
         warnings.push('Leader availability could not be checked. Confirm it before enabling unattended work.')
@@ -1652,7 +1652,7 @@ export function AutonomyPanel({
             <ol className="mt-2 list-decimal space-y-1 pl-5">
               <li>Add <code>github_token</code> to <code>backend/.env</code> for GitHub polling, then restart Deck. For App-backed dispatch, also configure the GitHub App settings. Deck selects the dispatch mode when work becomes eligible.</li>
               <li>Add a watched repo with an existing primary checkout under your home directory and labels to watch.</li>
-              <li>In Roster, launch the first enabled slot: it is the Leader who approves plans.</li>
+              <li>In Roster, assign and launch the Leader slot. It approves plans.</li>
               <li>On GitHub, label an issue for dispatch; add an area label to route it to a particular owner.</li>
               <li>Enable autonomy. Deck polls GitHub every 60 seconds by default and shows progress here.</li>
             </ol>

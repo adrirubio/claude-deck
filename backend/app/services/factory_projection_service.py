@@ -355,10 +355,14 @@ async def work_projections(db, rows, now):
     slots_by_id = {s.id: s for s in slots}
     members_by_id = {m.id: m for m in members}
     members_by_slot = defaultdict(list)
-    leaders = {}
-    for slot in slots:
-        if slot.enabled:
-            leaders.setdefault(slot.preset_id, slot)
+    leaders = {
+        team.id: slots_by_id.get(team.leader_slot_id)
+        for team_id, team in {team.id: team for _, _, team in rows}.items()
+    }
+    leaders = {
+        team_id: slot if slot is not None and slot.preset_id == team_id and slot.enabled else None
+        for team_id, slot in leaders.items()
+    }
     for member in members:
         slot = slots_by_id.get(member.team_slot_id)
         if slot is not None and slot.preset_id == member.team_preset_id:
@@ -412,7 +416,7 @@ async def work_projections(db, rows, now):
             owner=wire.OwnerReference(slot_id=slot.id, member_id=member.id if member else None,
                 name=slot.display_name, configured_provider=slot.provider, provider_label=providers.get(slot.provider)) if slot else None,
             approver=wire.ApproverReference(slot_id=leader_slot.id, member_id=leader_member.id if leader_member else None,
-                source="first_enabled_slot" if leaders.get(team.id) == leader_slot else "unknown") if leader_slot else None,
+                source="explicit_assignment" if team.leader_slot_id == leader_slot.id else "unknown") if leader_slot else None,
             waiting=waiting(item, legacy, owner_session), session=owner_session, approver_session=leader_session,
             policy=wire.WorkPolicy(merge_policy=scope.merge_policy, max_verification_retries=scope.max_verification_retries,
                                   max_approval_rounds=scope.max_approval_rounds, continuation_enabled=scope.continuation_enabled),

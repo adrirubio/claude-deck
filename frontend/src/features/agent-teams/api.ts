@@ -36,23 +36,38 @@ export function fetchAgentTeamPresets(): Promise<AgentTeamPresetListResponse> {
   return apiClient<AgentTeamPresetListResponse>('agent-teams/presets')
 }
 
-export function createAgentTeamPreset(input: AgentTeamPresetInput): Promise<AgentTeamPreset> {
+export function createAgentTeamPreset(input: AgentTeamPresetInput, operatorToken: string): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>('agent-teams/presets', {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
-export function createAgentTeamFromMail(input: AgentTeamCreateFromMailRequest): Promise<AgentTeamPreset> {
+export function createAgentTeamFromMail(input: AgentTeamCreateFromMailRequest, operatorToken: string): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>('agent-teams/presets/from-agent-mail', {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
 
-export function createAgentTeamFromBridge(input: AgentTeamCreateFromBridgeRequest): Promise<AgentTeamPreset> {
+export function createAgentTeamFromBridge(input: AgentTeamCreateFromBridgeRequest, operatorToken: string): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>('agent-teams/presets/from-agent-bridge', {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateAgentTeamLeader(
+  presetId: number,
+  input: { leader_slot_id: number; expected_leader_slot_id: number | null; expected_updated_at: string; reason: string },
+  operatorToken: string
+): Promise<AgentTeamPreset> {
+  return apiClient<AgentTeamPreset>(`agent-teams/presets/${presetId}/leader`, {
+    method: 'PUT',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
@@ -78,10 +93,12 @@ export function deleteAgentTeamPreset(presetId: number, operatorToken: string): 
 
 export function duplicateAgentTeamPreset(
   presetId: number,
-  input: AgentTeamPresetUpdate
+  input: AgentTeamPresetUpdate,
+  operatorToken: string
 ): Promise<AgentTeamPreset> {
   return apiClient<AgentTeamPreset>(`agent-teams/presets/${presetId}/duplicate`, {
     method: 'POST',
+    headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
   })
 }
@@ -150,6 +167,17 @@ export function launchAgentTeam(
     method: 'POST',
     headers: operatorHeaders(operatorToken),
     body: JSON.stringify(input),
+  })
+}
+
+export function fetchConfigurationObservation(operatorToken: string): Promise<{
+  observed_at: string;
+  complete: boolean;
+  presets: AgentTeamPreset[];
+  scopes: TeamGithubScope[];
+}> {
+  return apiClient('agent-teams/configuration-observation', {
+    headers: operatorHeaders(operatorToken),
   })
 }
 

@@ -26,7 +26,7 @@ Configuration checks do not verify model access. Credential readiness remains un
 
 Guided setup, explicit Leader selection and delivery audit/metrics are not included. This source candidate has not received M1b or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
 
-Repository setup uses current Teams and host/label procedures. Role text does not redesign Leader selection; the first enabled slot remains Leader.
+Repository setup uses a guided, observation-only access and label check. Leader authority uses the preset's explicit `leader_slot_id`; slot order and descriptive Role text do not select it.
 
 ## Tech Stack
 

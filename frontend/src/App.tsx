@@ -9,6 +9,7 @@ import { HarnessesPage } from './features/harnesses/HarnessesPage'
 import { OverviewPage, WorkPage, WorkDetailPage, RepositoriesPage, RepositoryPage } from './features/factory/FactoryPages'
 import { BridgeEntry, MailEntry } from './features/factory/ContextPages'
 import { AgentTeamsPage } from './features/agent-teams/AgentTeamsPage'
+import { RepositorySetupPage } from './features/factory/RepositorySetupPage'
 
 function TeamsAlias() { const { search, hash } = useLocation(); return <Navigate replace to={`/teams${search}${hash}`} /> }
 
@@ -25,6 +26,7 @@ function App() {
                 <Route path="work" element={<WorkPage />} />
                 <Route path="work/:workItemId" element={<WorkDetailPage />} />
                 <Route path="repositories" element={<RepositoriesPage />} />
+                <Route path="repositories/new" element={<RepositorySetupPage />} />
                 <Route path="repositories/:scopeId" element={<RepositoryPage />} />
                 <Route path="harnesses" element={<HarnessesPage />} />
                 <Route path="harnesses/:providerId" element={<HarnessesPage />} />

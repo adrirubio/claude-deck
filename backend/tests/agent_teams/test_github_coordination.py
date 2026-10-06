@@ -71,6 +71,7 @@ async def team(db, monkeypatch):
     scope = TeamGithubScope(preset_id=preset.id, repo_owner="o", repo_name="r", repo_path="/tmp/fixture",
                             merge_policy="human", max_concurrent_dispatched=2)
     db.add_all([slot, owner_slot, scope]); await db.flush()
+    preset.leader_slot_id = slot.id
     member = MailTeamMember(identity_key="fixture-leader", repo_id="r", repo_path="/tmp/fixture", repo_name="r",
                             display_name="Leader", participant_kind="team_slot",
                             team_preset_id=preset.id, team_slot_id=slot.id)

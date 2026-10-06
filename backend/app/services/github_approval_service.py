@@ -1800,7 +1800,7 @@ class GithubApprovalService:
             raise GithubApprovalError("continuation_request_expired")
 
         leader_slot = aliased(AgentTeamSlot)
-        earlier_slot = aliased(AgentTeamSlot)
+        leader_preset = aliased(AgentTeamPreset)
         leader_member = aliased(MailTeamMember)
         newer_leader_member = aliased(MailTeamMember)
         current_leader_exists = exists(
@@ -1810,26 +1810,18 @@ class GithubApprovalService:
                 TeamGithubScope.preset_id == leader_slot.preset_id,
             )
             .join(
+                leader_preset,
+                leader_preset.id == TeamGithubScope.preset_id,
+            )
+            .join(
                 leader_member,
                 leader_member.team_slot_id == leader_slot.id,
             )
             .where(
                 TeamGithubScope.id == item.scope_id,
+                leader_preset.leader_slot_id == leader_slot.id,
                 leader_slot.enabled.is_(True),
                 leader_member.id == authenticated_leader_member_id,
-                ~exists(
-                    select(earlier_slot.id).where(
-                        earlier_slot.preset_id == leader_slot.preset_id,
-                        earlier_slot.enabled.is_(True),
-                        or_(
-                            earlier_slot.position < leader_slot.position,
-                            and_(
-                                earlier_slot.position == leader_slot.position,
-                                earlier_slot.id < leader_slot.id,
-                            ),
-                        ),
-                    )
-                ),
                 ~exists(
                     select(newer_leader_member.id).where(
                         newer_leader_member.team_slot_id == leader_slot.id,

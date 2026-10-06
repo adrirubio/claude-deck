@@ -59,6 +59,7 @@ async def _seed_attempt(maker):
             await db.flush()
             slots.append(slot)
             members.append(member)
+        preset.leader_slot_id = slots[0].id
         scope = TeamGithubScope(
             preset_id=preset.id,
             repo_owner="o",

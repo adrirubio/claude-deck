@@ -2280,6 +2280,7 @@ class AgentTeamPresetCreate(BaseModel):
     name: str
     description: Optional[str] = None
     created_by: Optional[str] = None
+    autonomy_enabled: bool = False
     slots: List[AgentTeamSlotCreate] = Field(default_factory=list)
 
 
@@ -2297,7 +2298,43 @@ class AgentTeamPresetResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     autonomy_enabled: bool = False
+    leader_slot_id: Optional[int] = None
     slots: List[AgentTeamSlotResponse] = Field(default_factory=list)
+
+
+class AgentTeamLeaderUpdateRequest(BaseModel):
+    leader_slot_id: int
+    expected_leader_slot_id: Optional[int] = None
+    expected_updated_at: datetime
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class SetupPreflightRequest(BaseModel):
+    repo_owner: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    repo_name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    repo_path: str = Field(min_length=1, max_length=2048)
+    dispatch_label: str = Field(min_length=1, max_length=100)
+    design_label: str = Field(min_length=1, max_length=100)
+    dispatch_auth_mode: Literal["token", "github_app"]
+    base_ref: str = Field(default="origin/HEAD", min_length=1, max_length=255)
+
+
+class SetupPreflightCheck(BaseModel):
+    status: Literal["ready", "blocked", "unknown"]
+    code: str = Field(max_length=64)
+    remedy: str = Field(default="Review the check and complete any required setup step.", max_length=240)
+
+
+class SetupPreflightResponse(BaseModel):
+    status: Literal["ready", "blocked", "unknown"]
+    observed_at: datetime
+    checked_at: datetime
+    checks: Dict[str, SetupPreflightCheck]
+    # Allowlisted configuration key names mapped to boolean presence only.
+    # Never include values, key-file paths, hashes, or raw environment output.
+    configuration_presence: Dict[str, bool] = Field(default_factory=dict)
+    # Safe static host-procedure steps: credentials, harness/Mail, restart.
+    host_guidance: List[str] = Field(default_factory=list)
 
 
 class AgentTeamPresetListResponse(BaseModel):
@@ -2332,6 +2369,7 @@ class TeamGithubScopeCreate(BaseModel):
     max_verification_retries: int = Field(default=2, ge=0)
     max_auto_merges_per_day: int = Field(default=5, ge=0)
     base_ref: str = "origin/HEAD"
+    github_auth_mode: Literal["unknown", "ambient", "app"] = "unknown"
     builds_out_of_tree: bool = False
     build_dir_template: str = "build"
     build_command_hint: Optional[str] = None
@@ -2351,6 +2389,7 @@ class TeamGithubScopeUpdate(BaseModel):
     max_verification_retries: Optional[int] = Field(default=None, ge=0)
     max_auto_merges_per_day: Optional[int] = Field(default=None, ge=0)
     base_ref: Optional[str] = None
+    github_auth_mode: Optional[Literal["unknown", "ambient", "app"]] = None
     builds_out_of_tree: Optional[bool] = None
     build_dir_template: Optional[str] = None
     build_command_hint: Optional[str] = None

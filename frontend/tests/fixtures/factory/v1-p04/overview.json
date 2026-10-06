@@ -1,0 +1,244 @@
+{
+  "normal": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "automation": {
+        "configured_scopes": 3,
+        "enabled_scopes": 2,
+        "intake_blocked_scopes": 0,
+        "intake_eligible_scopes": 2,
+        "intake_unknown_scopes": 0,
+        "never_polled_scopes": 1,
+        "paused_scopes": 1,
+        "runtime": {
+          "mode": "normal",
+          "observed_at": "2026-09-30T11:59:00Z",
+          "reason_code": null,
+          "scheduler_state": "running"
+        },
+        "stale_scopes": 0
+      },
+      "counts": {
+        "active": 27,
+        "attention": 26,
+        "finished": 26,
+        "queued": 14,
+        "review": 26,
+        "total": 132,
+        "unknown": 13
+      },
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1
+    }
+  },
+  "recovery_only": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "automation": {
+        "configured_scopes": 3,
+        "enabled_scopes": 2,
+        "intake_blocked_scopes": 2,
+        "intake_eligible_scopes": 0,
+        "intake_unknown_scopes": 0,
+        "never_polled_scopes": 0,
+        "paused_scopes": 1,
+        "runtime": {
+          "mode": "recovery_only",
+          "observed_at": "2026-09-30T11:59:59Z",
+          "reason_code": null,
+          "scheduler_state": "running"
+        },
+        "stale_scopes": 0
+      },
+      "counts": {
+        "active": 27,
+        "attention": 26,
+        "finished": 26,
+        "queued": 14,
+        "review": 26,
+        "total": 132,
+        "unknown": 13
+      },
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1
+    }
+  },
+  "stale": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "automation": {
+        "configured_scopes": 3,
+        "enabled_scopes": 2,
+        "intake_blocked_scopes": 0,
+        "intake_eligible_scopes": 2,
+        "intake_unknown_scopes": 0,
+        "never_polled_scopes": 1,
+        "paused_scopes": 1,
+        "runtime": {
+          "mode": "normal",
+          "observed_at": "2026-09-30T11:59:00Z",
+          "reason_code": null,
+          "scheduler_state": "running"
+        },
+        "stale_scopes": 1
+      },
+      "counts": {
+        "active": 27,
+        "attention": 26,
+        "finished": 26,
+        "queued": 14,
+        "review": 26,
+        "total": 132,
+        "unknown": 13
+      },
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1
+    }
+  },
+  "stopped": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "automation": {
+        "configured_scopes": 3,
+        "enabled_scopes": 2,
+        "intake_blocked_scopes": 2,
+        "intake_eligible_scopes": 0,
+        "intake_unknown_scopes": 0,
+        "never_polled_scopes": 0,
+        "paused_scopes": 1,
+        "runtime": {
+          "mode": "normal",
+          "observed_at": "2026-09-30T11:59:59Z",
+          "reason_code": null,
+          "scheduler_state": "stopped"
+        },
+        "stale_scopes": 0
+      },
+      "counts": {
+        "active": 27,
+        "attention": 26,
+        "finished": 26,
+        "queued": 14,
+        "review": 26,
+        "total": 132,
+        "unknown": 13
+      },
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1
+    }
+  },
+  "team_filter": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 200,
+    "method": "GET",
+    "query": {
+      "team_id": 1
+    },
+    "response": {
+      "automation": {
+        "configured_scopes": 2,
+        "enabled_scopes": 1,
+        "intake_blocked_scopes": 0,
+        "intake_eligible_scopes": 1,
+        "intake_unknown_scopes": 0,
+        "never_polled_scopes": 0,
+        "paused_scopes": 1,
+        "runtime": {
+          "mode": "normal",
+          "observed_at": "2026-09-30T11:59:00Z",
+          "reason_code": null,
+          "scheduler_state": "running"
+        },
+        "stale_scopes": 0
+      },
+      "counts": {
+        "active": 14,
+        "attention": 13,
+        "finished": 13,
+        "queued": 14,
+        "review": 13,
+        "total": 67,
+        "unknown": 0
+      },
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": 1
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1
+    }
+  },
+  "unknown": {
+    "endpoint": "/api/v1/factory/overview",
+    "http_status": 200,
+    "method": "GET",
+    "query": {},
+    "response": {
+      "automation": {
+        "configured_scopes": 3,
+        "enabled_scopes": 2,
+        "intake_blocked_scopes": 0,
+        "intake_eligible_scopes": 0,
+        "intake_unknown_scopes": 2,
+        "never_polled_scopes": 0,
+        "paused_scopes": 1,
+        "runtime": {
+          "mode": "unknown",
+          "observed_at": null,
+          "reason_code": "runtime_not_observed",
+          "scheduler_state": "unknown"
+        },
+        "stale_scopes": 0
+      },
+      "counts": {
+        "active": 27,
+        "attention": 26,
+        "finished": 26,
+        "queued": 14,
+        "review": 26,
+        "total": 132,
+        "unknown": 13
+      },
+      "filters": {
+        "provider": null,
+        "scope_id": null,
+        "team_id": null
+      },
+      "generated_at": "2026-09-30T12:00:00Z",
+      "schema_version": 1
+    }
+  }
+}

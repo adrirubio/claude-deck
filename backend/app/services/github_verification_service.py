@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
+    AgentTeamPreset,
     AgentTeamSlot,
     GithubAttemptScopeRevision,
     GithubWorkItem,
@@ -1841,15 +1842,15 @@ class GithubVerificationService:
             return "approval was not recorded under enforced identity"
         if item.ack_approval_round != item.approval_round_count:
             return "approval is missing or belongs to a stale round"
+        preset = await db.get(AgentTeamPreset, scope.preset_id)
         leader_slot = (
             await db.execute(
                 select(AgentTeamSlot)
                 .where(
                     AgentTeamSlot.preset_id == scope.preset_id,
+                    AgentTeamSlot.id == (preset.leader_slot_id if preset else None),
                     AgentTeamSlot.enabled.is_(True),
                 )
-                .order_by(AgentTeamSlot.position, AgentTeamSlot.id)
-                .limit(1)
             )
         ).scalar_one_or_none()
         if leader_slot is None:

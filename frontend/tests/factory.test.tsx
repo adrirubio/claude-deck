@@ -31,10 +31,10 @@ import {
   settle,
   visibility,
 } from "./helpers/factory";
-import work from "./fixtures/factory/v1/work-items.json";
-import detail from "./fixtures/factory/v1/work-item.json";
-import overview from "./fixtures/factory/v1/overview.json";
-import repositories from "./fixtures/factory/v1/repositories.json";
+import work from "./fixtures/factory/v1-p04/work-items.json";
+import detail from "./fixtures/factory/v1-p04/work-item.json";
+import overview from "./fixtures/factory/v1-p04/overview.json";
+import repositories from "./fixtures/factory/v1-p04/repositories.json";
 
 beforeEach(async () => {
   resetFactoryReads();

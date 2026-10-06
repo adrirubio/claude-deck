@@ -71,6 +71,7 @@ export interface AgentTeamPreset {
   created_at: string
   updated_at: string
   autonomy_enabled: boolean
+  leader_slot_id?: number | null
   slots: AgentTeamSlot[]
 }
 
@@ -116,6 +117,7 @@ export interface AgentTeamPresetInput {
   name: string
   description?: string | null
   created_by?: string | null
+  autonomy_enabled?: false
   slots?: AgentTeamSlotInput[]
 }
 
@@ -196,6 +198,7 @@ export interface TeamGithubScopeInput {
   max_verification_retries?: number
   max_auto_merges_per_day?: number
   base_ref?: string
+  github_auth_mode?: 'unknown' | 'ambient' | 'app'
   builds_out_of_tree?: boolean
   build_dir_template?: string
   build_command_hint?: string | null
@@ -215,6 +218,7 @@ export interface TeamGithubScopeUpdate {
   max_verification_retries?: number
   max_auto_merges_per_day?: number
   base_ref?: string
+  github_auth_mode?: 'unknown' | 'ambient' | 'app'
   builds_out_of_tree?: boolean
   build_dir_template?: string
   build_command_hint?: string | null

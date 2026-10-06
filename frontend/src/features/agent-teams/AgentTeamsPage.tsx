@@ -82,6 +82,7 @@ import {
   retryGithubWorkItem,
   reorderAgentTeamSlots,
   updateAgentTeamPreset,
+  updateAgentTeamLeader,
   updateAgentTeamSlot,
   updateTeamGithubContinuationPolicy,
   updateTeamGithubScope,
@@ -505,7 +506,7 @@ function SlotDialog({
               value={form.role ?? ''}
               onChange={(event) => update({ role: event.target.value })}
             />
-            <p className="text-xs text-muted-foreground">Descriptive only. For autonomous dispatch, the first enabled slot in the roster is the Leader. Reorder slots to change it.</p>
+            <p className="text-xs text-muted-foreground">Role text is descriptive. Set the Leader explicitly in the roster. Reordering does not change Leader authority.</p>
           </div>
           <div className="grid gap-2">
             <Label>Color</Label>
@@ -1067,24 +1068,24 @@ export function AgentTeamsPage() {
     memberIds?: number[]
   }) => {
     try {
-      const created = presetDialog === 'from-mail'
-        ? await createAgentTeamFromMail({
+      const created = await withOperatorToken((token) => presetDialog === 'from-mail'
+        ? createAgentTeamFromMail({
           name: input.name,
           description: input.description,
           member_ids: input.memberIds,
           include_offline: input.includeOffline,
-        })
+        }, token)
         : presetDialog === 'from-bridge'
-          ? await createAgentTeamFromBridge({
+          ? createAgentTeamFromBridge({
             name: input.name,
             description: input.description,
-          })
-          : await createAgentTeamPreset({
+          }, token)
+          : createAgentTeamPreset({
             name: input.name,
             description: input.description,
             created_by: 'deck-ui',
             slots: [],
-          })
+          }, token))
       setPresets((current) => [created, ...current])
       setSelectedPresetId(created.id)
       toast.success('Team created')
@@ -1097,9 +1098,9 @@ export function AgentTeamsPage() {
   const duplicatePreset = async () => {
     if (!selectedPreset) return
     try {
-      const created = await duplicateAgentTeamPreset(selectedPreset.id, {
+      const created = await withOperatorToken((token) => duplicateAgentTeamPreset(selectedPreset.id, {
         name: `${selectedPreset.name} copy`,
-      })
+      }, token))
       setPresets((current) => [created, ...current])
       setSelectedPresetId(created.id)
       toast.success('Team duplicated')
@@ -1265,6 +1266,22 @@ export function AgentTeamsPage() {
       toast.success('Slot reordered')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to reorder slots')
+    }
+  }
+
+  const assignLeader = async (slot: AgentTeamSlot) => {
+    if (!selectedPreset || !slot.enabled || selectedPreset.autonomy_enabled) return
+    try {
+      const updated = await withOperatorToken((token) => updateAgentTeamLeader(selectedPreset.id, {
+        leader_slot_id: slot.id,
+        expected_leader_slot_id: selectedPreset.leader_slot_id ?? null,
+        expected_updated_at: selectedPreset.updated_at,
+        reason: 'Operator selected the Leader in the team roster.',
+      }, token))
+      replacePreset(updated)
+      toast.success('Leader assignment saved')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to assign Leader')
     }
   }
 
@@ -1508,7 +1525,7 @@ export function AgentTeamsPage() {
                 )}
                 {selectedPreset.slots.map((slot, index) => {
                   const colorClasses = getTeamSlotColorClasses(slot.ui_color)
-                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.slots)
+                  const isLeader = slot.id === autonomousLeaderSlotId(selectedPreset.leader_slot_id ?? null, selectedPreset.slots)
                   return (
                     <div key={slot.id} className={cn('rounded-lg border p-4', colorClasses.card)}>
                       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -1516,7 +1533,10 @@ export function AgentTeamsPage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="font-semibold">{slot.display_name}</p>
                             <AgentActivityBadge activity={agentActivity.get(slot.id)} />
-                            {isLeader && <Badge variant="outline" title="First enabled slot by roster position; approves plans and takes issues without another owner match.">Leader for autonomous dispatch</Badge>}
+                            {isLeader && <Badge variant="outline" title="This slot has the explicit Leader assignment.">Leader for autonomous dispatch</Badge>}
+                            {!isLeader && slot.enabled && !selectedPreset.autonomy_enabled && (
+                              <Button size="sm" variant="outline" onClick={() => void assignLeader(slot)}>Set Leader</Button>
+                            )}
                             <Badge variant={slot.enabled ? 'outline' : 'secondary'}>
                               {slot.enabled ? 'Enabled' : 'Disabled'}
                             </Badge>

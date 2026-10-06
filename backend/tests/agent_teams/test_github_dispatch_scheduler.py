@@ -46,6 +46,7 @@ async def _scope(db, *, repo_owner="o", repo_name="r", autonomy=True, enabled=Tr
         repo_id=repo_name,
         repo_path=f"/tmp/{repo_name}",
         repo_name=repo_name,
+        role="Leader",
     )
     scope = TeamGithubScope(
         preset_id=preset.id,
@@ -57,6 +58,7 @@ async def _scope(db, *, repo_owner="o", repo_name="r", autonomy=True, enabled=Tr
     )
     db.add_all([slot, scope])
     await db.flush()
+    preset.leader_slot_id = slot.id
     return scope
 
 

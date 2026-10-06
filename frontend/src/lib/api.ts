@@ -24,7 +24,7 @@ export function buildEndpoint(
 
 export interface ApiError {
   message?: string
-  detail?: string | { message?: string; block_code?: string; code?: string; msg?: string } | Array<{ msg?: string }>
+  detail?: string | { message?: string; block_code?: string; code?: string; msg?: string; proven_non_write?: boolean } | Array<{ msg?: string }>
 }
 
 const operatorErrorMessages: Record<string, string> = {
@@ -51,13 +51,15 @@ export class ApiHttpError extends Error {
   readonly status: number
   readonly blockCode?: string
   readonly code?: string
+  readonly provenNonWrite?: boolean
 
-  constructor(message: string, status: number, blockCode?: string, code?: string) {
+  constructor(message: string, status: number, blockCode?: string, code?: string, provenNonWrite?: boolean) {
     super(message)
     this.name = 'ApiHttpError'
     this.status = status
     this.blockCode = blockCode
     this.code = code
+    this.provenNonWrite = provenNonWrite
   }
 }
 
@@ -66,7 +68,8 @@ function httpError(response: Response, body: ApiError): ApiHttpError {
   const blockCode = detail && !Array.isArray(detail) && typeof detail === 'object'
     ? detail.block_code
     : undefined
-  return new ApiHttpError(apiErrorMessage(body), response.status, blockCode, detail && !Array.isArray(detail) && typeof detail === 'object' ? detail.code : undefined)
+  return new ApiHttpError(apiErrorMessage(body), response.status, blockCode, detail && !Array.isArray(detail) && typeof detail === 'object' ? detail.code : undefined,
+    detail && !Array.isArray(detail) && typeof detail === 'object' ? detail.proven_non_write : undefined)
 }
 
 export class ApiClient {
