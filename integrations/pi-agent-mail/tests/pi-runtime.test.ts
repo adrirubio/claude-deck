@@ -19,7 +19,7 @@ test('pinned Pi loader and TypeBox validate every real public schema without sta
     const loaded = await loadExtensions([join(import.meta.dirname, '../extension.ts')], import.meta.dirname)
     assert.deepEqual(loaded.errors, [])
     const definitions = [...loaded.extensions[0].tools.values()].map((tool: { definition: { name: string } }) => tool.definition)
-    assert.equal(definitions.length, 29)
+    assert.deepEqual(definitions.map((tool: { name: string }) => tool.name).sort(), manifest.map(tool => tool.name).sort())
     for (const tool of manifest) Compile(tool.inputSchema as unknown as TSchema)
     const validate = (name: string, args: Record<string, unknown>) => {
       const definition = definitions.find((tool: { name: string }) => tool.name === name)
@@ -27,6 +27,10 @@ test('pinned Pi loader and TypeBox validate every real public schema without sta
     }
     assert.deepEqual(validate('deck_check_inbox', { unread_only: false, limit: 10 }), { unread_only: false, limit: 10 })
     assert.deepEqual(validate('deck_get_backlog_coordination', { scope_id: 1 }), { scope_id: 1 })
+    const followup = { scope_id: 1, work_item_id: 2, action: 'assess', reason: 'next_action_arranged',
+      expected_sequence: 3, followup_token: 'fixture-private-followup' }
+    assert.deepEqual(validate('deck_report_owner_followup', followup), followup)
+    assert.throws(() => validate('deck_report_owner_followup', { scope_id: 1 }))
     assert.deepEqual(validate('deck_get_operator_action_contexts', { preset_id: 1 }), { preset_id: 1 })
     assert.deepEqual(validate('deck_prepare_operator_action_contexts', { scope_id: 1, entries: [] }), { scope_id: 1, entries: [] })
     assert.throws(() => validate('deck_prepare_operator_action_contexts', { entries: [] }))
