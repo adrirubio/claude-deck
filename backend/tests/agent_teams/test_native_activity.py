@@ -389,6 +389,41 @@ def test_codex_settlement_cursor_contains_no_reply_or_tool_data(native):
     assert "Private fixture reply" not in json.dumps(metadata)
 
 
+def test_stale_codex_turn_retains_private_identity_without_activity_or_settlement(native):
+    session_id = str(uuid4())
+    native["log"].write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": session_id, "cwd": str(native["cwd"])}}) + "\n" + json.dumps({
+        "type": "event_msg", "payload": {"type": "task_started"},
+        "timestamp": (native["now"] - timedelta(seconds=181)).isoformat()}) + "\n")
+    metadata = {}
+    result = activity._native_state(native["log"], session_id, str(native["cwd"]),
+        native["now"], native["now"] - timedelta(seconds=300), provenance=metadata)
+    assert result[:2] == ("unknown", "native_event_stale")
+    assert metadata["session_id"] == session_id and len(metadata["event_id"]) == 64
+    assert "event_source" not in metadata and "current_settlement_id" not in metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("state", "reason", "source"), [
+    ("working", "native_turn_started", "agent_start"),
+    ("idle", "native_turn_completed", "agent_settled"),
+])
+async def test_stale_pi_event_retains_private_identity_without_settlement(native, monkeypatch, state, reason, source):
+    from unittest.mock import AsyncMock
+    event_id = str(uuid4())
+    native["value"].update(state=state, reason=reason, event_id=event_id, event_source=source,
+        observed_at=(native["now"] - timedelta(seconds=181)).isoformat())
+    native["write"]()
+    monkeypatch.setattr(activity, "_process_started_at", lambda _: native["now"] - timedelta(seconds=300))
+    entries = [(2, "pi-cli", None, [activity.ActivityBinding(native["pane_pid"], native["pane_start"],
+        str(native["cwd"]), native["native_pid"], native["now"] - timedelta(seconds=250))], False)]
+    monkeypatch.setattr(activity, "_team_inputs", AsyncMock(return_value=entries))
+    private = (await activity.observe_private_team(None, 1))[2]
+    assert private.identity and private.cursor == event_id
+    assert (private.state, private.reason) == ("unknown", "native_event_stale")
+    assert private.settlement_id is None and private.current_settlement_id is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("attestation", ["fresh", "expired", "future", "before_event", "heartbeat"])
 async def test_sdk_idle_attestation_keeps_old_debt_current_without_creating_new_event(native, monkeypatch, attestation):

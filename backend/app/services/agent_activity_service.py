@@ -186,15 +186,17 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
             continue  # progress alone never starts an inferred turn
         observed_at = timestamp
         cursor = hashlib.sha256(f"{session_id}:{timestamp.isoformat()}:{event}".encode()).hexdigest()
-    if state == "working" and observed_at and (
-        now - observed_at
-    ).total_seconds() > _WORK_FRESHNESS_SECONDS:
-        return "unknown", "native_event_stale", observed_at
     if provenance is not None:
+        # A validated native lifetime can remain current while activity expires.
+        # This supplies identity, never a working or idle assertion.
         provenance.update(session_id=session_id, event_id=cursor)
         if state == "idle" and reason == "native_turn_completed" and observed_at:
             provenance.update(event_source="task_complete", event_id=hashlib.sha256(
                 f"{session_id}:{observed_at.isoformat()}:task_complete".encode()).hexdigest())
+    if state == "working" and observed_at and (
+        now - observed_at
+    ).total_seconds() > _WORK_FRESHNESS_SECONDS:
+        return "unknown", "native_event_stale", observed_at
     return state, reason, observed_at
 
 
