@@ -687,6 +687,26 @@ class GithubWorkspaceService:
                 or workspace_row.lease_token != lease_token
             ):
                 await db.rollback()
+                # A08: the refused release is recorded as rejected in a fresh
+                # observation transaction. Observation failure never masks
+                # the refusal.
+                try:
+                    from app.services import factory_audit_service as _audit
+                    await _audit.record_event(
+                        db,
+                        event_kind="workspace_release",
+                        source="github_workspace_service._release_acquisition",
+                        occurred_at=datetime.utcnow(),
+                        actor=_audit.derive_actor(actor_kind="operator"),
+                        scope_id=scope_id,
+                        item_id=item_id,
+                        action_outcome="rejected",
+                        sanitized_reason="lease identity mismatch",
+                        correlation_id=f"workspace-release:{workspace_id}:{item_id}",
+                    )
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
                 return False
             await db.commit()
             snapshot = None
@@ -746,6 +766,22 @@ class GithubWorkspaceService:
                 )
                 if snapshot is not None:
                     await self.remove_managed_worktree_config(config_workspace)
+                # A06/A08: the release event commits in the same transaction
+                # as the release itself. An audit-write failure rolls back
+                # the release.
+                from app.services import factory_audit_service as _audit
+                await _audit.record_event(
+                    db,
+                    event_kind="workspace_release",
+                    source="github_workspace_service._release_acquisition",
+                    occurred_at=datetime.utcnow(),
+                    actor=_audit.derive_actor(actor_kind="operator"),
+                    scope_id=scope_id,
+                    item_id=item_id,
+                    action_outcome="applied",
+                    sanitized_reason="workspace release applied",
+                    correlation_id=f"workspace-release:{workspace_id}:{item_id}",
+                )
                 await db.commit()
                 return True
             except BaseException as exc:
