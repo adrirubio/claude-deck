@@ -336,7 +336,8 @@ async def test_a07_missing_events_never_block_or_trigger(db):
     """A07: absent events cannot approve, retry, replay, change budgets or
     release a workspace; a mutation with zero ledger rows proceeds normally."""
     actor = audit.derive_actor(actor_kind="operator")
-    existing = await audit.find_by_operation(db, "op-missing", "policy_change")
+    existing = await audit.find_by_operation(
+        db, audit.replay_key_for("op-missing", "policy_change"))
     assert existing is None
     event = await audit.record_event(
         db, event_kind="policy_change", source="test", occurred_at=_now(),
@@ -725,3 +726,83 @@ async def test_c06_event_site_identity_and_provider_snapshots(db):
         "SELECT COUNT(*) FROM factory_audit_events WHERE scope_context_key = :key"),
         {"key": event.scope_context_key})).scalar_one()
     assert rows == 1
+
+
+async def test_c07_replay_identity_covers_actions_resources_and_races(db):
+    """C07: repeated accepted cancellations record one action fact with
+    unchanged authority; cross-resource IDs never collide; conflicting
+    payloads never overwrite; concurrent duplicates are race-safe."""
+    import asyncio as _asyncio
+
+    actor = audit.derive_actor(actor_kind="operator")
+    await _seed_item(db, 1)
+    await _seed_item(db, 2)
+    await db.commit()
+
+    # Repeat an actual accepted cancellation: one action fact only.
+    for _repeat in range(3):
+        await audit.record_event(
+            db, event_kind="recovery_cancellation", source="test", occurred_at=_now(),
+            actor=actor, item_id=1, revision_id=None, request_id=None,
+            action_outcome="applied", sanitized_reason="active continuation cancelled",
+            operation_id="recovery-cancellation:1:None")
+    await db.commit()
+    facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events"
+        " WHERE event_kind = 'recovery_cancellation' AND item_id = 1"))).scalar_one()
+    assert facts == 1
+
+    # Different resources with the same supplied operation id: no collision.
+    first = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, item_id=1, action_outcome="applied",
+        operation_id="shared-op", after_values={"enabled": True})
+    second = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, item_id=2, action_outcome="applied",
+        operation_id="shared-op", after_values={"enabled": False})
+    await db.commit()
+    assert first.id != second.id
+    assert first.replay_key != second.replay_key
+
+    # Conflicting payloads with the same operation id and resource: the
+    # first accepted fact wins; the second never overwrites it.
+    conflicting = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, item_id=1, action_outcome="rejected",
+        operation_id="shared-op", after_values={"enabled": False})
+    await db.commit()
+    assert conflicting.id == first.id
+    assert conflicting.action_outcome == "applied"
+    assert conflicting.after_values == {"enabled": True}
+
+    # Concurrent same-resource duplicates: the unique replay key makes the
+    # race safe. Each concurrent producer resolves to the same single fact.
+    maker = async_sessionmaker(db.info["async_engine"], expire_on_commit=False)
+
+    async def attempt():
+        async with maker() as race_db:
+            try:
+                return await audit.record_event(
+                    race_db, event_kind="work_lifecycle", source="test",
+                    occurred_at=_now(), actor=actor, item_id=1,
+                    action_outcome="applied", operation_id="race-op",
+                    after_values={"dispatch_status": "dispatched"})
+            except Exception:
+                await race_db.rollback()
+                return await audit.record_event(
+                    race_db, event_kind="work_lifecycle", source="test",
+                    occurred_at=_now(), actor=actor, item_id=1,
+                    action_outcome="applied", operation_id="race-op",
+                    after_values={"dispatch_status": "dispatched"})
+            finally:
+                await race_db.commit()
+
+    results = await _asyncio.gather(attempt(), attempt())
+    await db.commit()
+    race_facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events"
+        " WHERE operation_id = 'race-op'"))).scalar_one()
+    assert race_facts == 1
+    assert all(isinstance(result, audit.FactoryAuditEvent) for result in results)
+    assert results[0].id == results[1].id

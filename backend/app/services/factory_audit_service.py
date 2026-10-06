@@ -120,14 +120,34 @@ async def context_key_for(db: AsyncSession, key_kind: str, numeric_id: int) -> s
     return key
 
 
+def replay_key_for(
+    operation_id: str,
+    event_kind: str,
+    *,
+    team_preset_id: int | None = None,
+    team_slot_id: int | None = None,
+    scope_id: int | None = None,
+    item_id: int | None = None,
+    revision_id: int | None = None,
+    request_id: int | None = None,
+) -> str:
+    """C07: one replay identity per action and exact resource.
+
+    The same supplied operation id used for different resources produces
+    distinct replay keys; cross-resource collisions are impossible.
+    """
+    resource = "|".join(str(value) for value in (
+        team_preset_id, team_slot_id, scope_id, item_id, revision_id, request_id))
+    return f"{operation_id}|{event_kind}|{resource}"
+
+
 async def find_by_operation(
-    db: AsyncSession, operation_id: str, event_kind: str
+    db: AsyncSession, replay_key: str
 ) -> FactoryAuditEvent | None:
-    """Replay protection: one accepted action or terminal event per operation."""
+    """Replay protection: one accepted action or terminal event per identity."""
     return (await db.scalars(
         select(FactoryAuditEvent).where(
-            FactoryAuditEvent.operation_id == operation_id,
-            FactoryAuditEvent.event_kind == event_kind,
+            FactoryAuditEvent.replay_key == replay_key,
         ).limit(1)
     )).first()
 
@@ -169,8 +189,13 @@ async def record_event(
     only when an explicit operation id is supplied; legacy callers keep their
     existing guards and are never blocked by missing ledger state.
     """
+    replay_key = None
     if operation_id:
-        existing = await find_by_operation(db, operation_id, event_kind)
+        replay_key = replay_key_for(
+            operation_id, event_kind, team_preset_id=team_preset_id,
+            team_slot_id=team_slot_id, scope_id=scope_id, item_id=item_id,
+            revision_id=revision_id, request_id=request_id)
+        existing = await find_by_operation(db, replay_key)
         if existing is not None:
             return existing
     # C05: every event site allocates immutable context keys for any live
@@ -204,6 +229,7 @@ async def record_event(
         context_snapshot=context_snapshot,
         correlation_id=correlation_id,
         operation_id=operation_id,
+        replay_key=replay_key,
         sanitized_reason=sanitize_reason(sanitized_reason),
         before_values=allowlist_values(before_values),
         after_values=allowlist_values(after_values),
@@ -213,7 +239,15 @@ async def record_event(
         human_review_evidence=human_review_evidence,
     )
     db.add(event)
-    await db.flush()
+    try:
+        await db.flush()
+    except Exception:
+        await db.rollback()
+        if replay_key is not None:
+            existing = await find_by_operation(db, replay_key)
+            if existing is not None:
+                return existing
+        raise
     return event
 
 

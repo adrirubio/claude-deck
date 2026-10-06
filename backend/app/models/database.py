@@ -873,6 +873,9 @@ class FactoryAuditEvent(Base):
 
     correlation_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     operation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # C07: race-safe replay identity bound to the action and the exact
+    # resource. A supplied operation id never collides across resources.
+    replay_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     sanitized_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     before_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     after_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)

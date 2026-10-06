@@ -115,6 +115,7 @@ async def _observe_recovery_cancellation(db, *, item_id: int | None, revision_id
             request_id=request_id,
             action_outcome=outcome,
             sanitized_reason=reason,
+            operation_id=f"recovery-cancellation:{item_id}:{revision_id}",
             correlation_id=f"recovery-cancellation:{item_id}:{revision_id}:{reason}",
         )
         await db.commit()
