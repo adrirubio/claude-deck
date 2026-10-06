@@ -98,6 +98,30 @@ from app.services.github_initial_approval_recovery import cancel_stranded_initia
 from app.services.github_dispatch_service import ResumeAttemptError, github_dispatch_service
 
 
+async def _observe_recovery_cancellation(db, *, item_id: int | None, revision_id: int | None, request_id: int | None, outcome: str, reason: str) -> None:
+    """Record a recovery cancellation outcome in a fresh observation
+    transaction. Observation failure never masks the cancellation result.
+    """
+    try:
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="recovery_cancellation",
+            source="agent_teams.cancel_active_github_work_item_scope_revision",
+            occurred_at=datetime.now(timezone.utc),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            item_id=item_id,
+            revision_id=revision_id,
+            request_id=request_id,
+            action_outcome=outcome,
+            sanitized_reason=reason,
+            correlation_id=f"recovery-cancellation:{item_id}:{revision_id}:{reason}",
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+
 async def _observe_resume_rejection(db, item_id: int | None, code: str) -> None:
     """Record a rejected resume outcome in a fresh observation transaction.
 
@@ -1449,6 +1473,9 @@ async def cancel_active_github_work_item_scope_revision(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except MailDeliveryIntegrityError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    await _observe_recovery_cancellation(
+        db, item_id=item.id, revision_id=None, request_id=None,
+        outcome="applied", reason="active continuation cancelled")
     return await _reload_work_item_response(db, item.id)
 
 

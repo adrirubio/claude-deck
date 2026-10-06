@@ -197,3 +197,57 @@ async def record_event(
     db.add(event)
     await db.flush()
     return event
+
+
+async def record_observed_snapshot(
+    db: AsyncSession,
+    *,
+    event_kind: str,
+    source: str,
+    observed_at: datetime,
+    actor: dict[str, Any],
+    fact_source: str | None = None,
+    fact_time: datetime | None = None,
+    team_preset_id: int | None = None,
+    scope_id: int | None = None,
+    item_id: int | None = None,
+    context_snapshot: dict[str, Any] | None = None,
+    correlation_id: str | None = None,
+    after_values: dict[str, Any] | None = None,
+) -> FactoryAuditEvent:
+    """A13/A14: record imported current state as an observed snapshot.
+
+    The import observation time is the event occurrence time. A reliable
+    external fact keeps its own source and fact time distinct from the
+    import time. Unknown historical times remain unavailable and are never
+    inferred from generic row timestamps.
+    """
+    return await record_event(
+        db,
+        event_kind=event_kind,
+        source=source,
+        occurred_at=observed_at,
+        actor=actor,
+        record_kind="observed_snapshot",
+        fact_source=fact_source,
+        fact_time=fact_time,
+        team_preset_id=team_preset_id,
+        scope_id=scope_id,
+        item_id=item_id,
+        context_snapshot=context_snapshot,
+        correlation_id=correlation_id,
+        after_values=after_values,
+        action_outcome="applied",
+    )
+
+
+async def instrumentation_start(db: AsyncSession) -> datetime | None:
+    """Earliest recorded_at in the ledger: the instrumentation start marker.
+
+    Reads expose this as the coverage start. Events before it do not exist;
+    missing intervals stay unavailable rather than reconstructed.
+    """
+    from sqlalchemy import func
+    return (await db.execute(
+        select(func.min(FactoryAuditEvent.recorded_at))
+    )).scalar_one_or_none()
