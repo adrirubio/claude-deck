@@ -29,8 +29,34 @@ from app.utils.repo_utils import derive_repo_identity
 
 
 @pytest.fixture
-def svc():
+def svc(monkeypatch):
+    # These fixture PIDs have no host process. Unknown observation retains a
+    # binding; individual native-liveness cases supply their own observations.
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.peer_process.process_is_confirmed_dead",
+        lambda _pid: False,
+    )
     return AgentMailService()
+
+
+def _assert_authorized_work_continuation(prompt):
+    for instruction in (
+        "deck_check_inbox(unread_only=False)",
+        "Read task and review messages",
+        "answer pending context requests and handoffs",
+        "continue your current unfinished authorized task",
+        "An empty inbox does not mean the assignment is complete",
+        "Check the current assignment before you declare idle",
+        "Respect the factory pause, HOLD, ownership, approval, and review gates",
+        "If blocked, report the specific blocker to your Leader",
+        "If no authorized work remains, report idle",
+        "This wake grants no new authority",
+    ):
+        assert instruction in prompt
+
+
+def test_generic_wake_requires_authorized_work_continuation():
+    _assert_authorized_work_continuation(INBOX_CHECK_PROMPT)
 
 
 def _register(cwd, session_key="cc:s1", source="hook", provider="claude-code", pid=None):
@@ -922,7 +948,13 @@ async def test_observed_unsupported_provider_session_cannot_be_nudged(db, svc, t
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider", "display_name"),
-    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+    [
+        ("codex-cli", "Codex"),
+        ("claude-code", "Claude Code"),
+        ("copilot-cli", "GitHub Copilot"),
+        ("opencode-cli", "OpenCode"),
+        ("pi-cli", "Pi"),
+    ],
 )
 async def test_queue_inbox_check_sends_prompt_to_tmux_observed_agent(
     db,
@@ -969,6 +1001,7 @@ async def test_queue_inbox_check_sends_prompt_to_tmux_observed_agent(
 
     assert result["target"] == "w:0.1"
     assert result["prompt"] == INBOX_CHECK_PROMPT
+    _assert_authorized_work_continuation(result["prompt"])
     assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT]
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "%7", "Enter"]
     assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
@@ -1333,6 +1366,87 @@ async def test_duplicate_mcp_bindings_for_one_pane_refuse_wake_and_opt_in(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["pi-cli", "codex-cli"])
+async def test_dead_auxiliary_native_bindings_do_not_block_owner_wake(
+    db, svc, tmp_path, monkeypatch, provider
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{"provider": provider, "tmux_target": "w:0.1", "pane_id": "%41",
+                 "cwd": str(cwd), "pid": "4241", "status": "active"}]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    owner = (await db.execute(select(MailAgentSession).where(
+        MailAgentSession.source == "mcp"))).scalar_one()
+    owner.pid = 4241
+    auxiliary = MailAgentSession(
+        member_id=member.id, source="mcp", provider=provider,
+        session_key="mcp:dead-auxiliary", cwd=str(cwd / "other"), pid=4242,
+        team_preset_id=owner.team_preset_id, team_slot_id=owner.team_slot_id,
+        capability_token_hash=svc.hash_capability_token("auxiliary-token"),
+        bound_pane_pid=owner.bound_pane_pid,
+        bound_pane_proc_start=owner.bound_pane_proc_start,
+        wake_enabled=True, mailbox_status="connected", last_seen_at=datetime.utcnow(),
+    )
+    db.add(auxiliary)
+    await db.commit()
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.peer_process.process_is_confirmed_dead",
+        lambda pid: pid == 4242,
+    )
+    target = await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+    assert target.pane_id == "%41"
+    assert [s.id for s in await svc.nudgeable_sessions_for_slot(db, owner.team_slot_id)] == [target.id]
+    await svc.set_wake_enabled(
+        db, owner.id, True, actor_type="operator", reason_code="manual_opt_in"
+    )
+    await db.refresh(auxiliary)
+    assert auxiliary.closed_at is None and auxiliary.mailbox_status == "connected"
+    assert auxiliary.wake_enabled is True
+    with pytest.raises(MailWakeError, match="wake_target_unbound"):
+        await svc.set_wake_enabled(
+            db, auxiliary.id, True, actor_type="operator", reason_code="manual_opt_in"
+        )
+    await svc.set_wake_enabled(
+        db, owner.id, False, actor_type="operator", reason_code="manual_opt_out"
+    )
+    with pytest.raises(MailWakeError, match="wake_opted_out"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auxiliary_pid", [None, 4242])
+async def test_unknown_or_live_native_binding_preserves_ambiguity(
+    db, svc, tmp_path, monkeypatch, auxiliary_pid
+):
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    observed = [{"provider": "pi-cli", "tmux_target": "w:0.1", "pane_id": "%41",
+                 "cwd": str(cwd), "pid": "4241", "status": "active"}]
+    monkeypatch.setattr(
+        "app.services.agent_mail_service.discover_agent_sessions", lambda: observed
+    )
+    member = await _bound_wake_slot(db, svc, cwd, observed, monkeypatch)
+    owner = (await db.execute(select(MailAgentSession).where(
+        MailAgentSession.source == "mcp"))).scalar_one()
+    db.add(MailAgentSession(
+        member_id=member.id, source="mcp", provider="pi-cli",
+        session_key="mcp:uncertain-auxiliary", cwd=str(cwd), pid=auxiliary_pid,
+        team_preset_id=owner.team_preset_id, team_slot_id=owner.team_slot_id,
+        capability_token_hash=svc.hash_capability_token("auxiliary-token"),
+        bound_pane_pid=owner.bound_pane_pid,
+        bound_pane_proc_start=owner.bound_pane_proc_start,
+        wake_enabled=False, mailbox_status="connected", last_seen_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    with pytest.raises(MailWakeError, match="wake_target_ambiguous"):
+        await svc._nudge_session_for_member(db, member.id, datetime.utcnow())
+    assert await svc.nudgeable_sessions_for_slot(db, owner.team_slot_id) == []
+
+
+@pytest.mark.asyncio
 async def test_opt_out_suppresses_manual_and_automatic_team_wakes(
     db, svc, tmp_path, monkeypatch
 ):
@@ -1369,8 +1483,17 @@ async def test_opt_out_suppresses_manual_and_automatic_team_wakes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "nudge_prompt", [None, "Resume the approved continuation after its owner ACK."]
+)
+@pytest.mark.parametrize(
     ("provider", "display_name"),
-    [("codex-cli", "Codex"), ("claude-code", "Claude Code")],
+    [
+        ("codex-cli", "Codex"),
+        ("claude-code", "Claude Code"),
+        ("copilot-cli", "GitHub Copilot"),
+        ("opencode-cli", "OpenCode"),
+        ("pi-cli", "Pi"),
+    ],
 )
 async def test_send_message_auto_nudges_tmux_observed_recipient(
     db,
@@ -1379,6 +1502,7 @@ async def test_send_message_auto_nudges_tmux_observed_recipient(
     monkeypatch,
     provider,
     display_name,
+    nudge_prompt,
 ):
     cwd = tmp_path / "obs"
     cwd.mkdir()
@@ -1421,6 +1545,7 @@ async def test_send_message_auto_nudges_tmux_observed_recipient(
     await db.refresh(sender)
     calls.clear()
 
+    prompt_options = {} if nudge_prompt is None else {"nudge_prompt": nudge_prompt}
     await svc.send_message(
         db,
         MailMessageCreate(
@@ -1428,10 +1553,14 @@ async def test_send_message_auto_nudges_tmux_observed_recipient(
             recipient_member_id=recipient.id,
             body_markdown="please check this",
         ),
+        **prompt_options,
     )
 
     tmux_calls = [call for call in calls if call[0][1] == "send-keys"]
-    assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "%7", "-l", INBOX_CHECK_PROMPT]
+    expected_prompt = INBOX_CHECK_PROMPT if nudge_prompt is None else nudge_prompt
+    assert tmux_calls[0][0] == ["tmux", "send-keys", "-t", "%7", "-l", expected_prompt]
+    if nudge_prompt is None:
+        _assert_authorized_work_continuation(tmux_calls[0][0][-1])
     assert tmux_calls[1][0] == ["tmux", "send-keys", "-t", "%7", "Enter"]
     assert sleep_calls == [TMUX_ENTER_DELAY_SECONDS]
 

@@ -1,12 +1,13 @@
 """Read bounded native activity observations; never infer work from a live PID.
 
-Only authenticated, current pane bindings and explicit Codex resume UUIDs are
-supported. Missing permissions, ambiguous bindings and other harnesses return
+Use authenticated current pane bindings, explicit Codex resume UUIDs, or Pi's
+native extension observations. Missing permissions and ambiguous bindings return
 unknown. No transcripts, paths, session IDs or credentials leave this module.
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import pwd
@@ -15,6 +16,7 @@ import stat
 import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -25,11 +27,21 @@ from app.models.database import (
     AgentPaneBinding, AgentTeamSlot, MailAgentSession, MailPaneLifecycle, MailTeamMember,
 )
 from app.models.schemas import AgentActivityObservation, AgentTeamActivityResponse
+from app.services.pi_activity_service import observe_pi
 
 _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
 _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
+
+
+@dataclass(frozen=True)
+class ActivityBinding:
+    pane_pid: int
+    pane_start: str
+    cwd: str
+    native_pid: int | None = None
+    registered_at: datetime | None = None
 
 
 def _canonical_session_id(value: object) -> str | None:
@@ -128,7 +140,8 @@ def _process_started_at(start: str) -> datetime:
         seconds=1 / ticks_per_second)
 
 
-def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_at: datetime
+def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_at: datetime,
+                  *, provenance: dict | None = None
                   ) -> tuple[str, str, datetime | None]:
     with path.open("rb") as stream:
         metadata = json.loads(stream.readline(65_536))
@@ -146,7 +159,7 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
     lines = tail.splitlines()
     if offset:
         lines = lines[1:]  # first line can be a partial JSON record
-    state, reason, observed_at = "unknown", "no_native_event", None
+    state, reason, observed_at, cursor = "unknown", "no_native_event", None, None
     for line in lines:
         record = json.loads(line)
         if record.get("type") != "event_msg":
@@ -172,6 +185,14 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
         elif state != "working":
             continue  # progress alone never starts an inferred turn
         observed_at = timestamp
+        cursor = hashlib.sha256(f"{session_id}:{timestamp.isoformat()}:{event}".encode()).hexdigest()
+    if provenance is not None:
+        # A validated native lifetime can remain current while activity expires.
+        # This supplies identity, never a working or idle assertion.
+        provenance.update(session_id=session_id, event_id=cursor)
+        if state == "idle" and reason == "native_turn_completed" and observed_at:
+            provenance.update(event_source="task_complete", event_id=hashlib.sha256(
+                f"{session_id}:{observed_at.isoformat()}:task_complete".encode()).hexdigest())
     if state == "working" and observed_at and (
         now - observed_at
     ).total_seconds() > _WORK_FRESHNESS_SECONDS:
@@ -180,29 +201,60 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
 
 
 def _observe(slot_id: int, provider: str, session_id: str | None,
-             candidates: list[tuple[int, str, str]], duplicate_identity: bool, now: datetime
+             candidates: list[ActivityBinding], duplicate_identity: bool, now: datetime,
+             *, provenance: dict | None = None,
              ) -> AgentActivityObservation:
     def result(state: str, reason: str, observed_at: datetime | None = None):
         return AgentActivityObservation(slot_id=slot_id, state=state, reason=reason,
                                         observed_at=observed_at)
 
     try:
-        live = []
-        for pid, start, cwd in candidates:
+        live = {}
+        for binding in candidates:
+            pid, start, cwd = binding.pane_pid, binding.pane_start, binding.cwd
             try:
                 process_state, current_start = _process(pid)
             except FileNotFoundError:
                 continue
             if current_start == start:
-                live.append((pid, start, cwd, process_state))
+                native_pid, native_start = None, None
+                if provider == "pi-cli":
+                    if not binding.native_pid or binding.registered_at is None:
+                        return result("unknown", "native_identity_unavailable")
+                    try:
+                        _, native_start = _process(binding.native_pid)
+                    except FileNotFoundError:
+                        continue  # a dead auxiliary shim is not another live owner
+                    registered_at = binding.registered_at
+                    if registered_at.tzinfo is None:
+                        registered_at = registered_at.replace(tzinfo=timezone.utc)
+                    if (_process_started_at(native_start) > registered_at
+                            or registered_at > now + timedelta(seconds=5)):
+                        continue  # this PID did not exist at its authenticated registration
+                    native_pid = binding.native_pid
+                # Repeated authenticated rows for one exact native process do
+                # not create another worker. Different live identities do.
+                live[(pid, start, cwd, native_pid, native_start)] = process_state
         if not live:
             return result("stopped" if candidates else "unknown",
                           "process_ended" if candidates else "no_current_binding")
         if len(live) != 1:
             return result("unknown", "ambiguous_binding")
-        pid, start, cwd, process_state = live[0]
+        (pid, start, cwd, native_pid, native_start), process_state = next(iter(live.items()))
         if process_state in _STOPPED_STATES:
             return result("stopped", "process_stopped")
+        if provider == "pi-cli":
+            options = {"provenance": provenance} if provenance is not None else {}
+            state, reason, observed_at = observe_pi(
+                pid, start, cwd, now, _process_started_at(start), native_pid, native_start, **options)
+            process_state, current_start = _process(pid)
+            if current_start != start:
+                return result("unknown", "binding_changed")
+            if process_state in _STOPPED_STATES:
+                return result("stopped", "process_stopped")
+            if provenance is not None and provenance.get("session_id"):
+                provenance.update(pane_pid=pid, pane_start=start, provider=provider)
+            return result(state, reason, observed_at)
         if provider != "codex-cli":
             return result("unknown", "provider_unsupported")
         if duplicate_identity:
@@ -218,12 +270,15 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         path = _process_rollout_path(pid, home, session_id) or _rollout_path(home, session_id, cwd)
         if path is None:
             return result("unknown", "native_log_unavailable")
-        state, reason, observed_at = _native_state(path, session_id, cwd, now, _process_started_at(start))
+        options = {"provenance": provenance} if provenance is not None else {}
+        state, reason, observed_at = _native_state(path, session_id, cwd, now, _process_started_at(start), **options)
         process_state, current_start = _process(pid)
         if current_start != start:
             return result("unknown", "binding_changed")
         if process_state in _STOPPED_STATES:
             return result("stopped", "process_stopped")
+        if provenance is not None and provenance.get("session_id"):
+            provenance.update(pane_pid=pid, pane_start=start, provider=provider)
         return result(state, reason, observed_at)
     except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, RuntimeError):
         return result("unknown", "observation_unavailable")
@@ -262,14 +317,18 @@ async def _team_inputs(db: AsyncSession, preset_id: int):
             MailAgentSession.mailbox_status == "connected",
             MailAgentSession.capability_token_hash.is_not(None),
             MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))).all()
-    bindings: dict[int, set[tuple[int, str, str, str]]] = {}
+    bindings: dict[int, set[tuple[str, ActivityBinding]]] = {}
     for binding, session in rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
-            bindings.setdefault(binding.slot_id, set()).add((
-                binding.pane_pid, binding.pane_proc_start, session.provider, session.cwd))
+            bindings.setdefault(binding.slot_id, set()).add((session.provider, ActivityBinding(
+                binding.pane_pid, binding.pane_proc_start, session.cwd,
+                session.pid if session.provider == "pi-cli" else None,
+                session.created_at if session.provider == "pi-cli" else None)))
     return [(slot.id, slot.provider, (slot.launch_options or {}).get("session_id"),
-               sorted((pid, start, cwd) for pid, start, provider, cwd in
-                bindings.get(slot.id, set()) if provider == slot.provider),
+               sorted((binding for provider, binding in bindings.get(slot.id, set())
+                       if provider == slot.provider), key=lambda x: (
+                           x.pane_pid, x.pane_start, x.cwd, x.native_pid or 0,
+                           str(x.registered_at))),
                native_identity_counts.get(_canonical_session_id((slot.launch_options or {}).get("session_id")) or "", 0) > 1)
             for slot in slots]
 
@@ -288,3 +347,48 @@ async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityRes
             observation.observed_at = None
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)
+
+
+@dataclass(frozen=True)
+class PrivateActivity:
+    """Scheduler evidence. Never serialize this object through a public API."""
+
+    state: str
+    reason: str
+    observed_at: datetime | None
+    identity: str | None
+    settlement_id: str | None
+    cursor: str | None = None
+    current_settlement_id: str | None = None
+
+
+async def observe_private_team(db: AsyncSession, preset_id: int) -> dict[int, PrivateActivity]:
+    inputs = await _team_inputs(db, preset_id)
+    now = datetime.now(timezone.utc)
+
+    def observations():
+        values = {}
+        for entry in inputs:
+            metadata = {}
+            observed = _observe(*entry, now, provenance=metadata)
+            identity = None
+            if metadata.get("session_id") and metadata.get("pane_pid"):
+                identity = hashlib.sha256(json.dumps({key: metadata.get(key) for key in (
+                    "provider", "session_id", "pane_pid", "pane_start", "native_pid", "native_start",
+                )}, sort_keys=True).encode()).hexdigest()
+            settled = (observed.state == "idle" and observed.reason == "native_turn_completed"
+                       and metadata.get("event_source") in {"agent_settled", "task_complete"}
+                       and observed.observed_at is not None
+                       and 0 <= (now - observed.observed_at).total_seconds() <= _WORK_FRESHNESS_SECONDS)
+            values[entry[0]] = PrivateActivity(observed.state, observed.reason, observed.observed_at,
+                                               identity, metadata.get("event_id") if settled else None,
+                                               metadata.get("event_id"),
+                                               metadata.get("current_settlement_id") if observed.state == "idle" else None)
+        return values
+
+    values = await asyncio.to_thread(observations)
+    current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
+    for entry in inputs:
+        if current.get(entry[0]) != entry:
+            values[entry[0]] = PrivateActivity("unknown", "binding_changed", None, None, None)
+    return values

@@ -26,6 +26,18 @@ def test_backlog_assessment_forwards_optional_private_snapshot_token(monkeypatch
     assert posted[1][2]["json"]["snapshot_token"] is None
 
 
+def test_owner_followup_forwards_explicit_event_and_private_challenge(monkeypatch):
+    import mcp_shim.agent_mail_server as shim
+    posted = []
+    monkeypatch.setattr(shim, "_ensure_registered", lambda: {"ok": True})
+    monkeypatch.setattr(shim, "_dispatch_request", lambda method, path, **kwargs: posted.append(
+        (method, path, kwargs)) or {"ok": True})
+    shim.deck_report_owner_followup(1, 2, "assess", "next_action_arranged", 3, "fixture-private-followup")
+    assert posted == [("POST", "/github-scopes/1/owner-followups", {"json": {
+        "work_item_id": 2, "action": "assess", "reason": "next_action_arranged",
+        "expected_sequence": 3, "followup_token": "fixture-private-followup"}})]
+
+
 def test_ensure_registered_refreshes_cached_member(monkeypatch):
     import mcp_shim.agent_mail_server as shim
 
