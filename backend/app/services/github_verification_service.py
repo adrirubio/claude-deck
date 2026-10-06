@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 
 import httpx
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import exists, func, inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -1038,24 +1038,32 @@ class GithubVerificationService:
         recovery_only_attempt: GithubRecoveryOnlyAttempt | None,
     ) -> None:
         """Observe at most eight preserved PRs without granting recovery authority."""
-        # Existing diagnostic conflict paths can roll back and expire this row.
-        await db.refresh(scope)
+        # Callers can retain a detached scope across polling sessions. Rollback
+        # can also expire its attributes. Read identity without loading fields.
+        identity = inspect(scope).identity
+        if identity is None:
+            return
+        scope_id = identity[0]
+        scope = await db.get(TeamGithubScope, scope_id, populate_existing=True)
+        if scope is None:
+            return
         query = select(GithubWorkItem.id).where(
-            GithubWorkItem.scope_id == scope.id,
+            GithubWorkItem.scope_id == scope_id,
             GithubWorkItem.dispatch_status == "escalated",
             GithubWorkItem.pr_number.is_not(None),
             *(recovery_only_attempt.item_filters() if recovery_only_attempt else ()),
         ).order_by(GithubWorkItem.id).limit(8)
-        cursor = self._escalated_merge_cursors.get(scope.id, 0)
+        cursor = self._escalated_merge_cursors.get(scope_id, 0)
         items = (await db.execute(query.where(GithubWorkItem.id > cursor))).scalars().all()
         if not items and cursor:
             items = (await db.execute(query)).scalars().all()
-        scope_id = scope.id
         for item_id in items:
             self._escalated_merge_cursors[scope_id] = item_id
             try:
                 # A prior claim/notification can roll back and expire all rows.
-                await db.refresh(scope)
+                scope = await db.get(TeamGithubScope, scope_id, populate_existing=True)
+                if scope is None:
+                    return
                 item = await db.get(GithubWorkItem, item_id, populate_existing=True)
                 if (
                     item is None or item.scope_id != scope_id or item.pr_number is None
