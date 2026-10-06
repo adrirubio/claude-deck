@@ -171,6 +171,19 @@ class GithubWatcherService:
     async def _complete_and_notify(
         self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
     ) -> None:
+        # A28-A35: the terminal transition records its sourced outcome fact.
+        # A resolved PR on the closed issue is merge evidence (delivered).
+        # A closure without any PR remains unknown: terminal tracking alone
+        # never establishes delivery. Raw dispatch state is not rewritten.
+        from app.services import factory_audit_service as _audit
+        await _audit.record_delivery_fact(
+            db,
+            item_id=item.id,
+            delivery_outcome="delivered" if item.pr_number is not None else "unknown",
+            completion_kind="merged_code" if item.pr_number is not None else "closed_unproven",
+            fact_source="github_watcher_service._reconcile_closed_issues",
+            fact_time=datetime.utcnow(),
+        )
         item.dispatch_status = "completed"
         item.escalation_reason = None
         item.updated_at = datetime.utcnow()

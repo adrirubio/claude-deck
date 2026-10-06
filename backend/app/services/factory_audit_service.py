@@ -273,6 +273,75 @@ def validated_review_evidence(evidence: dict | None) -> bool:
     return True
 
 
+async def record_delivery_fact(
+    db: AsyncSession,
+    *,
+    item_id: int | None,
+    revision_id: int | None = None,
+    scope_id: int | None = None,
+    team_context_key: str | None = None,
+    scope_context_key: str | None = None,
+    delivery_outcome: str,
+    completion_kind: str,
+    fact_source: str,
+    fact_time: datetime | None,
+    artifact: str | None = None,
+    actor: dict[str, Any] | None = None,
+) -> FactoryAuditEvent:
+    """A28-A35: record one sourced delivery outcome fact per tracked attempt.
+
+    Later facts reconcile the classification without double-counting
+    delivery: the non-secret operation identity binds the fact to the
+    attempt and artifact, so repeated evidence returns the same event.
+    Raw dispatch state is never rewritten. Merge evidence and independent
+    human review stay distinct fields.
+    """
+    operation_id = f"delivery:{item_id}:{artifact or 'attempt'}"
+    context_snapshot = None
+    if artifact:
+        context_snapshot = {"artifact": artifact, "fact_source": fact_source}
+    return await record_event(
+        db,
+        event_kind="delivery_evidence",
+        source=fact_source,
+        occurred_at=fact_time or datetime.utcnow(),
+        actor=actor or derive_actor(actor_kind="scheduler", scheduler="github_watcher"),
+        item_id=item_id,
+        revision_id=revision_id,
+        scope_id=scope_id,
+        team_context_key=team_context_key,
+        scope_context_key=scope_context_key,
+        context_snapshot=context_snapshot,
+        delivery_outcome=delivery_outcome,
+        completion_kind=completion_kind,
+        action_outcome="applied",
+        operation_id=operation_id,
+        correlation_id=operation_id,
+        sanitized_reason=f"delivery fact: {completion_kind}",
+    )
+
+
+async def current_delivery_outcome(db: AsyncSession, item_id: int) -> str | None:
+    """One current outcome per tracked attempt from its recorded facts.
+
+    Delivered is retained through routine closure. Repeated delivered facts
+    never change the count. A later non-delivery fact does not downgrade a
+    proven delivery.
+    """
+    rows = (await db.scalars(
+        select(FactoryAuditEvent).where(
+            FactoryAuditEvent.item_id == item_id,
+            FactoryAuditEvent.event_kind == "delivery_evidence",
+        ).order_by(FactoryAuditEvent.occurred_at.asc(), FactoryAuditEvent.id.asc())
+    )).all()
+    outcome = None
+    for row in rows:
+        if row.delivery_outcome == "delivered":
+            return "delivered"
+        outcome = row.delivery_outcome
+    return outcome
+
+
 async def instrumentation_start(db: AsyncSession) -> datetime | None:
     """Earliest recorded_at in the ledger: the instrumentation start marker.
 

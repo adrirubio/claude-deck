@@ -466,3 +466,59 @@ async def test_c03_absent_review_evidence_never_counts(db):
     # Only the validated evidence counts; operator-actor evidence never counts.
     assert by_name["independently_human_reviewed_design"].value == 2.0
     assert by_name["independently_human_reviewed_design"].sample_count == 2
+
+
+async def test_c02_delivery_facts_reconcile_once_per_attempt(db):
+    """C02: merged code, failed design without PR, sourced termination,
+    ongoing escalation, artifact acceptance and late or repeated evidence
+    drive real consumers with one current outcome per attempt and no
+    downgrade or duplicate delivery."""
+    # Merged code: delivered through the real fact consumer.
+    await audit.record_delivery_fact(
+        db, item_id=11, delivery_outcome="delivered", completion_kind="merged_code",
+        fact_source="github_watcher", fact_time=_now(), artifact="pr-11")
+    # Failed design with no PR: terminal tracking without delivery.
+    await audit.record_delivery_fact(
+        db, item_id=12, delivery_outcome="unknown", completion_kind="closed_unproven",
+        fact_source="github_watcher", fact_time=_now())
+    # Sourced termination without delivery.
+    await audit.record_delivery_fact(
+        db, item_id=13, delivery_outcome="closed_without_delivery",
+        completion_kind="closed_unmerged", fact_source="github_watcher",
+        fact_time=_now(), artifact="pr-13")
+    # Ongoing and escalated work: no delivery fact exists.
+    await db.commit()
+
+    assert await audit.current_delivery_outcome(db, 11) == "delivered"
+    assert await audit.current_delivery_outcome(db, 12) == "unknown"
+    assert await audit.current_delivery_outcome(db, 13) == "closed_without_delivery"
+    assert await audit.current_delivery_outcome(db, 14) is None
+
+    # Exact artifact acceptance: delivered design for the artifact version.
+    await audit.record_delivery_fact(
+        db, item_id=15, delivery_outcome="delivered", completion_kind="artifact_accepted",
+        fact_source="review-record", fact_time=_now(), artifact="design-1@v2")
+    # Repeated identical evidence: the same operation identity deduplicates.
+    repeat = await audit.record_delivery_fact(
+        db, item_id=15, delivery_outcome="delivered", completion_kind="artifact_accepted",
+        fact_source="review-record", fact_time=_now(), artifact="design-1@v2")
+    # Late contrary evidence after a proven delivery never downgrades it.
+    await audit.record_delivery_fact(
+        db, item_id=11, delivery_outcome="closed_without_delivery",
+        completion_kind="routine_closure", fact_source="github_watcher",
+        fact_time=_now() + timedelta(minutes=9), artifact="pr-11")
+    await db.commit()
+
+    facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE item_id = 15"))).scalar_one()
+    assert facts == 1
+    assert repeat.completion_kind == "artifact_accepted"
+    assert await audit.current_delivery_outcome(db, 15) == "delivered"
+    assert await audit.current_delivery_outcome(db, 11) == "delivered"
+
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["delivered_in_window"].sample_count == 2
+    assert by_name["closed_without_delivery"].sample_count == 1
+    assert by_name["unknown_outcomes"].sample_count == 1
