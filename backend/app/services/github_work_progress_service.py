@@ -188,6 +188,7 @@ class GithubWorkProgressService:
         if rows is None:
             return None
         item, scope, preset, workspace = rows
+        started_identity = _base_identity(item, scope)
         now = datetime.now(timezone.utc)
         cached_row = await db.get(GithubWorkProgressSnapshot, item_id)
         snapshot = (_SavedSnapshot(cached_row.observed_at, deepcopy(cached_row.identity),
@@ -196,7 +197,7 @@ class GithubWorkProgressService:
         if workspace is None or workspace.lease_token is None:
             publication = _historical(matching, "workspace_not_leased")
         elif (matching and matching.identity == _identity(item, scope, workspace)
-              and now - _utc(matching.observed_at) < timedelta(seconds=_CACHE_SECONDS)):
+              and timedelta(0) <= now - _utc(matching.observed_at) < timedelta(seconds=_CACHE_SECONDS)):
             try:
                 publication = GithubPublicationObservation.model_validate(matching.observation)
             except (ValidationError, TypeError, ValueError):
@@ -271,6 +272,9 @@ class GithubWorkProgressService:
                 if rows is None:
                     return None
                 item, scope, preset, _workspace = rows
+
+        if _base_identity(item, scope) != started_identity:
+            publication = GithubPublicationObservation(state="unavailable", reason="changed_during_read")
 
         pending = await db.scalar(select(GithubApprovalRequest.id).where(
             GithubApprovalRequest.work_item_id == item_id,

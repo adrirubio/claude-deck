@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { apiClient } from '@/lib/api'
-import type { GithubWorkItem } from '@/types/agentTeams'
+import type { AgentActivityObservation, GithubWorkItem } from '@/types/agentTeams'
 
 type Publication = {
   state: 'current' | 'historical' | 'unavailable'
@@ -77,7 +77,9 @@ function valid(data: Progress, itemId: number, nonce: string | null, owner: numb
       .every((count) => count === null || Number.isSafeInteger(count) && count >= 0)
 }
 
-export function WorkPublicationPanel({ item, ownerName }: { item: GithubWorkItem; ownerName?: string }) {
+export function WorkPublicationPanel({ item, ownerName, ownerActivity }: {
+  item: GithubWorkItem; ownerName?: string; ownerActivity?: AgentActivityObservation
+}) {
   const id = item.id
   const nonce = item.dispatch_nonce ?? null
   const owner = item.owner_slot_id ?? null
@@ -155,6 +157,12 @@ export function WorkPublicationPanel({ item, ownerName }: { item: GithubWorkItem
         {loading ? 'Refreshing…' : 'Refresh progress'}
       </Button>
     </div>
+    {ownerActivity?.slot_id === owner && <p className="text-xs text-muted-foreground">
+      {ownerActivity.state === 'working' ? 'The owner harness reports a working turn.'
+        : ownerActivity.state === 'idle' ? 'The owner turn ended. A completed turn does not establish that this item is complete.'
+          : ownerActivity.state === 'stopped' ? 'The owner process is stopped.' : 'Owner activity is unavailable.'}
+      {' '}Owner activity can cover other items. The Leader follow-up view records any current settlement action.
+    </p>}
     {error && <p role="status" className="text-sm text-muted-foreground">Unable to refresh progress. Retained details are historical.</p>}
     {!matches || !data ? <p className="text-sm text-muted-foreground">{loading ? 'Reading progress…' : 'No progress observation is available.'}</p> : <>
       <p className="text-sm"><span className="font-medium">{current ? 'Phase' : 'Previous phase'}:</span> {phases[data.phase] ?? 'Unknown'}

@@ -119,7 +119,8 @@ describe('Leader backlog coordination', () => {
     expect(screen.getByText('Latest observed issue and tracking states')).toBeTruthy()
     expect(screen.getByText(/GitHub: closed · Tracking: merged · PR #25/)).toBeTruthy()
     expect(screen.getAllByText(/Previous actor: operator/)).toHaveLength(2)
-    expect(screen.queryByText(/Next actor:/)).toBeNull()
+    expect(screen.getByText(/Next actor: Team Leader. Refresh the assessment/)).toBeTruthy()
+    expect(screen.queryByText(/Next actor: operator/)).toBeNull()
     expect(screen.getByText(/notification limit alone does not require a human decision/)).toBeTruthy()
   })
   it('preserves HOLD publication guidance even with exhausted notifications', async () => {

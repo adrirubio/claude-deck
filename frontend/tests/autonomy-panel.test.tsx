@@ -9,6 +9,8 @@ import { fetchGithubRecoveryGateActive } from '../src/features/agent-teams/api'
 import type { AgentTeamPreset, GithubScopeRevision, GithubWorkItem, TeamGithubScope } from '../src/types/agentTeams'
 
 vi.mock('../src/features/agent-teams/BacklogCoordination', () => ({ BacklogCoordination: () => null }))
+// The publication reader has its own request, expiry and error tests.
+vi.mock('../src/features/agent-teams/WorkPublicationPanel', () => ({ WorkPublicationPanel: () => null }))
 
 vi.mock('../src/features/agent-teams/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/features/agent-teams/api')>()
