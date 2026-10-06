@@ -73,6 +73,76 @@ refused. An identical replay changes neither freshness nor counters.
 
 ## Visibility and limits
 
+### Follow up after an owner turn
+
+An open harness does not schedule the next turn. A progress message can reach the
+Leader before the owner stops. Issue #455 adds a durable watch for this race.
+Before ending a turn with unfinished initial implementation, the current Leader
+must record the remaining task and its next trigger.
+
+Call `deck_get_backlog_coordination(scope_id)`. Select the item's
+`owner_followups` entry. Use its private `followup_token` and `event_sequence`:
+
+```text
+deck_report_owner_followup(
+    scope_id=1, work_item_id=10,
+    action="watch", reason="unfinished_authorized_work",
+    expected_sequence=0, followup_token="PRIVATE_FRESH_READ"
+)
+```
+
+The watch covers a current approved initial implementation, including corrections
+to a tracked PR. It requires the current approval decision, stored owner ACK,
+workspace acquisition, distinct owner and Leader, and authenticated native
+bindings. It does not cover scoped recovery, terminal work, handoffs, or escalated
+attempts. Missing authority or unknown native evidence refuses registration.
+
+The read records the native event baseline. A fresh completed turn that occurs
+during registration becomes pending. An already completed fresh turn can also
+be registered explicitly. A resumed file, stale record, live PID, heartbeat,
+interrupted turn, or UI input prompt cannot prove settlement. Pi must use the
+current extension that records explicit `agent_settled` provenance.
+
+While idle, the owning Pi extension checks SDK idle state every 15 seconds. It
+also checks its current Mail fence, active-run state, and pending input. This
+attestation has a separate time and expires after 30 seconds. It preserves the
+actual settlement ID and time. It can prove that an already recorded event
+remains current during a longer Leader turn. It cannot create new settlement
+debt from an old event. A cached marker or a Mail heartbeat cannot renew this
+proof. A provider without fresh proof retains pending debt and suppresses wake.
+
+After a five-second debounce, the scheduler sends one notice to the exact current
+Leader when the Leader is idle. A busy Leader leaves the event pending. The notice
+asks the Leader to inspect evidence and choose the next permitted action. It
+never wakes the owner automatically.
+
+Read again, then call the same tool with `action="assess"`. Use the fresh token
+and event sequence. Use `reason="next_action_arranged"`, `"blocked"`, or
+`"complete"`. This resolves only the coordination event. It does not complete
+the issue. A Mail read receipt or an earlier backlog assessment cannot resolve a
+newer event. If work remains, arrange the next authorized chunk, read again, and
+register a new watch before ending the turn.
+
+Each new notice spends the existing daily and unchanged-snapshot notification
+budget. An unread current request can cover another event without new Mail or
+quota. Rearming and assessment spend no quota and reset no counter. A read but
+unassessed notice has a finite fallback. Each watch registration permits at most
+three new notices and three physical wake attempts, with the existing cooldown.
+The shared limits can stop it earlier. An active authenticated Leader can still
+read and assess a capped event.
+
+The safe `owner_followups` projection shows waiting, pending, delivered,
+assessed, invalidated, paused, capped, and uncertain delivery states. A cap or
+unknown observation does not create a human decision gate. Current assigned
+issues bound this projection; historical records do not enlarge the active set.
+An uncertain partial terminal injection is retained and is not retried
+automatically. The Leader must reconcile it from an active authenticated turn.
+
+OFF/HOLD suppresses delivery. Changed policy, native binding, attempt, approval,
+ACK or workspace acquisition invalidates the old watch. Resume requires a fresh
+watch. Watch state and stable Mail keys survive controller restart. The safety
+supervisor retains its separate HOLD function.
+
 The team page shows **Human actions and decision gates** above both the Roster
 and Autonomy tabs. It includes dispatched review/recovery attention and explicit
 Leader requests attached to backlog dispositions, including standing work that

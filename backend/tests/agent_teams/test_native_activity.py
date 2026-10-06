@@ -354,3 +354,59 @@ def test_pi_reused_native_pid_after_registration_is_rejected(native, monkeypatch
 def test_pi_missing_authenticated_native_identity_is_unknown(native):
     binding = activity.ActivityBinding(native["pane_pid"], native["pane_start"], str(native["cwd"]))
     assert native["observe"](candidates=[binding]).reason == "native_identity_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", [None, "ui_prompt_end", "agent_settled"])
+async def test_private_pi_settlement_requires_explicit_sdk_provenance(native, monkeypatch, source):
+    event_id = str(uuid4())
+    native["value"].update(state="idle", reason="native_turn_completed", event_id=event_id)
+    if source:
+        native["value"]["event_source"] = source
+    native["write"]()
+    entries = [(2, "pi-cli", None, [activity.ActivityBinding(native["pane_pid"], native["pane_start"],
+        str(native["cwd"]), native["native_pid"], native["now"] - timedelta(seconds=5))], False)]
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(activity, "_team_inputs", AsyncMock(return_value=entries))
+    private = (await activity.observe_private_team(None, 1))[2]
+    assert private.identity and private.state == "idle"
+    assert private.settlement_id == (event_id if source == "agent_settled" else None)
+    assert "event_id" not in native["observe"]().model_dump()
+
+
+def test_codex_settlement_cursor_contains_no_reply_or_tool_data(native):
+    session_id = str(uuid4())
+    timestamp = (native["now"] - timedelta(seconds=1)).isoformat()
+    native["log"].write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": session_id, "cwd": str(native["cwd"])}}) + "\n" + json.dumps({
+        "type": "event_msg", "payload": {"type": "task_complete", "last_agent_message": "Private fixture reply"},
+        "timestamp": timestamp}) + "\n")
+    metadata = {}
+    result = activity._native_state(native["log"], session_id, str(native["cwd"]),
+        native["now"], native["now"] - timedelta(seconds=10), provenance=metadata)
+    assert result[1] == "native_turn_completed" and metadata["event_source"] == "task_complete"
+    assert len(metadata["event_id"]) == 64
+    assert "Private fixture reply" not in json.dumps(metadata)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attestation", ["fresh", "expired", "future", "before_event", "heartbeat"])
+async def test_sdk_idle_attestation_keeps_old_debt_current_without_creating_new_event(native, monkeypatch, attestation):
+    from unittest.mock import AsyncMock
+    event_id = str(uuid4())
+    native["value"].update(state="idle", reason="native_turn_completed", event_id=event_id,
+        event_source="agent_settled", observed_at=(native["now"] - timedelta(seconds=600)).isoformat(),
+        attested_at=native["now"].isoformat(), attestation_source="sdk_idle")
+    if attestation == "expired": native["value"]["attested_at"] = (native["now"] - timedelta(seconds=31)).isoformat()
+    elif attestation == "future": native["value"]["attested_at"] = (native["now"] + timedelta(seconds=10)).isoformat()
+    elif attestation == "before_event": native["value"]["attested_at"] = (native["now"] - timedelta(seconds=601)).isoformat()
+    elif attestation == "heartbeat": native["value"]["attestation_source"] = "mail_heartbeat"
+    native["write"]()
+    monkeypatch.setattr(activity, "_process_started_at", lambda _: native["now"] - timedelta(seconds=700))
+    entries = [(2, "pi-cli", None, [activity.ActivityBinding(native["pane_pid"], native["pane_start"],
+        str(native["cwd"]), native["native_pid"], native["now"] - timedelta(seconds=650))], False)]
+    monkeypatch.setattr(activity, "_team_inputs", AsyncMock(return_value=entries))
+    private = (await activity.observe_private_team(None, 1))[2]
+    assert private.settlement_id is None  # An old event cannot create a new trigger.
+    assert private.current_settlement_id == (event_id if attestation == "fresh" else None)
+    assert private.state == ("idle" if attestation == "fresh" else "unknown")

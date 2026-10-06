@@ -83,7 +83,7 @@ def _native_process(pid: int, start: str, pane_pid: int, pane_start: str, cwd: s
 
 
 def observe_pi(pane_pid: int, pane_start: str, cwd: str, now: datetime, started_at: datetime,
-               expected_native_pid: int, expected_native_start: str
+               expected_native_pid: int, expected_native_start: str, *, provenance: dict | None = None,
                ) -> tuple[str, str, datetime | None]:
     directory = pi_session_directory(cwd).resolve()
     marker = directory / f".deck-native-{pane_pid}-{pane_start}.json"
@@ -150,6 +150,23 @@ def observe_pi(pane_pid: int, pane_start: str, cwd: str, now: datetime, started_
         return "unknown", "binding_changed", None
     if current_state in _STOPPED_STATES:
         return "stopped", "process_stopped", None
-    if (now - observed_at).total_seconds() > _FRESHNESS_SECONDS:
+    attested_idle = False
+    if (value.get("attestation_source") == "sdk_idle" and state == "idle"
+            and value.get("event_source") == "agent_settled"):
+        attested_at = datetime.fromisoformat(value["attested_at"].replace("Z", "+00:00"))
+        if (attested_at.tzinfo is None or attested_at < observed_at
+                or attested_at > now + timedelta(seconds=5)):
+            return "unknown", "observation_invalid", None
+        attested_idle = 0 <= (now - attested_at).total_seconds() <= 30
+    if not attested_idle and (now - observed_at).total_seconds() > _FRESHNESS_SECONDS:
         return "unknown", "native_event_stale", observed_at
+    if provenance is not None:
+        provenance.update(session_id=session_id, native_pid=pid, native_start=start)
+        event_id, source = value.get("event_id"), value.get("event_source")
+        if (isinstance(event_id, str) and str(UUID(event_id)) == event_id
+                and source in {"agent_start", "agent_settled", "native_progress",
+                               "ui_prompt_start", "ui_prompt_end", "session_reset"}):
+            provenance.update(event_id=event_id, event_source=source)
+            if state == "idle" and reason == "native_turn_completed" and source == "agent_settled":
+                provenance["current_settlement_id"] = event_id
     return state, reason, observed_at

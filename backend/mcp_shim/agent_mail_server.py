@@ -1128,6 +1128,37 @@ def deck_get_backlog_coordination(scope_id: int) -> dict:
 
 
 @mcp.tool()
+def deck_report_owner_followup(
+    scope_id: int, work_item_id: int, action: str, reason: str,
+    expected_sequence: int, followup_token: str,
+) -> dict:
+    """Current Leader: persist or resolve a bounded owner settlement watch.
+
+    Read deck_get_backlog_coordination immediately before this call. Select the
+    current owner_followups entry. Keep its followup_token private and use its
+    event_sequence as expected_sequence. Use action watch and reason
+    unfinished_authorized_work before ending a turn with unfinished initial
+    implementation. Watch supports current revision0 work with a tracked PR.
+    Arrange the next authorized action before ending your turn.
+
+    For an observed pending event, use action assess and reason
+    next_action_arranged, blocked, or complete. This records only a coordination
+    disposition. A Mail read or an older backlog assessment does not resolve it.
+    If work remains, read again and register the next watch. Changed authority,
+    event, binding, policy, expired challenges and OFF/HOLD refuse stale writes.
+    A watch never wakes the owner, renews a lease, resets budgets, approves work,
+    merges a PR, or satisfies a review or milestone gate.
+    """
+    registered = _ensure_registered()
+    if not registered["ok"]:
+        return registered
+    return _dispatch_request("POST", f"/github-scopes/{scope_id}/owner-followups", json={
+        "work_item_id": work_item_id, "action": action, "reason": reason,
+        "expected_sequence": expected_sequence, "followup_token": followup_token,
+    })
+
+
+@mcp.tool()
 def deck_get_operator_action_contexts(preset_id: int) -> dict:
     """Read current requests and issue instruction templates. This grants no authority.
 

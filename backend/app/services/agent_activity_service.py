@@ -7,6 +7,7 @@ unknown. No transcripts, paths, session IDs or credentials leave this module.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import pwd
@@ -139,7 +140,8 @@ def _process_started_at(start: str) -> datetime:
         seconds=1 / ticks_per_second)
 
 
-def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_at: datetime
+def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_at: datetime,
+                  *, provenance: dict | None = None
                   ) -> tuple[str, str, datetime | None]:
     with path.open("rb") as stream:
         metadata = json.loads(stream.readline(65_536))
@@ -157,7 +159,7 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
     lines = tail.splitlines()
     if offset:
         lines = lines[1:]  # first line can be a partial JSON record
-    state, reason, observed_at = "unknown", "no_native_event", None
+    state, reason, observed_at, cursor = "unknown", "no_native_event", None, None
     for line in lines:
         record = json.loads(line)
         if record.get("type") != "event_msg":
@@ -183,15 +185,22 @@ def _native_state(path: Path, session_id: str, cwd: str, now: datetime, started_
         elif state != "working":
             continue  # progress alone never starts an inferred turn
         observed_at = timestamp
+        cursor = hashlib.sha256(f"{session_id}:{timestamp.isoformat()}:{event}".encode()).hexdigest()
     if state == "working" and observed_at and (
         now - observed_at
     ).total_seconds() > _WORK_FRESHNESS_SECONDS:
         return "unknown", "native_event_stale", observed_at
+    if provenance is not None:
+        provenance.update(session_id=session_id, event_id=cursor)
+        if state == "idle" and reason == "native_turn_completed" and observed_at:
+            provenance.update(event_source="task_complete", event_id=hashlib.sha256(
+                f"{session_id}:{observed_at.isoformat()}:task_complete".encode()).hexdigest())
     return state, reason, observed_at
 
 
 def _observe(slot_id: int, provider: str, session_id: str | None,
-             candidates: list[ActivityBinding], duplicate_identity: bool, now: datetime
+             candidates: list[ActivityBinding], duplicate_identity: bool, now: datetime,
+             *, provenance: dict | None = None,
              ) -> AgentActivityObservation:
     def result(state: str, reason: str, observed_at: datetime | None = None):
         return AgentActivityObservation(slot_id=slot_id, state=state, reason=reason,
@@ -233,13 +242,16 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         if process_state in _STOPPED_STATES:
             return result("stopped", "process_stopped")
         if provider == "pi-cli":
+            options = {"provenance": provenance} if provenance is not None else {}
             state, reason, observed_at = observe_pi(
-                pid, start, cwd, now, _process_started_at(start), native_pid, native_start)
+                pid, start, cwd, now, _process_started_at(start), native_pid, native_start, **options)
             process_state, current_start = _process(pid)
             if current_start != start:
                 return result("unknown", "binding_changed")
             if process_state in _STOPPED_STATES:
                 return result("stopped", "process_stopped")
+            if provenance is not None and provenance.get("session_id"):
+                provenance.update(pane_pid=pid, pane_start=start, provider=provider)
             return result(state, reason, observed_at)
         if provider != "codex-cli":
             return result("unknown", "provider_unsupported")
@@ -256,12 +268,15 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         path = _process_rollout_path(pid, home, session_id) or _rollout_path(home, session_id, cwd)
         if path is None:
             return result("unknown", "native_log_unavailable")
-        state, reason, observed_at = _native_state(path, session_id, cwd, now, _process_started_at(start))
+        options = {"provenance": provenance} if provenance is not None else {}
+        state, reason, observed_at = _native_state(path, session_id, cwd, now, _process_started_at(start), **options)
         process_state, current_start = _process(pid)
         if current_start != start:
             return result("unknown", "binding_changed")
         if process_state in _STOPPED_STATES:
             return result("stopped", "process_stopped")
+        if provenance is not None and provenance.get("session_id"):
+            provenance.update(pane_pid=pid, pane_start=start, provider=provider)
         return result(state, reason, observed_at)
     except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, RuntimeError):
         return result("unknown", "observation_unavailable")
@@ -330,3 +345,48 @@ async def observe_team(db: AsyncSession, preset_id: int) -> AgentTeamActivityRes
             observation.observed_at = None
     return AgentTeamActivityResponse(preset_id=preset_id, checked_at=now,
                                     valid_until=now + timedelta(seconds=15), slots=observations)
+
+
+@dataclass(frozen=True)
+class PrivateActivity:
+    """Scheduler evidence. Never serialize this object through a public API."""
+
+    state: str
+    reason: str
+    observed_at: datetime | None
+    identity: str | None
+    settlement_id: str | None
+    cursor: str | None = None
+    current_settlement_id: str | None = None
+
+
+async def observe_private_team(db: AsyncSession, preset_id: int) -> dict[int, PrivateActivity]:
+    inputs = await _team_inputs(db, preset_id)
+    now = datetime.now(timezone.utc)
+
+    def observations():
+        values = {}
+        for entry in inputs:
+            metadata = {}
+            observed = _observe(*entry, now, provenance=metadata)
+            identity = None
+            if metadata.get("session_id") and metadata.get("pane_pid"):
+                identity = hashlib.sha256(json.dumps({key: metadata.get(key) for key in (
+                    "provider", "session_id", "pane_pid", "pane_start", "native_pid", "native_start",
+                )}, sort_keys=True).encode()).hexdigest()
+            settled = (observed.state == "idle" and observed.reason == "native_turn_completed"
+                       and metadata.get("event_source") in {"agent_settled", "task_complete"}
+                       and observed.observed_at is not None
+                       and 0 <= (now - observed.observed_at).total_seconds() <= _WORK_FRESHNESS_SECONDS)
+            values[entry[0]] = PrivateActivity(observed.state, observed.reason, observed.observed_at,
+                                               identity, metadata.get("event_id") if settled else None,
+                                               metadata.get("event_id"),
+                                               metadata.get("current_settlement_id") if observed.state == "idle" else None)
+        return values
+
+    values = await asyncio.to_thread(observations)
+    current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
+    for entry in inputs:
+        if current.get(entry[0]) != entry:
+            values[entry[0]] = PrivateActivity("unknown", "binding_changed", None, None, None)
+    return values
