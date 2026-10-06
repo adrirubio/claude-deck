@@ -26,6 +26,7 @@ from app.models.database import (
 )
 from app.services.agent_mail_service import agent_mail_service
 from app.services.github_verification_service import github_verification_service
+from app.services.github_recovery_gate import GithubRecoveryOnlyAttempt
 from app.services.github_dispatch_service import github_dispatch_service
 from app.services.github_app_auth_service import (
     GithubAppNotInstalled,
@@ -474,6 +475,78 @@ async def test_escalated_merge_poll_is_bounded_and_rotates(db):
     assert client.pull_calls == 8
     await github_verification_service.process_scope(db, scope, client=client)
     assert client.pull_calls == 9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rollback_source", ["claim_refusal", "notification"])
+async def test_escalated_merge_batch_continues_after_rollback(db, monkeypatch, rollback_source):
+    scope, first, workspace, client = await _escalated_merge_fixture(db)
+    first_id = first.id
+    second = await _item(
+        db, scope, pr_number=6, issue_number=2, dispatch_status="escalated",
+        dispatch_nonce="b0b0b0b0b0b0b0b0", dispatch_head_ref="deck/slot-2/issue-2/attempt",
+    )
+    second_id = second.id
+    pulls = {}
+    for row in (first, second):
+        pulls[row.pr_number] = _Client(pull={
+            "number": row.pr_number, "merged": True,
+            "head": {"sha": "a" * 40, "ref": row.dispatch_head_ref},
+        }).pull
+
+    async def get_pull(owner, repo, number):
+        if number == 5 and rollback_source == "claim_refusal":
+            await db.execute(update(GithubWorkItem).where(
+                GithubWorkItem.id == first_id,
+            ).values(dispatch_nonce="changed-attempt").execution_options(synchronize_session=False))
+            await db.commit()
+        return pulls[number]
+
+    async def notify(db, scope, item):
+        if item.id == first_id and rollback_source == "notification":
+            await db.rollback()
+
+    client.get_pull = get_pull
+    monkeypatch.setattr(github_verification_service, "_notify_blocker_merged", notify)
+    github_verification_service._escalated_merge_cursors.pop(scope.id, None)
+    await github_verification_service.process_scope(db, scope, client=client)
+    second = await db.get(GithubWorkItem, second_id, populate_existing=True)
+    first = await db.get(GithubWorkItem, first_id, populate_existing=True)
+    assert second.dispatch_status == "merged"
+    assert first.dispatch_status == ("escalated" if rollback_source == "claim_refusal" else "merged")
+    assert first.retry_count == 3
+
+
+@pytest.mark.asyncio
+async def test_escalated_merge_rechecks_recovery_target_after_id_selection(db, monkeypatch):
+    scope, item, workspace, client = await _escalated_merge_fixture(db)
+    item_id = item.id
+    attempt = GithubRecoveryOnlyAttempt(
+        scope.id, item_id, item.pr_number, item.dispatch_nonce, item.dispatch_head_ref,
+    )
+    before = _row_values(item)
+    original_get = db.get
+    changed = False
+
+    async def get_after_retry(entity, identity, *args, **kwargs):
+        nonlocal changed
+        if entity is GithubWorkItem and identity == item_id and not changed:
+            changed = True
+            await db.execute(update(GithubWorkItem).where(
+                GithubWorkItem.id == item_id,
+            ).values(dispatch_nonce="new-recovery-target").execution_options(synchronize_session=False))
+            await db.commit()
+        return await original_get(entity, identity, *args, **kwargs)
+
+    monkeypatch.setattr(db, "get", get_after_retry)
+    await github_verification_service.process_scope(
+        db, scope, client=client, recovery_only_attempt=attempt,
+    )
+    await db.refresh(item)
+    before["dispatch_nonce"] = "new-recovery-target"
+    assert changed is True
+    assert _row_values(item) == before
+    assert client.pull_calls == 0
 
 
 class _Client:
