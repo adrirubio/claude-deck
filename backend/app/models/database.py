@@ -1,6 +1,7 @@
 """SQLAlchemy database models."""
 from datetime import datetime
 from sqlalchemy import (
+    ForeignKey,
     String,
     Integer,
     Boolean,
@@ -848,14 +849,21 @@ class FactoryAuditEvent(Base):
     actor_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor_reference: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # Deletion-safe live references (ON DELETE SET NULL where foreign keys
-    # exist in the compat migration).
-    team_preset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    team_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    revision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    request_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Deletion-safe live references. ON DELETE SET NULL keeps the event and
+    # its snapshots after guard-permitted deletion; events never cascade
+    # away and never add a deletion block.
+    team_preset_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_presets.id", ondelete="SET NULL"), nullable=True)
+    team_slot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_team_slots.id", ondelete="SET NULL"), nullable=True)
+    scope_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="SET NULL"), nullable=True)
+    item_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_work_items.id", ondelete="SET NULL"), nullable=True)
+    revision_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_attempt_scope_revisions.id", ondelete="SET NULL"), nullable=True)
+    request_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("github_approval_requests.id", ondelete="SET NULL"), nullable=True)
 
     # Immutable context keys and snapshot labels.
     team_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)

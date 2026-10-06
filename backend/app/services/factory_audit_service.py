@@ -173,6 +173,14 @@ async def record_event(
         existing = await find_by_operation(db, operation_id, event_kind)
         if existing is not None:
             return existing
+    # C05: every event site allocates immutable context keys for any live
+    # identity it records. Numeric ID reuse can never reattach old history.
+    if team_preset_id is not None and team_context_key is None:
+        team_context_key = await context_key_for(db, "team", team_preset_id)
+    if scope_id is not None and scope_context_key is None:
+        scope_context_key = await context_key_for(db, "scope", scope_id)
+    if item_id is not None and item_context_key is None:
+        item_context_key = await context_key_for(db, "item", item_id)
     event = FactoryAuditEvent(
         occurred_at=occurred_at,
         event_kind=event_kind,

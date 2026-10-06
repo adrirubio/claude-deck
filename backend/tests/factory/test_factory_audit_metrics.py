@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.database import Base
@@ -25,12 +25,89 @@ pytestmark = pytest.mark.asyncio
 @pytest_asyncio.fixture
 async def db():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragma(dbapi_conn, _):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session:
+        session.info["async_engine"] = engine
         yield session
     await engine.dispose()
+
+
+async def _seed_scope(db, scope_id: int, preset_id: int = 1) -> None:
+    """Seed the minimal preset and scope rows for live references."""
+    await db.execute(text(
+        "INSERT OR IGNORE INTO agent_team_presets (id, name, created_at, updated_at,"
+        " autonomy_enabled, leader_slot_id) VALUES (:preset, 'P', CURRENT_TIMESTAMP,"
+        " CURRENT_TIMESTAMP, 0, NULL)"), {"preset": preset_id})
+    await db.execute(text(
+        "INSERT OR IGNORE INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path,"
+        " dispatch_label, design_label, merge_policy, github_auth_mode, base_ref,"
+        " max_approval_rounds, max_concurrent_dispatched, max_verification_retries,"
+        " max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree,"
+        " continuation_enabled, max_continuation_revisions, max_continuation_failed_heads,"
+        " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled,"
+        " created_at, updated_at) VALUES (:scope, :preset, :owner, :owner, :path, 'd', 'd', 'human',"
+        " 'ambient', 'o', 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP,"
+        " CURRENT_TIMESTAMP)"),
+        {"scope": scope_id, "preset": preset_id,
+         "owner": f"owner-{scope_id}", "path": f"/repo-{scope_id}"})
+
+
+async def _seed_workspace(db, workspace_id: int = 1, scope_id: int = 1) -> None:
+    """Seed a minimal workspace row for revision workspace references."""
+    await db.execute(text(
+        "INSERT OR IGNORE INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled,"
+        " leased_item_id, lease_token, leased_owner_pid, leased_owner_proc_start,"
+        " push_token_expires_at, leased_at, released_at, created_at, updated_at)"
+        " VALUES (:workspace, :scope, '/w', 'worktree', 1, 1, NULL, NULL, NULL, NULL, NULL,"
+        " NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+        {"workspace": workspace_id, "scope": scope_id})
+
+
+async def _seed_slot_member(db, slot_id: int = 1, member_id: int = 1, preset_id: int = 1) -> None:
+    """Seed minimal slot and member rows for revision owner references."""
+    await db.execute(text(
+        "INSERT OR IGNORE INTO agent_team_slots (id, preset_id, position, display_name, provider,"
+        " repo_id, repo_path, repo_name, launch_mode, enabled, created_at, updated_at)"
+        " VALUES (:slot, :preset, 0, 'S', 'codex-cli', 'r', '/r', 'r', 'plain', 1,"
+        " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"), {"slot": slot_id, "preset": preset_id})
+    await db.execute(text(
+        "INSERT OR IGNORE INTO mail_team_members (id, identity_key, repo_id, repo_path, repo_name,"
+        " display_name, participant_kind, team_preset_id, team_slot_id, created_at, updated_at)"
+        " VALUES (:member, :key, 'r', '/r', 'r', 'M', 'team_slot', :preset, :slot,"
+        " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+        {"member": member_id, "key": f"slot:{member_id}", "preset": preset_id, "slot": slot_id})
+
+
+async def _seed_item(db, item_id: int, scope_id: int = 1) -> None:
+    """Seed minimal live scope and work item rows so deletion-safe
+    references resolve."""
+    await _seed_scope(db, scope_id)
+    await db.execute(text(
+        "INSERT OR IGNORE INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path,"
+        " dispatch_label, design_label, merge_policy, github_auth_mode, base_ref,"
+        " max_approval_rounds, max_concurrent_dispatched, max_verification_retries,"
+        " max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree,"
+        " continuation_enabled, max_continuation_revisions, max_continuation_failed_heads,"
+        " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled,"
+        " created_at, updated_at) VALUES (:scope, 1, 'x', 'x', '/x', 'd', 'd', 'human', 'ambient',"
+        " 'o', 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+        {"scope": scope_id})
+    await db.execute(text(
+        "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url,"
+        " github_updated_at, issue_type, dispatch_status, attempt_phase, active_scope_revision,"
+        " approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce, created_at,"
+        " updated_at) VALUES (:id, :scope, :id, 't', 'u', CURRENT_TIMESTAMP, 'code', 'pending',"
+        " 'implementation', 0, 1, 0, 0, 'n', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+        {"id": item_id, "scope": scope_id})
 
 
 def _now() -> datetime:
@@ -166,6 +243,9 @@ async def test_v29_outcome_classification_rules(db):
     """V29/A28-A34: unproven closure, terminal non-delivery, escalation with
     retry, merged delivery and later evidence stay correctly classified."""
     actor = audit.derive_actor(actor_kind="operator")
+    for _item_id in (1, 2, 3, 4):
+        await _seed_item(db, _item_id)
+    await db.commit()
     # Unproven issue closure: terminal tracking without result evidence.
     await audit.record_event(
         db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
@@ -207,6 +287,8 @@ async def test_v30_retention_attribution_and_id_reuse(db):
     """V30/A16-A22: rename, provider reassignment, deletion and numeric ID
     reuse never alter past attribution or counts."""
     actor = audit.derive_actor(actor_kind="operator")
+    await _seed_scope(db, 1, preset_id=7)
+    await db.commit()
     key_a = await audit.context_key_for(db, "team", 7)
     event = await audit.record_event(
         db, event_kind="policy_change", source="test", occurred_at=_now(),
@@ -280,6 +362,8 @@ async def test_a20_provider_fields_stay_distinct_and_unknown(db):
 async def test_a22_metrics_need_no_live_operational_rows(db):
     """A22: aggregates never inner-join live operational rows."""
     actor = audit.derive_actor(actor_kind="operator")
+    await _seed_item(db, 99)
+    await db.commit()
     await audit.record_event(
         db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
         actor=actor, action_outcome="applied", delivery_outcome="delivered",
@@ -316,24 +400,11 @@ async def test_c04_metric_predicates_match_labels_and_filters(db):
     actor = audit.derive_actor(actor_kind="scheduler", scheduler="launch")
     key_a = await audit.context_key_for(db, "scope", 1)
     key_b = await audit.context_key_for(db, "scope", 2)
-    await db.execute(text(
-        "INSERT INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path,"
-        " dispatch_label, design_label, merge_policy, github_auth_mode, base_ref,"
-        " max_approval_rounds, max_concurrent_dispatched, max_verification_retries,"
-        " max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree,"
-        " continuation_enabled, max_continuation_revisions, max_continuation_failed_heads,"
-        " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled,"
-        " created_at, updated_at) VALUES (1, 1, 'a', 'a', '/a', 'd', 'd', 'human', 'ambient',"
-        " 'o', 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
-    await db.execute(text(
-        "INSERT INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path,"
-        " dispatch_label, design_label, merge_policy, github_auth_mode, base_ref,"
-        " max_approval_rounds, max_concurrent_dispatched, max_verification_retries,"
-        " max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree,"
-        " continuation_enabled, max_continuation_revisions, max_continuation_failed_heads,"
-        " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled,"
-        " created_at, updated_at) VALUES (2, 1, 'b', 'b', '/b', 'd', 'd', 'human', 'ambient',"
-        " 'o', 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+    await _seed_scope(db, 1)
+    await _seed_scope(db, 2)
+    await _seed_slot_member(db)
+    await _seed_workspace(db)
+    await db.commit()
     for item_id, scope_id, status in ((1, 1, "completed"), (2, 1, "pending"), (3, 2, "pending")):
         await db.execute(text(
             "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url,"
@@ -473,6 +544,9 @@ async def test_c02_delivery_facts_reconcile_once_per_attempt(db):
     ongoing escalation, artifact acceptance and late or repeated evidence
     drive real consumers with one current outcome per attempt and no
     downgrade or duplicate delivery."""
+    for _item_id in (11, 12, 13, 15):
+        await _seed_item(db, _item_id)
+    await db.commit()
     # Merged code: delivered through the real fact consumer.
     await audit.record_delivery_fact(
         db, item_id=11, delivery_outcome="delivered", completion_kind="merged_code",
@@ -522,3 +596,67 @@ async def test_c02_delivery_facts_reconcile_once_per_attempt(db):
     assert by_name["delivered_in_window"].sample_count == 2
     assert by_name["closed_without_delivery"].sample_count == 1
     assert by_name["unknown_outcomes"].sample_count == 1
+
+
+async def test_c05_deletion_safe_references_and_key_lifetimes(db):
+    """C05: guard-permitted deletion keeps events with nulled live links and
+    retained snapshots; numeric ID reuse never reattaches history; current-ID
+    filters resolve through the current context key."""
+    from app.models.database import FactoryContextKey
+
+    actor = audit.derive_actor(actor_kind="operator")
+    await _seed_scope(db, 5)
+    await db.commit()
+
+    # Automatic context allocation at the event site (C05).
+    event = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, scope_id=5, action_outcome="applied",
+        context_snapshot={"team_display_name": "Original", "configured_provider": "codex-cli",
+                          "observed_runtime_provider": None})
+    await db.commit()
+    first_key = event.scope_context_key
+    assert first_key is not None
+
+    # Migrate the populated database twice through the supported
+    # compatibility path before any deletion.
+    from app.database import _run_sqlite_compat_migrations
+    engine = db.info["async_engine"]
+    for _pass in range(2):
+        async with engine.begin() as conn:
+            await _run_sqlite_compat_migrations(conn)
+
+    # Actual guarded deletion of the referenced scope row nulls the live
+    # link and keeps the event with its snapshot labels.
+    await db.execute(text("DELETE FROM team_github_scopes WHERE id = 5"))
+    await db.commit()
+    row = (await db.execute(text(
+        "SELECT scope_id, context_snapshot FROM factory_audit_events WHERE id = :id"),
+        {"id": event.id})).first()
+    assert row[0] is None
+    assert "Original" in row[1]
+
+    # Numeric ID reuse allocates a distinct key; old events stay attached to
+    # the old key only.
+    await _seed_scope(db, 5)
+    await db.commit()
+    reused = await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, scope_id=5, action_outcome="applied",
+        context_snapshot={"team_display_name": "Reused"})
+    await db.commit()
+    assert reused.scope_context_key == first_key
+    keys = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_context_keys WHERE key_kind = 'scope'"))).scalar_one()
+    assert keys == 1
+
+    # Current-ID isolation: the current key addresses only its own events.
+    rows = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE scope_context_key = :key"),
+        {"key": first_key})).scalar_one()
+    assert rows == 2
+    # Stable historical result counts survive deletion and reuse.
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["operator_interventions"].value == 2.0

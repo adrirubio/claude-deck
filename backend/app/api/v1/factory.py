@@ -370,6 +370,9 @@ async def list_factory_audit_events(
     team_context_key: str | None = None,
     scope_context_key: str | None = None,
     item_context_key: str | None = None,
+    team_id: int | None = None,
+    scope_id: int | None = None,
+    item_id: int | None = None,
     _operator: None = Depends(require_operator),
     db=Depends(get_db),
 ):
@@ -384,6 +387,16 @@ async def list_factory_audit_events(
 
     from app.models.database import FactoryAuditEvent
     from app.models.schemas import FactoryAuditEventPage, FactoryAuditEventRead
+    from app.services.factory_audit_service import context_key_for as _audit_context_key
+
+    # C05: current-ID filters resolve the current resource context key so
+    # history stays addressable after deletion and numeric ID reuse.
+    if team_id is not None and team_context_key is None:
+        team_context_key = await _audit_context_key(db, "team", team_id)
+    if scope_id is not None and scope_context_key is None:
+        scope_context_key = await _audit_context_key(db, "scope", scope_id)
+    if item_id is not None and item_context_key is None:
+        item_context_key = await _audit_context_key(db, "item", item_id)
 
     stmt = select(FactoryAuditEvent)
     count_stmt = select(func.count()).select_from(FactoryAuditEvent)
