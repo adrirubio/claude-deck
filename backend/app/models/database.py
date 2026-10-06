@@ -802,3 +802,76 @@ class GithubAttemptScopeRevision(Base):
             name="uix_github_attempt_scope_revision",
         ),
     )
+
+
+class FactoryContextKey(Base):
+    """Immutable context key allocation for audit history.
+
+    A context key is allocated once per logical resource identity so that
+    reused numeric database IDs can never attach old events to a new record.
+    The key survives legitimate deletion of the live resource.
+    """
+
+    __tablename__ = "factory_context_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key_kind: Mapped[str] = mapped_column(String, nullable=False)
+    numeric_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    context_key: Mapped[str] = mapped_column(String, unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FactoryAuditEvent(Base):
+    """Durable observation-ledger event.
+
+    The ledger observes actual results. It never approves plans, raises
+    limits, retries work, releases a workspace or replays a mutation.
+    Event facts and context snapshots are immutable; live references are
+    deletion-safe and may become null.
+    """
+
+    __tablename__ = "factory_audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    event_kind: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    # observed events carry fact_source/fact_time distinct from import time.
+    record_kind: Mapped[str] = mapped_column(String, default="observed", nullable=False)
+    fact_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    fact_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Actor derivation: role from actual authentication or scheduler context.
+    actor_kind: Mapped[str] = mapped_column(String, nullable=False)
+    actor_member_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor_reference: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Deletion-safe live references (ON DELETE SET NULL where foreign keys
+    # exist in the compat migration).
+    team_preset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    team_slot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    revision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Immutable context keys and snapshot labels.
+    team_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    scope_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    item_context_key: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    context_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    operation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    sanitized_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    before_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_values: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # Outcomes stay separate: action outcome records what the action
+    # established; delivery outcome requires its own evidence.
+    action_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    delivery_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+    completion_kind: Mapped[str | None] = mapped_column(String, nullable=True)
+    human_review_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)

@@ -2745,3 +2745,78 @@ class BridgeAttachmentDeleteResponse(BaseModel):
     deleted: bool
     target: str
     attachment_id: int
+
+
+class FactoryAuditEventRead(BaseModel):
+    """Safe audit event projection for operator-protected reads."""
+
+    id: int
+    occurred_at: datetime
+    recorded_at: datetime
+    event_kind: str
+    source: str
+    record_kind: str
+    fact_source: str | None = None
+    fact_time: datetime | None = None
+    actor_kind: str
+    actor_reference: str | None = None
+    team_preset_id: int | None = None
+    team_slot_id: int | None = None
+    scope_id: int | None = None
+    item_id: int | None = None
+    revision_id: int | None = None
+    request_id: int | None = None
+    team_context_key: str | None = None
+    scope_context_key: str | None = None
+    item_context_key: str | None = None
+    context_snapshot: dict | None = None
+    correlation_id: str | None = None
+    sanitized_reason: str | None = None
+    before_values: dict | None = None
+    after_values: dict | None = None
+    action_outcome: str | None = None
+    delivery_outcome: str | None = None
+    completion_kind: str | None = None
+    human_review_evidence: dict | None = None
+    live_links_available: bool = True
+
+
+class FactoryAuditEventPage(BaseModel):
+    """Paginated audit read with the applied historical filters."""
+
+    items: list[FactoryAuditEventRead]
+    total: int
+    page: int
+    page_size: int
+    team_context_key: str | None = None
+    scope_context_key: str | None = None
+    event_kind: str | None = None
+    snapshot_labels: list[str] = []
+
+
+class FactoryMetricSample(BaseModel):
+    """One safe aggregate with its evidence basis and coverage."""
+
+    name: str
+    counting_unit: str
+    value: float | None = None
+    sample_count: int = 0
+    unknown_count: int = 0
+    excluded_count: int = 0
+    unknown_reasons: list[str] = []
+    source: str = "factory_audit_events"
+    coverage: str = "full"
+
+
+class FactoryMetricsWindow(BaseModel):
+    """Requested metrics window with boundaries and missing coverage."""
+
+    window_start: datetime
+    window_end: datetime
+    filter_scope: str
+    counting_unit_note: str
+    available_interval_start: datetime | None = None
+    available_interval_end: datetime | None = None
+    missing_intervals: list[str] = []
+    instrumentation_start: datetime | None = None
+    metrics: list[FactoryMetricSample] = []
