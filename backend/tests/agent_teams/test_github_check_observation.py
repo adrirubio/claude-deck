@@ -38,8 +38,9 @@ def job(identity=100, *, execution=10, attempt=1, status="completed", conclusion
 
 
 class API:
-    def __init__(self, checks=None, runs=None, jobs=None, history=None, pulls=None):
+    def __init__(self, checks=None, runs=None, jobs=None, history=None, pulls=None, latest=None):
         self.checks = checks or []
+        self.latest = latest
         self.runs = runs or []
         self.jobs = jobs or {}
         self.history = history or {}
@@ -54,8 +55,9 @@ class API:
         assert request.headers["Authorization"] == "Bearer polling-token"
         assert request.url.host == "api.github.com"
         if path.endswith("/check-runs"):
-            assert request.url.params["filter"] == "all"
-            body = {"total_count": len(self.checks), "check_runs": self.checks}
+            assert request.url.params["filter"] in {"all", "latest"}
+            checks = self.latest if request.url.params["filter"] == "latest" and self.latest is not None else self.checks
+            body = {"total_count": len(checks), "check_runs": checks}
         elif path.endswith("/actions/runs"):
             assert request.url.params["head_sha"] == SHA
             body = {"total_count": len(self.runs), "workflow_runs": self.runs}
@@ -116,6 +118,21 @@ async def test_duplicate_names_external_failure_and_allowed_job_failure_remain()
     api = API([check(conclusion="failure"), check(101, app=2, conclusion="failure"), check(102, suite=12)], [run(), run(12, workflow=2)], {10: [job(conclusion="failure")], 12: [job(102, execution=12)]})
     result = await observe(api)
     assert {row.get("id") for row in result if row["conclusion"] == "failure"} == {100, 101}
+
+
+@pytest.mark.asyncio
+async def test_external_rerun_keeps_github_latest_selection():
+    current = check(101, app=2)
+    api = API([check(app=2, conclusion="failure"), current], latest=[current])
+    result = await observe(api)
+    assert result == [current]
+
+
+@pytest.mark.asyncio
+async def test_external_current_failure_is_retained_after_rerun():
+    current = check(101, app=2, conclusion="failure")
+    api = API([check(app=2), current], latest=[current])
+    assert await observe(api) == [current]
 
 
 @pytest.mark.asyncio
@@ -226,7 +243,8 @@ async def test_pagination_reads_later_external_failure():
         if request.url.path.endswith("/check-runs"):
             page = int(request.url.params["page"])
             rows = [check(i + 1, app=2) for i in range(100)] if page == 1 else [check(101, app=2, conclusion="failure")]
-            headers = {"Link": f'<https://api.github.com{PREFIX}/commits/{SHA}/check-runs?filter=all&per_page=100&page=2>; rel="next"'} if page == 1 else {}
+            check_filter = request.url.params["filter"]
+            headers = {"Link": f'<https://api.github.com{PREFIX}/commits/{SHA}/check-runs?filter={check_filter}&per_page=100&page=2>; rel="next"'} if page == 1 else {}
             return httpx.Response(200, request=request, headers=headers, json={"total_count": 101, "check_runs": rows})
         return api(request)
     result = await observe(handler)
