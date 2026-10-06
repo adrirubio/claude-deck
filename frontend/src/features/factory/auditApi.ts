@@ -77,7 +77,7 @@ export async function fetchAuditEvents(params: {
   if (params.teamContextKey) query.set("team_context_key", params.teamContextKey);
   if (params.scopeContextKey) query.set("scope_context_key", params.scopeContextKey);
   if (params.itemContextKey) query.set("item_context_key", params.itemContextKey);
-  return apiClient.get(`/api/v1/factory/audit-events?${query.toString()}`);
+  return apiClient<AuditEventPage>(`/api/v1/factory/audit-events?${query.toString()}`);
 }
 
 export async function fetchMetricsWindow(params: {
@@ -90,5 +90,5 @@ export async function fetchMetricsWindow(params: {
     window_end: params.windowEnd,
   });
   if (params.filterScope) query.set("filter_scope", params.filterScope);
-  return apiClient.get(`/api/v1/factory/metrics?${query.toString()}`);
+  return apiClient<MetricsWindow>(`/api/v1/factory/metrics?${query.toString()}`);
 }

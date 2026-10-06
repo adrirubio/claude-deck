@@ -1,11 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  AuditEventRead,
-  MetricsWindow,
-  fetchAuditEvents,
-  fetchMetricsWindow,
-} from "./auditApi";
+import type { AuditEventRead, MetricsWindow } from "./auditApi";
+import { fetchAuditEvents, fetchMetricsWindow } from "./auditApi";
 
 const labelClass = "block text-sm font-medium";
 
@@ -234,6 +230,7 @@ export function AuditMetricsPage() {
         </div>
       </section>
 
+      <p className="text-sm">Total audit events matching filters: {total}</p>
       <p role="status" className="text-sm">{status}</p>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </section>
