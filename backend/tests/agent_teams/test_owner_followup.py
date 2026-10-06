@@ -153,6 +153,104 @@ async def test_short_turn_between_polls_and_busy_leader_retains_pending_event(db
 
 
 @pytest.mark.asyncio
+async def test_rearm_does_not_replay_assessed_settlement_or_spend_shared_quota(db, watched):
+    await arm(db, watched)
+    settle(watched)
+    await service.poll(db, watched.scope_id)
+    previous = await row(db, watched)
+    await db.execute(update(MailReceipt).where(MailReceipt.message_id == previous.message_id).values(read_at=datetime.utcnow()))
+    await db.commit()
+    await service.report(db, watched.scope_id, watched.leader,
+                         request(await read(db, watched), "assess", "next_action_arranged"))
+    await arm(db, watched)  # The next owner turn has not started; the latest event is still E1.
+    await service.poll(db, watched.scope_id)
+    current = await row(db, watched)
+    assert current.state == "waiting" and current.sequence == 1
+    assert current.settlement_id is None and current.settled_at is None
+    assert await count_notices(db) == 1
+    policy = await github_coordination_service.state(db, watched.scope_id)
+    assert (policy.daily_requests, policy.snapshot_requests) == (1, 1)
+    watched.native_wake.assert_awaited_once()
+    watched.activities[watched.owner.team_slot_id] = replace(
+        watched.activities[watched.owner.team_slot_id], state="working", reason="native_turn_started",
+        settlement_id=None, cursor="owner-working-2")
+    await service.poll(db, watched.scope_id)
+    settle(watched, event="owner-completed-2")
+    await service.poll(db, watched.scope_id)
+    assert (await row(db, watched)).state == "notified"  # Shared physical wake cooldown still applies.
+    assert await count_notices(db) == 2
+    watched.native_wake.assert_awaited_once()
+    agent_mail_service._last_auto_nudge_at[watched.leader.member_id] = (
+        datetime.utcnow() - timedelta(seconds=module.AUTO_NUDGE_COOLDOWN_SECONDS + 1))
+    await service.poll(db, watched.scope_id)
+    assert (await row(db, watched)).state == "delivered"
+    assert (await row(db, watched)).sequence == 2
+    assert await count_notices(db) == 2 and watched.native_wake.await_count == 2
+    policy = await github_coordination_service.state(db, watched.scope_id)
+    assert (policy.daily_requests, policy.snapshot_requests) == (2, 2)
+
+
+@pytest.mark.asyncio
+async def test_rearm_captures_different_fresh_settlement(db, watched):
+    await arm(db, watched)
+    settle(watched)
+    await service.poll(db, watched.scope_id)
+    await service.report(db, watched.scope_id, watched.leader,
+                         request(await read(db, watched), "assess", "next_action_arranged"))
+    rearm = request(await read(db, watched))
+    settle(watched, event="owner-completed-2")
+    await service.report(db, watched.scope_id, watched.leader, rearm)
+    current = await row(db, watched)
+    assert current.state == "pending" and current.sequence == 2
+    assert current.settlement_id == "owner-completed-2"
+
+
+@pytest.mark.asyncio
+async def test_stale_leader_identity_retains_fresh_owner_debt_until_valid_idle(db, watched):
+    await arm(db, watched)
+    watched.activities[watched.leader.team_slot_id] = replace(
+        watched.activities[watched.leader.team_slot_id], state="unknown", reason="native_event_stale",
+        observed_at=datetime.now(timezone.utc) - timedelta(seconds=181))
+    settle(watched, leader_idle=False)
+    await service.poll(db, watched.scope_id)
+    assert (await row(db, watched)).state == "pending" and (await row(db, watched)).sequence == 1
+    assert await count_notices(db) == 0
+    watched.native_wake.assert_not_awaited()
+    # More than one activity window passes. Fresh SDK idle proof retains the same debt.
+    watched.activities[watched.owner.team_slot_id] = replace(
+        watched.activities[watched.owner.team_slot_id], settlement_id=None,
+        observed_at=datetime.now(timezone.utc) - timedelta(seconds=600),
+        current_settlement_id="owner-completed-1")
+    await service.poll(db, watched.scope_id)
+    assert await count_notices(db) == 0
+    watched.native_wake.assert_not_awaited()
+    watched.activities[watched.leader.team_slot_id] = replace(
+        watched.activities[watched.leader.team_slot_id], state="idle", reason="native_turn_completed",
+        observed_at=datetime.now(timezone.utc))
+    await service.poll(db, watched.scope_id)
+    await module.GithubOwnerFollowupService().poll(db, watched.scope_id)
+    assert (await row(db, watched)).state == "delivered" and (await row(db, watched)).sequence == 1
+    assert await count_notices(db) == 1
+    watched.native_wake.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity", [None, "replacement-leader"])
+async def test_missing_or_changed_stale_leader_identity_cannot_capture_owner_debt(db, watched, identity):
+    await arm(db, watched)
+    watched.activities[watched.leader.team_slot_id] = replace(
+        watched.activities[watched.leader.team_slot_id], state="unknown", reason="native_event_stale",
+        identity=identity)
+    settle(watched, leader_idle=False)
+    await service.poll(db, watched.scope_id)
+    current = await row(db, watched)
+    assert current.sequence == 0 and current.settlement_id is None
+    assert current.state == ("waiting" if identity is None else "invalidated")
+    assert await count_notices(db) == 0
+    watched.native_wake.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_old_read_cannot_ack_later_event_and_mail_read_is_not_ack(db, watched):
     arm_call = await arm(db, watched)
     old = await read(db, watched)

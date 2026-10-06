@@ -320,11 +320,14 @@ class GithubOwnerFollowupService:
             baseline_at = datetime.fromtimestamp(claims["baseline_at"] / 1_000_000, timezone.utc).replace(tzinfo=None)
             if claims["baseline_at"] == 0 or baseline_at > now:
                 raise CoordinationError("followup_read_changed")
-            settled_at = native_owner.observed_at.replace(tzinfo=None) if native_owner.settlement_id else None
+            new_settlement = native_owner.settlement_id
+            if watch and new_settlement == watch.settlement_id:
+                new_settlement = None  # Rearm waits for a new event, not the event just assessed.
+            settled_at = native_owner.observed_at.replace(tzinfo=None) if new_settlement else None
             values = dict(context=context, registered_at=baseline_at, baseline_event=claims["baseline_event"],
-                          state="pending" if native_owner.settlement_id else "waiting",
-                          settlement_id=native_owner.settlement_id, settled_at=settled_at,
-                          sequence=claims["sequence"] + int(native_owner.settlement_id is not None),
+                          state="pending" if new_settlement else "waiting",
+                          settlement_id=new_settlement, settled_at=settled_at,
+                          sequence=claims["sequence"] + int(new_settlement is not None),
                           message_id=None, request_sequence=None, delivery_attempts=0, notification_count=0,
                           last_notified_at=None,
                           last_delivery_at=None, outcome=None)

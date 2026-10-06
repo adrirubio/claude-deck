@@ -158,15 +158,18 @@ def observe_pi(pane_pid: int, pane_start: str, cwd: str, now: datetime, started_
                 or attested_at > now + timedelta(seconds=5)):
             return "unknown", "observation_invalid", None
         attested_idle = 0 <= (now - attested_at).total_seconds() <= 30
-    if not attested_idle and (now - observed_at).total_seconds() > _FRESHNESS_SECONDS:
-        return "unknown", "native_event_stale", observed_at
     if provenance is not None:
+        # Identity survives expired activity only after native and file checks.
+        # A stale record cannot supply settlement or current idle proof.
         provenance.update(session_id=session_id, native_pid=pid, native_start=start)
         event_id, source = value.get("event_id"), value.get("event_source")
         if (isinstance(event_id, str) and str(UUID(event_id)) == event_id
                 and source in {"agent_start", "agent_settled", "native_progress",
                                "ui_prompt_start", "ui_prompt_end", "session_reset"}):
             provenance.update(event_id=event_id, event_source=source)
-            if state == "idle" and reason == "native_turn_completed" and source == "agent_settled":
+            if (state == "idle" and reason == "native_turn_completed" and source == "agent_settled"
+                    and (attested_idle or (now - observed_at).total_seconds() <= _FRESHNESS_SECONDS)):
                 provenance["current_settlement_id"] = event_id
+    if not attested_idle and (now - observed_at).total_seconds() > _FRESHNESS_SECONDS:
+        return "unknown", "native_event_stale", observed_at
     return state, reason, observed_at

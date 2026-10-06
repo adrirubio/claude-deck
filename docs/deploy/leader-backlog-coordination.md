@@ -116,12 +116,19 @@ Leader when the Leader is idle. A busy Leader leaves the event pending. The noti
 asks the Leader to inspect evidence and choose the next permitted action. It
 never wakes the owner automatically.
 
+A valid native identity can remain current when activity evidence expires. Deck
+can record a fresh owner completion while the Leader activity is unknown. It
+must wait for valid Leader idle evidence before it sends or delivers a notice.
+A missing or changed native identity does not permit event capture.
+
 Read again, then call the same tool with `action="assess"`. Use the fresh token
 and event sequence. Use `reason="next_action_arranged"`, `"blocked"`, or
 `"complete"`. This resolves only the coordination event. It does not complete
 the issue. A Mail read receipt or an earlier backlog assessment cannot resolve a
 newer event. If work remains, arrange the next authorized chunk, read again, and
 register a new watch before ending the turn.
+If the latest owner completion is the event just assessed, the new watch waits
+for a different event. It creates no new debt and spends no shared quota.
 
 Each new notice spends the existing daily and unchanged-snapshot notification
 budget. An unread current request can cover another event without new Mail or
