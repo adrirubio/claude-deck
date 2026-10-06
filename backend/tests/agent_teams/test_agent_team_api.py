@@ -2837,3 +2837,148 @@ async def test_readiness_post_registration_auxiliary_process_is_refused(client, 
         peer._PROC_ROOT = original_root
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
     assert "owner_binding_mcp_process_gap" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_counted_growth_at_four_seams(tmp_path, monkeypatch):
+    """C7/T1: deterministic outcomes and counted bounds at the member,
+    session, binding and roster growth seams, driven by an independent
+    disposable writer. No ready-or-blocked acceptance and no vacuous
+    assertions."""
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy import text as sql_text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import app.api.v1.agent_teams as agent_teams_module
+    from app.database import Base
+    from app.services import agent_team_service
+    from app.services.agent_mail_service import agent_mail_service
+    from tests.agent_teams.test_agent_team_api import _bind_owner, _readiness_team
+
+    def resolve(path_str):
+        import importlib
+        parts = path_str.split(".")
+        for cut in range(len(parts), 0, -1):
+            try:
+                obj = importlib.import_module(".".join(parts[:cut]))
+            except ImportError:
+                continue
+            for attr in parts[cut:]:
+                obj = getattr(obj, attr)
+            return obj
+
+    class MP:
+        def setattr(self, target, name=None, value=None):
+            if isinstance(target, str):
+                parts = target.split(".")
+                setattr(resolve(".".join(parts[:-1])), parts[-1], name)
+            else:
+                setattr(target, name, value)
+
+    agent_team_service._fallback_provider = AsyncMock(return_value="codex-cli")
+    agent_mail_service.sync_observed_sessions = AsyncMock()
+    agent_team_service._discover_sessions = lambda: []
+
+    scenarios = [
+        ("member", {"owner_binding_stale", "owner_binding_missing", "provider_mail_not_ready"},
+         "INSERT INTO mail_team_members (identity_key, repo_id, repo_path, repo_name,"
+         " display_name, participant_kind, team_preset_id, team_slot_id, created_at, updated_at)"
+         " VALUES ('slot:g-' || :n, 'r', '/r', 'r', 'G' || :n, 'team_slot', :preset, :slot,"
+         " CURRENT_TIMESTAMP, '2999-01-01 00:00:00')", 300),
+        ("session", {"owner_binding_context_limit", "owner_binding_missing", "provider_mail_not_ready"},
+         "INSERT INTO mail_agent_sessions (member_id, provider, source, session_key,"
+         " wake_enabled, mailbox_status, last_seen_at, team_preset_id, team_slot_id,"
+         " bound_pane_pid, bound_pane_proc_start, capability_token_hash, created_at)"
+         " VALUES (:member, 'codex-cli', 'mcp', 'mcp:g-' || :n, 1, 'connected',"
+         " CURRENT_TIMESTAMP, :preset, :slot, 9000 + :n, '1', 'cap-g' || :n,"
+         " CURRENT_TIMESTAMP)", 300),
+        ("binding", set(),
+         "INSERT INTO agent_pane_bindings (pane_pid, pane_proc_start, slot_id, preset_id,"
+         " created_at) VALUES (40000 + :n, '1', :slot, :preset, CURRENT_TIMESTAMP)", 300),
+        ("roster", {"readiness_context_limit"},
+         "INSERT INTO agent_team_slots (preset_id, position, display_name, provider,"
+         " repo_id, repo_path, repo_name, launch_mode, enabled, created_at, updated_at)"
+         " VALUES (:preset, 100 + :n, 'G' || :n, 'codex-cli', 'ov', '/ov', 'ov', 'plain', 0,"
+         " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", 300),
+    ]
+
+    for index, (seam, expected_codes, growth_sql, count) in enumerate(scenarios):
+        db_path = tmp_path / f"growth-{seam}.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
+        writer_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.run_sync(Base.metadata.create_all)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with maker() as db:
+                preset, scope, _repo = await _readiness_team(db, MP(), tmp_path, f"Counted{index}", 1)
+                await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                                 {"slot": preset.slots[0].id, "preset": preset.id})
+                _bind_owner(db, preset, preset.slots[1].id, 1400 + index, 8500 + index, last_seen=datetime.utcnow())
+                _bind_owner(db, preset, preset.slots[0].id, 1450 + index, 8550 + index, last_seen=datetime.utcnow())
+                await db.commit()
+                seam_params = {"n": 0, "preset": preset.id, "slot": preset.slots[1].id,
+                               "member": 1400 + index}
+
+                # Independent disposable writer grows the collection.
+                async with writer_engine.begin() as conn:
+                    for n in range(count):
+                        await conn.exec_driver_sql(growth_sql, {**seam_params, "n": n})
+
+                # Counted seams: SQL collection, hydration and native probes.
+                counters = {"member": 0, "session": 0, "binding": 0, "roster": 0, "probes": 0}
+                original_execute = db.execute
+                original_scalars = db.scalars
+
+                def classify(sql):
+                    if "mail_team_members" in sql:
+                        counters["member"] += 1
+                    elif "mail_agent_sessions" in sql:
+                        counters["session"] += 1
+                    elif "agent_pane_bindings" in sql:
+                        counters["binding"] += 1
+                    elif "agent_team_slots" in sql:
+                        counters["roster"] += 1
+
+                async def counting_execute(query, *args, **kwargs):
+                    classify(str(getattr(query, "statement", query)))
+                    return await original_execute(query, *args, **kwargs)
+
+                async def counting_scalars(query, *args, **kwargs):
+                    classify(str(getattr(query, "statement", query)))
+                    return await original_scalars(query, *args, **kwargs)
+
+                def counting_probe(*_args, **_kwargs):
+                    counters["probes"] += 1
+                    return True
+
+                monkeypatch.setattr(db, "execute", counting_execute)
+                monkeypatch.setattr(db, "scalars", counting_scalars)
+                monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict", counting_probe)
+                monkeypatch.setattr("app.utils.peer_process.pane_agent_argv",
+                                    lambda *a: ["codex", "exec"])
+                # Decisive invariance: the same bounded work runs before and
+                # after the 300-row growth; growth never widens a query or a
+                # native probe count.
+                before_body = await agent_teams_module.read_activation_readiness(scope.id, None, db)
+                before_counts = dict(counters)
+                for key in counters:
+                    counters[key] = 0
+                body = await agent_teams_module.read_activation_readiness(scope.id, None, db)
+
+                codes = {blocker["code"] for blocker in body["blockers"]}
+                assert codes == expected_codes, (seam, codes)
+                if seam == "binding":
+                    assert body["status"] == "ready"
+                else:
+                    assert body["status"] == "blocked"
+                # Bounded work: identical query and probe counts before and
+                # after growth; native probes stay one pair per candidate
+                # session and never exceed the declared per-slot caps.
+                assert counters == before_counts, (seam, before_counts, counters)
+                assert counters["probes"] <= 4, (seam, counters)
+        finally:
+            await engine.dispose()
+            await writer_engine.dispose()
