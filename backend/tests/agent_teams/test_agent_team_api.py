@@ -1292,6 +1292,8 @@ async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
     # binding. Individual cases can override the returned verdicts.
     monkeypatch.setattr("app.utils.peer_process.pane_is_alive_strict",
                         lambda pane_pid, proc_start: True)
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
+                        lambda pane_pid, proc_start: "codex exec --yolo")
     from unittest.mock import AsyncMock
 
     from app.models.database import MailAgentSession, MailTeamMember
@@ -2265,3 +2267,33 @@ async def test_readiness_repeated_observation_is_stable(client, db, monkeypatch,
     second = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     assert first.json()["status"] == second.json()["status"]
     assert [b["code"] for b in first.json()["blockers"]] == [b["code"] for b in second.json()["blockers"]]
+
+
+@pytest.mark.asyncio
+async def test_readiness_native_agent_identity_mismatch_is_refused(client, db, monkeypatch, tmp_path):
+    """I06: the actual native provider/agent identity must confirm the slot
+    provider family; a stored provider string alone cannot establish it."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "AgentId", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1002, 8102, last_seen=datetime.utcnow())
+    # Wrong provider family in the native command line.
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
+                        lambda pane_pid, proc_start: "claude --model x")
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_identity" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_unconfirmed_native_identity_refuses(client, db, monkeypatch, tmp_path):
+    """I06: a shell command line or unreadable process refuses identity
+    instead of inferring it."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ShellPane", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1003, 8103, last_seen=datetime.utcnow())
+    monkeypatch.setattr("app.utils.peer_process.pane_agent_command",
+                        lambda pane_pid, proc_start: "bash")
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_identity" in codes
+    assert readiness.json()["status"] == "blocked"

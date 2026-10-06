@@ -2723,9 +2723,22 @@ async def read_activation_readiness(
             # Strict native identity: confirm the pane process start-time
             # lifetime against the live process, not a lenient liveness guess.
             # One probe per candidate, capped by the bounded session query.
-            from app.utils.peer_process import pane_is_alive_strict
+            from app.utils.peer_process import pane_agent_command, pane_is_alive_strict
             if pane_is_alive_strict(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
                 return False, "native_lifetime", member.id, None
+            # Actual native provider/agent identity: the pane process command
+            # line must confirm the provider family. Stored provider strings
+            # and pane liveness alone cannot establish identity. A shell or an
+            # unreadable process refuses rather than inferring.
+            command = pane_agent_command(session.bound_pane_pid, session.bound_pane_proc_start)
+            marker = {
+                "claude-code": "claude",
+                "codex-cli": "codex",
+                "copilot-cli": "copilot",
+                "opencode-cli": "opencode",
+            }.get(slot.provider, slot.provider)
+            if command is None or marker not in command:
+                return False, "native_identity", member.id, None
             qualifying.append(session)
         if len(qualifying) > 1:
             # Two or more simultaneously live bindings are never resolved

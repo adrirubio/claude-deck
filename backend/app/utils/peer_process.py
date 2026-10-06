@@ -12,6 +12,7 @@ handler. Once the response is sent the peer socket enters TIME_WAIT, its
 
 import logging
 import os
+from pathlib import Path
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -331,6 +332,29 @@ def pane_is_alive_strict(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
         return current_start == pane_proc_start
     except (OSError, ValueError, IndexError):
         return None
+
+
+def pane_agent_command(pane_pid: int, pane_proc_start: str) -> Optional[str]:
+    """Return the pane process command line when its start-time identity is
+    confirmed; otherwise None.
+
+    Bounded observational native evidence: one /proc stat read for the
+    lifetime check and one /proc cmdline read for the actual agent/provider
+    identity. A shell command line or an unreadable process yields None; the
+    caller must refuse rather than infer identity from stored fields alone.
+    """
+    stat = read_proc_stat(pane_pid)
+    if stat is None:
+        return None
+    current_pid, current_start = stat
+    if current_pid != pane_pid or current_start != pane_proc_start:
+        return None
+    try:
+        raw = Path(f"/proc/{pane_pid}/cmdline").read_bytes()
+    except OSError:
+        return None
+    command = raw.replace(b"\x00", b" ").decode("utf-8", "replace").strip()
+    return command or None
 
 
 def pane_is_alive(pane_pid: int, pane_proc_start: str) -> Optional[bool]:
