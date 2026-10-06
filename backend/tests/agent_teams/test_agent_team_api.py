@@ -2913,7 +2913,7 @@ async def test_readiness_counted_growth_at_four_seams(tmp_path, monkeypatch):
         maker = async_sessionmaker(engine, expire_on_commit=False)
         try:
             async with maker() as db:
-                preset, scope, _repo = await _readiness_team(db, MP(), tmp_path, f"Counted{index}", 1)
+                preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, f"Counted{index}", 1)
                 await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
                                  {"slot": preset.slots[0].id, "preset": preset.id})
                 _bind_owner(db, preset, preset.slots[1].id, 1400 + index, 8500 + index, last_seen=datetime.utcnow())
