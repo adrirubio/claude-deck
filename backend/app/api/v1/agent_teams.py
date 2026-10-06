@@ -149,6 +149,29 @@ def _policy_event_snapshot(scope, request) -> dict:
     }
 
 
+async def _observe_policy_rejection(db, code: str) -> None:
+    """C09: an optimistic-concurrency refusal records its rejected outcome.
+
+    The refusal stands; observation failure never masks it. No action is
+    ever replayed because its audit fact is absent.
+    """
+    try:
+        from app.services import factory_audit_service as _audit
+        await _audit.record_event(
+            db,
+            event_kind="policy_change",
+            source="agent_teams.update_github_scope",
+            occurred_at=datetime.now(timezone.utc),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            action_outcome="rejected",
+            sanitized_reason=code,
+            correlation_id=f"policy-rejection:{code}",
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+
+
 def _audit_handoff_actor(session):
     """C08: a member handoff attempt is attributed to its authenticated
     member, never to the shared operator credential."""
@@ -573,6 +596,7 @@ async def _reserve_scope_writer(db: AsyncSession, scope_id: int) -> TeamGithubSc
         )
     except OperationalError as exc:
         await db.rollback()
+        await _observe_policy_rejection(db, "scope_changed_during_update")
         raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
     if result.rowcount != 1:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
@@ -2172,6 +2196,7 @@ async def update_github_scope(
         raise HTTPException(status_code=409, detail="GitHub scope already exists for this repo") from exc
     except OperationalError as exc:
         await db.rollback()
+        await _observe_policy_rejection(db, "scope_changed_during_update")
         raise HTTPException(status_code=409, detail="scope_changed_during_update") from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc

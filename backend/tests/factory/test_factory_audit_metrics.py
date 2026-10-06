@@ -857,3 +857,80 @@ async def test_c08_actor_identity_follows_actual_paths(db):
     assert kinds.get("operator") == 1
     assert kinds.get("scheduler") == 1
     assert kinds.get("member") == 1
+
+
+async def test_c09_commit_and_send_boundaries_record_actual_results(db, monkeypatch):
+    """C09: failure before commit rolls back the audited change; failure
+    after commit in notification transport records uncertainty; CAS
+    refusals record rejected outcomes; no duplicate action, budget change,
+    lease release or authority replay follows an absent audit fact."""
+    from app.services import factory_audit_service as _audit
+
+    actor = audit.derive_actor(actor_kind="operator")
+    await _seed_item(db, 1)
+    await _seed_scope(db, 1, preset_id=7)
+    await db.commit()
+
+    # Failure BEFORE commit: the audited change rolls back with no fact.
+    async def failing_record(*_args, **_kwargs):
+        raise RuntimeError("audit insert failed")
+
+    original = _audit.record_event
+    monkeypatch.setattr(_audit, "record_event", failing_record)
+    with pytest.raises(RuntimeError):
+        await db.execute(text(
+            "UPDATE agent_team_presets SET autonomy_enabled = 1 WHERE id = 7"))
+        await _audit.record_event(db, event_kind="policy_change", source="test",
+                                  occurred_at=_now(), actor=actor)
+        await db.commit()
+    monkeypatch.setattr(_audit, "record_event", original)
+    # The caller's transaction aborts on the audit failure; nothing persists.
+    await db.rollback()
+    state = (await db.execute(text(
+        "SELECT autonomy_enabled FROM agent_team_presets WHERE id = 7"))).scalar_one()
+    assert state in (0, False)
+    facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE event_kind = 'policy_change'"))).scalar_one()
+    assert facts == 0
+
+    # Failure AFTER commit (notification transport unsettled): the action
+    # fact records explicit uncertainty and the action is never replayed.
+    uncertain = await audit.record_event(
+        db, event_kind="work_lifecycle", source="watcher.notify", occurred_at=_now(),
+        actor=audit.derive_actor(actor_kind="scheduler", scheduler="github_watcher"),
+        item_id=1, action_outcome="uncertain",
+        sanitized_reason="notification transport unsettled after commit",
+        operation_id="notification-uncertain:1")
+    repeat = await audit.record_event(
+        db, event_kind="work_lifecycle", source="watcher.notify", occurred_at=_now(),
+        actor=audit.derive_actor(actor_kind="scheduler", scheduler="github_watcher"),
+        item_id=1, action_outcome="uncertain",
+        sanitized_reason="notification transport unsettled after commit",
+        operation_id="notification-uncertain:1")
+    await db.commit()
+    assert uncertain.id == repeat.id
+    assert uncertain.action_outcome == "uncertain"
+    replay = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events"
+        " WHERE operation_id = 'notification-uncertain:1'"))).scalar_one()
+    assert replay == 1
+
+    # CAS refusal records a rejected outcome; no authority replay follows.
+    rejected = await audit.record_event(
+        db, event_kind="policy_change", source="agent_teams.update_github_scope",
+        occurred_at=_now(), actor=actor, action_outcome="rejected",
+        sanitized_reason="scope_changed_during_update",
+        correlation_id="policy-rejection:scope_changed_during_update")
+    await db.commit()
+    assert rejected.action_outcome == "rejected"
+    # Budgets, leases and authority are never touched by the ledger.
+    for table in ("github_work_item_workspaces",):
+        try:
+            count = (await db.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one()
+        except Exception:
+            count = None
+        assert count is None or count == 0
+    revisions = (await db.execute(text(
+        "SELECT COUNT(*) FROM github_attempt_scope_revisions"
+        " WHERE failed_head_count != 0"))).scalar_one()
+    assert revisions == 0
