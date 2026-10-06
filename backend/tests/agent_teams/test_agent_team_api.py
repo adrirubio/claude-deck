@@ -2374,3 +2374,43 @@ async def test_readiness_requires_capability_token_enforcement(client, db, monke
     codes = {blocker["code"] for blocker in disabled.json()["blockers"]}
     assert "capability_tokens_not_required" in codes
     assert disabled.json()["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_readiness_owner_disabled_between_baseline_and_validation_is_refused(
+    client, db, monkeypatch, tmp_path
+):
+    """C-2/Astra: the complete immutable baseline is captured before
+    validation. A writer that disables the only owner between those reads is
+    refused; the change is never absorbed into both signatures."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "BaselineRace", 1)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 1010, 8110, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 1011, 8111, last_seen=now)
+    await db.commit()
+
+    original_scalars = db.scalars
+    state = {"started": False}
+
+    async def intercepting_scalars(query, *args, **kwargs):
+        sql = str(getattr(query, "statement", query))
+        if not state["started"] and ("mail_team_members" in sql or "mail_agent_sessions" in sql):
+            state["started"] = True
+            # Independent writer change lands after the complete baseline and
+            # before the first validation read. Validation-phase queries are
+            # the first member or session reads.
+            await db.execute(text(
+                "UPDATE mail_agent_sessions SET wake_enabled = 0 WHERE id = 8110"))
+            await db.execute(text("COMMIT"))
+        return await original_scalars(query, *args, **kwargs)
+
+    monkeypatch.setattr(db, "scalars", intercepting_scalars)
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    body = readiness.json()
+    codes = {blocker["code"] for blocker in body["blockers"]}
+    assert body["status"] == "blocked"
+    assert "binding_changed_during_observation" in codes
+    assert "owner_binding_stale" in codes
+    assert state["started"] is True

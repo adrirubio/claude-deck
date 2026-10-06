@@ -2845,11 +2845,21 @@ async def read_activation_readiness(
             tuple(tuple(row) for row in roster_rows),
         )
 
+    # C-2: one complete immutable baseline is captured BEFORE any
+    # validation. Validation runs against that baseline; a change between the
+    # baseline and validation reads is refused, never absorbed.
+    baselines: dict[int, tuple] = {}
+    for slot in enabled[:64]:
+        baselines[slot.id] = await identity_signature(slot)
     states: dict[int, tuple[bool, str | None, int | None, int | None]] = {}
     signatures: dict[int, tuple] = {}
     for slot in enabled[:64]:
         states[slot.id] = await binding_state(slot)
         signatures[slot.id] = await identity_signature(slot)
+        if signatures[slot.id] != baselines[slot.id]:
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The binding state changed between baseline and validation.",
+                             "slot_ids": [slot.id]})
 
     leader = next((slot for slot in enabled if preset is not None and slot.id == preset.leader_slot_id), None)
     if leader is None:
@@ -2894,20 +2904,17 @@ async def read_activation_readiness(
         blockers.append({"code": "binding_changed_during_observation",
                          "message": "The Leader assignment changed during the observation."})
     for slot in enabled[:64]:
-        current_slot = await db.get(AgentTeamSlot, slot.id)
-        if current_slot is None or current_slot.enabled != slot.enabled:
-            blockers.append({"code": "binding_changed_during_observation",
-                             "message": "The roster membership changed during the observation.",
-                             "slot_ids": [slot.id]})
-            continue
         # Fresh full re-evaluation: membership, session identity, wake state,
         # capability, provider, heartbeat freshness, pane identity, binding row
-        # and native liveness must all still hold.
+        # and native liveness must all still hold. The final complete snapshot
+        # must equal both the post-validation signature and the immutable
+        # baseline; scalar-column reads make it fresh, never cached.
         fresh_ok, _fresh_reason, fresh_member_id, fresh_session_id = await binding_state(slot)
         fresh_signature = await identity_signature(slot)
         if (fresh_member_id != states[slot.id][2] or fresh_ok != states[slot.id][0]
                 or fresh_session_id != states[slot.id][3]
-                or fresh_signature != signatures[slot.id]):
+                or fresh_signature != signatures[slot.id]
+                or fresh_signature != baselines[slot.id]):
             blockers.append({"code": "binding_changed_during_observation",
                              "message": "The complete binding state changed during the observation.",
                              "slot_ids": [slot.id]})
