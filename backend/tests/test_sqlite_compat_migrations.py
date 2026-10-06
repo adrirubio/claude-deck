@@ -1180,14 +1180,14 @@ async def _v37_seed_authority_records(conn, *, divergent: bool):
         "INSERT INTO mail_messages (id, thread_root_id, kind, sender_member_id, recipient_member_id, subject, "
         "body_markdown, approval_round, decision, delivery_key, payload, created_at) "
         "VALUES (102, 100, 'answer', 8, 7, 'ACK', "
-        "'Leader ACK evidence', 1, 'approved', 'fixture-ack-delivery-102', "
-        "'{\"ack\": true, \"work_item_id\": 1}', CURRENT_TIMESTAMP)"
+        "'Leader ACK evidence', 1, 'approved', 'github-approval:1:decision', "
+        "'{\"approval_request_id\": 1}', CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_approval_requests (id, work_item_id, request_kind, dispatch_nonce, approval_round, "
-        "owner_member_id, leader_member_id, request_fingerprint, status, request_message_id, decision_message_id, scope_revision_id, "
+        "owner_member_id, leader_member_id, request_fingerprint, status, request_message_id, scope_revision_id, "
         "created_at) VALUES (2, 1, 'continuation', 'fixture-nonce', 2, 7, 8, 'fixture-continuation-fingerprint', "
-        "'approved', 101, 103, 2, CURRENT_TIMESTAMP)"
+        "'approved', 101, 2, CURRENT_TIMESTAMP)"
     ))
     await conn.execute(text(
         "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision, owner_slot_id, "
