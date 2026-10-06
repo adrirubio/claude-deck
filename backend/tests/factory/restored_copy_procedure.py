@@ -50,6 +50,13 @@ PROCEDURE_STEPS = (
 DISPOSABLE_MARKER_NAME = ".disposable-restored-copy-target"
 
 PROCEDURE_LIMITS = {
+    "sqlite_mode_limits": (
+        "Journal-mode semantics: committed WAL state is checkpointed into the"
+        " main file and the exclusive writer lock runs under forced rollback"
+        " journal mode. Side-file behavior: WAL and SHM side files are"
+        " digested at every recorded boundary. Lock scope: the exclusive"
+        " writer lock covers quiescence, reference capture and the backup"
+        " copy; later writers refuse at the final boundary."),
     "synthetic_quiescence": (
         "Quiescence in disposable fixtures is synthetic. It is not a real "
         "work-completion claim."
@@ -244,6 +251,15 @@ def run_restored_copy_procedure(
 
     conn = sqlite3.connect(resolved_source)
     try:
+        # C6: one protected logical state across quiescence, reference
+        # capture, backup and comparison. Committed WAL state is folded into
+        # the main file first; the journal mode is forced to rollback so the
+        # exclusive writer lock has an explicit documented scope.
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        # Step 3: writer exclusion is acquired BEFORE the quiescence read and
+        # held through the backup copy. Its acquisition is the stop proof.
+        conn.execute("BEGIN EXCLUSIVE")
         # Step 2: quiesce attempts, approvals, revisions and leases.
         findings = _quiescence_findings(conn)
         if findings:
@@ -251,42 +267,41 @@ def run_restored_copy_procedure(
                 "source_digest": _digest_set(resolved_source),
                 "reference_scope": capture_reference_scope(conn),
             }
+            conn.execute("ROLLBACK")
+            conn.close()
             return refuse("quiescence_residual", PROCEDURE_STEPS[1],
                           "Residual authority: " + "; ".join(sorted(findings)))
         record(PROCEDURE_STEPS[1], "ADMIT",
                "No nonterminal attempt, pending approval, nonterminal revision, active lease or residual authority.")
-
-        # C-6: force rollback journal mode on the disposable copy so the
-        # exclusive stop proof covers writers; WAL side files cannot then
-        # carry unaccounted changes.
-        conn.execute("PRAGMA journal_mode=DELETE")
-        # Step 3: stop relevant writers after quiescence (exclusive lock proof).
-        try:
-            conn.execute("BEGIN EXCLUSIVE")
-            conn.execute("COMMIT")
-        except sqlite3.OperationalError as exc:
-            unchanged_evidence = {
-                "source_digest": _digest_set(resolved_source),
-                "reference_scope": capture_reference_scope(conn),
-            }
-            return refuse("writer_open", PROCEDURE_STEPS[2], f"A writer remains open: {exc}")
-        record(PROCEDURE_STEPS[2], "ADMIT", "Exclusive lock acquired; no writer remains open.")
-
+        record(PROCEDURE_STEPS[2], "ADMIT",
+               "Exclusive writer lock acquired before the quiescence read and held through backup.")
         pre_mutation_scope = capture_reference_scope(conn)
-    finally:
-        conn.close()
 
-    # Step 4: back up the database, digesting main and side files.
-    backup_path = resolved_root / "procedure-backup.db"
-    restored_path = resolved_root / "procedure-restored.db"
-    source_digest_before = _digest_set(resolved_source)
-    shutil.copy(resolved_source, backup_path)
-    source_digest_after = _digest_set(resolved_source)
-    if source_digest_after != source_digest_before:
-        unchanged_evidence = {"source_digest": source_digest_before}
-        return refuse("backup_diverged", PROCEDURE_STEPS[3], "The source digests changed during the copy.")
-    record(PROCEDURE_STEPS[3], "ADMIT",
-           f"Backup created; source digest unchanged ({source_digest_before}).")
+        # Step 4: back up the database inside the held writer lock,
+        # digesting main and side files.
+        backup_path = resolved_root / "procedure-backup.db"
+        restored_path = resolved_root / "procedure-restored.db"
+        source_digest_before = _digest_set(resolved_source)
+        shutil.copy(resolved_source, backup_path)
+        source_digest_after = _digest_set(resolved_source)
+        if source_digest_after != source_digest_before:
+            unchanged_evidence = {"source_digest": source_digest_before}
+            conn.execute("ROLLBACK")
+            conn.close()
+            return refuse("backup_diverged", PROCEDURE_STEPS[3], "The source digests changed during the copy.")
+        conn.execute("COMMIT")
+        record(PROCEDURE_STEPS[3], "ADMIT",
+               f"Backup created inside the held writer lock; source digests unchanged ({source_digest_before}).")
+    except sqlite3.OperationalError as exc:
+        unchanged_evidence = {"source_digest": _digest_set(resolved_source)}
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        conn.close()
+        return refuse("writer_open", PROCEDURE_STEPS[2], f"Writer exclusion failed: {exc}")
+    finally:
+        pass
 
     shutil.copy(backup_path, restored_path)
     if _digest_set(restored_path) != _digest_set(backup_path):

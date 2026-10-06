@@ -294,3 +294,50 @@ def test_shared_procedure_refuses_six_restored_copy_mutations(tmp_path):
             assert record["refusal_code"] == "restored_copy_diverged", (name, record["refusal_code"])
 
     asyncio.run(run())
+
+
+def test_shared_procedure_backup_contains_committed_wal_state(tmp_path):
+    """C6/R5: a committed WAL-mode change before the procedure run is folded
+    into the protected state and present in the admitted backup."""
+    import asyncio
+    import sqlite3 as _sqlite3
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.database import Base
+
+    async def run():
+        (tmp_path / DISPOSABLE_MARKER_NAME).write_text("disposable test target")
+        source = tmp_path / "walstate.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{source}")
+        async with engine.begin() as conn:
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.run_sync(Base.metadata.create_all)
+        async with engine.connect() as conn:
+            await _v37_seed_authority_records(conn, divergent=False)
+            await _v37_quiesce_and_verify(conn)
+        await engine.dispose()
+
+        # A separate WAL-mode connection commits before the procedure run.
+        writer = _sqlite3.connect(source)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("UPDATE github_work_items SET approval_round_count = 7 WHERE id = 1")
+        writer.commit()
+        writer.close()
+
+        record = run_restored_copy_procedure(
+            source_path=source, work_root=tmp_path,
+            pause_state={"automation_paused": True})
+        assert record["outcome"] == "ADMIT"
+        # The comparison record is the backup content: the committed WAL
+        # state is inside the protected logical state.
+        items = record["comparison_record"]["items"]
+        assert items and items[0]["approval_round_count"] == 7
+        restored = tmp_path / "procedure-restored.db"
+        check = _sqlite3.connect(restored)
+        value = check.execute(
+            "SELECT approval_round_count FROM github_work_items WHERE id = 1").fetchone()[0]
+        check.close()
+        assert value == 7
+
+    asyncio.run(run())
