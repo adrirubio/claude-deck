@@ -356,3 +356,101 @@ async def repository(scope_id: int, db=Depends(read_snapshot)):
     if not 0 < scope_id < 2**63:
         raise projections.FactoryReadError("invalid_filter", 422)
     return await projections.repository_detail(db, scope_id)
+
+
+# ---------------------------------------------------------------------------
+# P05: observation ledger reads and safe delivery metrics
+# ---------------------------------------------------------------------------
+
+@router.get("/audit-events")
+async def list_factory_audit_events(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    event_kind: str | None = None,
+    team_context_key: str | None = None,
+    scope_context_key: str | None = None,
+    item_context_key: str | None = None,
+    _operator: None = Depends(require_operator),
+    db=Depends(get_db),
+):
+    """A15/A16/A21/A38: operator-protected paginated audit reads.
+
+    Historical context keys address retained history after deletion; current
+    ID filters resolve the current resource context key. Agent tokens do not
+    authorize audit reads. Deleted live links are labelled unavailable while
+    snapshot labels remain readable.
+    """
+    from sqlalchemy import func, select
+
+    from app.models.database import FactoryAuditEvent
+    from app.models.schemas import FactoryAuditEventPage, FactoryAuditEventRead
+
+    stmt = select(FactoryAuditEvent)
+    count_stmt = select(func.count()).select_from(FactoryAuditEvent)
+    if event_kind:
+        stmt = stmt.where(FactoryAuditEvent.event_kind == event_kind)
+        count_stmt = count_stmt.where(FactoryAuditEvent.event_kind == event_kind)
+    if team_context_key:
+        stmt = stmt.where(FactoryAuditEvent.team_context_key == team_context_key)
+        count_stmt = count_stmt.where(FactoryAuditEvent.team_context_key == team_context_key)
+    if scope_context_key:
+        stmt = stmt.where(FactoryAuditEvent.scope_context_key == scope_context_key)
+        count_stmt = count_stmt.where(FactoryAuditEvent.scope_context_key == scope_context_key)
+    if item_context_key:
+        stmt = stmt.where(FactoryAuditEvent.item_context_key == item_context_key)
+        count_stmt = count_stmt.where(FactoryAuditEvent.item_context_key == item_context_key)
+    total = int((await db.execute(count_stmt)).scalar_one_or_none() or 0)
+    rows = (await db.execute(
+        stmt.order_by(FactoryAuditEvent.occurred_at.desc(), FactoryAuditEvent.id.desc())
+        .offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+    items = []
+    labels: set[str] = set()
+    for row in rows:
+        if row.context_snapshot:
+            labels.update(str(key) for key in row.context_snapshot.keys())
+        items.append(FactoryAuditEventRead(
+            id=row.id, occurred_at=row.occurred_at, recorded_at=row.recorded_at,
+            event_kind=row.event_kind, source=row.source, record_kind=row.record_kind,
+            fact_source=row.fact_source, fact_time=row.fact_time,
+            actor_kind=row.actor_kind, actor_reference=row.actor_reference,
+            team_preset_id=row.team_preset_id, team_slot_id=row.team_slot_id,
+            scope_id=row.scope_id, item_id=row.item_id, revision_id=row.revision_id,
+            request_id=row.request_id,
+            team_context_key=row.team_context_key, scope_context_key=row.scope_context_key,
+            item_context_key=row.item_context_key, context_snapshot=row.context_snapshot,
+            correlation_id=row.correlation_id, sanitized_reason=row.sanitized_reason,
+            before_values=row.before_values, after_values=row.after_values,
+            action_outcome=row.action_outcome, delivery_outcome=row.delivery_outcome,
+            completion_kind=row.completion_kind, human_review_evidence=row.human_review_evidence,
+            live_links_available=any(value is not None for value in (
+                row.team_preset_id, row.scope_id, row.item_id, row.revision_id)),
+        ))
+    return FactoryAuditEventPage(
+        items=items, total=total, page=page, page_size=page_size,
+        team_context_key=team_context_key, scope_context_key=scope_context_key,
+        event_kind=event_kind, snapshot_labels=sorted(labels))
+
+
+@router.get("/metrics")
+async def get_factory_metrics(
+    window_start: datetime,
+    window_end: datetime,
+    filter_scope: str = "all",
+    team_context_key: str | None = None,
+    scope_context_key: str | None = None,
+    db=Depends(get_db),
+):
+    """A23-A38: safe aggregates with window, scope, unit, samples and
+    coverage. Ordinary factory read: no protected details, no fresh GitHub
+    fetches and no writes.
+    """
+    from app.services import factory_metrics_service as _metrics
+    return await _metrics.build_metrics_window(
+        db,
+        window_start=window_start,
+        window_end=window_end,
+        filter_scope=filter_scope,
+        team_context_key=team_context_key,
+        scope_context_key=scope_context_key,
+    )
