@@ -1331,7 +1331,7 @@ def _bind_owner(db, preset, slot_id, member_id, session_id, *, last_seen):
         id=session_id, member_id=member_id, provider="codex-cli", source="mcp",
         session_key=f"mcp:ready-{session_id}", wake_enabled=True,
         mailbox_status="connected", last_seen_at=last_seen,
-        team_preset_id=preset.id, team_slot_id=slot_id,
+        team_preset_id=preset.id, team_slot_id=slot_id, pid=1000 + session_id,
         bound_pane_pid=1000 + session_id, bound_pane_proc_start="1",
         capability_token_hash=f"cap-{session_id}"))
     db.add(AgentPaneBinding(pane_pid=1000 + session_id, pane_proc_start="1",
@@ -1366,7 +1366,7 @@ async def test_activation_readiness_rejects_ambiguous_owner_binding(client, db, 
         session_key="mcp:ready-812", wake_enabled=True,
         mailbox_status="connected", last_seen_at=now,
         team_preset_id=preset.id, team_slot_id=preset.slots[1].id,
-        bound_pane_pid=1002, bound_pane_proc_start="1",
+        pid=1002, bound_pane_pid=1002, bound_pane_proc_start="1",
         capability_token_hash="cap-812"))
     db.add(AgentPaneBinding(pane_pid=1002, pane_proc_start="1",
                             slot_id=preset.slots[1].id, preset_id=preset.id))
@@ -2568,27 +2568,6 @@ async def test_readiness_earliest_roster_disable_refused_by_selection_snapshot(t
 
     from tests.agent_teams.test_agent_team_api import _readiness_team, _bind_owner
 
-    def _resolve(path_str):
-        import importlib
-        parts = path_str.split(".")
-        for cut in range(len(parts), 0, -1):
-            try:
-                obj = importlib.import_module(".".join(parts[:cut]))
-            except ImportError:
-                continue
-            for attr in parts[cut:]:
-                obj = getattr(obj, attr)
-            return obj
-        raise ImportError(path_str)
-
-    class MP:
-        def setattr(self, target, name=None, value=None):
-            if isinstance(target, str):
-                parts = target.split(".")
-                setattr(_resolve(".".join(parts[:-1])), parts[-1], name)
-            else:
-                setattr(target, name, value)
-
     db_path = tmp_path / "early-disable.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
     writer_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", connect_args={"timeout": 5})
@@ -2596,7 +2575,6 @@ async def test_readiness_earliest_roster_disable_refused_by_selection_snapshot(t
         await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
         await connection.run_sync(Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
-    mp = MP()
     from unittest.mock import AsyncMock
     from app.services import agent_team_service
     from app.services.agent_mail_service import agent_mail_service
@@ -2606,7 +2584,7 @@ async def test_readiness_earliest_roster_disable_refused_by_selection_snapshot(t
     try:
         async with maker() as db:
             import pathlib
-            preset, scope, _repo = await _readiness_team(db, mp, pathlib.Path(str(tmp_path)), "EarlyDisable", 1)
+            preset, scope, _repo = await _readiness_team(db, monkeypatch, pathlib.Path(str(tmp_path)), "EarlyDisable", 1)
             await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
                              {"slot": preset.slots[0].id, "preset": preset.id})
             _bind_owner(db, preset, preset.slots[1].id, 1200, 8300, last_seen=datetime.utcnow())
@@ -2641,3 +2619,113 @@ async def test_readiness_earliest_roster_disable_refused_by_selection_snapshot(t
     finally:
         await engine.dispose()
         await writer_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_readiness_auxiliary_mcp_process_positive(client, db, monkeypatch, tmp_path):
+    """C3: a bounded positive auxiliary MCP process tied to the current pane
+    through its parent chain satisfies the process/lifetime proof."""
+    import importlib
+    from app.models.database import MailAgentSession as Sess
+
+    peer = importlib.import_module("app.utils.peer_process")
+    real_argv = peer.pane_agent_argv
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "AuxProc", 1)
+    monkeypatch.setattr(peer, "pane_agent_argv", real_argv)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 1300, 8400, last_seen=now)
+    _bind_owner(db, preset, preset.slots[0].id, 1301, 8401, last_seen=now)
+    row = await db.get(Sess, 8400)
+    row.pid = 5001
+    await db.commit()
+
+    fake = tmp_path / "proc"
+    proc_dir = fake / "5001"
+    proc_dir.mkdir(parents=True)
+    pane_pid = 1000 + 8400
+    (proc_dir / "stat").write_text(
+        f"5001 (mcp) S {pane_pid} 5001 5001 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 77777 0 0")
+    (proc_dir / "cmdline").write_bytes(b"codex\x00mcp\x00")
+    for tree_pid in (pane_pid, 1000 + 8401):
+        pane_dir = fake / str(tree_pid)
+        pane_dir.mkdir(parents=True, exist_ok=True)
+        (pane_dir / "stat").write_text(
+            f"{tree_pid} (codex) S 1 {tree_pid} {tree_pid} 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0")
+        (pane_dir / "cmdline").write_bytes(b"codex\x00exec\x00--yolo\x00")
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    monkeypatch.setattr(peer, "process_is_confirmed_dead", lambda pid: False)
+    try:
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    finally:
+        peer._PROC_ROOT = original_root
+    body = readiness.json()
+    assert body["status"] == "ready", body
+
+
+@pytest.mark.asyncio
+async def test_readiness_auxiliary_mcp_process_gaps_refuse(client, db, monkeypatch, tmp_path):
+    """C3: missing, malformed, oversized or untied auxiliary process
+    identities refuse with the safe gap."""
+    import importlib
+    from app.models.database import MailAgentSession as Sess
+
+    peer = importlib.import_module("app.utils.peer_process")
+    real_argv = peer.pane_agent_argv
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "AuxGap", 1)
+    monkeypatch.setattr(peer, "pane_agent_argv", real_argv)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 1310, 8410, last_seen=now)
+    row = await db.get(Sess, 8410)
+    row.pid = 5002
+    await db.commit()
+
+    fake = tmp_path / "proc"
+    proc_dir = fake / "5002"
+    proc_dir.mkdir(parents=True)
+    pane_pid = 1000 + 8410
+    for tree_pid in (pane_pid, 1000 + 8401):
+        pane_dir = fake / str(tree_pid)
+        pane_dir.mkdir(parents=True, exist_ok=True)
+        (pane_dir / "stat").write_text(
+            f"{tree_pid} (codex) S 1 {tree_pid} {tree_pid} 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0")
+        (pane_dir / "cmdline").write_bytes(b"codex\x00exec\x00--yolo\x00")
+    original_root = peer._PROC_ROOT
+    peer._PROC_ROOT = str(fake)
+    monkeypatch.setattr(peer, "process_is_confirmed_dead", lambda pid: False)
+    try:
+        # Missing: no stat file at all.
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+        assert "owner_binding_mcp_process_gap" in {
+            b["code"] for b in readiness.json()["blockers"]}
+
+        # Malformed: unparsable stat content.
+        (proc_dir / "stat").write_text("garbage without fields")
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+        assert "owner_binding_mcp_process_gap" in {
+            b["code"] for b in readiness.json()["blockers"]}
+
+        # Oversized command bytes.
+        (proc_dir / "stat").write_text(
+            f"5002 (mcp) S {pane_pid} 5002 5002 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 77777 0 0")
+        (proc_dir / "cmdline").write_bytes(b"x" * (peer.PANE_COMMAND_BYTE_CAP + 5))
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+        assert "owner_binding_mcp_process_gap" in {
+            b["code"] for b in readiness.json()["blockers"]}
+
+        # Untied chain: the parent chain never reaches the current pane.
+        (proc_dir / "stat").write_text(
+            "5002 (mcp) S 9999 5002 5002 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 0 77777 0 0")
+        (proc_dir / "cmdline").write_bytes(b"codex\x00mcp\x00")
+        for pid in (9999, 9998, 9997, 9996):
+            d = fake / str(pid)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "stat").write_text(
+                f"{pid} (up) S {pid - 1} {pid} {pid} 0 -1 0 0 0 0 0 0 0 0 0 0 0 0 55555 0 0")
+        readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+        assert "owner_binding_mcp_process_gap" in {
+            b["code"] for b in readiness.json()["blockers"]}
+    finally:
+        peer._PROC_ROOT = original_root

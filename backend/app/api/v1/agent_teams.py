@@ -2773,11 +2773,39 @@ async def read_activation_readiness(
             # Authenticated MCP process: when the session process differs
             # from the pane process it must not be confirmed dead. This is the
             # separate current process check, not connected or heartbeat
-            # alone.
-            from app.utils.peer_process import process_is_confirmed_dead
+            # alone. The conservative wake-helper semantics are unchanged.
+            from app.utils.peer_process import (
+                pane_agent_argv,
+                process_is_confirmed_dead,
+                read_proc_stat,
+            )
             if (session.pid != session.bound_pane_pid
                     and process_is_confirmed_dead(session.pid)):
                 return False, "mcp_process", member.id, None
+            # C3: bounded positive auxiliary MCP process and lifetime proof.
+            # Missing, denied, malformed, oversized or reused process
+            # identities refuse with a safe gap. Identity is tied to the
+            # authenticated session and the current pane through the bounded
+            # parent chain (at most four hops).
+            if session.pid != session.bound_pane_pid:
+                current_pid = session.pid
+                anchored = False
+                for _hop in range(4):
+                    stat = read_proc_stat(current_pid)
+                    if stat is None or not isinstance(stat[1], str) or not stat[1]:
+                        return False, "mcp_process_gap", member.id, None
+                    ppid, start_time = stat
+                    argv = pane_agent_argv(current_pid, start_time)
+                    if argv is None:
+                        # Oversized, malformed or identity changed across the
+                        # bounded read window: refuse with the safe gap.
+                        return False, "mcp_process_gap", member.id, None
+                    if ppid == session.bound_pane_pid:
+                        anchored = True
+                        break
+                    current_pid = ppid
+                if not anchored:
+                    return False, "mcp_process_gap", member.id, None
             # Actual lifecycle retirement: a retired pane lifecycle row means
             # the pane is retired. Newest binding order is not equivalent.
             from app.models.database import MailPaneLifecycle
