@@ -200,6 +200,13 @@ class GithubDispatchScheduler:
                     await db.rollback()
                     logger.warning("backlog_coordination_failed scope=%s error_type=%s",
                                    coordination_scope_id, type(error).__name__)
+                try:
+                    from app.services.github_owner_followup_service import github_owner_followup_service
+                    await github_owner_followup_service.poll(db, coordination_scope_id)
+                except Exception as error:
+                    await db.rollback()
+                    logger.warning("owner_followup_failed scope=%s error_type=%s",
+                                   coordination_scope_id, type(error).__name__)
 
     async def _run_recovery_only(
         self,

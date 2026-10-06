@@ -520,6 +520,9 @@ class GithubCoordinationService:
                     "work without a dummy dispatch. Waiting for one human merge need not pause unrelated "
                     "work; spare capacity alone does not authorize blocked work. Preserve human merge, "
                     "exact-head review, approval/lease identities and finite budgets. Stop on OFF/HOLD."
+                    " Inspect owner_followups in the fresh read. Resolve each pending settlement with "
+                    "deck_report_owner_followup. For unfinished current initial implementation, record "
+                    "the next action and register its owner watch before ending your turn."
                 ), payload={"kind": "github_backlog_reconcile", "scope_id": scope_id,
                             "generation": generation, "request_sequence": sequence},
             ), auto_nudge=False, commit=False,
@@ -749,6 +752,7 @@ class GithubCoordinationService:
             status = "coordination_capped"
         snapshot = row.snapshot or {} if row else {}
         entries = row.assessments if row else []
+        from app.services.github_owner_followup_service import github_owner_followup_service
         return {
             "scope_id": scope_id, "repo": f"{scope.repo_owner}/{scope.repo_name}",
             "enabled": bool(row and row.enabled), "version": row.version if row else 0,
@@ -773,6 +777,7 @@ class GithubCoordinationService:
             "eligible_count": sum(e["disposition"] == "eligible" for e in entries) if current else None,
             "entries": entries, "assessment_current": current,
             "observations": snapshot.get("issues", []),
+            "owner_followups": await github_owner_followup_service.summary(db, scope_id),
         }
 
     async def request(self, db, scope_id, *, principal=None, client=None):
@@ -818,6 +823,8 @@ class GithubCoordinationService:
             "generation": generation, "sequence": row.request_sequence,
             "expires": int(time.time()) + _READ_TTL_SECONDS, "nonce": uuid4().hex,
         })
+        from app.services.github_owner_followup_service import github_owner_followup_service
+        result["owner_followups"] = await github_owner_followup_service.requests(db, scope_id, principal)
         return result
 
 

@@ -1,5 +1,6 @@
 """Agent Mail: durable team members, ephemeral sessions, messages, delivery context."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -10,7 +11,7 @@ import subprocess
 import time
 from uuid import uuid4
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Awaitable, Callable, List, Optional
 
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -2098,11 +2099,17 @@ class AgentMailService:
         self,
         session: MailAgentSession,
         nudge_prompt: str = INBOX_CHECK_PROMPT,
+        *,
+        pane_start: str | None = None,
+        transport_guard: Callable[[], bool] | None = None,
     ) -> dict[str, str]:
         if not session.tmux_target or not session.pane_id or session.pid is None:
             raise MailWakeError("wake_target_unbound")
 
         def require_current_pane() -> None:
+            if ((pane_start is not None and peer_process.pane_is_alive(session.pid, pane_start) is not True)
+                    or (transport_guard is not None and not transport_guard())):
+                raise MailWakeError("wake_target_stale")
             current = subprocess.run(
                 ["tmux", "display-message", "-p", "-t", session.pane_id,
                  "#{pane_id}|#{pane_pid}"],
@@ -2159,6 +2166,45 @@ class AgentMailService:
         ))
         await db.commit()
 
+    async def _send_guarded_tmux_inbox_check(
+        self, session: MailAgentSession, nudge_prompt: str, pane_start: str,
+        delivery_guard: Callable[[], Awaitable[bool]],
+        transport_guard: Callable[[], bool] | None,
+    ) -> dict[str, str]:
+        """Recheck authority after each slow lookup and immediately before submission."""
+        staged = False
+
+        async def current():
+            if (peer_process.pane_is_alive(session.pid, pane_start) is not True
+                    or (transport_guard is not None and not transport_guard())):
+                raise MailWakeError("wake_transport_uncertain" if staged else "wake_target_stale")
+            lookup = await asyncio.to_thread(subprocess.run,
+                ["tmux", "display-message", "-p", "-t", session.pane_id, "#{pane_id}|#{pane_pid}"],
+                capture_output=True, text=True, timeout=5, check=True)
+            if (lookup.stdout.strip() != f"{session.pane_id}|{session.pid}"
+                    or not await delivery_guard()
+                    or peer_process.pane_is_alive(session.pid, pane_start) is not True
+                    or (transport_guard is not None and not transport_guard())):
+                raise MailWakeError("wake_transport_uncertain" if staged else "wake_target_stale")
+
+        if not session.tmux_target or not session.pane_id or session.pid is None:
+            raise MailWakeError("wake_target_unbound")
+        try:
+            await current()
+            # Once text may have been written, a failed guard or syscall is uncertain.
+            staged = True
+            await asyncio.to_thread(subprocess.run,
+                ["tmux", "send-keys", "-t", session.pane_id, "-l", nudge_prompt],
+                capture_output=True, text=True, timeout=5, check=True)
+            await asyncio.sleep(TMUX_ENTER_DELAY_SECONDS)
+            await current()
+            await asyncio.to_thread(subprocess.run,
+                ["tmux", "send-keys", "-t", session.pane_id, "Enter"],
+                capture_output=True, text=True, timeout=5, check=True)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise MailWakeError("wake_transport_uncertain" if staged else "wake_transport_failed") from error
+        return {"method": "tmux", "target": session.tmux_target}
+
     async def _wake_member(
         self,
         db: AsyncSession,
@@ -2171,6 +2217,9 @@ class AgentMailService:
         source: str = "auto_nudge",
         reason_code: str | None = None,
         force: bool = False,
+        expected_session_id: int | None = None,
+        delivery_guard: Callable[[], Awaitable[bool]] | None = None,
+        transport_guard: Callable[[], bool] | None = None,
     ) -> dict[str, str]:
         unread, pending = await self.counts_for_member(db, member_id)
         audit = MailWakeAttempt(
@@ -2191,6 +2240,19 @@ class AgentMailService:
                 else:
                     raise MailWakeError("inbox_empty")
             session = await self._nudge_session_for_member(db, member_id, now)
+            expected_start = None
+            if expected_session_id is not None:
+                expected = await db.get(MailAgentSession, expected_session_id, populate_existing=True)
+                if (expected is None or expected.member_id != member_id or expected.source != "mcp"
+                        or expected.closed_at is not None or expected.mailbox_status != "connected"
+                        or not expected.wake_enabled or not expected.capability_token_hash
+                        or expected.last_seen_at < now - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS)
+                        or expected.bound_pane_pid != session.pid
+                        or expected.team_slot_id != session.team_slot_id
+                        or expected.team_preset_id != session.team_preset_id
+                        or peer_process.pane_is_alive(expected.bound_pane_pid, expected.bound_pane_proc_start) is not True):
+                    raise MailWakeError("wake_session_mismatch")
+                expected_start = expected.bound_pane_proc_start
             if actor_type == "session":
                 caller = await db.get(MailAgentSession, actor_session_id)
                 if (
@@ -2216,7 +2278,19 @@ class AgentMailService:
         db.add(audit)
         await db.commit()
         try:
-            result = self._send_tmux_inbox_check(session, nudge_prompt)
+            if expected_session_id is not None:
+                current = await self._nudge_session_for_member(db, member_id, datetime.utcnow())
+                if current.id != session.id or current.pid != session.pid:
+                    raise MailWakeError("wake_session_mismatch")
+            if delivery_guard is not None and not await delivery_guard():
+                raise MailWakeError("wake_session_mismatch")
+            if expected_session_id is not None:
+                if delivery_guard is None:
+                    raise MailWakeError("wake_session_mismatch")
+                result = await self._send_guarded_tmux_inbox_check(
+                    session, nudge_prompt, expected_start, delivery_guard, transport_guard)
+            else:
+                result = self._send_tmux_inbox_check(session, nudge_prompt)
         except MailWakeError as exc:
             audit.result = "refused"
             audit.failure_code = exc.code

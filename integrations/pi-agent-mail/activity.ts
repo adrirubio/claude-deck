@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 
 type Activity = 'working' | 'idle' | 'unknown'
 type Identity = { pid: number; start: string }
+type NativeEvent = { id: string; at: string; source: string; state: Activity; reason: string }
 
 function nativeIdentity(): Identity {
   const stat = readFileSync(`/proc/${process.pid}/stat`, 'utf8')
@@ -23,6 +24,9 @@ export function registerNativeActivity(pi: ExtensionAPI) {
   let inputPending = 0
   let lastWrite = 0
   let terminalReason = 'native_turn_completed'
+  let context: ExtensionContext | undefined
+  let latest: NativeEvent | undefined
+  let attestationTimer: ReturnType<typeof setInterval> | undefined
 
   const matches = (ctx: ExtensionContext) => {
     try {
@@ -31,10 +35,13 @@ export function registerNativeActivity(pi: ExtensionAPI) {
     } catch { return false }
   }
 
-  const publish = (state: Activity, reason: string, progress = false) => {
+  const publish = (state: Activity, reason: string, progress = false, source = 'native_progress',
+    attested?: NativeEvent) => {
     if (!pane || !native || !session || !owns()) return
     const now = Date.now()
     if (progress && now - lastWrite < 2000) return
+    const event = attested ?? { id: randomUUID(), at: new Date(now).toISOString(), source, state, reason }
+    if (!attested) latest = event
     let temporary: string | undefined
     try {
       const path = session.file
@@ -43,7 +50,9 @@ export function registerNativeActivity(pi: ExtensionAPI) {
         version: 1, pane, native, cwd: session.cwd,
         session_id: session.id, session_file: path, session_header: session.header,
         session_persisted: existsSync(path),
-        state, reason, observed_at: new Date(now).toISOString(),
+        state, reason, observed_at: event.at,
+        event_id: event.id, event_source: event.source,
+        attested_at: new Date(now).toISOString(), attestation_source: attested ? 'sdk_idle' : 'native_event',
       })
       if (Buffer.byteLength(data) > 16384) return
       temporary = `${marker}.${randomUUID()}.tmp`
@@ -62,15 +71,29 @@ export function registerNativeActivity(pi: ExtensionAPI) {
     if (matches(ctx) && active && !inputPending) publish('working', 'native_progress', !force)
   }
 
+  const attest = () => {
+    try {
+      // Observe current SDK state. Do not renew cached completion or a Mail heartbeat.
+      if (context && matches(context) && !active && !inputPending && context.isIdle()
+        && latest?.state === 'idle' && latest.source === 'agent_settled') {
+        publish(latest.state, latest.reason, false, latest.source, latest)
+      }
+    } catch { /* Missing SDK evidence remains unknown after its bounded expiry. */ }
+  }
+
   const stop = () => {
     // Only the successful owning generation can invalidate its observation.
-    publish('unknown', 'native_session_ended')
+    publish('unknown', 'native_session_ended', false, 'session_reset')
     pane = undefined
     native = undefined
     session = undefined
     owns = () => false
     active = false
     inputPending = 0
+    context = undefined
+    latest = undefined
+    clearInterval(attestationTimer)
+    attestationTimer = undefined
   }
   const start = (ctx: ExtensionContext, identity: Identity, ownership: () => boolean) => {
     stop()
@@ -86,15 +109,18 @@ export function registerNativeActivity(pi: ExtensionAPI) {
       session = { id: ctx.sessionManager.getSessionId(), file: resolve(file), cwd: resolve(ctx.cwd),
         header: { type: header.type, version: header.version, id: header.id, cwd: header.cwd } }
       owns = ownership
+      context = ctx
     } catch { return }
     // Do not inherit old turns when a file is resumed or the extension reloads.
-    publish('unknown', 'no_native_event')
+    publish('unknown', 'no_native_event', false, 'session_reset')
+    attestationTimer = setInterval(attest, 15000)
+    attestationTimer.unref()
   }
   pi.on('agent_start', (_event, ctx) => {
     if (!matches(ctx)) return
     active = true
     terminalReason = 'native_turn_completed'
-    if (!inputPending) publish('working', 'native_turn_started')
+    if (!inputPending) publish('working', 'native_turn_started', false, 'agent_start')
   })
   pi.on('turn_start', (_event, ctx) => progress(ctx, true))
   pi.on('message_start', (_event, ctx) => progress(ctx, true))
@@ -114,20 +140,20 @@ export function registerNativeActivity(pi: ExtensionAPI) {
   pi.on('agent_settled', (_event, ctx) => {
     if (!matches(ctx)) return
     active = false
-    if (!inputPending) publish('idle', terminalReason)
+    if (!inputPending) publish('idle', terminalReason, false, 'agent_settled')
   })
   pi.on('ui_prompt_start', (_event, ctx) => {
     if (!matches(ctx)) return
     inputPending++
-    publish('idle', 'native_input_requested')
+    publish('idle', 'native_input_requested', false, 'ui_prompt_start')
   })
   pi.on('ui_prompt_end', (_event, ctx) => {
     if (!matches(ctx)) return
     inputPending = Math.max(0, inputPending - 1)
     if (!inputPending) {
       if (active) publish('working', 'native_progress')
-      else publish('idle', terminalReason)
+      else publish('idle', terminalReason, false, 'ui_prompt_end')
     }
   })
-  return { start, stop }
+  return { start, stop, attest }
 }

@@ -302,6 +302,35 @@ class GithubBacklogCoordination(Base):
     error_code: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class GithubOwnerFollowup(Base):
+    """Notification obligation only; private authority and native evidence."""
+
+    __tablename__ = "github_owner_followups"
+
+    work_item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    scope_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("team_github_scopes.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    state: Mapped[str] = mapped_column(String, default="waiting", nullable=False)
+    context: Mapped[dict] = mapped_column(JSON, nullable=False)
+    last_action_hash: Mapped[str] = mapped_column(String, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    baseline_event: Mapped[str] = mapped_column(String, nullable=False)
+    settlement_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delivery_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    notification_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_delivery_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 class GithubWorkItem(Base):
     """A labeled GitHub issue the dispatch pipeline is tracking."""
 

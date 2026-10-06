@@ -7,12 +7,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.deps import require_mail_session, require_mail_session_or_operator, require_operator
 from app.database import get_db
-from app.models.coordination import CoordinationAssessment, CoordinationPolicy, OperatorActionContextPreparation
+from app.models.coordination import CoordinationAssessment, CoordinationPolicy, OperatorActionContextPreparation, OwnerFollowupRequest
 from app.models.database import MailAgentSession
 from app.services.github_coordination_service import CoordinationError, github_coordination_service as service
 from app.services.github_operator_attention_service import github_operator_attention_service
 
 router = APIRouter()
+
+
+@router.post("/github-scopes/{scope_id}/owner-followups")
+async def owner_followup(
+    scope_id: int, request: OwnerFollowupRequest, response: Response,
+    principal: MailAgentSession = Depends(require_mail_session), db: AsyncSession = Depends(get_db),
+):
+    from app.services.github_owner_followup_service import github_owner_followup_service
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await asyncio.wait_for(github_owner_followup_service.report(
+            db, scope_id, principal, request), timeout=9)
+    except CoordinationError as error:
+        raise conflict(error) from error
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="followup_read_changed") from None
+    except (TimeoutError, OSError):
+        raise HTTPException(status_code=409, detail="followup_observation_unknown") from None
 
 
 def conflict(error: CoordinationError):
