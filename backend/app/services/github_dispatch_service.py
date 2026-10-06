@@ -518,6 +518,7 @@ class GithubDispatchService:
             try:
                 await github_workspace_service.force_release_acquisition(
                     db,
+                    actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
                     workspace_id=workspace.id,
                     scope_id=scope.id,
                     item_id=item.id,

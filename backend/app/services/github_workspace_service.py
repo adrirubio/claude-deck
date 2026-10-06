@@ -174,7 +174,7 @@ class GithubWorkspaceService:
                 return None
             released = await self.force_release_acquisition(
                 db,
-            actor_kind="scheduler",
+                actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
                 workspace_id=held.id,
                 scope_id=scope.id,
                 item_id=item.id,
@@ -221,8 +221,8 @@ class GithubWorkspaceService:
             except GithubWorkspaceResetError:
                 if workspace.leased_at is not None:
                     await self.force_release_acquisition(
-            db,
-            actor_kind="scheduler",
+                        db,
+            actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
                         
                         workspace_id=workspace.id,
                         scope_id=scope.id,
@@ -881,6 +881,9 @@ class GithubWorkspaceService:
     async def release_by_token(
         self, db: AsyncSession, item_id: int, *, lease_token: str,
         actor_kind: str = "member",
+        actor_member_id: int | None = None,
+        actor_session_id: int | None = None,
+        actor_scheduler: str | None = None,
     ) -> bool:
         """Release only the workspace acquisition named by the token.
 
@@ -897,6 +900,9 @@ class GithubWorkspaceService:
             )
         return await self._release_acquisition(
             db,
+            actor_member_id=actor_member_id,
+            actor_session_id=actor_session_id,
+            actor_scheduler=actor_scheduler,
             actor_kind=actor_kind,
             workspace_id=workspace.id,
             scope_id=workspace.scope_id,
@@ -1097,7 +1103,7 @@ class GithubWorkspaceService:
                 continue
             released_now = await self._release_acquisition(
                 db,
-            actor_kind="scheduler",
+                actor_kind="scheduler", actor_scheduler="github_dispatch_scheduler",
                 workspace_id=workspace.id,
                 scope_id=scope.id,
                 item_id=item.id,
