@@ -874,4 +874,4 @@ class FactoryAuditEvent(Base):
     action_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
     delivery_outcome: Mapped[str | None] = mapped_column(String, nullable=True)
     completion_kind: Mapped[str | None] = mapped_column(String, nullable=True)
-    human_review_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    human_review_evidence: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)

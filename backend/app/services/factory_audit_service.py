@@ -251,6 +251,28 @@ async def record_observed_snapshot(
     )
 
 
+def validated_review_evidence(evidence: dict | None) -> bool:
+    """A33/C03: only validated independent review facts count.
+
+    The evidence must name the review fact kind, the exact design artifact
+    and version, an independent human actor (not the shared operator
+    credential) and its review source. Absent, JSON-null, empty or partial
+    evidence never counts.
+    """
+    if not isinstance(evidence, dict) or not evidence:
+        return False
+    if evidence.get("fact_kind") != "human_review_acceptance":
+        return False
+    if not evidence.get("artifact") or not evidence.get("version"):
+        return False
+    actor = evidence.get("actor")
+    if not isinstance(actor, str) or actor in {"shared-operator-credential", "operator"}:
+        return False
+    if not evidence.get("source"):
+        return False
+    return True
+
+
 async def instrumentation_start(db: AsyncSession) -> datetime | None:
     """Earliest recorded_at in the ledger: the instrumentation start marker.
 

@@ -407,3 +407,62 @@ async def test_c04_metric_predicates_match_labels_and_filters(db):
         db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1),
         filter_scope="scoped")
     assert unscoped.metrics == []
+
+
+async def test_c03_absent_review_evidence_never_counts(db):
+    """C03: policy, launch and delivered-design rows with absent evidence
+    count zero independent reviews; JSON-null is unambiguous; only one valid
+    artifact review counts with truthful unknowns."""
+    actor = audit.derive_actor(actor_kind="operator")
+    launch_actor = audit.derive_actor(actor_kind="scheduler", scheduler="launch")
+    # Real writer rows with absent evidence (None supplied).
+    await audit.record_event(
+        db, event_kind="policy_change", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", human_review_evidence=None)
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="launch", occurred_at=_now(),
+        actor=launch_actor, action_outcome="applied",
+        after_values={"dispatch_status": "dispatched"})
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
+        after_values={"dispatch_status": "merged"})
+    await db.commit()
+    # None must store SQL NULL, not JSON null.
+    null_rows = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE human_review_evidence IS NULL"))).scalar_one()
+    assert null_rows == 3
+
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    assert by_name["independently_human_reviewed_design"].value == 0.0
+    assert by_name["independently_human_reviewed_design"].unknown_count == 1
+
+    # Invalid evidence (operator actor), then valid and repeated evidence.
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
+        human_review_evidence={"fact_kind": "human_review_acceptance",
+                               "artifact": "design-1", "version": "v2",
+                               "actor": "shared-operator-credential",
+                               "source": "operator-session"})
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
+        human_review_evidence={"fact_kind": "human_review_acceptance",
+                               "artifact": "design-1", "version": "v2",
+                               "actor": "reviewer-external", "source": "review-record"})
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=launch_actor, action_outcome="applied", delivery_outcome="delivered",
+        human_review_evidence={"fact_kind": "human_review_acceptance",
+                               "artifact": "design-1", "version": "v2",
+                               "actor": "reviewer-external", "source": "review-record"})
+    await db.commit()
+    window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    by_name = {sample.name: sample for sample in window.metrics}
+    # Only the validated evidence counts; operator-actor evidence never counts.
+    assert by_name["independently_human_reviewed_design"].value == 2.0
+    assert by_name["independently_human_reviewed_design"].sample_count == 2

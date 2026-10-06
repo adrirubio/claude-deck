@@ -123,9 +123,11 @@ async def build_metrics_window(
     terminal_unknown = await _count(db, ledger_scoped(
         select(func.count()).select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.delivery_outcome == _UNKNOWN)))
-    review_evidenced = await _count(db, ledger_scoped(
-        select(func.count()).select_from(FactoryAuditEvent)
-        .where(FactoryAuditEvent.human_review_evidence.is_not(None))))
+    review_rows = (await db.execute(ledger_scoped(
+        select(FactoryAuditEvent.human_review_evidence).select_from(FactoryAuditEvent)
+        .where(FactoryAuditEvent.human_review_evidence.is_not(None))))).scalars().all()
+    review_evidenced = sum(
+        1 for evidence in review_rows if _audit.validated_review_evidence(evidence))
     recovery_applied = await _count(db, ledger_scoped(
         select(func.count()).select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
