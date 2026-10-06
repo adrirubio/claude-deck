@@ -189,6 +189,7 @@ export function AuditMetricsPage() {
             </thead>
             <tbody>
               {events.map((event) => (
+                <>
                 <tr key={event.id} className="border-t align-top">
                   <td className="p-2">{event.occurred_at}</td>
                   <td className="p-2 break-words">{event.event_kind}</td>
@@ -202,8 +203,9 @@ export function AuditMetricsPage() {
                       {expanded === event.id ? "Hide detail" : "Show detail"}
                     </Button>
                   </td>
-                  {expanded === event.id && (
-                    <tr>
+                </tr>
+                {expanded === event.id && (
+                    <tr key={`${event.id}-detail`}>
                       <td colSpan={7} className="bg-muted/40 p-3">
                         <dl className="grid grid-cols-1 gap-1 text-xs sm:grid-cols-2">
                           <div><span className={labelClass}>Source</span>{event.source}</div>
@@ -224,8 +226,8 @@ export function AuditMetricsPage() {
                         </dl>
                       </td>
                     </tr>
-                  )}
-                </tr>
+                )}
+                </>
               ))}
             </tbody>
           </table>
