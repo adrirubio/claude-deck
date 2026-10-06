@@ -16,6 +16,7 @@ from app.database import Base
 from app.models.database import (
     AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
     GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
@@ -270,6 +271,206 @@ async def test_mark_merged_does_not_release_workspace(db):
 
     assert item.dispatch_status == "merged"
     assert workspace.leased_item_id == item.id
+
+
+async def _escalated_merge_fixture(db):
+    scope = await _scope(db)
+    preset = await db.get(AgentTeamPreset, scope.preset_id)
+    preset.autonomy_enabled = True
+    item = await _item(
+        db, scope, pr_number=5, dispatch_status="escalated",
+        escalation_reason="retry_count_exhausted", retry_count=3,
+        dispatch_nonce="a0a0a0a0a0a0a0a0",
+        diagnostic_retry_count=2, approval_round_count=1,
+        status_note="Preserve the existing attempt.",
+    )
+    workspace = GithubWorkspace(
+        scope_id=scope.id, path="/tmp/escalated-merge-workspace",
+        leased_item_id=item.id, lease_token="fixture-lease",
+    )
+    db.add(workspace)
+    await db.commit()
+    client = _Client(pull={
+        "number": 5, "merged": True,
+        "head": {"sha": "a" * 40},
+    })
+    return scope, item, workspace, client
+
+
+def _row_values(row):
+    return {column.name: getattr(row, column.name) for column in row.__table__.columns}
+
+
+@pytest.mark.asyncio
+async def test_poll_reconciles_escalated_external_merge_once_without_retry(db, monkeypatch):
+    scope, item, workspace, client = await _escalated_merge_fixture(db)
+    before = _row_values(item)
+    lease_before = _row_values(workspace)
+    notices = []
+
+    async def notify(db, scope, item):
+        notices.append(item.id)
+
+    monkeypatch.setattr(github_verification_service, "_notify_blocker_merged", notify)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(workspace)
+    assert item.dispatch_status == "merged"
+    assert item.escalation_reason is None
+    assert item.status_note is None
+    assert notices == [item.id]
+    assert client.pull_calls == 1
+    assert client.merge_calls == client.ready_calls == 0
+    assert _row_values(workspace) == lease_before
+    for key, value in before.items():
+        if key not in {"dispatch_status", "escalation_reason", "status_note", "updated_at"}:
+            assert getattr(item, key) == value, key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    "open", "closed_unmerged", "wrong_number", "wrong_head", "wrong_base",
+    "wrong_repo", "missing_sha", "missing_base", "missing_nonce", "diagnostic", "pending_approval",
+    "paused_scope", "autonomy_off", "unavailable", "concurrent_attempt",
+])
+async def test_escalated_merge_refuses_without_mutation(db, change):
+    scope, item, workspace, client = await _escalated_merge_fixture(db)
+    if change in {"open", "closed_unmerged"}:
+        client.pull.update(merged=False, merged_at=None,
+                           state="open" if change == "open" else "closed")
+    elif change == "wrong_number":
+        client.pull["number"] = 6
+    elif change == "wrong_head":
+        client.pull["head"]["ref"] = "deck/another-attempt"
+    elif change == "wrong_base":
+        client.pull["base"]["ref"] = "another-integration"
+    elif change == "wrong_repo":
+        client.pull["head"]["repo"] = {"full_name": "other/repository"}
+    elif change == "missing_sha":
+        client.pull["head"].pop("sha")
+    elif change == "missing_base":
+        item.dispatch_base_ref = None
+    elif change == "missing_nonce":
+        item.dispatch_nonce = None
+    elif change == "diagnostic":
+        item.attempt_phase = "diagnostic"
+    elif change == "pending_approval":
+        _, owner = await _owner(db, scope)
+        leader = MailTeamMember(
+            identity_key="fixture-pending-leader", repo_id="r", repo_path="/tmp/r",
+            repo_name="r", display_name="Leader", participant_kind="external",
+        )
+        db.add(leader)
+        await db.flush()
+        db.add(GithubApprovalRequest(
+            work_item_id=item.id, dispatch_nonce=item.dispatch_nonce,
+            approval_round=1, owner_member_id=owner.id, leader_member_id=leader.id,
+            status="pending", request_kind="initial_plan",
+            request_fingerprint="fixture-pending",
+        ))
+    elif change == "paused_scope":
+        scope.enabled = False
+    elif change == "autonomy_off":
+        (await db.get(AgentTeamPreset, scope.preset_id)).autonomy_enabled = False
+    elif change == "unavailable":
+        async def unavailable(*args):
+            raise httpx.ConnectError("fixture unavailable")
+        client.get_pull = unavailable
+    elif change == "concurrent_attempt":
+        original_get_pull = client.get_pull
+
+        async def moved_attempt(*args):
+            await db.execute(update(GithubWorkItem).where(
+                GithubWorkItem.id == item.id,
+            ).values(dispatch_nonce="new-attempt").execution_options(synchronize_session=False))
+            await db.commit()
+            return await original_get_pull(*args)
+        client.get_pull = moved_attempt
+    await db.commit()
+    before = _row_values(item)
+    lease_before = _row_values(workspace)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(workspace)
+    if change == "concurrent_attempt":
+        before["dispatch_nonce"] = "new-attempt"
+    assert _row_values(item) == before
+    assert _row_values(workspace) == lease_before
+    assert client.merge_calls == client.ready_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["submitted", "active", "wrong_head", "diagnostic"])
+async def test_escalated_merge_preserves_continuation_completion_guards(db, state):
+    scope, item, workspace, client = await _escalated_merge_fixture(db)
+    slot, owner = await _owner(db, scope)
+    item.owner_slot_id = slot.id
+    item.active_scope_revision = 1
+    revision, revision_workspace = await _implementation_revision(
+        db, scope, item, slot, owner,
+        status="active" if state == "active" else "submitted",
+        failed_head_count=1, last_failed_head_sha="b" * 40,
+    )
+    revision_workspace.path += "-revision"
+    revision.submitted_head_sha = "a" * 40 if state != "wrong_head" else "c" * 40
+    if state == "diagnostic":
+        item.attempt_phase = revision.phase = "diagnostic"
+    await db.commit()
+    item_before = _row_values(item)
+    revision_before = _row_values(revision)
+    workspace_before = _row_values(revision_workspace)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    await db.refresh(revision)
+    await db.refresh(revision_workspace)
+    if state == "submitted":
+        assert item.dispatch_status == "merged"
+        assert revision.status == "completed"
+        assert revision.completed_at is not None
+        for key, value in item_before.items():
+            if key not in {"dispatch_status", "escalation_reason", "status_note", "updated_at"}:
+                assert getattr(item, key) == value, key
+        for key, value in revision_before.items():
+            if key not in {"status", "completed_at"}:
+                assert getattr(revision, key) == value, key
+    else:
+        assert _row_values(item) == item_before
+        assert _row_values(revision) == revision_before
+    assert _row_values(revision_workspace) == workspace_before
+    assert client.merge_calls == client.ready_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("correct_author", [False, True])
+async def test_escalated_merge_checks_configured_app_author(db, monkeypatch, correct_author):
+    scope, item, workspace, client = await _escalated_merge_fixture(db)
+    scope.github_auth_mode = "app"
+    monkeypatch.setattr(settings, "github_app_bot_login", "fixture-factory[bot]")
+    if correct_author:
+        client.pull["user"]["login"] = "fixture-factory[bot]"
+    await db.commit()
+    before = _row_values(item)
+    await github_verification_service.process_scope(db, scope, client=client)
+    await db.refresh(item)
+    if correct_author:
+        assert item.dispatch_status == "merged"
+    else:
+        assert _row_values(item) == before
+
+
+@pytest.mark.asyncio
+async def test_escalated_merge_poll_is_bounded_and_rotates(db):
+    scope, first, workspace, client = await _escalated_merge_fixture(db)
+    for number in range(6, 14):
+        await _item(db, scope, pr_number=number, issue_number=number,
+                    dispatch_status="escalated", dispatch_nonce=f"{number:016x}")
+    client.pull.update(merged=False, state="open", merged_at=None)
+    github_verification_service._escalated_merge_cursors.pop(scope.id, None)
+    await github_verification_service.process_scope(db, scope, client=client)
+    assert client.pull_calls == 8
+    await github_verification_service.process_scope(db, scope, client=client)
+    assert client.pull_calls == 9
 
 
 class _Client:

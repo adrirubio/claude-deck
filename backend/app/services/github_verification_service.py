@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import re
 import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timedelta
@@ -14,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.database import (
+    AgentTeamPreset,
     AgentTeamSlot,
+    GithubApprovalRequest,
     GithubAttemptScopeRevision,
     GithubWorkItem,
     GithubWorkspace,
@@ -76,6 +79,7 @@ class ContinuationCompletionError(ValueError):
 class GithubVerificationService:
     def __init__(self) -> None:
         self._pr_ready_locks: dict[int, asyncio.Lock] = {}
+        self._escalated_merge_cursors: dict[int, int] = {}
 
     @staticmethod
     def _changed_tree_paths(
@@ -1012,6 +1016,139 @@ class GithubVerificationService:
                 )
                 item.updated_at = datetime.utcnow()
                 await db.commit()
+
+        await self._reconcile_escalated_merges(
+            db, scope, client, recovery_only_attempt=recovery_only_attempt
+        )
+
+    async def _reconcile_escalated_merges(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        client: GithubClient,
+        *,
+        recovery_only_attempt: GithubRecoveryOnlyAttempt | None,
+    ) -> None:
+        """Observe at most eight preserved PRs without granting recovery authority."""
+        query = select(GithubWorkItem).where(
+            GithubWorkItem.scope_id == scope.id,
+            GithubWorkItem.dispatch_status == "escalated",
+            GithubWorkItem.pr_number.is_not(None),
+            *(recovery_only_attempt.item_filters() if recovery_only_attempt else ()),
+        ).order_by(GithubWorkItem.id).limit(8)
+        cursor = self._escalated_merge_cursors.get(scope.id, 0)
+        items = (await db.execute(query.where(GithubWorkItem.id > cursor))).scalars().all()
+        if not items and cursor:
+            items = (await db.execute(query)).scalars().all()
+        scope_id = scope.id
+        for item in items:
+            self._escalated_merge_cursors[scope_id] = item.id
+            try:
+                await self._reconcile_escalated_merge(
+                    db, scope, item, client,
+                    notify=recovery_only_attempt is None,
+                )
+            except (httpx.HTTPError, GithubClientResponseError, ValueError):
+                # Observation failure is not another implementation failure.
+                logger.warning(
+                    "Escalated PR merge observation unavailable for work item %s",
+                    item.id,
+                )
+
+    async def _reconcile_escalated_merge(
+        self,
+        db: AsyncSession,
+        scope: TeamGithubScope,
+        item: GithubWorkItem,
+        client: GithubClient,
+        *,
+        notify: bool,
+    ) -> None:
+        if (
+            item.attempt_phase != "implementation"
+            or not item.dispatch_nonce
+            or not item.dispatch_head_ref
+            or not item.dispatch_base_ref
+            or item.handoff_state is not None
+        ):
+            return
+        # Capture the attempt before external reads. The final claim rejects a
+        # concurrent retry, approval, handoff, policy pause, or revision change.
+        fields = (
+            "id", "scope_id", "dispatch_status", "dispatch_nonce", "pr_number",
+            "dispatch_head_ref", "dispatch_base_ref", "owner_slot_id",
+            "active_scope_revision", "attempt_phase", "handoff_state",
+            "retry_count", "diagnostic_retry_count", "approval_round_count",
+            "escalation_reason", "last_verified_sha", "updated_at",
+        )
+        expected = {field: getattr(item, field) for field in fields}
+        scope_fields = ("id", "preset_id", "repo_owner", "repo_name", "github_auth_mode")
+        expected_scope = {field: getattr(scope, field) for field in scope_fields}
+        enabled_scope = exists(
+            select(TeamGithubScope.id)
+            .join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id)
+            .where(
+                *(getattr(TeamGithubScope, key) == value for key, value in expected_scope.items()),
+                TeamGithubScope.enabled.is_(True),
+                AgentTeamPreset.autonomy_enabled.is_(True),
+            )
+        )
+        if not await db.scalar(select(enabled_scope)):
+            return
+        pending_approval = exists(select(GithubApprovalRequest.id).where(
+            GithubApprovalRequest.work_item_id == item.id,
+            GithubApprovalRequest.status == "pending",
+        ))
+        if await db.scalar(select(pending_approval)):
+            return
+        revision = await self._active_scope_revision(db, item)
+        if item.active_scope_revision and (
+            revision is None or revision.phase != "implementation"
+            or revision.status != "submitted"
+        ):
+            return
+        revision_guard = ()
+        if revision is not None:
+            revision_guard = (exists(select(GithubAttemptScopeRevision.id).where(
+                GithubAttemptScopeRevision.id == revision.id,
+                GithubAttemptScopeRevision.work_item_id == item.id,
+                GithubAttemptScopeRevision.dispatch_nonce == expected["dispatch_nonce"],
+                GithubAttemptScopeRevision.owner_slot_id == expected["owner_slot_id"],
+                GithubAttemptScopeRevision.revision == expected["active_scope_revision"],
+                GithubAttemptScopeRevision.phase == "implementation",
+                GithubAttemptScopeRevision.status == "submitted",
+                GithubAttemptScopeRevision.submitted_head_sha == revision.submitted_head_sha,
+            )),)
+        pull = await client.get_pull(scope.repo_owner, scope.repo_name, expected["pr_number"])
+        if self._classify_pull(pull) != "merged" or pull.get("merged") is not True:
+            return
+        if self._pull_number(pull) != expected["pr_number"]:
+            raise ValueError("merged PR number does not match the tracked PR")
+        head_sha = self._head_sha(pull)
+        if not isinstance(head_sha, str) or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+            raise ValueError("merged PR head SHA is unavailable")
+        if revision is not None and head_sha != revision.submitted_head_sha:
+            return
+        expected_base = await self.normalize_base_ref(
+            scope, client, token=None, base_ref=expected["dispatch_base_ref"]
+        )
+        self._verify_pull_identity(pull, scope, item, expected_base=expected_base)
+        claim = await db.execute(update(GithubWorkItem).where(
+            *(getattr(GithubWorkItem, key) == value for key, value in expected.items()),
+            enabled_scope, ~pending_approval, *revision_guard,
+        ).values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+        if claim.rowcount != 1:
+            await db.rollback()
+            await db.refresh(scope)
+            await db.refresh(item)
+            return
+        self._mark_merged(item)
+        if revision is not None:
+            revision.status = "completed"
+            revision.completed_at = datetime.utcnow()
+        await db.commit()
+        if notify:
+            await self._notify_blocker_merged(db, scope, item)
 
     async def _active_scope_revision(
         self,
