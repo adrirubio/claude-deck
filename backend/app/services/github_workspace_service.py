@@ -174,6 +174,7 @@ class GithubWorkspaceService:
                 return None
             released = await self.force_release_acquisition(
                 db,
+            actor_kind="scheduler",
                 workspace_id=held.id,
                 scope_id=scope.id,
                 item_id=item.id,
@@ -220,7 +221,9 @@ class GithubWorkspaceService:
             except GithubWorkspaceResetError:
                 if workspace.leased_at is not None:
                     await self.force_release_acquisition(
-                        db,
+            db,
+            actor_kind="scheduler",
+                        
                         workspace_id=workspace.id,
                         scope_id=scope.id,
                         item_id=item.id,
@@ -622,6 +625,8 @@ class GithubWorkspaceService:
         scope_id: int,
         item_id: int,
         actor_kind: str = "operator",
+        actor_member_id: int | None = None,
+        actor_session_id: int | None = None,
         expected_leased_at: datetime | None,
         lease_token: str | None,
         owner_slot_id: int | None = None,
@@ -698,7 +703,7 @@ class GithubWorkspaceService:
                         event_kind="workspace_release",
                         source="github_workspace_service._release_acquisition",
                         occurred_at=datetime.utcnow(),
-                        actor=_audit.derive_actor(actor_kind=actor_kind),
+                        actor=_audit.derive_actor(actor_kind=actor_kind, member_id=actor_member_id, session_id=actor_session_id),
                         scope_id=scope_id,
                         item_id=item_id,
                         action_outcome="rejected",
@@ -776,7 +781,7 @@ class GithubWorkspaceService:
                     event_kind="workspace_release",
                     source="github_workspace_service._release_acquisition",
                     occurred_at=datetime.utcnow(),
-                    actor=_audit.derive_actor(actor_kind=actor_kind),
+                    actor=_audit.derive_actor(actor_kind=actor_kind, member_id=actor_member_id, session_id=actor_session_id),
                     scope_id=scope_id,
                     item_id=item_id,
                     action_outcome="applied",
@@ -835,6 +840,8 @@ class GithubWorkspaceService:
         scope_id: int,
         item_id: int,
         actor_kind: str = "operator",
+        actor_member_id: int | None = None,
+        actor_session_id: int | None = None,
         expected_leased_at: datetime,
         lease_token: str | None,
     ) -> bool:
@@ -848,6 +855,8 @@ class GithubWorkspaceService:
         return await self._release_acquisition(
             db,
             actor_kind=actor_kind,
+            actor_member_id=actor_member_id,
+            actor_session_id=actor_session_id,
             workspace_id=workspace_id,
             scope_id=scope_id,
             item_id=item_id,
@@ -898,6 +907,8 @@ class GithubWorkspaceService:
         db: AsyncSession,
         item_id: int,
         actor_kind: str = "member",
+        actor_member_id: int | None = None,
+        actor_session_id: int | None = None,
         *,
         lease_token: str,
         workspace_id: int,
@@ -909,6 +920,8 @@ class GithubWorkspaceService:
         return await self._release_acquisition(
             db,
             actor_kind=actor_kind,
+            actor_member_id=actor_member_id,
+            actor_session_id=actor_session_id,
             workspace_id=workspace_id,
             scope_id=scope_id,
             item_id=item_id,
@@ -1079,6 +1092,7 @@ class GithubWorkspaceService:
                 continue
             released_now = await self._release_acquisition(
                 db,
+            actor_kind="scheduler",
                 workspace_id=workspace.id,
                 scope_id=scope.id,
                 item_id=item.id,
