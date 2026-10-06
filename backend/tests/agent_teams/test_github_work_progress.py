@@ -265,6 +265,7 @@ async def test_route_is_safe_read_no_store_and_missing_item_404(db, monkeypatch)
     ("dispatched", None, None, "implementation", "owner"),
     ("dispatched", 1, None, "plan_review", "leader"),
     ("ready_for_review", None, None, "review", "operator"),
+    ("awaiting_human_review", None, None, "review", "operator"),
     ("verifying", None, None, "ci", "controller"),
     ("escalated", None, None, "intervention", "operator"),
     ("dispatched", None, "hold", "paused", "operator"),
@@ -382,3 +383,121 @@ async def test_route_timeout_and_disposable_database_startup(db, monkeypatch):
         tables = await connection.run_sync(lambda sync: inspect(sync).get_table_names())
         assert "github_work_progress_snapshots" in tables
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["error", "timeout"])
+async def test_final_context_refresh_after_failed_observation(db, failure):
+    item, scope, preset, workspace = await seed(db)
+    item_id = item.id
+    class ChangingObserver(Observer):
+        async def read(self, context):
+            await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item_id).values(dispatch_nonce="new-dispatch", owner_slot_id=None))
+            await db.execute(update(AgentTeamPreset).where(AgentTeamPreset.id == preset.id).values(autonomy_enabled=False))
+            await db.commit()
+            if failure == "timeout": raise TimeoutError
+            raise ProgressObservationError("git_unavailable")
+    result = await GithubWorkProgressService(ChangingObserver(), Client()).summary(db, item_id)
+    assert result.dispatch_nonce == "new-dispatch" and result.owner_slot_id is None
+    assert (result.phase, result.next_actor) == ("paused", "operator")
+    assert result.publication.state == "unavailable" and result.publication.local_sha is None
+    assert item.retry_count == 0
+
+
+@pytest.mark.asyncio
+async def test_release_after_cache_write_before_final_load_is_historical(db):
+    item, scope, preset, workspace = await seed(db)
+    workspace_id = workspace.id
+    class ReleasingService(GithubWorkProgressService):
+        async def _rows(self, db, item_id, *, final=False):
+            if final:
+                await db.execute(update(GithubWorkspace).where(GithubWorkspace.id == workspace_id).values(leased_item_id=None, lease_token=None))
+                await db.commit()
+            return await super()._rows(db, item_id, final=final)
+    result = await ReleasingService(Observer(), Client()).summary(db, item.id)
+    assert result.publication.state == "historical" and result.publication.reason == "workspace_not_leased"
+    assert result.publication.local_sha == SHA
+    assert (result.phase, result.next_actor) == ("workspace_wait", "leader")
+
+
+@pytest.mark.asyncio
+async def test_same_session_lease_timestamp_refresh_cannot_substitute_guard(db):
+    item, scope, preset, workspace = await seed(db)
+    changed_time = workspace.leased_at + timedelta(seconds=1)
+    class TimestampClient(Client):
+        async def get_ref(self, *args, **kwargs):
+            workspace.leased_at = changed_time
+            await db.commit()
+            await db.refresh(workspace)
+            return await super().get_ref(*args, **kwargs)
+    result = await GithubWorkProgressService(Observer(), TimestampClient()).summary(db, item.id)
+    assert result.publication.state == "unavailable" and result.publication.reason == "changed_during_read"
+    assert await db.get(GithubWorkProgressSnapshot, item.id) is None
+    assert workspace.leased_at == changed_time and workspace.lease_token == "private-lease-value"
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_has_final_lease_validation(db):
+    item, scope, preset, workspace = await seed(db)
+    service = GithubWorkProgressService(Observer(), Client())
+    await service.summary(db, item.id)
+    workspace_id = workspace.id
+    class ReleasingService(GithubWorkProgressService):
+        async def _rows(self, db, item_id, *, final=False):
+            if final:
+                await db.execute(update(GithubWorkspace).where(GithubWorkspace.id == workspace_id).values(leased_item_id=None, lease_token=None))
+                await db.commit()
+            return await super()._rows(db, item_id, final=final)
+    result = await ReleasingService(service.observer, service.client).summary(db, item.id)
+    assert service.observer.calls == 1
+    assert result.publication.state == "historical"
+    assert (result.phase, result.next_actor) == ("workspace_wait", "leader")
+
+
+@pytest.mark.asyncio
+async def test_creation_timestamp_is_captured_before_async_read(db):
+    item, *_ = await seed(db)
+    changed_time = item.created_at + timedelta(seconds=1)
+    class ChangingClient(Client):
+        async def get_ref(self, *args, **kwargs):
+            item.created_at = changed_time
+            await db.commit()
+            await db.refresh(item)
+            return await super().get_ref(*args, **kwargs)
+    result = await GithubWorkProgressService(Observer(), ChangingClient()).summary(db, item.id)
+    assert result.publication.state == "unavailable" and result.publication.local_sha is None
+    assert await db.get(GithubWorkProgressSnapshot, item.id) is None
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_matches_current_dispatch_and_round(db):
+    from app.models.database import GithubApprovalRequest
+    item, *_ = await seed(db)
+    item.approval_round_count = 1
+    request = GithubApprovalRequest(work_item_id=item.id, request_kind="initial_plan", dispatch_nonce="old-dispatch",
+        approval_round=1, owner_member_id=1, leader_member_id=2, request_fingerprint="fixture", status="pending")
+    db.add(request); await db.commit()
+    service = GithubWorkProgressService(Observer(), Client())
+    assert (await service.summary(db, item.id)).next_actor == "owner"
+    request.dispatch_nonce = item.dispatch_nonce
+    request.approval_round = 0
+    await db.commit()
+    assert (await service.summary(db, item.id)).next_actor == "owner"
+    request.approval_round = 1
+    await db.commit()
+    value = await service.summary(db, item.id)
+    assert (value.phase, value.next_actor) == ("plan_review", "leader")
+
+
+@pytest.mark.parametrize("status, merge, attempt, note, ack, pending, expected", [
+    ("ready_for_review", "auto", "implementation", None, True, None, ("review", "controller")),
+    ("ready_for_review", "auto", "implementation", "Auto-merge blocked: test", True, None, ("review", "operator")),
+    ("ready_for_review", "human", "diagnostic", None, True, None, ("diagnostic_review", "leader")),
+    ("dispatched", "human", "implementation", None, False, None, ("planning", "owner")),
+    ("awaiting_human_review", "human", "implementation", None, True, 1, ("plan_review", "leader")),
+])
+def test_review_and_planning_variants_retain_existing_gates(status, merge, attempt, note, ack, pending, expected):
+    item = SimpleNamespace(dispatch_status=status, attempt_phase=attempt, status_note=note,
+                           handoff_state=None, ack_received_at=datetime.utcnow() if ack else None)
+    scope = SimpleNamespace(enabled=True, merge_policy=merge)
+    assert _next_step(item, scope, SimpleNamespace(autonomy_enabled=True), pending, None)[:2] == expected

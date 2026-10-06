@@ -92,3 +92,22 @@ describe('Work publication observations', () => {
     expect(screen.getByText(/Next actor/).textContent).toContain('Operator')
   })
 })
+
+
+it('does not restore prior current data across A to B to A', async () => {
+  vi.mocked(apiClient).mockResolvedValueOnce(progress()).mockImplementation(() => new Promise(() => {}))
+  const view = render(<WorkPublicationPanel item={item} />)
+  await screen.findByText('2 unpublished commits')
+  view.rerender(<WorkPublicationPanel item={{ ...item, id: 2, dispatch_nonce: 'other' }} />)
+  view.rerender(<WorkPublicationPanel item={item} />)
+  expect(screen.queryByText('2 unpublished commits')).toBeNull()
+  expect(screen.queryByText('Continue approved work.')).toBeNull()
+  expect(screen.queryByText(/Next actor:/)).toBeNull()
+})
+
+it('renders the current design human-review instruction', async () => {
+  vi.mocked(apiClient).mockResolvedValue(progress({ phase: 'review', next_actor: 'operator', next_action: 'Read the human summary and review the design PR.' }))
+  render(<WorkPublicationPanel item={{ ...item, dispatch_status: 'awaiting_human_review' }} />)
+  expect(await screen.findByText('Read the human summary and review the design PR.')).toBeTruthy()
+  expect(screen.getByText(/Next actor/).textContent).toContain('Operator')
+})

@@ -37,6 +37,7 @@ const phases: Record<string, string> = {
   plan_review: 'Plan review', handoff: 'Owner handoff', queue: 'Admission or capacity wait',
   review: 'Review and merge', diagnostic_review: 'Diagnostic review', ci: 'Automatic checks',
   planning: 'Owner planning or acknowledgement', implementation: 'Approved implementation', unknown: 'Unknown',
+  workspace_wait: 'Workspace lease wait',
 }
 const reasons: Record<string, string> = {
   workspace_not_leased: 'The workspace is no longer leased to this item.',
@@ -77,9 +78,17 @@ function valid(data: Progress, itemId: number, nonce: string | null, owner: numb
       .every((count) => count === null || Number.isSafeInteger(count) && count >= 0)
 }
 
-export function WorkPublicationPanel({ item, ownerName, ownerActivity }: {
+type PanelProps = {
   item: GithubWorkItem; ownerName?: string; ownerActivity?: AgentActivityObservation
-}) {
+}
+export function WorkPublicationPanel(props: PanelProps) {
+  const { item } = props
+  const key = JSON.stringify([item.id, item.dispatch_nonce, item.owner_slot_id,
+    item.dispatch_status, item.pending_approval_request_id, item.ack_evidence_message_id, item.updated_at])
+  return <WorkPublicationReader key={key} {...props} />
+}
+
+function WorkPublicationReader({ item, ownerName, ownerActivity }: PanelProps) {
   const id = item.id
   const nonce = item.dispatch_nonce ?? null
   const owner = item.owner_slot_id ?? null
