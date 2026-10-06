@@ -362,4 +362,416 @@ describe("guided repository setup", () => {
     expect(screen.getByRole("button", { name: "Enable this scope" })).toBeDisabled();
     expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
   });
+
+  async function runDraftToSavedSetupWithExistingTeam(teamId: number) {
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team setup"), { target: { value: "existing" } });
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value: String(teamId) } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/Saved configuration/);
+  }
+
+  function mockReadyPreflightAndRoster() {
+    mocks.apiClient.mockImplementation((endpoint: string) => {
+      if (endpoint.startsWith("factory/setup-preflight")) return Promise.resolve({
+        status: "ready", observed_at: "2026-10-05T00:00:00Z", checked_at: "2026-10-05T00:00:00Z",
+        checks: { checkout_identity: { status: "ready", code: "checkout_identity_matches", remedy: "ready" } },
+      });
+      return Promise.resolve(connectedRoster);
+    });
+  }
+
+  it("keeps the active team unchanged and saves the new scope disabled (V28)", async () => {
+    const team = teamFixture(true);
+    const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
+    const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: [siblingA, siblingB].filter((item) => item.preset_id === teamId) }));
+    mocks.createTeamGithubScope.mockResolvedValue(newScope);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetupWithExistingTeam(12);
+
+    expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
+    expect(mocks.createTeamGithubScope.mock.calls[0][1]).toMatchObject({
+      enabled: false, merge_policy: "human", max_concurrent_dispatched: 1,
+      max_verification_retries: 1, max_auto_merges_per_day: 0,
+    });
+    // V28: policies, autonomy, Leader and existing scopes stay untouched.
+    expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
+    expect(mocks.updateAgentTeamLeader).not.toHaveBeenCalled();
+    expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
+    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+  });
+
+  it("recovers an interrupted save without duplicating the disabled scope (V28)", async () => {
+    const team = teamFixture(true);
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    let saved = false;
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: (saved ? [newScope] : []).filter((item) => item.preset_id === teamId) }));
+    mocks.createTeamGithubScope.mockImplementation(() => {
+      saved = true;
+      return Promise.reject(new mocks.ApiHttpError("transport reset", 0));
+    });
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team setup"), { target: { value: "existing" } });
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    await screen.findByText(/Reconcile uncertain create/);
+    expect((await screen.findAllByText(/Do not repeat the create request/)).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /Use Scope #55/ }));
+    await screen.findByText(/Saved configuration/);
+    // V28: no duplicate create, and the recovered scope stays disabled.
+    expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+    expect(mocks.updateTeamGithubScope).not.toHaveBeenCalled();
+  });
+
+  it("refuses an existing team without explicit Leader and never pauses it (V28)", async () => {
+    const team = { ...teamFixture(true), leader_slot_id: null };
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team setup"), { target: { value: "existing" } });
+    fireEvent.change(screen.getByLabelText("Team"), { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    await screen.findByText(/has no explicit Leader assignment/);
+    // V28: a blocked role edit never pauses the team or writes configuration.
+    expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
+    expect(mocks.updateAgentTeamLeader).not.toHaveBeenCalled();
+    expect(mocks.createTeamGithubScope).not.toHaveBeenCalled();
+  });
+
+  async function runToUncertainLaunch() {
+    const team = teamFixture(false);
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: [ownScope].filter((item) => item.preset_id === teamId) }));
+    mocks.createAgentTeamPreset.mockResolvedValue(team);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    mocks.launchAgentTeam.mockRejectedValue(new Error("transport reset"));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetup();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Worker A/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Review current launch plan" }));
+    await screen.findByText(/Plan ready/);
+    fireEvent.click(screen.getByRole("button", { name: "Launch reviewed slots" }));
+    await screen.findByText(/Launch outcome needs operator reconciliation/);
+  }
+
+  it("freezes the original launch request after an uncertain outcome (V21)", async () => {
+    await runToUncertainLaunch();
+    expect(mocks.launchAgentTeam).toHaveBeenCalledTimes(1);
+
+    // The slot selection is frozen while the outcome is uncertain.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Worker A/ }));
+    mocks.planAgentTeamLaunch.mockClear();
+    mocks.planAgentTeamLaunch.mockResolvedValue({
+      can_launch: false, spawn_count: 0, reuse_count: 0, blocked_count: 1, plan_hash: "synthetic-plan",
+      items: [{ slot_id: 102, slot_name: "Worker A", action: "blocked", block_code: "provider_unavailable", reasons: [], matching_session: null }],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile current sessions" }));
+
+    await screen.findByText(/Keep launch blocked/);
+    const reconcileArgs = mocks.planAgentTeamLaunch.mock.calls.at(-1)?.[1] as { slot_ids: number[] };
+    expect(reconcileArgs.slot_ids).toEqual([102]);
+    expect(screen.getByText(/synthetic-plan/)).toBeInTheDocument();
+    expect(mocks.launchAgentTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms reconciliation only when every frozen slot has a session (V21)", async () => {
+    await runToUncertainLaunch();
+    mocks.planAgentTeamLaunch.mockResolvedValue({
+      can_launch: true, spawn_count: 0, reuse_count: 1, blocked_count: 0, plan_hash: "synthetic-plan",
+      items: [{ slot_id: 102, slot_name: "Worker A", action: "reuse", block_code: null, reasons: [], matching_session: { id: 2 } }],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile current sessions" }));
+    await screen.findByRole("button", { name: "Confirm reconciled sessions" });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm reconciled sessions" }));
+
+    await screen.findByText(/Current sessions were reconciled/);
+    expect(mocks.launchAgentTeam).toHaveBeenCalledTimes(1);
+    // Confirmation clears the frozen request and requires a fresh launch plan.
+    expect(screen.queryByRole("button", { name: "Launch reviewed slots" })).not.toBeInTheDocument();
+  });
+
+  it("blocks new launch actions while reconciliation is pending (V21)", async () => {
+    await runToUncertainLaunch();
+    expect(screen.getByRole("button", { name: "Review current launch plan" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Launch reviewed slots" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reconcile current sessions" })).toBeEnabled();
+    expect(mocks.launchAgentTeam).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the create latch when reconciliation fails (V20/V21)", async () => {
+    mockReadyPreflightAndRoster();
+    let reads = 0;
+    mocks.fetchAgentTeamPresets.mockImplementation(() => {
+      reads += 1;
+      return reads <= 2 ? Promise.resolve({ presets: [] }) : Promise.reject(new Error("read failed"));
+    });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    mocks.createAgentTeamPreset.mockRejectedValue(new mocks.ApiHttpError("transport reset", 0));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+
+    // Failed reconciliation keeps the no-duplicate-create latch and offers no
+    // selection. The shown error is the safe underlying read failure.
+    await screen.findByText(/No unique record is ready for selection/);
+    expect(screen.getByText(/read failed/)).toBeInTheDocument();
+    expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /Use / })).not.toBeInTheDocument();
+  });
+
+  it("resumes an interrupted Leader assignment without a duplicate team (V21)", async () => {
+    mockReadyPreflightAndRoster();
+    const createdTeam = { ...teamFixture(false), leader_slot_id: null };
+    const fixedTeam = teamFixture(false);
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [createdTeam] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    mocks.createAgentTeamPreset.mockResolvedValue(createdTeam);
+    mocks.updateAgentTeamLeader
+      .mockRejectedValueOnce(new mocks.ApiHttpError("stale expected state", 409))
+      .mockResolvedValue(fixedTeam);
+    mocks.createTeamGithubScope.mockResolvedValue(newScope);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/stale expected state/);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/Saved configuration/);
+    // V21: the interrupted role step resumes on the created team without a
+    // duplicate create, and completes the explicit Leader assignment.
+    expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
+    expect(mocks.updateAgentTeamLeader).toHaveBeenCalledTimes(2);
+    expect(mocks.createTeamGithubScope).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a recovered team after the draft changes (V21)", async () => {
+    mockReadyPreflightAndRoster();
+    const createdTeam = teamFixture(false);
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [createdTeam] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    mocks.createAgentTeamPreset.mockRejectedValue(new mocks.ApiHttpError("transport reset", 0));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/Reconcile uncertain create/);
+
+    // The draft changes before the operator selects the recovered record.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Changed team name" } });
+    fireEvent.click(screen.getByRole("button", { name: /Use Synthetic team/ }));
+    await screen.findByText(/no longer matches this draft/);
+    expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures implemented-flow configuration and compares it with saved payloads (V32)", async () => {
+    mockReadyPreflightAndRoster();
+    const team = teamFixture(false);
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    mocks.createAgentTeamPreset.mockResolvedValue(team);
+    mocks.createTeamGithubScope.mockResolvedValue(newScope);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+
+    // Requested configuration from the implemented flow.
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.change(within(screen.getByRole("group", { name: "Worker A" })).getByLabelText("Area labels, comma separated"), { target: { value: "backend" } });
+    fireEvent.change(within(screen.getByRole("group", { name: "Worker A" })).getByLabelText("Expertise"), { target: { value: "API" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await screen.findByText(/Saved configuration/);
+
+    // The captured team payload equals the requested roster and routing.
+    const teamPayload = mocks.createAgentTeamPreset.mock.calls[0][0];
+    expect(teamPayload).toMatchObject({ name: "Synthetic team", autonomy_enabled: false });
+    expect(teamPayload.slots).toMatchObject([
+      { display_name: "Leader", role: "Leader", provider: "codex-cli", repo_path: "/synthetic/checkout", area_labels: [], expertise: null },
+      { display_name: "Worker A", role: "Worker", provider: "codex-cli", repo_path: "/synthetic/checkout", area_labels: ["backend"], expertise: "API" },
+    ]);
+    // The captured scope payload equals the requested repository configuration.
+    // The draft selects the GitHub token dispatch mode; the documented mapping
+    // saves it as the ambient auth mode. github_app maps to app.
+    const scopePayload = mocks.createTeamGithubScope.mock.calls[0][1];
+    expect(scopePayload).toMatchObject({
+      repo_owner: "example", repo_name: "synthetic-product", repo_path: "/synthetic/checkout",
+      dispatch_label: "claude-deck-ready", design_label: "claude-deck-design", base_ref: "origin/HEAD",
+      github_auth_mode: "ambient", merge_policy: "human", enabled: false,
+      max_concurrent_dispatched: 1, max_verification_retries: 1, max_auto_merges_per_day: 0,
+    });
+    expect(scopePayload.github_auth_mode).toBe("ambient");
+    // The saved configuration shown to the operator equals the created records.
+    expect(screen.getByText(/Team Synthetic team \(#12\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Scope #55 is disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/A cached fallback is not current evidence/)).toBeInTheDocument();
+  });
+
+  it("activates only the new scope on an active team (V28)", async () => {
+    const team = teamFixture(true);
+    const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
+    const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: [siblingA, siblingB, newScope].filter((item) => item.preset_id === teamId) }));
+    mocks.createTeamGithubScope.mockResolvedValue(newScope);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    mocks.updateTeamGithubScope.mockResolvedValue({ ...newScope, enabled: true });
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetupWithExistingTeam(12);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
+    await screen.findByRole("button", { name: "Enable this scope" });
+    fireEvent.click(screen.getByRole("button", { name: "Enable this scope" }));
+
+    await waitFor(() => expect(mocks.updateTeamGithubScope).toHaveBeenCalledTimes(1));
+    expect(mocks.updateTeamGithubScope.mock.calls[0][0]).toBe(55);
+    expect(mocks.updateTeamGithubScope.mock.calls[0][1]).toMatchObject({ enabled: true });
+    // V28: scope-only activation never touches the team or the sibling scopes.
+    expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
+    expect(mocks.updateAgentTeamLeader).not.toHaveBeenCalled();
+  });
+
+  it("previews every resumed sibling for a paused team and gates team activation (V28)", async () => {
+    const team = teamFixture(false);
+    const siblingA = scopeFixture(56, 12, true, "other-repo-a", "label-a");
+    const siblingB = scopeFixture(57, 12, true, "other-repo-b", "label-b");
+    const newScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: [siblingA, siblingB, newScope].filter((item) => item.preset_id === teamId) }));
+    mocks.createTeamGithubScope.mockResolvedValue(newScope);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetupWithExistingTeam(12);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
+    await screen.findByText(/Scopes affected or overlapping:/);
+    // V28: every already-enabled sibling that team activation resumes is listed.
+    expect(screen.getByText(/team 12\/scope 56/)).toBeInTheDocument();
+    expect(screen.getByText(/team 12\/scope 57/)).toBeInTheDocument();
+    // The team-wide effect needs its own acknowledgement before activation.
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText(/Enable team automation/));
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeEnabled();
+    expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
+  });
+
+  it("requires one acknowledgement per simultaneous overlap (V36)", async () => {
+    const team = teamFixture(false);
+    const externalTeam = { id: 20, name: "External team", autonomy_enabled: true, leader_slot_id: 201, updated_at: "2026-10-05T00:00:00Z", slots: [] };
+    const ownScope = scopeFixture(55, 12, false, "synthetic-product", "claude-deck-ready");
+    const siblingOne = scopeFixture(56, 12, true, "other-repo-a", "shared-a");
+    const siblingTwo = scopeFixture(57, 12, true, "other-repo-b", "shared-b");
+    const externalOne = scopeFixture(77, 20, true, "other-repo-a", "shared-a");
+    const externalTwo = scopeFixture(78, 20, true, "other-repo-b", "shared-b");
+    const allScopes = [ownScope, siblingOne, siblingTwo, externalOne, externalTwo];
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [team, externalTeam] });
+    mocks.fetchTeamGithubScopes.mockImplementation((teamId: number) =>
+      Promise.resolve({ scopes: allScopes.filter((item) => item.preset_id === teamId) }));
+    mocks.createTeamGithubScope.mockResolvedValue(ownScope);
+    mocks.planAgentTeamLaunch.mockResolvedValue(readyPlan);
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    await runDraftToSavedSetupWithExistingTeam(12);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review current activation and overlap" }));
+    const boxes = await screen.findAllByRole("checkbox", { name: /Prospective overlap/ });
+    expect(boxes).toHaveLength(2);
+    fireEvent.click(screen.getByLabelText(/Enable team automation/));
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeDisabled();
+    // V36: every overlap.key needs its own acknowledgement.
+    fireEvent.click(boxes[0]);
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeDisabled();
+    fireEvent.click(boxes[1]);
+    expect(screen.getByRole("button", { name: "Enable team automation" })).toBeEnabled();
+    expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
+  });
 });

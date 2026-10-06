@@ -2382,3 +2382,95 @@ async def test_only_live_bound_pane_is_reused_without_operator_adoption(db, tmp_
         await agent_team_service.launch(
             db, preset.id, AgentTeamLaunchRequest(confirm_plan_hash=plan.plan_hash)
         )
+
+
+@pytest.mark.asyncio
+async def test_v18_leader_update_races_attempt_and_lease_creation(tmp_path):
+    """V18: a protected Leader update races work and lease creation safely."""
+    from app.models.database import TeamGithubScope
+
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'v18-leader-creation-race.db'}",
+        connect_args={"timeout": 5},
+    )
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+        await connection.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as seed:
+            preset = AgentTeamPreset(name="V18 creation race", description="", created_by="test")
+            seed.add(preset)
+            await seed.flush()
+            slot = AgentTeamSlot(
+                preset_id=preset.id, position=0, display_name="Race",
+                provider="codex-cli", repo_id="race", repo_path="/tmp/race", repo_name="race")
+            seed.add(slot)
+            await seed.flush()
+            scope = TeamGithubScope(preset_id=preset.id, repo_owner="example", repo_name="race",
+                                    repo_path="/tmp/race")
+            seed.add(scope)
+            await seed.flush()
+            stamp = preset.updated_at
+            await seed.commit()
+            preset_id, slot_id, scope_id = preset.id, slot.id, scope.id
+
+        async with maker() as writer, maker() as updater:
+            await writer.execute(text("BEGIN IMMEDIATE"))
+            attempt = asyncio.create_task(agent_team_service.set_leader(
+                updater, preset_id, leader_slot_id=slot_id,
+                expected_leader_slot_id=None, expected_updated_at=stamp,
+                reason="V18 creation race"))
+            await asyncio.sleep(0.05)
+            assert not attempt.done(), "the Leader update must wait for the writer"
+            # A competing writer creates an active attempt and a workspace lease.
+            await writer.execute(text(
+                "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url, "
+                "github_updated_at, issue_type, dispatch_status, attempt_phase, approval_round_count, "
+                "retry_count, active_scope_revision, diagnostic_retry_count, created_at, updated_at) "
+                "VALUES (1, :scope, 1, 'race', 'https://example.invalid/1', CURRENT_TIMESTAMP, 'code', "
+                "'dispatched', 'implementation', 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {"scope": scope_id})
+            await writer.execute(text(
+                "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled, "
+                "leased_item_id, lease_token, created_at, updated_at) "
+                "VALUES (1, :scope, '/tmp/race-work', 'worktree', 1, 1, 1, 'race-lease', "
+                "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ), {"scope": scope_id})
+            await writer.commit()
+            with pytest.raises(ValueError, match="leader_assignment_team_not_quiescent"):
+                await asyncio.wait_for(attempt, timeout=2)
+            await updater.rollback()
+
+        async with maker() as verify:
+            fresh = await agent_team_service.get_preset(verify, preset_id)
+            assert fresh.leader_slot_id is None
+            # Clear the competing rows for the two-update race.
+            await verify.execute(text("DELETE FROM github_workspaces"))
+            await verify.execute(text("DELETE FROM github_work_items"))
+            await verify.commit()
+
+        async with maker() as first, maker() as second:
+            current = await agent_team_service.get_preset(first, preset_id)
+            shared_stamp = current.updated_at
+            winner = asyncio.create_task(agent_team_service.set_leader(
+                first, preset_id, leader_slot_id=slot_id,
+                expected_leader_slot_id=None, expected_updated_at=shared_stamp,
+                reason="V18 winner"))
+            loser = asyncio.create_task(agent_team_service.set_leader(
+                second, preset_id, leader_slot_id=slot_id,
+                expected_leader_slot_id=None, expected_updated_at=shared_stamp,
+                reason="V18 loser"))
+            outcomes = await asyncio.wait_for(
+                asyncio.gather(winner, loser, return_exceptions=True), timeout=2)
+            succeeded = [result for result in outcomes if not isinstance(result, Exception)]
+            refused = [result for result in outcomes if isinstance(result, ValueError)]
+            assert len(succeeded) == 1
+            assert len(refused) == 1
+            assert "leader_assignment_changed" in str(refused[0])
+
+        async with maker() as verify:
+            fresh = await agent_team_service.get_preset(verify, preset_id)
+            assert fresh.leader_slot_id == slot_id
+    finally:
+        await engine.dispose()

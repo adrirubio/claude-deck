@@ -11,7 +11,14 @@ from app.database import get_db
 from app.api.v1.agent_teams import _scope_auth_configured
 from app.config import settings
 from app.main import app
-from app.models.database import AgentTeamPreset, GithubWorkItem, GithubWorkspace, TeamGithubScope
+from app.models.database import (
+    AgentTeamPreset,
+    GithubApprovalRequest,
+    GithubAttemptScopeRevision,
+    GithubWorkItem,
+    GithubWorkspace,
+    TeamGithubScope,
+)
 from app.models.schemas import AgentTeamPresetCreate, AgentTeamSlotCreate
 from app.services.agent_team_service import agent_team_service
 from app.services.github_app_auth_service import github_app_auth_service
@@ -884,3 +891,224 @@ async def test_team_creation_requires_operator(client):
     )
     assert response.status_code == 401
     assert response.json()["detail"] == "operator_token_required"
+
+
+@pytest.mark.asyncio
+async def test_v18_leader_update_invalid_change_matrix(client, db, tmp_path):
+    """V18: invalid-change matrix for the protected Leader update route."""
+    repo = tmp_path / "v18-repo"
+    repo.mkdir()
+    other = tmp_path / "v18-other"
+    other.mkdir()
+    team_a = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="V18 team A", slots=[
+        AgentTeamSlotCreate(display_name="A1", repo_path=str(repo)),
+        AgentTeamSlotCreate(display_name="A2", repo_path=str(repo)),
+        AgentTeamSlotCreate(display_name="A3", repo_path=str(repo), enabled=False),
+    ]))
+    team_b = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="V18 team B", slots=[
+        AgentTeamSlotCreate(display_name="B1", repo_path=str(other)),
+    ]))
+    a1, _a2, a3_disabled = team_a.slots[0], team_a.slots[1], team_a.slots[2]
+    b1_cross = team_b.slots[0]
+    endpoint = f"/api/v1/agent-teams/presets/{team_a.id}/leader"
+    stamp = team_a.updated_at.isoformat()
+
+    def payload(slot_id, expected=None, updated_at=None, reason="V18 matrix check"):
+        return {"leader_slot_id": slot_id, "expected_leader_slot_id": expected,
+                "expected_updated_at": updated_at or stamp, "reason": reason}
+
+    # Unauthorized: missing and wrong operator credentials are refused.
+    missing_auth = await client.put(endpoint, headers={"X-Deck-Operator-Token": ""},
+                                    json=payload(a1.id))
+    assert missing_auth.status_code == 401
+    wrong_auth = await client.put(endpoint, headers={"X-Deck-Operator-Token": "v18-wrong"},
+                                  json=payload(a1.id))
+    assert wrong_auth.status_code == 401
+
+    # Missing slot: refused without any assignment change.
+    missing_slot = await client.put(endpoint, json=payload(999999))
+    assert missing_slot.status_code == 409
+    assert missing_slot.json()["detail"]["code"] == "leader_slot_unavailable"
+
+    # Disabled slot: refused.
+    disabled_slot = await client.put(endpoint, json=payload(a3_disabled.id))
+    assert disabled_slot.status_code == 409
+    assert disabled_slot.json()["detail"]["code"] == "leader_slot_unavailable"
+
+    # Cross-team slot: refused.
+    cross_team = await client.put(endpoint, json=payload(b1_cross.id))
+    assert cross_team.status_code == 409
+    assert cross_team.json()["detail"]["code"] == "leader_slot_unavailable"
+
+    # Stale expected assignment and stale update stamp: refused.
+    stale = await client.put(endpoint, json=payload(a1.id, expected=999999))
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "leader_assignment_changed"
+    stale_stamp = await client.put(endpoint, json=payload(a1.id, updated_at="2000-01-01T00:00:00"))
+    assert stale_stamp.status_code == 409
+    assert stale_stamp.json()["detail"]["code"] == "leader_assignment_changed"
+
+    # Empty reason: refused.
+    no_reason = await client.put(endpoint, json=payload(a1.id, reason=" "))
+    assert no_reason.status_code == 409
+    assert no_reason.json()["detail"]["code"] == "leader_assignment_reason_required"
+
+    # Positive control: a valid explicit assignment succeeds.
+    accepted = await client.put(endpoint, json=payload(a1.id))
+    assert accepted.status_code == 200
+    assert accepted.json()["leader_slot_id"] == a1.id
+
+    # Active team automation: refused and the assignment is preserved.
+    async def current(slot_id, reason="V18 matrix check"):
+        preset = await agent_team_service.get_preset(db, team_a.id)
+        return {"leader_slot_id": slot_id, "expected_leader_slot_id": preset.leader_slot_id,
+                "expected_updated_at": preset.updated_at.isoformat(), "reason": reason}
+
+    team_a.autonomy_enabled = True
+    await db.execute(text("UPDATE agent_team_presets SET autonomy_enabled = 1 WHERE id = :id"), {"id": team_a.id})
+    await db.commit()
+    db.expire_all()
+    active_team = await client.put(endpoint, json=await current(_a2.id))
+    assert active_team.status_code == 409
+    assert active_team.json()["detail"]["code"] == "leader_assignment_team_active"
+    await db.execute(text("UPDATE agent_team_presets SET autonomy_enabled = 0 WHERE id = :id"), {"id": team_a.id})
+    await db.commit()
+    db.expire_all()
+
+    # Non-quiescent team with an active item and lease: refused.
+    scope = TeamGithubScope(preset_id=team_a.id, repo_owner="example", repo_name="v18",
+                            repo_path=str(repo))
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(scope_id=scope.id, issue_number=1, issue_title="v18",
+                          issue_url="https://example.invalid/1", github_updated_at=datetime.utcnow(),
+                          dispatch_status="dispatched")
+    db.add(item)
+    await db.flush()
+    workspace = GithubWorkspace(scope_id=scope.id, path=str(tmp_path / "v18-work"),
+                                leased_item_id=item.id, lease_token="v18-lease")
+    db.add(workspace)
+    await db.commit()
+    busy_team = await client.put(endpoint, json=await current(_a2.id))
+    assert busy_team.status_code == 409
+    assert busy_team.json()["detail"]["code"] == "leader_assignment_team_not_quiescent"
+
+    # Concurrent acquisition is covered by
+    # test_leader_mutation_rechecks_assignment_after_waiting_for_sqlite_writer.
+    unchanged = await agent_team_service.get_preset(db, team_a.id)
+    assert unchanged.leader_slot_id == a1.id
+
+
+@pytest.mark.asyncio
+async def test_v18_leader_update_quiescence_blockers_and_competing_updates(client, db, tmp_path):
+    """V18: each quiescence blocker and competing protected updates refuse safely."""
+    repo = tmp_path / "v18b-repo"
+    repo.mkdir()
+    team = await agent_team_service.create_preset(db, AgentTeamPresetCreate(name="V18B team", slots=[
+        AgentTeamSlotCreate(display_name="Q1", repo_path=str(repo)),
+        AgentTeamSlotCreate(display_name="Q2", repo_path=str(repo)),
+    ]))
+    q1, q2 = team.slots[0], team.slots[1]
+    scope = TeamGithubScope(preset_id=team.id, repo_owner="example", repo_name="v18b",
+                            repo_path=str(repo))
+    db.add(scope)
+    await db.flush()
+    item = GithubWorkItem(scope_id=scope.id, issue_number=2, issue_title="v18b",
+                          issue_url="https://example.invalid/2", github_updated_at=datetime.utcnow(),
+                          dispatch_status="completed")
+    db.add(item)
+    await db.commit()
+    # Capture identities before later commits can expire the shared session rows.
+    team_id, q1_id, q2_id, scope_id, item_id = team.id, q1.id, q2.id, scope.id, item.id
+    endpoint = f"/api/v1/agent-teams/presets/{team_id}/leader"
+
+    async def attempt(slot_id, reason="V18 quiescence blockers"):
+        preset = await agent_team_service.get_preset(db, team_id)
+        return await client.put(endpoint, json={
+            "leader_slot_id": slot_id,
+            "expected_leader_slot_id": preset.leader_slot_id,
+            "expected_updated_at": preset.updated_at.isoformat(),
+            "reason": reason,
+        })
+
+    async def refused_unchanged(response, slot_id):
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "leader_assignment_team_not_quiescent"
+        preset = await agent_team_service.get_preset(db, team_id)
+        assert preset.leader_slot_id is None
+
+    # Blocker: a verifying attempt alone.
+    item.dispatch_status = "verifying"
+    await db.commit()
+    await refused_unchanged(await attempt(q1_id), q1_id)
+    item.dispatch_status = "completed"
+    await db.commit()
+
+    # Blocker: a pending approval request alone.
+    approval = GithubApprovalRequest(
+        work_item_id=item_id, request_kind="initial", dispatch_nonce="v18b-nonce",
+        approval_round=1, owner_member_id=1, leader_member_id=2,
+        request_fingerprint="v18b-fingerprint", status="pending")
+    db.add(approval)
+    await db.commit()
+    await refused_unchanged(await attempt(q1_id), q1_id)
+    approval.status = "approved"
+    await db.commit()
+
+    # Blocker: a nonterminal attempt scope revision alone.
+    revision = GithubAttemptScopeRevision(
+        work_item_id=item_id, dispatch_nonce="v18b-nonce", revision=0, owner_slot_id=q1_id,
+        owner_member_id=1, phase="implementation", execution_target="/work", summary="v18b",
+        allowed_paths="[]", allowed_actions="[]", allowed_commands="[]", prohibited_actions="[]",
+        tool_fallbacks="{}", baseline_head_sha="a" * 40, baseline_tree_sha="b" * 40,
+        originating_escalation_reason="fixture", expected_workspace_id=0,
+        expected_lease_token_hash="fixture-hash", max_failed_heads=2, failed_head_count=0,
+        status="active", delivery_attempt_count=0)
+    db.add(revision)
+    await db.commit()
+    await refused_unchanged(await attempt(q1_id), q1_id)
+    revision.status = "superseded"
+    await db.commit()
+
+    # Blocker: residual workspace lease fields after release.
+    workspace = GithubWorkspace(scope_id=scope_id, path=str(tmp_path / "v18b-work"),
+                                lease_token="residual-lease-token")
+    db.add(workspace)
+    await db.commit()
+    await refused_unchanged(await attempt(q1_id), q1_id)
+    workspace.lease_token = None
+    await db.commit()
+
+    # Quiescent team: a valid explicit assignment succeeds.
+    accepted = await attempt(q1_id)
+    assert accepted.status_code == 200
+    assert accepted.json()["leader_slot_id"] == q1_id
+
+    # Competing protected updates: the second stale request is refused and the
+    # first assignment is preserved.
+    preset = await agent_team_service.get_preset(db, team_id)
+    stale_snapshot = {
+        "leader_slot_id": q2_id,
+        "expected_leader_slot_id": preset.leader_slot_id,
+        "expected_updated_at": preset.updated_at.isoformat(),
+        "reason": "V18 competing update",
+    }
+    first = await client.put(endpoint, json=dict(stale_snapshot))
+    assert first.status_code == 200
+    second = await client.put(endpoint, json=dict(stale_snapshot))
+    assert second.status_code == 409
+    assert second.json()["detail"]["code"] == "leader_assignment_changed"
+    after = await agent_team_service.get_preset(db, team_id)
+    assert after.leader_slot_id == q2_id
+
+    # A blocker created after a refusal is visible to the next fresh read.
+    late = GithubWorkspace(scope_id=scope_id, path=str(tmp_path / "v18b-late"),
+                           leased_item_id=item_id, lease_token="late-lease")
+    db.add(late)
+    await db.commit()
+    late_blocked = await attempt(q1_id)
+    assert late_blocked.status_code == 409
+    assert late_blocked.json()["detail"]["code"] == "leader_assignment_team_not_quiescent"
+
+    # Concurrent writer acquisition is covered by
+    # test_leader_mutation_rechecks_assignment_after_waiting_for_sqlite_writer.
