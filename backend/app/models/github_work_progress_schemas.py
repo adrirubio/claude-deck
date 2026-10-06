@@ -3,6 +3,22 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from mcp_shim.work_remaining_protocol import ReportContext
+
+
+class GithubWorkRemainingView(BaseModel):
+    state: Literal["current", "historical", "unavailable"] = "unavailable"
+    remaining: str | None = None
+    estimate: str | None = None
+    next_action: str | None = None
+    reported_at: datetime | None = None
+    reported_by: str | None = None
+    source_sha: str | None = None
+    reason: Literal["report_missing", "report_invalid", "report_unavailable", "source_unconfirmed",
+                    "context_changed", "report_expired"] | None = "report_missing"
+    source_url: str | None = None
+    completed: str | None = None
+    assumptions: str | None = None
 
 
 class GithubPublicationObservation(BaseModel):
@@ -39,3 +55,5 @@ class GithubWorkProgressResponse(BaseModel):
     next_poll_expected_at: datetime | None = None
     last_check_head: str | None = None
     publication: GithubPublicationObservation
+    remaining_work: GithubWorkRemainingView = Field(default_factory=GithubWorkRemainingView)
+    remaining_work_context: ReportContext | None = None
