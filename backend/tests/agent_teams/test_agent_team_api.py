@@ -1288,6 +1288,10 @@ async def test_activation_readiness_names_binding_and_provider_gaps(client, db, 
 
 
 async def _readiness_team(db, monkeypatch, tmp_path, name, workers):
+    # Native pane liveness is test-controlled; rows alone never satisfy the
+    # binding. Individual cases can override the returned verdicts.
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive",
+                        lambda pane_pid, proc_start: True)
     from unittest.mock import AsyncMock
 
     from app.models.database import MailAgentSession, MailTeamMember
@@ -1987,3 +1991,53 @@ async def test_readiness_overflow_roster_and_unrelated_history_are_bounded(
     # The unrelated-history observation is unchanged and complete for its roster.
     baseline_codes = {blocker["code"] for blocker in baseline.json()["blockers"]}
     assert baseline_codes == {"leader_assignment_missing", "provider_mail_not_ready"}
+
+
+@pytest.mark.asyncio
+async def test_readiness_dead_native_lifetime_is_refused(client, db, monkeypatch, tmp_path):
+    """F3/G1: stored binding rows alone never satisfy readiness; native
+    liveness evidence is consumed and a dead pane lifetime is refused."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "DeadPane", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 970, 870, last_seen=datetime.utcnow())
+    monkeypatch.setattr("app.utils.peer_process.pane_is_alive",
+                        lambda pane_pid, proc_start: False)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_lifetime" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_leader_only_is_refused_without_distinct_owner(client, db, monkeypatch, tmp_path):
+    """F3/G3: Leader-only readiness is refused without a distinct eligible owner."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "LeaderOnly", 1)
+    now = datetime.utcnow()
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[0].id, 971, 871, last_seen=now)
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_missing" in codes
+    assert readiness.json()["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_readiness_newest_non_slot_member_never_falls_back(client, db, monkeypatch, tmp_path):
+    """F3/G4: the newest member is selected first; a non-slot kind is refused
+    without falling back to an older valid member."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "KindGuard", 1)
+    now = datetime.utcnow()
+    _bind_owner(db, preset, preset.slots[1].id, 972, 872, last_seen=now)
+    from app.models.database import MailTeamMember
+    db.add(MailTeamMember(
+        id=973, identity_key="operator:973", repo_id="r", repo_path="/r", repo_name="r",
+        display_name="Operator", participant_kind="operator",
+        team_preset_id=preset.id, team_slot_id=preset.slots[1].id))
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_member_kind" in codes
+    # No fallback: the older valid member 972 never makes the slot eligible.
+    assert "owner_binding_stale" not in codes
+    assert "owner_binding_ambiguous" not in codes

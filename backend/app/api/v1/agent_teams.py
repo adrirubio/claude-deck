@@ -2664,16 +2664,19 @@ async def read_activation_readiness(
 
     async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None]:
         """Current authenticated binding for one slot from bounded queries only."""
+        # Select the newest member first, then validate its kind. Never fall
+        # back to an older member when the newest is not a slot member.
         candidates = list((await db.scalars(
             select(MailTeamMember).where(
                 MailTeamMember.team_preset_id == scope.preset_id,
                 MailTeamMember.team_slot_id == slot.id,
-                MailTeamMember.participant_kind == "team_slot",
             ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(2)
         )).all())
         if not candidates:
             return False, "missing", None
         member = candidates[0]
+        if member.participant_kind != "team_slot":
+            return False, "member_kind", member.id
         sessions = list((await db.scalars(
             select(MailAgentSession).where(
                 MailAgentSession.member_id == member.id,
@@ -2707,6 +2710,11 @@ async def read_activation_readiness(
             )).first()
             if binding is None:
                 return False, "native_mismatch", member.id
+            # Bounded native liveness evidence: stored rows alone are not
+            # sufficient. One pane probe per candidate, capped by the query.
+            from app.utils.peer_process import pane_is_alive
+            if pane_is_alive(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
+                return False, "native_lifetime", member.id
             qualifying.append(session)
         if len(qualifying) > 1:
             return False, "ambiguous", member.id
@@ -2753,12 +2761,24 @@ async def read_activation_readiness(
                          "slot_names": sorted(set(unbound_slots))})
 
     # Post-observation revalidation: bindings must not change during the reads.
+    # Gap 2: revalidate the complete current binding after the slow
+    # observation: Leader assignment, roster membership and the current member.
+    current_preset = await db.get(AgentTeamPreset, scope.preset_id)
+    if (current_preset is not None and preset is not None
+            and current_preset.leader_slot_id != preset.leader_slot_id):
+        blockers.append({"code": "binding_changed_during_observation",
+                         "message": "The Leader assignment changed during the observation."})
     for slot in enabled[:64]:
+        current_slot = await db.get(AgentTeamSlot, slot.id)
+        if current_slot is None or current_slot.enabled != slot.enabled:
+            blockers.append({"code": "binding_changed_during_observation",
+                             "message": "The roster membership changed during the observation.",
+                             "slot_ids": [slot.id]})
+            continue
         current_member = (await db.scalars(
             select(MailTeamMember).where(
                 MailTeamMember.team_preset_id == scope.preset_id,
                 MailTeamMember.team_slot_id == slot.id,
-                MailTeamMember.participant_kind == "team_slot",
             ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1)
         )).first()
         expected_member_id = states[slot.id][2]
