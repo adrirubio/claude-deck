@@ -2043,6 +2043,24 @@ async def update_github_scope(
                 scope.github_app_installation_id = None
         elif request.github_auth_mode is not None:
             scope.github_app_installation_id = None
+        # A02: the policy event persists in the same transaction as the
+        # policy change. An audit-write failure rolls back the change.
+        from app.services import factory_audit_service as _audit
+        _policy_before = dict(zip(_SCOPE_CONFIGURATION_FIELDS, observed_configuration))
+        _policy_after = dict(zip(_SCOPE_CONFIGURATION_FIELDS, _scope_configuration(scope)))
+        await _audit.record_event(
+            db,
+            event_kind="policy_change",
+            source="agent_teams.update_github_scope",
+            occurred_at=datetime.now(timezone.utc),
+            actor=_audit.derive_actor(actor_kind="operator"),
+            scope_id=scope.id,
+            before_values=_policy_before,
+            after_values=_policy_after,
+            sanitized_reason="scope configuration update",
+            action_outcome="applied",
+            correlation_id=f"policy:scope:{scope.id}:{scope.updated_at.isoformat()}",
+        )
         await db.commit()
         await db.refresh(scope)
     except HTTPException:
@@ -2073,12 +2091,35 @@ async def update_github_scope_continuation_policy(
     scope = await db.get(TeamGithubScope, scope_id)
     if scope is None:
         raise HTTPException(status_code=404, detail="GitHub scope not found")
+    before_values = {
+        "enabled": scope.enabled,
+        "max_scope_paths": scope.max_scope_paths,
+        "max_scope_commands": scope.max_scope_commands,
+    }
     scope.continuation_enabled = request.continuation_enabled
     scope.max_continuation_revisions = request.max_continuation_revisions
     scope.max_continuation_failed_heads = request.max_continuation_failed_heads
     scope.max_failed_heads_per_revision = request.max_failed_heads_per_revision
     scope.max_scope_paths = request.max_scope_paths
     scope.max_scope_commands = request.max_scope_commands
+    # A02: the policy event persists in the same transaction as the policy
+    # change. An audit-write failure rolls back the change.
+    from app.services import factory_audit_service as _audit
+    await _audit.record_event(
+        db,
+        event_kind="policy_change",
+        source="agent_teams.update_github_scope_continuation_policy",
+        occurred_at=datetime.now(timezone.utc),
+        actor=_audit.derive_actor(actor_kind="operator"),
+        scope_id=scope.id,
+        before_values=before_values,
+        after_values={"enabled": scope.enabled,
+                      "max_scope_paths": scope.max_scope_paths,
+                      "max_scope_commands": scope.max_scope_commands},
+        sanitized_reason=request.reason if hasattr(request, "reason") else "continuation policy update",
+        action_outcome="applied",
+        correlation_id=f"policy:continuation:{scope.id}:{int(request.continuation_enabled)}",
+    )
     await db.commit()
     await db.refresh(scope)
     return _scope_response(scope)
