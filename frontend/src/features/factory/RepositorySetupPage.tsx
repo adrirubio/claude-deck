@@ -256,7 +256,10 @@ export function RepositorySetupPage() {
   async function withOperatorToken<Result>(action: (value: string) => Promise<Result>): Promise<Result> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const value = await requestOperatorToken(attempt ? "The operator token was rejected. Enter a valid token to retry." : null);
-      if (!value) throw new Error("Operator token is required for this action.");
+      // Typed pre-send credential cancellation: the prompt cancel sends
+      // nothing. Recovery clears only when every attempted create was a
+      // proven non-write; uncertain writes keep the latch.
+      if (!value) throw new SaveIntentChangedError("Operator token is required for this action.");
       try { return await action(value); }
       catch (cause) {
         if (!(cause instanceof ApiHttpError) || cause.status !== 401 || attempt > 0) throw cause;

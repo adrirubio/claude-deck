@@ -1520,4 +1520,50 @@ describe("guided repository setup", () => {
     expect(screen.getByRole("button", { name: "Enable team automation" })).toBeEnabled();
     expect(mocks.updateAgentTeamPreset).not.toHaveBeenCalled();
   });
+
+  it("B4 cancel credential retry after known401 remains a non-write", async () => {
+    let stored: string | null = "synthetic-operator";
+    mocks.getOperatorToken.mockImplementation(() => stored);
+    mocks.clearOperatorToken.mockImplementation(() => { stored = null; });
+    mocks.setOperatorToken.mockImplementation((value: string) => { stored = value; });
+    mockReadyPreflightAndRoster();
+    mocks.fetchAgentTeamPresets.mockResolvedValue({ presets: [] });
+    mocks.fetchTeamGithubScopes.mockResolvedValue({ scopes: [] });
+    let rejectCreate: ((cause: unknown) => void) | undefined;
+    mocks.createAgentTeamPreset.mockImplementation(() => new Promise((_resolve, reject) => { rejectCreate = reject; }));
+    render(<MemoryRouter><RepositorySetupPage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Repository owner"), { target: { value: "example" } });
+    fireEvent.change(screen.getByLabelText("Repository name"), { target: { value: "synthetic-product" } });
+    fireEvent.change(screen.getByLabelText("Primary checkout path"), { target: { value: "/synthetic/checkout" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check access and labels" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue to configuration" }));
+    fireEvent.change(screen.getByLabelText("Team name"), { target: { value: "Synthetic team" } });
+    fireEvent.change(screen.getByLabelText("Worker slots, one name per line"), { target: { value: "Worker A" } });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review setup" }));
+    fireEvent.click(screen.getByLabelText(/Save configuration only/));
+    fireEvent.click(screen.getByRole("button", { name: "Save configuration" }));
+    await waitFor(() => expect(rejectCreate).toBeDefined());
+
+    // The draft changes while the create is in flight; the delayed 401 then
+    // triggers the replacement credential.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Dispatch label"), { target: { value: "changed-before-401" } });
+    rejectCreate?.(new mocks.ApiHttpError("The operator token was rejected.", 401));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    // The retry is a pre-send cancellation: nothing was sent and no uncertain
+    // latch is raised.
+    await waitFor(() => expect(screen.queryByText(/Reconcile uncertain create/)).not.toBeInTheDocument());
+    expect(mocks.createAgentTeamPreset).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Reconcile uncertain create/)).not.toBeInTheDocument();
+    expect(mocks.createTeamGithubScope).not.toHaveBeenCalled();
+  });
+
 });
