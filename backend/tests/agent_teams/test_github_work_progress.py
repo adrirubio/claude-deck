@@ -594,6 +594,7 @@ async def test_remaining_context_requires_current_scoped_leader_and_rechecks_aft
     slot = AgentTeamSlot(preset_id=preset.id, position=0, display_name="Leader", role="Leader",
         provider="codex-cli", repo_id="repo", repo_path="/safe/leader", repo_name="repo")
     db.add(slot); await db.flush()
+    preset.leader_slot_id = slot.id
     member = MailTeamMember(identity_key="leader", repo_id="repo", repo_path=slot.repo_path,
         repo_name="repo", display_name="Leader", participant_kind="team_slot", team_preset_id=preset.id, team_slot_id=slot.id)
     db.add(member); await db.flush()
