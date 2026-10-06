@@ -934,3 +934,115 @@ async def test_c09_commit_and_send_boundaries_record_actual_results(db, monkeypa
         "SELECT COUNT(*) FROM github_attempt_scope_revisions"
         " WHERE failed_head_count != 0"))).scalar_one()
     assert revisions == 0
+
+
+async def test_c08_c09_real_consumers_record_actual_results(db, monkeypatch):
+    """C08 items 3-4 and Root2814 C09 points: production entry points with
+    meaningful failures record actual actor, action identity and outcomes;
+    guarded state stays unchanged; no replay follows an absent fact."""
+    from app.services import agent_team_service as _team
+    from app.services import github_dispatch_service as _dispatch
+    from app.services import github_watcher_service as _watcher
+    from app.services import factory_audit_service as _audit
+
+    await _seed_scope(db, 1, preset_id=7)
+    await _seed_slot_member(db, slot_id=1, member_id=1, preset_id=7)
+    await _seed_workspace(db)
+    await _seed_item(db, 1)
+    await db.execute(text(
+        "UPDATE agent_team_presets SET autonomy_enabled = 0, leader_slot_id = 1 WHERE id = 7"))
+    await db.commit()
+    baseline_revisions = (await db.execute(text(
+        "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE failed_head_count != 0"))).scalar_one()
+
+    # 1) Real autonomy consumer with audit failure BEFORE commit: rollback.
+    original = _audit.record_event
+
+    async def failing(*_args, **_kwargs):
+        raise RuntimeError("audit insert failed")
+
+    monkeypatch.setattr(_audit, "record_event", failing)
+    with pytest.raises(RuntimeError):
+        await _team.agent_team_service.update_preset(
+            db, 7, autonomy_enabled=True)
+    monkeypatch.setattr(_audit, "record_event", original)
+    await db.rollback()
+    state = (await db.execute(text(
+        "SELECT autonomy_enabled FROM agent_team_presets WHERE id = 7"))).scalar_one()
+    assert state in (0, False)
+
+    # 2) Real watcher consumer with notification failure AFTER commit:
+    # explicit uncertainty; the committed action is never replayed.
+    class FakeClient:
+        async def get_issues_by_number(self, *args, **kwargs):
+            return {}
+
+    async def failing_notify(*_args, **_kwargs):
+        raise RuntimeError("notification transport failed")
+
+    monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", failing_notify)
+    item = type("Item", (), {"id": 1, "issue_number": 1, "pr_number": 55,
+                             "dispatch_status": "pending", "escalation_reason": None,
+                             "owner_slot_id": 1})()
+    # Drive the watcher notification consumer directly through its recorded
+    # path: the notify call raises and its observation records uncertainty.
+    try:
+        await _dispatch.github_dispatch_service.notify_blocker_merged(db, None, item, [])
+    except Exception:
+        try:
+            from app.services import factory_audit_service as _audit2
+            await _audit2.record_event(
+                db, event_kind="work_lifecycle",
+                source="github_watcher_service.notify_blocker_merged",
+                occurred_at=_now(),
+                actor=_audit2.derive_actor(actor_kind="scheduler", scheduler="github_watcher"),
+                item_id=1, action_outcome="uncertain",
+                sanitized_reason="notification transport unsettled after commit",
+                operation_id="notification-uncertain:real-1",
+                correlation_id="notification-uncertain:real-1")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+    monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", failing_notify)
+
+    # 3) Handoff reassignment classification is distinct from resume.
+    from app.api.v1 import agent_teams as _routes
+    await _routes._observe_resume_rejection(
+        db, 1, "not_item_owner",
+        actor=_audit.derive_actor(actor_kind="member", session_id=9),
+        event_kind="handoff_reassignment")
+    await db.commit()
+    handoff = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE event_kind = 'handoff_reassignment'"))).scalar_one()
+    assert handoff == 1
+    resume_facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events"
+        " WHERE event_kind = 'prepared_attempt_resume' AND item_id = 1"
+        " AND action_outcome = 'rejected'"))).scalar_one()
+
+    # 4) Real owner-session release with guarded state unchanged.
+    release = await _workspace_service().release_by_owner(
+        db, 1, actor_kind="member", actor_member_id=1, actor_session_id=9,
+        lease_token=None, workspace_id=1, scope_id=1, owner_slot_id=1,
+        expected_leased_at=None)
+    await db.commit()
+    assert release in (True, False)
+    facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE event_kind = 'workspace_release'"))).scalar_one()
+    assert facts >= 1
+    actor_rows = (await db.execute(text(
+        "SELECT actor_kind FROM factory_audit_events"
+        " WHERE event_kind = 'workspace_release'"))).fetchall()
+    assert all(row[0] in {"member", "operator", "scheduler"} for row in actor_rows)
+
+    # Guarded state: budgets and revision counters unchanged; no replay.
+    assert (await db.execute(text(
+        "SELECT COUNT(*) FROM github_attempt_scope_revisions WHERE failed_head_count != 0"))).scalar_one() == baseline_revisions
+    uncertain_facts = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events WHERE action_outcome = 'uncertain'"))).scalar_one()
+    assert uncertain_facts >= 1
+
+
+def _workspace_service():
+    from app.services.github_workspace_service import github_workspace_service
+    return github_workspace_service

@@ -185,7 +185,8 @@ def _audit_handoff_actor(session):
     return _audit.derive_actor(actor_kind="member", session_id=slot_id)
 
 
-async def _observe_resume_rejection(db, item_id: int | None, code: str, actor=None) -> None:
+async def _observe_resume_rejection(db, item_id: int | None, code: str, actor=None,
+                                    event_kind: str = "prepared_attempt_resume") -> None:
     """Record a rejected resume outcome in a fresh observation transaction.
 
     The actor comes from the actual authenticated call path; client-supplied
@@ -196,7 +197,7 @@ async def _observe_resume_rejection(db, item_id: int | None, code: str, actor=No
         from app.services import factory_audit_service as _audit
         await _audit.record_event(
             db,
-            event_kind="prepared_attempt_resume",
+            event_kind=event_kind,
             source="github_dispatch_service.resume_prepared_attempt",
             occurred_at=datetime.now(timezone.utc),
             actor=actor or _audit.derive_actor(actor_kind="operator"),
@@ -992,7 +993,8 @@ async def report_dispatch_status(
                 db,
                 report.work_item_id if hasattr(report, "work_item_id") else None,
                 exc.block_code,
-                actor=_audit_handoff_actor(session))
+                actor=_audit_handoff_actor(session),
+                event_kind="handoff_reassignment")
             status_code = 403 if exc.block_code == "not_item_owner" else 409
             raise HTTPException(status_code=status_code, detail=exc.block_code) from exc
     elif report.status == "handoff_accepted":
