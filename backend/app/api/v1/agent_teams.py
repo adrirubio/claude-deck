@@ -2694,6 +2694,7 @@ async def read_activation_readiness(
                 MailAgentSession.mailbox_status == "connected",
                 MailAgentSession.capability_token_hash.is_not(None),
             ).order_by(MailAgentSession.id).limit(9)
+            .execution_options(populate_existing=True)
         )).all())
         if len(sessions) > 8:
             return False, "context_limit", member.id, None
@@ -2745,26 +2746,33 @@ async def read_activation_readiness(
             if (command is None or marker not in argv0
                     or argv0 in {"bash", "sh", "zsh", "fish", "dash", "ksh"}):
                 return False, "native_identity", member.id, None
+            # Authenticated MCP process: when the session process differs
+            # from the pane process it must not be confirmed dead. This is the
+            # separate current process check, not connected or heartbeat
+            # alone.
+            from app.utils.peer_process import process_is_confirmed_dead
+            if (session.pid != session.bound_pane_pid
+                    and process_is_confirmed_dead(session.pid)):
+                return False, "mcp_process", member.id, None
+            # Actual lifecycle retirement: a retired pane lifecycle row means
+            # the pane is retired. Newest binding order is not equivalent.
+            from app.models.database import MailPaneLifecycle
+            retired = (await db.scalars(
+                select(MailPaneLifecycle.pane_pid).where(
+                    MailPaneLifecycle.pane_pid == session.bound_pane_pid,
+                    MailPaneLifecycle.pane_proc_start == session.bound_pane_proc_start,
+                    MailPaneLifecycle.retired_at.is_not(None),
+                ).limit(1)
+            )).first()
+            if retired is not None:
+                return False, "native_retired", member.id, None
             qualifying.append(session)
         if len(qualifying) > 1:
             # Two or more simultaneously live bindings are never resolved
-            # silently. A single superseded binding is retirement, not
-            # ambiguity, and is classified below.
+            # silently.
             return False, "ambiguous", member.id, None
         if not qualifying:
             return False, "stale", member.id, None
-        # Retirement: the single qualifying binding must still be the current
-        # binding row for this slot. A superseded row describes a retired pane.
-        newest_binding = (await db.scalars(
-            select(AgentPaneBinding).where(
-                AgentPaneBinding.slot_id == slot.id,
-                AgentPaneBinding.preset_id == scope.preset_id,
-            ).order_by(AgentPaneBinding.id.desc()).limit(1)
-        )).first()
-        if newest_binding is not None and (
-                newest_binding.pane_pid != qualifying[0].bound_pane_pid
-                or newest_binding.pane_proc_start != qualifying[0].bound_pane_proc_start):
-            return False, "native_retired", member.id, None
         return True, None, member.id, qualifying[0].id
 
     async def identity_signature(slot: AgentTeamSlot) -> tuple:

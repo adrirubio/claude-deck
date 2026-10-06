@@ -2100,18 +2100,37 @@ async def test_readiness_changed_signature_during_observation_is_refused(client,
 
 
 @pytest.mark.asyncio
-async def test_readiness_single_retired_binding_is_not_ambiguity(client, db, monkeypatch, tmp_path):
-    """I11: a single superseded binding is retirement, not ambiguity."""
+async def test_readiness_retired_lifecycle_is_not_ambiguity(client, db, monkeypatch, tmp_path):
+    """I11: actual lifecycle retirement is checked; newest binding order is
+    not equivalent, and a retired pane is not an ambiguity."""
     preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Retired", 1)
     _bind_owner(db, preset, preset.slots[1].id, 982, 882, last_seen=datetime.utcnow())
-    from app.models.database import AgentPaneBinding
-    db.add(AgentPaneBinding(pane_pid=10882, pane_proc_start="2",
-                            slot_id=preset.slots[1].id, preset_id=preset.id))
+    from app.models.database import MailPaneLifecycle
+    db.add(MailPaneLifecycle(pane_pid=1000 + 882, pane_proc_start="1",
+                             retired_at=datetime.utcnow()))
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
     assert "owner_binding_native_retired" in codes
     assert "owner_binding_ambiguous" not in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_confirmed_dead_mcp_process_is_refused(client, db, monkeypatch, tmp_path):
+    """I05/I06: the separate MCP process check refuses a confirmed-dead
+    session process that differs from the pane process."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "McpDead", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 983, 883, last_seen=datetime.utcnow())
+    from app.models.database import MailAgentSession as Sess
+    row = await db.get(Sess, 883)
+    row.pid = 424242
+    await db.commit()
+    monkeypatch.setattr("app.utils.peer_process.process_is_confirmed_dead",
+                        lambda pid: True)
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_mcp_process" in codes
+    assert readiness.json()["status"] == "blocked"
 
 
 @pytest.mark.asyncio
