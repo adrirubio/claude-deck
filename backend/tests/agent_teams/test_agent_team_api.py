@@ -1444,8 +1444,8 @@ async def test_activation_readiness_reports_bounded_context(client, db, monkeypa
     await db.commit()
     readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
-    assert "readiness_context_limit" in codes
-    assert "leader_assignment_missing" in codes
+    assert codes == {"readiness_context_limit"}
+    # B05: overflow stops Leader, owner, session and native work entirely.
 
 
 @pytest.mark.asyncio
@@ -2010,7 +2010,7 @@ async def test_readiness_dead_native_lifetime_is_refused(client, db, monkeypatch
 @pytest.mark.asyncio
 async def test_readiness_leader_only_is_refused_without_distinct_owner(client, db, monkeypatch, tmp_path):
     """F3/G3: Leader-only readiness is refused without a distinct eligible owner."""
-    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "LeaderOnly", 1)
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "LeaderOnly", 0)
     now = datetime.utcnow()
     await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
                      {"slot": preset.slots[0].id, "preset": preset.id})

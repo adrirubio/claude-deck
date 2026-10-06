@@ -95,7 +95,8 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
         "sessions": _rows(conn, (
             "SELECT id, member_id, provider, source, session_key, wake_enabled, mailbox_status,"
             " team_preset_id, team_slot_id, bound_pane_pid, bound_pane_proc_start,"
-            " capability_token_hash, last_seen_at FROM mail_agent_sessions ORDER BY id")),
+            " capability_token_hash, last_seen_at, closed_at, created_at"
+            " FROM mail_agent_sessions ORDER BY id")),
         "pane_bindings": _rows(conn, (
             "SELECT pane_pid, pane_proc_start, slot_id, preset_id"
             " FROM agent_pane_bindings ORDER BY preset_id, slot_id, pane_pid")),
@@ -104,9 +105,18 @@ def capture_reference_scope(conn: sqlite3.Connection) -> dict[str, object]:
             " handoff_target_slot_id, ack_approver_member_id, active_scope_revision,"
             " approval_round_count, dispatch_nonce FROM github_work_items ORDER BY id")),
         "workspaces": _rows(conn, (
-            "SELECT id, scope_id, leased_item_id, lease_token, leased_owner_pid,"
-            " leased_owner_proc_start, push_token_expires_at, leased_at, released_at"
+            "SELECT id, scope_id, kind, dispatchable, enabled, leased_item_id, lease_token,"
+            " leased_owner_pid, leased_owner_proc_start, push_token_expires_at,"
+            " leased_at, released_at, created_at, updated_at"
             " FROM github_workspaces ORDER BY id")),
+        "scope_policy": _rows(conn, (
+            "SELECT id, preset_id, repo_owner, repo_name, dispatch_label, design_label,"
+            " merge_policy, github_auth_mode, base_ref, max_approval_rounds,"
+            " max_concurrent_dispatched, max_verification_retries, max_auto_merges_per_day,"
+            " max_build_parallelism, builds_out_of_tree, continuation_enabled,"
+            " max_continuation_revisions, max_continuation_failed_heads,"
+            " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled"
+            " FROM team_github_scopes ORDER BY id")),
         "approval_requests": _rows(conn, (
             "SELECT id, work_item_id, request_kind, dispatch_nonce, approval_round,"
             " owner_member_id, leader_member_id, request_fingerprint, status,"

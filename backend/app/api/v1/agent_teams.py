@@ -2659,10 +2659,17 @@ async def read_activation_readiness(
         blockers.append({"code": "readiness_context_limit",
                          "message": "The roster exceeds the bounded readiness observation."})
     enabled = [slot for slot in slots if slot.enabled]
+    if any(blocker["code"] == "readiness_context_limit" for blocker in blockers):
+        # B05: overflow stops member, session and native work entirely.
+        return {
+            "status": "blocked",
+            "observed_at": observed_at,
+            "blockers": blockers,
+        }
     heartbeat_cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         seconds=MCP_HEARTBEAT_TTL_SECONDS)
 
-    async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None]:
+    async def binding_state(slot: AgentTeamSlot) -> tuple[bool, str | None, int | None, int | None]:
         """Current authenticated binding for one slot from bounded queries only."""
         # Select the newest member first, then validate its kind. Never fall
         # back to an older member when the newest is not a slot member.
@@ -2673,10 +2680,10 @@ async def read_activation_readiness(
             ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(2)
         )).all())
         if not candidates:
-            return False, "missing", None
+            return False, "missing", None, None
         member = candidates[0]
         if member.participant_kind != "team_slot":
-            return False, "member_kind", member.id
+            return False, "member_kind", member.id, None
         sessions = list((await db.scalars(
             select(MailAgentSession).where(
                 MailAgentSession.member_id == member.id,
@@ -2689,7 +2696,7 @@ async def read_activation_readiness(
             ).order_by(MailAgentSession.id).limit(9)
         )).all())
         if len(sessions) > 8:
-            return False, "context_limit", member.id
+            return False, "context_limit", member.id, None
         qualifying = []
         for session in sessions:
             if not session.wake_enabled:
@@ -2709,18 +2716,21 @@ async def read_activation_readiness(
                 ).limit(2)
             )).first()
             if binding is None:
-                return False, "native_mismatch", member.id
+                return False, "native_mismatch", member.id, None
+            # Multiple live pane bindings for one member are never resolved
+            # silently: the qualifying list below refuses the ambiguity, which
+            # also covers replaced or retired panes still bound in records.
             # Bounded native liveness evidence: stored rows alone are not
             # sufficient. One pane probe per candidate, capped by the query.
             from app.utils.peer_process import pane_is_alive
             if pane_is_alive(session.bound_pane_pid, session.bound_pane_proc_start) is not True:
-                return False, "native_lifetime", member.id
+                return False, "native_lifetime", member.id, None
             qualifying.append(session)
         if len(qualifying) > 1:
-            return False, "ambiguous", member.id
+            return False, "ambiguous", member.id, None
         if not qualifying:
-            return False, "stale", member.id
-        return True, None, member.id
+            return False, "stale", member.id, None
+        return True, None, member.id, qualifying[0].id
 
     states: dict[int, tuple[bool, str | None, int | None]] = {}
     for slot in enabled[:64]:
@@ -2737,7 +2747,7 @@ async def read_activation_readiness(
     owner_slots = [slot for slot in enabled if leader is None or slot.id != leader.id]
     eligible_owner_slot_ids: set[int] = set()
     for slot in owner_slots[:64]:
-        ok, reason, _bound_member_id = states[slot.id]
+        ok, reason, _bound_member_id, _bound_session_id = states[slot.id]
         if ok:
             eligible_owner_slot_ids.add(slot.id)
         elif reason == "ambiguous":
@@ -2750,7 +2760,7 @@ async def read_activation_readiness(
             blockers.append({"code": f"owner_binding_{reason}",
                              "message": "An owner session binding is not current and authenticated.",
                              "slot_ids": [slot.id]})
-    if not eligible_owner_slot_ids and owner_slots:
+    if not eligible_owner_slot_ids:
         blockers.append({"code": "owner_binding_missing",
                          "message": "A distinct eligible owner binding is required."})
 
@@ -2775,17 +2785,14 @@ async def read_activation_readiness(
                              "message": "The roster membership changed during the observation.",
                              "slot_ids": [slot.id]})
             continue
-        current_member = (await db.scalars(
-            select(MailTeamMember).where(
-                MailTeamMember.team_preset_id == scope.preset_id,
-                MailTeamMember.team_slot_id == slot.id,
-            ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1)
-        )).first()
-        expected_member_id = states[slot.id][2]
-        current_member_id = current_member.id if current_member is not None else None
-        if expected_member_id != current_member_id:
+        # Fresh full re-evaluation: membership, session identity, wake state,
+        # capability, provider, heartbeat freshness, pane identity, binding row
+        # and native liveness must all still hold.
+        fresh_ok, _fresh_reason, fresh_member_id, fresh_session_id = await binding_state(slot)
+        if (fresh_member_id != states[slot.id][2] or fresh_ok != states[slot.id][0]
+                or fresh_session_id != states[slot.id][3]):
             blockers.append({"code": "binding_changed_during_observation",
-                             "message": "The membership binding changed during the observation.",
+                             "message": "The complete binding state changed during the observation.",
                              "slot_ids": [slot.id]})
 
     return {

@@ -55,7 +55,7 @@ async def test_shared_procedure_admits_representable_with_nine_step_log(tmp_path
     # AC4: the comparison record covers every reference-scope entry.
     assert set(record["comparison_record"]) == {
         "explicit_assignments", "members", "sessions", "pane_bindings",
-        "items", "workspaces", "approval_requests", "revisions"}
+        "items", "workspaces", "scope_policy", "approval_requests", "revisions"}
     # Synthetic-quiescence and separate-release limits stay explicit.
     assert "not a real" in record["limits"]["synthetic_quiescence"]
     assert record["limits"]["v14"] == "NOT_PERFORMED"
