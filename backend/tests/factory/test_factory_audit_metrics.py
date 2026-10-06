@@ -304,3 +304,106 @@ async def test_a24_a27_duration_and_retry_boundaries(db):
     assert "not execution time" in by_name["elapsed_attempt_duration"].unknown_reasons[0]
     assert by_name["diagnostic_retries"].value is None
     assert "budget counters" in by_name["diagnostic_retries"].unknown_reasons[0]
+
+
+async def test_c04_metric_predicates_match_labels_and_filters(db):
+    """C04: mixed two-scope fixture with independently calculated counts.
+
+    Scope A: one successful dispatch, one failed launch, one completed item,
+    one pending item, one terminal revision, one active revision, one applied
+    recovery without a preserved revision. Scope B: one delivered fact.
+    """
+    actor = audit.derive_actor(actor_kind="scheduler", scheduler="launch")
+    key_a = await audit.context_key_for(db, "scope", 1)
+    key_b = await audit.context_key_for(db, "scope", 2)
+    await db.execute(text(
+        "INSERT INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path,"
+        " dispatch_label, design_label, merge_policy, github_auth_mode, base_ref,"
+        " max_approval_rounds, max_concurrent_dispatched, max_verification_retries,"
+        " max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree,"
+        " continuation_enabled, max_continuation_revisions, max_continuation_failed_heads,"
+        " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled,"
+        " created_at, updated_at) VALUES (1, 1, 'a', 'a', '/a', 'd', 'd', 'human', 'ambient',"
+        " 'o', 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+    await db.execute(text(
+        "INSERT INTO team_github_scopes (id, preset_id, repo_owner, repo_name, repo_path,"
+        " dispatch_label, design_label, merge_policy, github_auth_mode, base_ref,"
+        " max_approval_rounds, max_concurrent_dispatched, max_verification_retries,"
+        " max_auto_merges_per_day, max_build_parallelism, builds_out_of_tree,"
+        " continuation_enabled, max_continuation_revisions, max_continuation_failed_heads,"
+        " max_failed_heads_per_revision, max_scope_paths, max_scope_commands, enabled,"
+        " created_at, updated_at) VALUES (2, 1, 'b', 'b', '/b', 'd', 'd', 'human', 'ambient',"
+        " 'o', 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+    for item_id, scope_id, status in ((1, 1, "completed"), (2, 1, "pending"), (3, 2, "pending")):
+        await db.execute(text(
+            "INSERT INTO github_work_items (id, scope_id, issue_number, issue_title, issue_url,"
+            " github_updated_at, issue_type, dispatch_status, attempt_phase, active_scope_revision,"
+            " approval_round_count, retry_count, diagnostic_retry_count, dispatch_nonce, created_at,"
+            " updated_at) VALUES (:id, :scope, :id, 't', 'u', CURRENT_TIMESTAMP, 'code', :status,"
+            " 'implementation', 0, 1, 0, 0, 'n', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"),
+            {"id": item_id, "scope": scope_id, "status": status})
+    await db.execute(text(
+        "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision,"
+        " owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths,"
+        " allowed_actions, allowed_commands, prohibited_actions, tool_fallbacks, baseline_head_sha,"
+        " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
+        " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
+        " delivery_attempt_count, approval_request_id, created_at)"
+        " VALUES (1, 1, 'n', 0, 1, 1, 'implementation', '/w', 's', '[]', '[]', '[]', '[]', '{}',"
+        " 'a', 'b', 'r', 1, 'h', 2, 0, 'completed', 0, NULL, CURRENT_TIMESTAMP)"))
+    await db.execute(text(
+        "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision,"
+        " owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths,"
+        " allowed_actions, allowed_commands, prohibited_actions, tool_fallbacks, baseline_head_sha,"
+        " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
+        " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
+        " delivery_attempt_count, approval_request_id, created_at)"
+        " VALUES (2, 2, 'n', 0, 1, 1, 'implementation', '/w', 's', '[]', '[]', '[]', '[]', '{}',"
+        " 'a', 'b', 'r', 1, 'h', 2, 0, 'active', 0, NULL, CURRENT_TIMESTAMP)"))
+    await db.commit()
+
+    # Scope A ledger facts: successful dispatch, failed launch, applied
+    # recovery without a preserved revision.
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="launch", occurred_at=_now(),
+        actor=actor, action_outcome="applied", scope_id=1, scope_context_key=key_a,
+        after_values={"dispatch_status": "dispatched"})
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="launch", occurred_at=_now(),
+        actor=actor, action_outcome="applied", scope_id=1, scope_context_key=key_a,
+        after_values={"dispatch_status": "failed"})
+    await audit.record_event(
+        db, event_kind="prepared_attempt_resume", source="test", occurred_at=_now(),
+        actor=audit.derive_actor(actor_kind="operator"), item_id=1,
+        scope_id=1, scope_context_key=key_a, action_outcome="applied")
+    # Scope B fact.
+    await audit.record_event(
+        db, event_kind="work_lifecycle", source="test", occurred_at=_now(),
+        actor=actor, action_outcome="applied", scope_id=2, scope_context_key=key_b,
+        delivery_outcome="delivered", after_values={"dispatch_status": "merged"})
+    await db.commit()
+
+    scoped = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1),
+        filter_scope="scoped", scope_context_key=key_a)
+    by_name = {sample.name: sample for sample in scoped.metrics}
+    assert by_name["current_queue"].value == 1.0
+    assert by_name["current_queue"].source == "live_persisted_state"
+    assert by_name["total_tracked_attempts"].value == 2.0
+    assert by_name["active_revisions"].value == 1.0
+    assert by_name["harness_failures"].value == 1.0
+    assert by_name["recovery_success"].value == 0.0
+    assert by_name["delivered_in_window"].value == 0.0
+    assert by_name["delivered_in_window"].sample_count == 0
+
+    global_window = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1))
+    global_by_name = {sample.name: sample for sample in global_window.metrics}
+    assert global_by_name["delivered_in_window"].value == 1.0
+    assert global_by_name["harness_failures"].value == 1.0
+    assert global_by_name["current_queue"].value == 2.0
+
+    unscoped = await metrics.build_metrics_window(
+        db, window_start=_now() - timedelta(hours=1), window_end=_now() + timedelta(hours=1),
+        filter_scope="scoped")
+    assert unscoped.metrics == []
