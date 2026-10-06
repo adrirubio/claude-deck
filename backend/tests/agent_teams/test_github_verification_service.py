@@ -407,6 +407,9 @@ async def test_escalated_merge_preserves_continuation_completion_guards(db, stat
     slot, owner = await _owner(db, scope)
     item.owner_slot_id = slot.id
     item.active_scope_revision = 1
+    workspace.leased_item_id = None
+    workspace.lease_token = None
+    await db.commit()
     revision, revision_workspace = await _implementation_revision(
         db, scope, item, slot, owner,
         status="active" if state == "active" else "submitted",

@@ -1030,6 +1030,8 @@ class GithubVerificationService:
         recovery_only_attempt: GithubRecoveryOnlyAttempt | None,
     ) -> None:
         """Observe at most eight preserved PRs without granting recovery authority."""
+        # Existing diagnostic conflict paths can roll back and expire this row.
+        await db.refresh(scope)
         query = select(GithubWorkItem).where(
             GithubWorkItem.scope_id == scope.id,
             GithubWorkItem.dispatch_status == "escalated",
