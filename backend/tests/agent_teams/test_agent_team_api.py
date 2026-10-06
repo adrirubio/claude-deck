@@ -2110,3 +2110,104 @@ async def test_readiness_single_retired_binding_is_not_ambiguity(client, db, mon
     codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
     assert "owner_binding_native_retired" in codes
     assert "owner_binding_ambiguous" not in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_within_call_independent_writer_change_is_refused(
+    client, db, monkeypatch, tmp_path
+):
+    """I10: a committed independent-writer change between the first
+    observation and the revalidation read refuses readiness inside one call."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "MidCall", 1)
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    _bind_owner(db, preset, preset.slots[1].id, 990, 890, last_seen=datetime.utcnow())
+    _bind_owner(db, preset, preset.slots[0].id, 991, 891, last_seen=datetime.utcnow())
+    await db.commit()
+
+    original_execute = db.execute
+    state = {"leader_selects": 0}
+
+    async def intercepting_execute(query, *args, **kwargs):
+        sql = str(getattr(query, "statement", query))
+        if "leader_slot_id" in sql and "FROM agent_team_presets" in sql:
+            state["leader_selects"] += 1
+            if state["leader_selects"] == 3:
+                # Independent writer change lands after the first pass and
+                # before the revalidation signature read.
+                await original_execute(text(
+                    "UPDATE mail_agent_sessions SET wake_enabled = 0 WHERE id = 890"))
+                await original_execute(text("COMMIT"))
+        return await original_execute(query, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", intercepting_execute)
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "binding_changed_during_observation" in codes
+    assert readiness.json()["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_readiness_pid_reuse_with_changed_proc_start_is_refused(client, db, monkeypatch, tmp_path):
+    """I06: PID reuse with a changed process start cannot bypass identity."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "PidReuse", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 992, 892, last_seen=datetime.utcnow())
+    from app.models.database import MailAgentSession as Sess
+    row = await db.get(Sess, 892)
+    row.bound_pane_proc_start = "2"
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_native_mismatch" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_heartbeat_boundary_uses_shared_ttl(client, db, monkeypatch, tmp_path):
+    """I05: the heartbeat boundary uses the shared TTL predicate exactly."""
+    from datetime import timedelta
+    from app.services.github_coordination_service import MCP_HEARTBEAT_TTL_SECONDS
+
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "TtlBoundary", 1)
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    inside = datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS - 5)
+    outside = datetime.utcnow() - timedelta(seconds=MCP_HEARTBEAT_TTL_SECONDS + 5)
+    _bind_owner(db, preset, preset.slots[1].id, 993, 893, last_seen=inside)
+    _bind_owner(db, preset, preset.slots[0].id, 994, 894, last_seen=inside)
+    await db.commit()
+    ready = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    assert ready.json()["status"] == "ready"
+
+    from app.models.database import MailAgentSession as Sess
+    row = await db.get(Sess, 893)
+    row.last_seen_at = outside
+    await db.commit()
+    stale = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in stale.json()["blockers"]}
+    assert "owner_binding_stale" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_authenticated_and_native_halves_never_combine(client, db, monkeypatch, tmp_path):
+    """I06: authenticated session A and native match B cannot jointly satisfy
+    one participant."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Halves", 1)
+    now = datetime.utcnow()
+    # Session A: authenticated and fresh but no pane identity.
+    _bind_owner(db, preset, preset.slots[1].id, 995, 895, last_seen=now)
+    from app.models.database import MailAgentSession as Sess
+    row_a = await db.get(Sess, 895)
+    row_a.bound_pane_pid = None
+    row_a.bound_pane_proc_start = None
+    # Session B: pane identity and binding but no capability token.
+    _bind_owner(db, preset, preset.slots[1].id, 996, 896, last_seen=now)
+    row_b = await db.get(Sess, 896)
+    row_b.capability_token_hash = None
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_ambiguous" not in codes
+    assert "owner_binding_stale" in codes
+    assert readiness.json()["status"] == "blocked"

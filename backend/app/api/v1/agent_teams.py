@@ -2742,7 +2742,9 @@ async def read_activation_readiness(
                 AgentPaneBinding.preset_id == scope.preset_id,
             ).order_by(AgentPaneBinding.id.desc()).limit(1)
         )).first()
-        if newest_binding is not None and newest_binding.pane_pid != qualifying[0].bound_pane_pid:
+        if newest_binding is not None and (
+                newest_binding.pane_pid != qualifying[0].bound_pane_pid
+                or newest_binding.pane_proc_start != qualifying[0].bound_pane_proc_start):
             return False, "native_retired", member.id, None
         return True, None, member.id, qualifying[0].id
 
@@ -2753,36 +2755,49 @@ async def read_activation_readiness(
         identity and kind, complete session capability/wake/provider/freshness
         and pane lifetime fields, and pane binding rows with retirement order.
         """
-        slot_row = (await db.scalars(
-            select(AgentTeamSlot).where(AgentTeamSlot.id == slot.id).limit(1))).first()
-        preset_row = await db.get(AgentTeamPreset, scope.preset_id)
-        member_row = (await db.scalars(
-            select(MailTeamMember).where(
-                MailTeamMember.team_preset_id == scope.preset_id,
-                MailTeamMember.team_slot_id == slot.id,
-            ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))).first()
-        session_rows = list((await db.scalars(
-            select(MailAgentSession).where(
-                MailAgentSession.team_preset_id == scope.preset_id,
-                MailAgentSession.team_slot_id == slot.id,
-                MailAgentSession.closed_at.is_(None),
-            ).order_by(MailAgentSession.id).limit(9))).all())
-        binding_rows = list((await db.scalars(
-            select(AgentPaneBinding).where(
-                AgentPaneBinding.slot_id == slot.id,
-                AgentPaneBinding.preset_id == scope.preset_id,
-            ).order_by(AgentPaneBinding.id.desc()).limit(3))).all())
+        # Scalar-column rows and explicit fresh reads only: cached ORM
+        # entities cannot hide changed identity fields from this comparison.
+        slot_row = (await db.execute(select(
+            AgentTeamSlot.enabled, AgentTeamSlot.provider,
+        ).where(AgentTeamSlot.id == slot.id).limit(1))).first()
+        preset_row = (await db.execute(select(
+            AgentTeamPreset.leader_slot_id,
+        ).where(AgentTeamPreset.id == scope.preset_id).limit(1))).first()
+        member_row = (await db.execute(select(
+            MailTeamMember.id, MailTeamMember.participant_kind, MailTeamMember.updated_at,
+        ).where(
+            MailTeamMember.team_preset_id == scope.preset_id,
+            MailTeamMember.team_slot_id == slot.id,
+        ).order_by(MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).limit(1))).first()
+        session_rows = list((await db.execute(select(
+            MailAgentSession.id, MailAgentSession.provider, MailAgentSession.wake_enabled,
+            MailAgentSession.mailbox_status, MailAgentSession.capability_token_hash,
+            MailAgentSession.last_seen_at, MailAgentSession.bound_pane_pid,
+            MailAgentSession.bound_pane_proc_start,
+        ).where(
+            MailAgentSession.team_preset_id == scope.preset_id,
+            MailAgentSession.team_slot_id == slot.id,
+            MailAgentSession.closed_at.is_(None),
+        ).order_by(MailAgentSession.id).limit(9))).all())
+        binding_rows = list((await db.execute(select(
+            AgentPaneBinding.id, AgentPaneBinding.pane_pid, AgentPaneBinding.pane_proc_start,
+        ).where(
+            AgentPaneBinding.slot_id == slot.id,
+            AgentPaneBinding.preset_id == scope.preset_id,
+        ).order_by(AgentPaneBinding.id.desc()).limit(3))).all())
+        # The complete roster snapshot catches added enabled slots that
+        # per-slot checks alone would miss.
+        roster_rows = list((await db.execute(select(
+            AgentTeamSlot.id, AgentTeamSlot.enabled, AgentTeamSlot.provider,
+        ).where(AgentTeamSlot.preset_id == scope.preset_id)
+          .order_by(AgentTeamSlot.position, AgentTeamSlot.id).limit(65))).all())
         return (
-            slot_row.enabled if slot_row else None,
-            slot_row.provider if slot_row else None,
-            getattr(preset_row, "leader_slot_id", None),
-            member_row.id if member_row else None,
-            member_row.participant_kind if member_row else None,
-            member_row.updated_at if member_row else None,
-            tuple((s.id, s.provider, s.wake_enabled, s.mailbox_status,
-                   s.capability_token_hash is not None, s.last_seen_at,
-                   s.bound_pane_pid, s.bound_pane_proc_start) for s in session_rows),
-            tuple((b.id, b.pane_pid, b.pane_proc_start) for b in binding_rows),
+            slot_row if slot_row else None,
+            preset_row[0] if preset_row else None,
+            member_row if member_row else None,
+            tuple(tuple(row) for row in session_rows),
+            tuple(tuple(row) for row in binding_rows),
+            tuple(tuple(row) for row in roster_rows),
         )
 
     states: dict[int, tuple[bool, str | None, int | None, int | None]] = {}
