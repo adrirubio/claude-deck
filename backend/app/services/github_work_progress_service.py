@@ -41,6 +41,14 @@ class _SavedSnapshot:
     observation: dict
 
 
+@dataclass(frozen=True)
+class _SourceTarget:
+    workspace: WorkspaceProgressContext
+    head_ref: str | None
+    repo_owner: str
+    repo_name: str
+
+
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
@@ -68,12 +76,6 @@ def _identity(item, scope, workspace) -> dict:
             "leased_at": _iso(workspace.leased_at)}
 
 
-def _same_base(snapshot, item, scope) -> bool:
-    return (isinstance(snapshot.identity, dict)
-            and all(snapshot.identity.get(key) == value
-                    for key, value in _base_identity(item, scope).items()))
-
-
 def _historical(snapshot, reason: str) -> GithubPublicationObservation:
     if snapshot is not None:
         try:
@@ -95,6 +97,8 @@ def _next_step(item, scope, preset, pending, hold: str | None) -> tuple[str, str
         return "intervention", "operator", "Read the issue and guarded recovery details."
     if pending:
         return "plan_review", "leader", "Review the pending plan through the supported approval process."
+    if item.dispatch_status == "awaiting_human_review":
+        return "review", "operator", "Read the human summary and review the design PR."
     if item.handoff_state:
         return "handoff", "leader", "Reconcile the recorded handoff and its responsible owner."
     if item.dispatch_status == "pending":
@@ -123,9 +127,22 @@ class GithubWorkProgressService:
         self.observer = observer or workspace_progress_observer
         self.client = client or github_client
 
-    async def _rows(self, db: AsyncSession, item_id: int):
+    async def _rows(self, db: AsyncSession, item_id: int, *, final=False):
+        columns = [GithubWorkItem, TeamGithubScope, AgentTeamPreset, GithubWorkspace]
+        if final:
+            columns.extend([
+                select(GithubApprovalRequest.id).where(
+                    GithubApprovalRequest.work_item_id == GithubWorkItem.id,
+                    GithubApprovalRequest.dispatch_nonce == GithubWorkItem.dispatch_nonce,
+                    GithubApprovalRequest.approval_round == GithubWorkItem.approval_round_count,
+                    GithubApprovalRequest.status == "pending",
+                ).correlate(GithubWorkItem).limit(1).scalar_subquery(),
+                select(GithubBacklogCoordination.last_polled_at).where(
+                    GithubBacklogCoordination.scope_id == TeamGithubScope.id,
+                ).correlate(TeamGithubScope).scalar_subquery(),
+            ])
         return (await db.execute(
-            select(GithubWorkItem, TeamGithubScope, AgentTeamPreset, GithubWorkspace)
+            select(*columns)
             .join(TeamGithubScope, TeamGithubScope.id == GithubWorkItem.scope_id)
             .join(AgentTeamPreset, AgentTeamPreset.id == TeamGithubScope.preset_id)
             .outerjoin(GithubWorkspace, GithubWorkspace.leased_item_id == GithubWorkItem.id)
@@ -133,27 +150,27 @@ class GithubWorkProgressService:
             .execution_options(populate_existing=True)
         )).one_or_none()
 
-    async def _observe(self, item, scope, workspace, previous, now):
-        context = WorkspaceProgressContext(scope.repo_path, workspace.path, workspace.kind)
+    async def _observe(self, target, previous, now):
+        context = target.workspace
         local = await self.observer.read(context)
         result = GithubPublicationObservation(
             state="current", observed_at=now, local_sha=local.sha,
             tracked_changes=local.tracked_changes, untracked_files=local.untracked_files,
         )
-        if not _ref(item.dispatch_head_ref):
+        if not _ref(target.head_ref):
             result.state = "unavailable"; result.reason = "branch_not_assigned"
-        elif local.branch != item.dispatch_head_ref:
+        elif local.branch != target.head_ref:
             result.state = "unavailable"
             result.reason = "detached_head" if local.branch is None else "branch_mismatch"
         elif not all(part not in {".", ".."} and _REPO_PART.fullmatch(part or "")
-                     for part in (scope.repo_owner, scope.repo_name)):
+                     for part in (target.repo_owner, target.repo_name)):
             result.state = "unavailable"; result.reason = "remote_unavailable"
         else:
             result.destination_url = (
-                f"https://github.com/{scope.repo_owner}/{scope.repo_name}/tree/{item.dispatch_head_ref}")
+                f"https://github.com/{target.repo_owner}/{target.repo_name}/tree/{target.head_ref}")
             try:
                 remote = await asyncio.wait_for(self.client.get_ref(
-                    scope.repo_owner, scope.repo_name, item.dispatch_head_ref,
+                    target.repo_owner, target.repo_name, target.head_ref,
                     token=settings.github_token), timeout=4)
                 if remote is None:
                     # GitHub also uses 404 for an inaccessible private repo.
@@ -164,7 +181,7 @@ class GithubWorkProgressService:
                         raise GithubClientResponseError("invalid_progress_ref")
                     obj = remote.get("object")
                     sha = obj.get("sha") if isinstance(obj, dict) else None
-                    if (remote.get("ref") != f"refs/heads/{item.dispatch_head_ref}"
+                    if (remote.get("ref") != f"refs/heads/{target.head_ref}"
                             or not isinstance(sha, str) or not _SHA.fullmatch(sha)
                             or obj.get("type") != "commit"):
                         raise GithubClientResponseError("invalid_progress_ref")
@@ -189,28 +206,37 @@ class GithubWorkProgressService:
             return None
         item, scope, preset, workspace = rows
         started_identity = _base_identity(item, scope)
+        started_created_at = item.created_at
+        workspace_identity = _identity(item, scope, workspace) if workspace else None
+        leased_at = workspace.leased_at if workspace else None
+        lease = workspace.lease_token if workspace else None
+        target = (_SourceTarget(
+            WorkspaceProgressContext(scope.repo_path, workspace.path, workspace.kind),
+            item.dispatch_head_ref, scope.repo_owner, scope.repo_name,
+        ) if workspace else None)
         now = datetime.now(timezone.utc)
         cached_row = await db.get(GithubWorkProgressSnapshot, item_id)
         snapshot = (_SavedSnapshot(cached_row.observed_at, deepcopy(cached_row.identity),
                                    deepcopy(cached_row.observation)) if cached_row else None)
-        matching = snapshot if snapshot and _same_base(snapshot, item, scope) else None
-        if workspace is None or workspace.lease_token is None:
+        matching = (snapshot if snapshot and isinstance(snapshot.identity, dict)
+                    and all(snapshot.identity.get(key) == value
+                            for key, value in started_identity.items()) else None)
+        if workspace is None or lease is None:
             publication = _historical(matching, "workspace_not_leased")
-        elif (matching and matching.identity == _identity(item, scope, workspace)
+        elif (matching and matching.identity == workspace_identity
               and timedelta(0) <= now - _utc(matching.observed_at) < timedelta(seconds=_CACHE_SECONDS)):
             try:
                 publication = GithubPublicationObservation.model_validate(matching.observation)
             except (ValidationError, TypeError, ValueError):
                 publication = _historical(None, "snapshot_unavailable")
         else:
-            identity = _identity(item, scope, workspace)
+            identity = workspace_identity
             # Used for the conditional write only. Never put this private value
             # in an observation, cache identity, log, or API response.
-            lease = workspace.lease_token
             prior = _historical(matching, "snapshot_unavailable") if matching else None
             try:
                 publication = await asyncio.wait_for(
-                    self._observe(item, scope, workspace, prior, now), timeout=8)
+                    self._observe(target, prior, now), timeout=8)
             except ProgressObservationError as error:
                 publication = _historical(matching, error.reason)
             except (TimeoutError, OSError):
@@ -227,7 +253,7 @@ class GithubWorkProgressService:
                     .join(GithubWorkspace, GithubWorkspace.leased_item_id == GithubWorkItem.id)
                     .where(
                         GithubWorkItem.id == item_id,
-                        GithubWorkItem.created_at == item.created_at,
+                        GithubWorkItem.created_at == started_created_at,
                         GithubWorkItem.dispatch_nonce == identity["dispatch_nonce"],
                         GithubWorkItem.owner_slot_id == identity["owner_slot_id"],
                         GithubWorkItem.dispatch_head_ref == identity["head_ref"],
@@ -238,7 +264,7 @@ class GithubWorkProgressService:
                         GithubWorkspace.id == identity["workspace_id"],
                         GithubWorkspace.path == identity["workspace_path"],
                         GithubWorkspace.kind == identity["workspace_kind"],
-                        GithubWorkspace.leased_at == workspace.leased_at,
+                        GithubWorkspace.leased_at == leased_at,
                         GithubWorkspace.lease_token == lease,
                     ))
                 data = publication.model_dump(mode="json")
@@ -267,22 +293,31 @@ class GithubWorkProgressService:
                 except (IntegrityError, OperationalError):
                     await db.rollback()
                     publication = _historical(matching, "snapshot_unavailable")
-                # Do not let rollback-expired ORM fields become the next action.
-                rows = await self._rows(db, item_id)
-                if rows is None:
-                    return None
-                item, scope, preset, _workspace = rows
-
+        # End any old read snapshot. Every path receives one coherent final
+        # item/scope/preset/workspace/approval projection after asynchronous work.
+        if db.in_transaction():
+            await db.rollback()
+        rows = await self._rows(db, item_id, final=True)
+        if rows is None:
+            return None
+        item, scope, preset, final_workspace, pending, polled_at = rows
         if _base_identity(item, scope) != started_identity:
             publication = GithubPublicationObservation(state="unavailable", reason="changed_during_read")
-
-        pending = await db.scalar(select(GithubApprovalRequest.id).where(
-            GithubApprovalRequest.work_item_id == item_id,
-            GithubApprovalRequest.status == "pending",
-        ).limit(1))
+        elif publication.state == "current" and (
+            final_workspace is None or final_workspace.lease_token != lease
+            or _identity(item, scope, final_workspace) != workspace_identity
+        ):
+            publication = publication.model_copy(update={
+                "state": "historical",
+                "reason": "workspace_not_leased" if final_workspace is None or not final_workspace.lease_token
+                else "changed_during_read",
+            })
         phase, actor, action = _next_step(item, scope, preset, pending, hold_code())
-        polled_at = await db.scalar(select(GithubBacklogCoordination.last_polled_at)
-                                   .where(GithubBacklogCoordination.scope_id == scope.id))
+        if phase in {"implementation", "planning"} and (
+            final_workspace is None or not final_workspace.lease_token
+        ):
+            phase, actor, action = ("workspace_wait", "leader",
+                "Reconcile the missing workspace lease before work continues.")
         check_head = item.last_verified_sha
         if not isinstance(check_head, str) or not _SHA.fullmatch(check_head):
             check_head = None
