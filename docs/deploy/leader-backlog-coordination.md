@@ -145,6 +145,21 @@ issues bound this projection; historical records do not enlarge the active set.
 An uncertain partial terminal injection is retained and is not retried
 automatically. The Leader must reconcile it from an active authenticated turn.
 
+The team page shows owner follow-ups separately from backlog eligibility. A
+current backlog assessment does not resolve a later owner completion. The
+server checks the captured attempt, authority and native binding before it
+marks a recorded obligation current. It rechecks the watch and authority after
+the asynchronous reads. Missing, changed or paused evidence makes the record
+historical. The public read changes no record and mints no authority token.
+
+A current capped record identifies its issue, event and completion time. Its
+next actor is the Leader. A supervisor can contact the Leader through the
+existing channel. This notice is not a human approval request. Shared daily,
+unchanged snapshot and local delivery limits remain separate. The display
+does not reset a limit, infer idle activity, wake an agent or admit work.
+Failed refresh, expiry, scope changes and OFF/HOLD remove current action
+guidance. The existing UI request and poll supply this section.
+
 OFF/HOLD suppresses delivery. Changed policy, native binding, attempt, approval,
 ACK or workspace acquisition invalidates the old watch. Resume requires a fresh
 watch. Watch state and stable Mail keys survive controller restart. The safety
