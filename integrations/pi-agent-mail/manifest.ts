@@ -530,6 +530,77 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_prepare_work_remaining_summary",
+    "description": "Leader-only: prepare three short public lines for the main GitHub issue and PR.\n\n    This tool does not publish to GitHub. Use existing authorized GitHub access.\n    State what remains and who acts next. An effort range covers active work only;\n    name its scope and confidence. Omit both bounds when the estimate is unknown.\n    Publish after a safe checkpoint and refresh after source, scope or phase changes.\n    Reports grant no approval and do not satisfy review, CI or milestone gates.\n    Do not include private values, raw output, prompts or an inferred percentage.\n    ",
+    "inputSchema": {
+      "properties": {
+        "work_item_id": {
+          "title": "Work Item Id",
+          "type": "integer"
+        },
+        "remaining": {
+          "title": "Remaining",
+          "type": "string"
+        },
+        "next_action": {
+          "title": "Next Action",
+          "type": "string"
+        },
+        "effort_low_minutes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort Low Minutes"
+        },
+        "effort_high_minutes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort High Minutes"
+        },
+        "confidence": {
+          "default": "unknown",
+          "title": "Confidence",
+          "type": "string"
+        },
+        "effort_scope": {
+          "default": "",
+          "title": "Effort Scope",
+          "type": "string"
+        },
+        "completed": {
+          "default": "",
+          "title": "Completed",
+          "type": "string"
+        },
+        "assumptions": {
+          "default": "",
+          "title": "Assumptions",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "remaining",
+        "next_action"
+      ],
+      "title": "deck_prepare_work_remaining_summaryArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_reply",
     "description": "Reply in an existing thread. If the root is a pending context request addressed\n    to you, your reply is recorded as the answer and resolves it.",
     "inputSchema": {
