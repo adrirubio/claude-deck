@@ -2211,3 +2211,57 @@ async def test_readiness_authenticated_and_native_halves_never_combine(client, d
     assert "owner_binding_ambiguous" not in codes
     assert "owner_binding_stale" in codes
     assert readiness.json()["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_readiness_provider_mismatch_is_not_ready(client, db, monkeypatch, tmp_path):
+    """I09: a session whose provider does not match its slot is never ready;
+    provider and Mail gaps are reported without spawn or install."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "ProviderGap", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 997, 897, last_seen=datetime.utcnow())
+    from app.models.database import MailAgentSession as Sess
+    row = await db.get(Sess, 897)
+    row.provider = "pi"
+    await db.commit()
+    readiness = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    codes = {blocker["code"] for blocker in readiness.json()["blockers"]}
+    assert "owner_binding_stale" in codes
+    assert "provider_mail_not_ready" in codes
+
+
+@pytest.mark.asyncio
+async def test_readiness_observation_leaves_stored_state_unchanged(client, db, monkeypatch, tmp_path):
+    """S01: the readiness observation writes no Mail, team, scope, item,
+    approval, revision, workspace or pane rows."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "NoWrite", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 998, 898, last_seen=datetime.utcnow())
+    _bind_owner(db, preset, preset.slots[0].id, 999, 899, last_seen=datetime.utcnow())
+    await db.execute(text("UPDATE agent_team_presets SET leader_slot_id = :slot WHERE id = :preset"),
+                     {"slot": preset.slots[0].id, "preset": preset.id})
+    await db.commit()
+
+    async def snapshot():
+        counts = {}
+        for table in ("mail_team_members", "mail_agent_sessions", "agent_pane_bindings",
+                      "agent_team_slots", "team_github_scopes", "github_work_items",
+                      "github_approval_requests", "github_attempt_scope_revisions",
+                      "github_workspaces"):
+            counts[table] = (await db.execute(text(f"SELECT COUNT(*) FROM {table}"))).scalar_one()
+        return counts
+
+    before = await snapshot()
+    await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    after = await snapshot()
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_readiness_repeated_observation_is_stable(client, db, monkeypatch, tmp_path):
+    """S02: repeated observations return the same readiness meaning."""
+    preset, scope, _repo = await _readiness_team(db, monkeypatch, tmp_path, "Repeat", 1)
+    _bind_owner(db, preset, preset.slots[1].id, 1001, 8101, last_seen=datetime.utcnow())
+    await db.commit()
+    first = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    second = await client.get(f"/api/v1/agent-teams/github-scopes/{scope.id}/activation-readiness")
+    assert first.json()["status"] == second.json()["status"]
+    assert [b["code"] for b in first.json()["blockers"]] == [b["code"] for b in second.json()["blockers"]]
