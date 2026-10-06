@@ -5,6 +5,7 @@ Native identities, watch challenges and authority material stay private.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -241,12 +242,78 @@ class GithubOwnerFollowupService:
                                          for candidate in sorted(leader_candidates, key=lambda value: value.id)]
         return context, authority, leader, owner, item, policy
 
-    async def summary(self, db, scope_id):
+    async def summary(self, db, scope_id, activities=None):
+        """Project recorded obligations without delivering or changing authority."""
         result = []
+        candidates = []
         for watch in await self.watches(db, scope_id):
             item = await db.get(GithubWorkItem, watch.work_item_id, populate_existing=True)
-            if item:
-                result.append(_public(watch, item))
+            if not item:
+                continue
+            value = {**_public(watch, item), "current": False,
+                     "history_reason": "no_outstanding_event", "required_actor": None,
+                     "notification_limit": None}
+            result.append(value)
+            if watch.state not in _ACTIVE or not watch.settlement_id or not watch.settled_at or watch.sequence <= 0:
+                continue
+            # Freeze before native reads. ORM instances can be refreshed by a later read.
+            captured = _digest(watch.context)
+            watch_guard = exists(select(GithubOwnerFollowup.work_item_id).where(
+                GithubOwnerFollowup.work_item_id == watch.work_item_id,
+                *(getattr(GithubOwnerFollowup, key) == getattr(watch, key) for key in (
+                    "scope_id", "version", "sequence", "state", "settlement_id", "settled_at"))))
+            candidates.append((watch.work_item_id, captured, watch_guard, value,
+                               watch.notification_count, watch.delivery_attempts))
+        if not candidates:
+            return result
+        scope = await coordination.scope(db, scope_id)
+        preset = await db.get(AgentTeamPreset, scope.preset_id, populate_existing=True)
+        policy = await coordination.state(db, scope_id)
+        if hold_code() or not policy or not policy.enabled or not scope.enabled or not preset.autonomy_enabled:
+            for *_, value, _notifications, _attempts in candidates:
+                value["history_reason"] = "paused"
+            return result
+        selected_issues = list(policy.issue_numbers)
+        if activities is None:
+            try:
+                # One bounded observation for the whole team, within the existing UI deadline.
+                activities = await asyncio.wait_for(observe_private_team(db, scope.preset_id, 256), 3)
+            except (TimeoutError, ValueError, OSError):
+                for *_, value, _notifications, _attempts in candidates:
+                    value["history_reason"] = "observation_unavailable"
+                return result
+        guards = []
+        checked = []
+        for item_id, captured, watch_guard, value, notifications, attempts in candidates:
+            try:
+                context, guard, _, _, _, policy = await self.context(db, scope_id, item_id, activities)
+            except CoordinationError as error:
+                value["history_reason"] = ("observation_unavailable" if error.code == "followup_observation_unknown"
+                                           else "paused" if error.code in {"autonomy_off", "hold", "hold_unavailable", "recovery_only"}
+                                           else "authority_changed")
+                continue
+            if captured != _digest(context):
+                value["history_reason"] = "authority_changed"
+                continue
+            guards.append(guard & watch_guard & exists(select(GithubBacklogCoordination.scope_id).where(
+                GithubBacklogCoordination.scope_id == scope_id, GithubBacklogCoordination.enabled.is_(True),
+                GithubBacklogCoordination.policy_revision == context["policy_revision"],
+                GithubBacklogCoordination.issue_numbers == selected_issues)))
+            checked.append(value)
+            if value["state"] == "capped":
+                value["notification_limit"] = (
+                    "delivery" if notifications >= _MAX_DELIVERY_ATTEMPTS or attempts >= _MAX_DELIVERY_ATTEMPTS
+                    else "daily" if policy.budget_day == datetime.utcnow().strftime("%Y-%m-%d")
+                    and policy.daily_requests >= policy.max_daily_requests
+                    else "snapshot" if policy.snapshot_requests >= _MAX_SNAPSHOT_REQUESTS else "unknown")
+        if guards:
+            # Validate all rows together after every asynchronous context read.
+            valid = (await db.execute(select(*guards))).one()
+            held = bool(hold_code())
+            for value, matches in zip(checked, valid):
+                value.update(current=bool(matches and not held),
+                             history_reason=None if matches and not held else "paused" if held else "changed_during_read",
+                             required_actor="leader" if matches and not held else None)
         return result
 
     async def requests(self, db, scope_id, principal):
@@ -261,7 +328,7 @@ class GithubOwnerFollowupService:
             GithubWorkItem.dispatch_status == "dispatched").order_by(GithubWorkItem.id).limit(33))).all())
         if len(items) > 32:
             raise CoordinationError("followup_context_limit")
-        result = await self.summary(db, scope_id)
+        result = await self.summary(db, scope_id, activities)
         by_id = {value["work_item_id"]: value for value in result}
         for item in items:
             watch = watches.get(item.id)

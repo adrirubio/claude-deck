@@ -13,6 +13,7 @@ import os
 import pwd
 import sqlite3
 import stat
+import threading
 import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,7 @@ _TAIL_BYTES = 1_048_576
 _MAX_PROCESS_DESCRIPTORS = 256
 _WORK_FRESHNESS_SECONDS = 180
 _STOPPED_STATES = {"T", "t", "Z", "X", "x"}
+_BOUNDED_PRIVATE_WORKERS = threading.BoundedSemaphore(1)
 
 
 @dataclass(frozen=True)
@@ -284,26 +286,34 @@ def _observe(slot_id: int, provider: str, session_id: str | None,
         return result("unknown", "observation_unavailable")
 
 
-async def _team_inputs(db: AsyncSession, preset_id: int):
-    slots = list((await db.scalars(select(AgentTeamSlot).where(
-        AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))).all())
+async def _team_inputs(db: AsyncSession, preset_id: int, max_rows: int | None = None):
+    async def rows(query):
+        if max_rows is not None:
+            query = query.limit(max_rows + 1)
+        values = list((await db.execute(query)).all())
+        if max_rows is not None and len(values) > max_rows:
+            raise ValueError("activity_context_limit")
+        return values
+
+    slots = [row[0] for row in await rows(select(AgentTeamSlot).where(
+        AgentTeamSlot.preset_id == preset_id).execution_options(populate_existing=True))]
     # A rollout identifies a conversation, not its writer PID. Conservatively
     # reject UUID reuse anywhere in Deck, including other presets/disabled slots,
     # so another harness cannot supply a false Working event for this owner.
     native_identity_counts: dict[str, int] = {}
-    for options in await db.scalars(select(AgentTeamSlot.launch_options).where(
+    for (options,) in await rows(select(AgentTeamSlot.launch_options).where(
             AgentTeamSlot.provider == "codex-cli")):
         session_id = _canonical_session_id((options or {}).get("session_id"))
         if session_id is not None:
             native_identity_counts[session_id] = native_identity_counts.get(session_id, 0) + 1
-    members = list((await db.scalars(select(MailTeamMember).where(
+    members = [row[0] for row in await rows(select(MailTeamMember).where(
         MailTeamMember.team_preset_id == preset_id).order_by(
             MailTeamMember.updated_at.desc(), MailTeamMember.id.desc()).execution_options(
-                populate_existing=True))).all())
+                populate_existing=True))]
     current_member = {}
     for member in members:
         current_member.setdefault(member.team_slot_id, member.id)
-    rows = (await db.execute(select(AgentPaneBinding, MailAgentSession).join(
+    bound_rows = await rows(select(AgentPaneBinding, MailAgentSession).join(
         MailAgentSession,
         (MailAgentSession.bound_pane_pid == AgentPaneBinding.pane_pid)
         & (MailAgentSession.bound_pane_proc_start == AgentPaneBinding.pane_proc_start)
@@ -316,9 +326,9 @@ async def _team_inputs(db: AsyncSession, preset_id: int):
             MailAgentSession.source == "mcp", MailAgentSession.closed_at.is_(None),
             MailAgentSession.mailbox_status == "connected",
             MailAgentSession.capability_token_hash.is_not(None),
-            MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))).all()
+            MailPaneLifecycle.retired_at.is_(None)).execution_options(populate_existing=True))
     bindings: dict[int, set[tuple[str, ActivityBinding]]] = {}
-    for binding, session in rows:
+    for binding, session in bound_rows:
         if session.member_id == current_member.get(binding.slot_id) and session.cwd:
             bindings.setdefault(binding.slot_id, set()).add((session.provider, ActivityBinding(
                 binding.pane_pid, binding.pane_proc_start, session.cwd,
@@ -362,8 +372,9 @@ class PrivateActivity:
     current_settlement_id: str | None = None
 
 
-async def observe_private_team(db: AsyncSession, preset_id: int) -> dict[int, PrivateActivity]:
-    inputs = await _team_inputs(db, preset_id)
+async def observe_private_team(db: AsyncSession, preset_id: int,
+                               max_input_rows: int | None = None) -> dict[int, PrivateActivity]:
+    inputs = await _team_inputs(db, preset_id, max_input_rows)
     now = datetime.now(timezone.utc)
 
     def observations():
@@ -386,8 +397,22 @@ async def observe_private_team(db: AsyncSession, preset_id: int) -> dict[int, Pr
                                                metadata.get("current_settlement_id") if observed.state == "idle" else None)
         return values
 
-    values = await asyncio.to_thread(observations)
-    current = {entry[0]: entry for entry in await _team_inputs(db, preset_id)}
+    if max_input_rows is None:
+        values = await asyncio.to_thread(observations)
+    else:
+        if not _BOUNDED_PRIVATE_WORKERS.acquire(blocking=False):
+            raise ValueError("activity_observation_busy")
+        task = asyncio.create_task(asyncio.to_thread(observations))
+
+        def finished(worker):
+            _BOUNDED_PRIVATE_WORKERS.release()
+            if not worker.cancelled():
+                worker.exception()
+
+        task.add_done_callback(finished)
+        # A response timeout must not release capacity while its native worker runs.
+        values = await asyncio.shield(task)
+    current = {entry[0]: entry for entry in await _team_inputs(db, preset_id, max_input_rows)}
     for entry in inputs:
         if current.get(entry[0]) != entry:
             values[entry[0]] = PrivateActivity("unknown", "binding_changed", None, None, None)
