@@ -24,7 +24,7 @@ This reference describes the integrated product source candidate. Earlier packag
 
 Configuration checks do not verify model access. Credential readiness remains unknown, and generic provider cards do not establish a team-slot session binding. Conditional operating support still requires the current identity, workspace and approval authority.
 
-Guided setup, explicit Leader selection and delivery audit/metrics are not included. This source candidate has not received M1b or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
+Feature pages describe the capabilities in the integrated source. A source update does not grant milestone or pilot acceptance. The manual Bridge trial is unperformed; pilot participants, human benefit measurements and timing comparisons are unavailable. Promotion, publication, paid execution and deployment require separate authorization.
 
 Repository setup uses a guided, observation-only access and label check. Leader authority uses the preset's explicit `leader_slot_id`; slot order and descriptive Role text do not select it.
 
