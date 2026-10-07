@@ -886,7 +886,7 @@ class GithubVerificationService:
             if verdict == "merged":
                 chosen = max(selected, key=self._pull_number)
                 item.pr_number = self._pull_number(chosen)
-                await self._mark_merged(
+                await self._mark_merged_with_fact(
                     db, item, chosen, source="github_verification_service._reconcile_attempt_pulls")
                 item.status_note = (
                     "Merged pull requests found for this dispatch head: "
@@ -926,7 +926,7 @@ class GithubVerificationService:
         item.pr_number = pr_number
         item.last_verified_sha = None
         if verdict == "merged":
-            await self._mark_merged(
+            await self._mark_merged_with_fact(
                 db, item, pull, source="github_verification_service._record_selected_pull")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
@@ -1189,7 +1189,7 @@ class GithubVerificationService:
             await db.refresh(scope)
             await db.refresh(item)
             return
-        await self._mark_merged(
+        await self._mark_merged_with_fact(
             db, item, pull, source="github_verification_service._reconcile_escalated_merge")
         if revision is not None:
             revision.status = "completed"
@@ -1336,7 +1336,7 @@ class GithubVerificationService:
                 return
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
-            await self._mark_merged(
+            await self._mark_merged_with_fact(
                 db, item, pull, source="github_verification_service._observe_diagnostic_checks")
             await self._record_revision_outcome(
                 db, item, revision, "completed",
@@ -1697,7 +1697,7 @@ class GithubVerificationService:
                 await self._record_revision_outcome(
                     db, item, revision, "completed",
                     source="github_verification_service._verify_item")
-            await self._mark_merged(db, item, pull, source="github_verification_service._verify_item")
+            await self._mark_merged_with_fact(db, item, pull, source="github_verification_service._verify_item")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
             return
@@ -1857,7 +1857,7 @@ class GithubVerificationService:
             )
             return
         if verdict == "merged":
-            await self._mark_merged(
+            await self._mark_merged_with_fact(
                 db, item, pull, source="github_verification_service._process_review_item")
             await db.commit()
             await self._notify_blocker_merged(db, scope, item)
@@ -2004,7 +2004,7 @@ class GithubVerificationService:
 
         # The merge response carries no merge time, so the sourced fact time
         # stays unknown (null); the record time is the observation time.
-        await self._mark_merged(
+        await self._mark_merged_with_fact(
             db, item, {"number": item.pr_number},
             source="github_verification_service._process_review_item.auto_merge")
         item.auto_merged_at = datetime.utcnow()
@@ -2343,17 +2343,20 @@ class GithubVerificationService:
         ).all()
         return len(count) >= scope.max_auto_merges_per_day
 
-    async def _mark_merged(
+    def _mark_merged(self, item: GithubWorkItem) -> None:
+        item.dispatch_status = "merged"
+        item.escalation_reason = None
+        item.status_note = None
+        item.updated_at = datetime.utcnow()
+
+    async def _mark_merged_with_fact(
         self, db: AsyncSession, item: GithubWorkItem, pull: dict | None, *, source: str
     ) -> None:
         # R02: the sourced merge outcome is recorded in the merge transaction,
         # bound to the attempt, revision and PR artifact.
         from app.services import factory_audit_service as _audit
         await _audit.record_merged_delivery(db, item, pull, source=source)
-        item.dispatch_status = "merged"
-        item.escalation_reason = None
-        item.status_note = None
-        item.updated_at = datetime.utcnow()
+        self._mark_merged(item)
 
     async def _record_revision_outcome(
         self,

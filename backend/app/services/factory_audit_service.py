@@ -331,8 +331,8 @@ async def event_time_snapshot(
 
     The configured harness is the trusted slot configuration: the item's
     owner slot, or the team's Leader slot for team and scope facts. GitHub
-    authentication mode is its own label. The observed runtime provider stays
-    unknown (None): no runtime proof is available at these writers.
+    authentication mode is its own label. The observed runtime provider comes
+    only from the owner's bound live session; otherwise it stays unknown.
     """
     from app.models.database import AgentTeamPreset, AgentTeamSlot, GithubWorkItem, TeamGithubScope
 
@@ -365,6 +365,19 @@ async def event_time_snapshot(
         if slot is not None:
             snapshot.update({
                 "slot_display_name": slot.display_name, "configured_provider": slot.provider})
+    if item_id is not None and slot_id is not None:
+        # A20: the observed runtime harness is the provider of the owner
+        # slot's open, connected Mail session with a kernel-verified pane
+        # binding. Without such a session the runtime stays unknown.
+        from app.models.database import MailAgentSession
+        runtime = (await db.scalars(select(MailAgentSession.provider).where(
+            MailAgentSession.team_slot_id == slot_id,
+            MailAgentSession.closed_at.is_(None),
+            MailAgentSession.mailbox_status == "connected",
+            MailAgentSession.bound_pane_pid.is_not(None),
+            MailAgentSession.bound_pane_proc_start.is_not(None),
+        ).order_by(MailAgentSession.id.desc()).limit(1))).first()
+        snapshot["observed_runtime_provider"] = runtime
     if snapshot:
         snapshot.setdefault("observed_runtime_provider", None)
         snapshot["event_time_labels"] = sorted(

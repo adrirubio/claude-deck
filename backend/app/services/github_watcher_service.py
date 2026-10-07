@@ -244,37 +244,68 @@ class GithubWatcherService:
         # Scalars are captured before any await. A failed notification below
         # rolls the session back and expires every loaded row, so later loop
         # entries must never read attributes from the original objects.
-        pending = [(item.id, item.issue_number, item.pr_number) for item in stalled]
+        pending = [(item.id, item.issue_number, item.pr_number, item.escalation_reason)
+                   for item in stalled]
         current = await client.get_issues_by_number(
             scope.repo_owner,
             scope.repo_name,
-            [issue_number for _item_id, issue_number, _pr_number in pending],
+            [issue_number for _item_id, issue_number, _pr_number, _reason in pending],
         )
-        for item_id, issue_number, pr_number in pending:
+        for item_id, issue_number, pr_number, escalation_reason in pending:
             issue = current.get(issue_number)
             if issue is None or issue.get("state") != "closed":
                 continue
+            closed_unmerged = False
             if pr_number is not None:
-                logger.info(
-                    "Work item %s (issue #%s) has a closed issue but an unresolved "
-                    "PR #%s; leaving it for the verification path",
-                    item_id,
-                    issue_number,
-                    pr_number,
-                )
-                continue
+                # R02/A30: an escalated attempt whose PR verification proved
+                # closed without merge, and whose issue is now closed, ends
+                # without delivery when no attempt continues.
+                if escalation_reason == "pr_closed_unmerged" and not await self._attempt_continues(
+                        db, item_id):
+                    closed_unmerged = True
+                else:
+                    logger.info(
+                        "Work item %s (issue #%s) has a closed issue but an unresolved "
+                        "PR #%s; leaving it for the verification path",
+                        item_id,
+                        issue_number,
+                        pr_number,
+                    )
+                    continue
             # Re-read the real row: it is current even after an earlier
             # entry's notification failure rolled the session back.
             item = await db.get(GithubWorkItem, item_id, populate_existing=True)
             if (
                 item is None
                 or item.dispatch_status not in _CLOSED_ISSUE_RECONCILABLE_STATUSES
-                or item.pr_number is not None
+                or (item.pr_number is not None and not closed_unmerged)
+                or (closed_unmerged and (
+                    item.dispatch_status != "escalated"
+                    or item.escalation_reason != "pr_closed_unmerged"))
             ):
                 continue
             await self._complete_and_notify(
                 db, scope, item,
-                fact_source="github_watcher_service._reconcile_closed_issues", issue=issue)
+                fact_source="github_watcher_service._reconcile_closed_issues", issue=issue,
+                closed_unmerged=closed_unmerged)
+
+    async def _attempt_continues(self, db: AsyncSession, item_id: int) -> bool:
+        """R02/A30: a pending approval, live revision or requested retry continues it."""
+        from app.models.database import GithubApprovalRequest
+
+        item = await db.get(GithubWorkItem, item_id, populate_existing=True)
+        if item is None or item.retry_requested_at is not None:
+            return True
+        pending_request = (await db.scalars(select(GithubApprovalRequest.id).where(
+            GithubApprovalRequest.work_item_id == item_id,
+            GithubApprovalRequest.status == "pending",
+        ).limit(1))).first()
+        live_revision = (await db.scalars(select(GithubAttemptScopeRevision.id).where(
+            GithubAttemptScopeRevision.work_item_id == item_id,
+            GithubAttemptScopeRevision.status.not_in(
+                ("completed", "cancelled", "rejected", "exhausted", "expired", "superseded")),
+        ).limit(1))).first()
+        return pending_request is not None or live_revision is not None
 
     async def _complete_and_notify(
         self,
@@ -284,6 +315,7 @@ class GithubWatcherService:
         *,
         fact_source: str = "github_watcher_service._complete_and_notify",
         issue: dict | None = None,
+        closed_unmerged: bool = False,
     ) -> None:
         """Complete a closed-issue item and notify its team.
 
@@ -324,7 +356,15 @@ class GithubWatcherService:
         issue = issue if isinstance(issue, dict) else {}
         state_reason = issue.get("state_reason")
         closed_at = _audit._parse_time(issue.get("closed_at"))
-        if state_reason in ("not_planned", "duplicate") and item.pr_number is None:
+        artifact = None
+        if closed_unmerged:
+            # The PR closure without merge was read by verification (its
+            # escalation reason); the closed issue ends the attempt.
+            outcome, completion, source_of_fact = (
+                "closed_without_delivery", "pr_closed_unmerged",
+                "github_pull_request_closed_unmerged")
+            artifact = f"{scope.repo_owner}/{scope.repo_name}/pull/{item.pr_number}"
+        elif state_reason in ("not_planned", "duplicate") and item.pr_number is None:
             outcome, completion, source_of_fact = (
                 "closed_without_delivery", f"issue_closed_{state_reason}",
                 "github_issue_state_reason")
@@ -339,6 +379,7 @@ class GithubWatcherService:
             completion_kind=completion,
             fact_source=source_of_fact,
             fact_time=closed_at,
+            artifact=artifact,
             attempt=captured_attempt,
             launch_attempt=_audit.launch_attempt_key(captured_item_id, captured_launch_id),
             source=fact_source,

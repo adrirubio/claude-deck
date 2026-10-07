@@ -3202,6 +3202,123 @@ async def test_r02_watcher_records_sourced_terminal_non_delivery(store, monkeypa
         assert row[1] == "github_issue_state_reason"
 
 
+@pytest.mark.parametrize("case", [
+    "terminal", "pending_request", "live_revision", "retry_requested", "other_escalation"])
+async def test_a30_closed_unmerged_terminal_consumer_keeps_continuation_guards(
+    store, monkeypatch, case
+):
+    """A30 (Root 3525): an escalated attempt whose PR verification proved
+    closed without merge, with its issue closed and no continuing attempt,
+    ends as sourced terminal non-delivery. A pending request, a live
+    revision, a requested retry or another escalation keeps it untouched."""
+    from app.models.database import (
+        GithubApprovalRequest, GithubAttemptScopeRevision, TeamGithubScope,
+    )
+    from app.services.github_dispatch_service import github_dispatch_service
+    from app.services.github_watcher_service import github_watcher_service
+
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(
+        store, item_id=130, status="escalated", pr_number=73,
+        escalation_reason="plan_blocked" if case == "other_escalation" else "pr_closed_unmerged",
+        retry_requested_at=_FIXED_LEASE if case == "retry_requested" else None)
+    async with store() as db:
+        if case == "pending_request":
+            db.add(GithubApprovalRequest(
+                work_item_id=130, request_kind="initial_plan", dispatch_nonce=_NONCE,
+                approval_round=3, owner_member_id=_OWNER["member"],
+                leader_member_id=_LEADER["member"], request_fingerprint="f" * 64,
+                status="pending"))
+        if case == "live_revision":
+            await db.execute(text(
+                "INSERT INTO github_workspaces (id, scope_id, path, kind, dispatchable, enabled,"
+                " created_at, updated_at) VALUES (130, 5, '/tmp/ws-130', 'worktree', 1, 1,"
+                " CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"))
+            db.add(GithubAttemptScopeRevision(
+                work_item_id=130, dispatch_nonce=_NONCE, revision=1,
+                owner_slot_id=_OWNER["slot"], owner_member_id=_OWNER["member"],
+                phase="implementation", execution_target="workspace", summary="Live",
+                allowed_paths=["src/a.py"], allowed_actions=["edit_production"],
+                allowed_commands=[], prohibited_actions=[], tool_fallbacks={},
+                baseline_head_sha="a" * 40, baseline_tree_sha="b" * 40,
+                originating_escalation_reason="pr_closed_unmerged",
+                expected_workspace_id=130, expected_lease_token_hash="h" * 64,
+                max_failed_heads=2, status="proposed"))
+        await db.commit()
+    before = await _authority(store, 130)
+
+    async def no_notice(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(github_dispatch_service, "notify_blocker_merged", no_notice)
+
+    class ClosedIssue:
+        async def get_issues_by_number(self, owner, repo, numbers):
+            return {number: {"state": "closed", "state_reason": "completed",
+                             "closed_at": "2026-10-06T11:40:00Z", "labels": []}
+                    for number in numbers}
+
+    async with store() as db:
+        scope = await db.get(TeamGithubScope, 5)
+        await github_watcher_service._reconcile_closed_issues(db, scope, ClosedIssue())
+
+    facts = await _facts(store, event_kind="delivery_evidence")
+    after = await _authority(store, 130)
+    if case != "terminal":
+        assert facts == []
+        assert after == before
+        return
+    async with store() as db:
+        row = (await db.execute(text(
+            "SELECT delivery_outcome, completion_kind, fact_source, fact_time,"
+            " json_extract(context_snapshot, '$.artifact') FROM factory_audit_events"
+            " WHERE event_kind = 'delivery_evidence'"))).first()
+    assert row[:3] == ("closed_without_delivery", "pr_closed_unmerged",
+                       "github_pull_request_closed_unmerged")
+    assert datetime.fromisoformat(str(row[3])) == datetime(2026, 10, 6, 11, 40)
+    assert row[4] == "matrix-owner/matrix-repo/pull/73"
+    assert after["item"]["dispatch_status"] == "completed"
+
+
+async def test_a20_real_caller_records_configured_and_bound_runtime_providers(store):
+    """A20 (Root 3525): the real lifecycle writer records the configured slot
+    harness and, separately, the runtime harness of the owner's bound live
+    session. Without a bound live session the runtime stays unknown."""
+    from app.models.database import GithubWorkItem
+    from app.services.github_dispatch_service import observe_work_lifecycle
+
+    await _seed_team(store)
+    await _seed_work(store, item_id=131, status="pending")
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE agent_team_slots SET provider = 'claude-code' WHERE id = :id"),
+            {"id": _OWNER["slot"]})
+        await db.commit()
+
+    async def record(to_status: str) -> None:
+        async with store() as db:
+            item = await db.get(GithubWorkItem, 131)
+            await observe_work_lifecycle(db, item=item, from_status=None, to_status=to_status,
+                                         source="github_dispatch_service.launch")
+            await db.commit()
+
+    await record("dispatched")
+    async with store() as db:
+        await db.execute(text(
+            "UPDATE mail_agent_sessions SET closed_at = CURRENT_TIMESTAMP WHERE id = :id"),
+            {"id": _OWNER["session"]})
+        await db.commit()
+    await record("failed")
+
+    async with store() as db:
+        rows = (await db.execute(text(
+            "SELECT json_extract(context_snapshot, '$.configured_provider'),"
+            " json_extract(context_snapshot, '$.observed_runtime_provider')"
+            " FROM factory_audit_events WHERE event_kind = 'work_lifecycle' ORDER BY id"))).fetchall()
+    assert [tuple(row) for row in rows] == [("claude-code", "codex-cli"), ("claude-code", None)]
+
+
 async def test_r03_one_result_per_attempt_survives_late_evidence_and_deletion(store):
     """R03 (B4 F03/F04, Astra F02): unknown then delivered for one attempt is
     one delivered result; repeated evidence adds nothing; a new attempt on the
