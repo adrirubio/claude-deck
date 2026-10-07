@@ -142,7 +142,8 @@ class StoredIntegrationFixture(IntegrationFixture):
                 lease_token='fixture-lease', leased_owner_pid=6000, leased_owner_proc_start='fixture'))
             db.add(GithubAttemptScopeRevision(id=1, work_item_id=1, dispatch_nonce='fixture', revision=4,
                 owner_slot_id=2, owner_member_id=2, phase='implementation', execution_target='workspace',
-                summary='Fixture', allowed_paths=['owned.txt'], allowed_actions=['edit_production'],
+                summary='Fixture', originating_escalation_reason='retry_count_exhausted',
+                allowed_paths=['owned.txt'], allowed_actions=['edit_production'],
                 allowed_commands=['pytest'], prohibited_actions=[], tool_fallbacks={},
                 baseline_head_sha=baseline, baseline_tree_sha=git(path,'rev-parse',baseline+'^{tree}'),
                 expected_workspace_id=1, expected_lease_token_hash='f'*64, max_failed_heads=2,
