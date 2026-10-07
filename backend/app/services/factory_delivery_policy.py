@@ -1,7 +1,9 @@
 """Delivery choices are scoped data. Authentication and approvals remain separate."""
 from __future__ import annotations
 
-from sqlalchemy import exists, select, update
+from copy import deepcopy
+
+from sqlalchemy import JSON, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import GithubDeliveryPolicyEvent, GithubWorkItem, TeamGithubScope
@@ -17,6 +19,31 @@ def effective_policy(item: GithubWorkItem, scope: TeamGithubScope) -> FactoryDel
     value = item.delivery_policy if item.delivery_policy is not None else (
         {} if item.dispatch_nonce else scope.delivery_policy or {})
     return FactoryDeliveryPolicy.model_validate(value)
+
+
+def policy_context(item: GithubWorkItem) -> tuple:
+    return item.delivery_policy_revision, deepcopy(item.delivery_policy)
+
+
+def policy_context_conditions(context: tuple) -> list:
+    revision, policy = context
+    value = (or_(GithubWorkItem.delivery_policy.is_(None), GithubWorkItem.delivery_policy == JSON.NULL)
+             if policy is None else GithubWorkItem.delivery_policy == policy)
+    return [GithubWorkItem.delivery_policy_revision == revision, value]
+
+
+async def claim_policy_context(db: AsyncSession, item: GithubWorkItem, context: tuple) -> bool:
+    result = await db.execute(update(GithubWorkItem).where(
+        GithubWorkItem.id == item.id, GithubWorkItem.dispatch_nonce == item.dispatch_nonce,
+        GithubWorkItem.owner_slot_id == item.owner_slot_id,
+        GithubWorkItem.active_scope_revision == item.active_scope_revision,
+        GithubWorkItem.dispatch_status == item.dispatch_status,
+        *policy_context_conditions(context),
+    ).values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
+    if result.rowcount == 1:
+        return True
+    await db.rollback()
+    return False
 
 
 async def update_scope_policy(db: AsyncSession, scope: TeamGithubScope, *,

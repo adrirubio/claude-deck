@@ -44,7 +44,10 @@ from app.services.github_recovery_gate import (
 from app.services.github_workspace_service import github_workspace_service
 from app.services.team_communication_policy import HUMAN_REVIEW_SUMMARY_GUIDANCE
 
-from app.services.factory_delivery_policy import effective_policy, required_check_blockers, scope_policy
+from app.services.factory_delivery_policy import (
+    claim_policy_context, effective_policy, policy_context, policy_context_conditions,
+    required_check_blockers, scope_policy,
+)
 
 _SUCCESS_CONCLUSIONS = {"success", "neutral", "skipped"}
 _STATUS_SUCCESS_STATES = {"success"}
@@ -1242,6 +1245,7 @@ class GithubVerificationService:
         db: AsyncSession,
         item: GithubWorkItem,
         revision: GithubAttemptScopeRevision,
+        *, policy_guard: tuple | None = None,
     ) -> bool:
         current_revision = exists(
             select(GithubAttemptScopeRevision.id).where(
@@ -1264,6 +1268,7 @@ class GithubVerificationService:
                 GithubWorkItem.active_scope_revision == revision.revision,
                 GithubWorkItem.attempt_phase == "diagnostic",
                 current_revision,
+                *(policy_context_conditions(policy_guard) if policy_guard is not None else ()),
             )
             .values(updated_at=GithubWorkItem.updated_at)
             .execution_options(synchronize_session=False)
@@ -1281,6 +1286,8 @@ class GithubVerificationService:
         revision: GithubAttemptScopeRevision,
         client: GithubClient,
     ) -> None:
+        policy_guard = policy_context(item)
+        policy = effective_policy(item, scope)
         pull = await client.get_pull(
             scope.repo_owner,
             scope.repo_name,
@@ -1302,7 +1309,7 @@ class GithubVerificationService:
                 expected_base=expected_base,
             )
         except ValueError as exc:
-            if not await self._claim_current_diagnostic_context(db, item, revision):
+            if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
                 return
             revision.status = "exhausted"
             await github_dispatch_service.escalate(
@@ -1316,7 +1323,7 @@ class GithubVerificationService:
 
         verdict = self._classify_pull(pull)
         if verdict == "merged":
-            if not await self._claim_current_diagnostic_context(db, item, revision):
+            if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
                 return
             revision.status = "completed"
             revision.completed_at = datetime.utcnow()
@@ -1325,7 +1332,7 @@ class GithubVerificationService:
             await self._notify_blocker_merged(db, scope, item)
             return
         if verdict != "open":
-            if not await self._claim_current_diagnostic_context(db, item, revision):
+            if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
                 return
             revision.status = "superseded"
             await github_dispatch_service.escalate_without_notification(
@@ -1338,7 +1345,7 @@ class GithubVerificationService:
 
         head_sha = self._head_sha(pull)
         if not head_sha:
-            if not await self._claim_current_diagnostic_context(db, item, revision):
+            if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
                 return
             revision.status = "exhausted"
             await github_dispatch_service.escalate(
@@ -1369,12 +1376,12 @@ class GithubVerificationService:
                 if check not in pending
                 and check.get("conclusion") not in _SUCCESS_CONCLUSIONS
             ]
-            blockers = required_check_blockers(effective_policy(item, scope), checks, head_sha)
+            blockers = required_check_blockers(policy, checks, head_sha)
             state = "red" if failed else "pending" if pending or blockers else "green"
-        elif effective_policy(item, scope).required_checks:
+        elif policy.required_checks:
             state = "pending"
             evidence_rows = [{"name": check.name, "state": "missing"}
-                             for check in effective_policy(item, scope).required_checks]
+                             for check in policy.required_checks]
         else:
             combined = await client.get_combined_status_for_ref(
                 scope.repo_owner,
@@ -1391,7 +1398,7 @@ class GithubVerificationService:
             else:
                 state = "pending"
 
-        if not await self._claim_current_diagnostic_context(db, item, revision):
+        if not await self._claim_current_diagnostic_context(db, item, revision, policy_guard=policy_guard):
             return
 
         envelope = dict(revision.evidence) if isinstance(revision.evidence, dict) else {}
@@ -1626,6 +1633,8 @@ class GithubVerificationService:
         *,
         revision: GithubAttemptScopeRevision | None = None,
     ) -> None:
+        policy_guard = policy_context(item)
+        policy = effective_policy(item, scope)
         pull = await client.get_pull(scope.repo_owner, scope.repo_name, int(item.pr_number))
         if not await self._validate_polled_pull_identity(
             db,
@@ -1704,7 +1713,8 @@ class GithubVerificationService:
             scope.repo_name,
             head_sha or "",
         )
-        policy = effective_policy(item, scope)
+        if not await claim_policy_context(db, item, policy_guard):
+            return
         blockers = required_check_blockers(policy, checks, head_sha)
         if not checks and not policy.required_checks:
             if await self._process_combined_status(
@@ -1714,6 +1724,7 @@ class GithubVerificationService:
                 client,
                 pull,
                 revision=revision,
+                policy_guard=policy_guard,
             ):
                 return
             await self._handle_no_check_signal(
@@ -1775,6 +1786,7 @@ class GithubVerificationService:
                 pull,
                 head_sha,
                 revision=revision,
+                policy_guard=policy_guard,
             )
 
     async def _process_review_item(
@@ -2077,13 +2089,17 @@ class GithubVerificationService:
         pull: dict,
         *,
         revision: GithubAttemptScopeRevision | None = None,
+        policy_guard: tuple | None = None,
     ) -> bool:
+        policy_guard = policy_guard if policy_guard is not None else policy_context(item)
         head_sha = self._head_sha(pull)
         status = await client.get_combined_status_for_ref(
             scope.repo_owner,
             scope.repo_name,
             head_sha or "",
         )
+        if not await claim_policy_context(db, item, policy_guard):
+            return True
         contexts = status.get("statuses") or []
         if not contexts:
             return False
@@ -2097,6 +2113,7 @@ class GithubVerificationService:
                 pull,
                 head_sha,
                 revision=revision,
+                policy_guard=policy_guard,
             )
             return True
         if state in _STATUS_FAILURE_STATES:
@@ -2185,7 +2202,11 @@ class GithubVerificationService:
         head_sha: str | None,
         *,
         revision: GithubAttemptScopeRevision | None = None,
+        policy_guard: tuple | None = None,
     ) -> None:
+        policy_guard = policy_guard if policy_guard is not None else policy_context(item)
+        if not await claim_policy_context(db, item, policy_guard):
+            return
         was_draft = bool(pull.get("draft") and pull.get("node_id"))
         if was_draft:
             await client.mark_pull_ready_for_review(str(pull["node_id"]))
@@ -2195,6 +2216,8 @@ class GithubVerificationService:
                 scope.repo_name,
                 int(item.pr_number),
             )
+        if not await claim_policy_context(db, item, policy_guard):
+            return
         if revision is not None:
             if not await self._submitted_head_is_current(
                 db,
