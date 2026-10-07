@@ -416,3 +416,329 @@ async def test_initial_monitor_discards_changed_context_after_native_await(db, m
     await github_dispatch_service.monitor_dispatched(db, scope, [slot], wake_state_by_slot={slot.id: "ready"})
     await db.refresh(item)
     assert notices == [] and item.last_nudge_at is None and item.dispatch_status != "escalated"
+
+
+async def observation_fixture(db, monkeypatch, tmp_path, initial=False):
+    from app.models.database import GithubApprovalRequest
+    from app.services import owner_observation_pause as pause
+    rows = await native_fixture(db, monkeypatch, tmp_path)
+    scope, item, workspace, revision, slot, member, session, observed = rows
+    now = datetime.utcnow()
+    scope.continuation_enabled = True
+    item.delivery_policy = FactoryDeliveryPolicy(owner_contact="native", owner_idle_seconds=60,
+        owner_nudge_grace_seconds=30, owner_observation_wait_seconds=30,
+        owner_observation_resume_seconds=60).model_dump()
+    approval = GithubApprovalRequest(work_item_id=item.id, request_kind="initial_plan" if initial else "continuation",
+        dispatch_nonce=item.dispatch_nonce, approval_round=1, owner_member_id=member.id,
+        leader_member_id=member.id, request_fingerprint="fixture", status="approved", decided_at=now)
+    db.add(approval)
+    await db.flush()
+    if initial:
+        item.active_scope_revision = 0
+        item.pr_number = None
+        item.dispatched_at = now - timedelta(minutes=5)
+        item.ack_received_at = now - timedelta(minutes=4)
+        item.updated_at = item.dispatched_at
+        item.last_nudge_at = now - timedelta(minutes=2)
+    else:
+        revision.approved_at = now - timedelta(minutes=4)
+        revision.delivered_at = now - timedelta(minutes=3)
+        revision.approval_request_id = approval.id
+        approval.scope_revision_id = revision.id
+        item.continuation_activated_at = now - timedelta(minutes=5)
+        item.continuation_nudged_at = now - timedelta(minutes=2)
+    workspace.lease_last_owner_contact_at = now - timedelta(minutes=5)
+    observed.state = "unknown"
+    observed.reason = "observation_unavailable"
+    observed.identity = None
+    observed.binding_identity = None
+    monkeypatch.setattr(pause, "_process_identity", lambda *_args: "fixture-start")
+    async def notice(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(github_dispatch_service, "notify_team", notice)
+    monkeypatch.setattr(github_dispatch_service, "_brief_delivered", lambda *_args: asyncio.sleep(0, result=True))
+    await db.commit()
+    return rows
+
+
+@pytest.mark.parametrize("initial", [False, True])
+@pytest.mark.asyncio
+async def test_both_monitors_preserve_approval_through_bounded_observation_wait_and_pause(db, monkeypatch, tmp_path, initial):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, slot, *_ = await observation_fixture(db, monkeypatch, tmp_path, initial)
+    async def poll():
+        if initial:
+            await github_dispatch_service.monitor_dispatched(db, scope, [slot], wake_state_by_slot={slot.id:"ready"})
+        else:
+            await github_dispatch_service.monitor_continuation(db, scope, [slot])
+    contact = workspace.lease_last_owner_contact_at
+    protected = (item.dispatch_nonce, item.active_scope_revision, item.retry_count, revision.status,
+                 revision.acknowledged_at, revision.allowed_commands, revision.failed_head_count, workspace.lease_token)
+    await poll()
+    record = (await db.scalars(select(GithubOwnerObservationPause))).one()
+    assert record.status == "waiting" and item.dispatch_status == "dispatched"
+    assert workspace.lease_last_owner_contact_at == contact
+    record.deadline = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+    await poll()
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert record.status == "paused" and item.escalation_reason == pause.REASON
+    assert (item.dispatch_nonce, item.active_scope_revision, item.retry_count, revision.status,
+            revision.acknowledged_at, revision.allowed_commands, revision.failed_head_count, workspace.lease_token) == protected
+    assert record.notice_status == "sent"
+
+
+@pytest.mark.parametrize("change", ["stale_session", "new_generation", "dead", "idle", "mismatch", "unapproved", "policy_disabled"])
+@pytest.mark.asyncio
+async def test_observation_wait_refuses_unproved_or_changed_owner(db, monkeypatch, tmp_path, change):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, _slot, _member, session, observed = await observation_fixture(db, monkeypatch, tmp_path)
+    if change == "stale_session":
+        session.last_seen_at = datetime.utcnow() - timedelta(hours=1)
+    elif change == "new_generation":
+        session.bound_pane_proc_start = "replacement"
+    elif change == "dead":
+        def dead(*_args):
+            raise ProcessLookupError()
+        monkeypatch.setattr(pause, "_process_identity", dead)
+    elif change == "idle":
+        observed.state = "idle"
+    elif change == "mismatch":
+        observed.reason = "session_mismatch"
+    elif change == "unapproved":
+        revision.approved_at = None
+    else:
+        item.delivery_policy = FactoryDeliveryPolicy(owner_contact="native").model_dump()
+    await db.commit()
+    assert not await pause.handle_observation_gap(db, scope, item)
+    assert (await db.scalars(select(GithubOwnerObservationPause))).all() == []
+    assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_recorded_resume_preserves_scope_contact_budgets_and_exact_replay(db, monkeypatch, tmp_path):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, *_ = await observation_fixture(db, monkeypatch, tmp_path)
+    assert await pause.handle_observation_gap(db, scope, item)
+    record = (await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+    assert await pause.handle_observation_gap(db, scope, item)
+    protected = (revision.status, revision.acknowledged_at, revision.approval_request_id,
+                 revision.allowed_paths, revision.allowed_commands, revision.max_failed_heads,
+                 revision.failed_head_count, item.retry_count, workspace.lease_last_owner_contact_at)
+    assert (await pause.resume_observation_pause(db,item,scope,record.id,"Inspect complete"))["status"] == "resumed"
+    assert item.dispatch_status == "dispatched" and item.escalation_reason is None
+    assert (revision.status, revision.acknowledged_at, revision.approval_request_id,
+            revision.allowed_paths, revision.allowed_commands, revision.max_failed_heads,
+            revision.failed_head_count, item.retry_count, workspace.lease_last_owner_contact_at) == protected
+    assert (await pause.resume_observation_pause(db,item,scope,record.id,"Inspect complete"))["status"] == "already_resumed"
+    with pytest.raises(ValueError, match="replay_conflict"):
+        await pause.resume_observation_pause(db,item,scope,record.id,"Changed reason")
+
+
+@pytest.mark.asyncio
+async def test_initial_resume_uses_only_grace_with_no_new_owner_progress(db,monkeypatch,tmp_path):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    import app.services.github_dispatch_service as dispatch_module
+    scope,item,workspace,_revision,slot,*_=await observation_fixture(db,monkeypatch,tmp_path,initial=True)
+    original=datetime.utcnow()-timedelta(hours=4)
+    item.dispatched_at=original;item.updated_at=original
+    workspace.lease_last_owner_contact_at=original
+    item.delivery_policy=dict(item.delivery_policy,owner_idle_seconds=3600)
+    await db.commit()
+    assert await pause.handle_observation_gap(db,scope,item)
+    record=(await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline=datetime.utcnow()-timedelta(seconds=1);await db.commit()
+    assert await pause.handle_observation_gap(db,scope,item)
+    assert (await pause.resume_observation_pause(db,item,scope,record.id,'Inspect complete'))['status']=='resumed'
+    resumed=record.resumed_at
+    class Later(datetime):
+        @classmethod
+        def utcnow(cls): return resumed+timedelta(seconds=31)
+        @classmethod
+        def now(cls,tz=None):
+            value=resumed+timedelta(seconds=31)
+            return value.replace(tzinfo=timezone.utc).astimezone(tz) if tz else value
+    monkeypatch.setattr(dispatch_module,'datetime',Later)
+    monkeypatch.setattr(pause,'datetime',Later)
+    await github_dispatch_service.monitor_dispatched(db,scope,[slot],wake_state_by_slot={slot.id:'ready'})
+    records=list((await db.scalars(select(GithubOwnerObservationPause).order_by(GithubOwnerObservationPause.id))).all())
+    assert len(records)==2 and records[-1].status=='waiting'
+    assert item.dispatched_at==original and workspace.lease_last_owner_contact_at==original
+    assert item.retry_count==3 and item.active_scope_revision==0
+
+
+@pytest.mark.parametrize('change',['unapproved','missing_ack','handoff','revision','competing_generation','competing_stopped','competing_denied','unchanged'])
+@pytest.mark.asyncio
+async def test_maintenance_reuses_actual_database_approval_and_ack_guards(monkeypatch,tmp_path,change):
+    from pathlib import Path
+    from sqlalchemy.ext.asyncio import create_async_engine,AsyncSession
+    from app.database import Base
+    from app.models.database import GithubApprovalRequest
+    from app.services.maintenance_operations import Maintenance,InstallationProfile
+    database=tmp_path/'owner.sqlite'
+    engine=create_async_engine('sqlite+aiosqlite:///'+str(database))
+    try:
+        async with engine.begin() as connection: await connection.run_sync(Base.metadata.create_all)
+        async with AsyncSession(engine,expire_on_commit=False) as db:
+            scope,item,workspace,revision,slot,member,session,*_=await observation_fixture(db,monkeypatch,tmp_path,initial=change=='missing_ack')
+            if change=='unapproved':
+                request=(await db.scalars(select(GithubApprovalRequest))).one();request.status='pending'
+            elif change=='missing_ack': item.ack_received_at=None
+            elif change=='handoff': item.handoff_state='pending'
+            elif change=='revision': revision.status='superseded'
+            elif change in {'competing_generation','competing_stopped','competing_denied'}:
+                if change != 'competing_generation':
+                    from app.services import agent_activity_service as activity
+                    original=activity._process
+                    def observed(pid):
+                        if pid==session.pid+1:
+                            if change=='competing_denied': raise PermissionError('synthetic process observation denied')
+                            return 'T','competing-start'
+                        return original(pid)
+                    monkeypatch.setattr(activity,'_process',observed)
+                    monkeypatch.setattr('app.services.owner_observation_pause.process_is_confirmed_dead',lambda _pid:False)
+                db.add(MailAgentSession(member_id=member.id,provider=slot.provider,source='mcp',session_key='competing',
+                    pid=session.pid+1,cwd=session.cwd,team_slot_id=slot.id,team_preset_id=scope.preset_id,
+                    bound_pane_pid=session.bound_pane_pid,bound_pane_proc_start=session.bound_pane_proc_start,
+                    capability_token_hash='other-fixture-hash'))
+            await db.commit()
+            profile=InstallationProfile(controller=str(tmp_path/'controller'),database=str(database),
+                operator_env=str(tmp_path/'operator.env'),api_url='http://127.0.0.1:8000/api/v1',service='fixture.service',
+                supervisor_unit='fixture.timer',supervisor_state=str(tmp_path/'supervisor.json'),state_dir=str(tmp_path/'state'),
+                hold_files=[str(tmp_path/'HOLD')],arming_file=str(tmp_path/'armed'),github_user='fixture',workspace_user='fixture',
+                protected_files=['private.env'])
+            service=Maintenance(profile)
+            call=lambda: service.approved_owner({'id':item.id},{'id':workspace.id})
+            if change=='unchanged':
+                result=await asyncio.to_thread(call)
+                assert result['workspace_id']==workspace.id and result['generation']==session.id
+            else:
+                with pytest.raises(ValueError): await asyncio.to_thread(call)
+            assert not Path(profile.controller).exists()
+    finally: await engine.dispose()
+
+
+@pytest.mark.parametrize("change", ["commands", "budget", "nonce", "generation", "lease", "expired", "unrelated_reason"])
+@pytest.mark.asyncio
+async def test_recorded_resume_refuses_changed_or_expired_authority(db, monkeypatch, tmp_path, change):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, _slot, _member, session, _observed = await observation_fixture(db, monkeypatch, tmp_path)
+    await pause.handle_observation_gap(db, scope, item)
+    record = (await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+    await pause.handle_observation_gap(db, scope, item)
+    if change == "commands": revision.allowed_commands = ["different"]
+    elif change == "budget": revision.max_failed_heads = 10
+    elif change == "nonce": item.dispatch_nonce = "changed"
+    elif change == "generation": session.capability_token_hash = "changed"
+    elif change == "lease": workspace.lease_token = "changed"
+    elif change == "expired": record.resume_deadline = datetime.utcnow() - timedelta(seconds=1)
+    else: item.escalation_reason = "abandoned_by_operator"
+    await db.commit()
+    with pytest.raises(ValueError):
+        await pause.resume_observation_pause(db,item,scope,record.id,"Inspect complete")
+    await db.rollback()
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_observation_pause_does_not_overwrite_context_changed_during_read(db, monkeypatch, tmp_path):
+    from app.services import owner_observation_pause as pause
+    scope,item,_workspace,revision,slot,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    async def changed(*_args, **_kwargs):
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(dispatch_status="completed"))
+        await db.commit()
+        return {slot.id:observed_work("unknown","observation_unavailable",None,None,None)}
+    monkeypatch.setattr(pause.activity,"observe_private_team",changed)
+    await github_dispatch_service.monitor_continuation(db,scope,[slot])
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "completed" and revision.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_operator_pause_routes_require_operator_and_exclude_private_context(db,monkeypatch,tmp_path):
+    from fastapi import FastAPI
+    import httpx
+    from app.api.v1.factory_maintenance import router
+    from app.database import get_db
+    from app.config import settings
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope,item,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    await pause.handle_observation_gap(db,scope,item)
+    record=(await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline=datetime.utcnow()-timedelta(seconds=1);await db.commit()
+    await pause.handle_observation_gap(db,scope,item)
+    app=FastAPI();app.include_router(router)
+    async def fixture_db(): yield db
+    app.dependency_overrides[get_db]=fixture_db
+    monkeypatch.setattr(settings,'operator_token','fixture-operator')
+    preset_id,item_id=scope.preset_id,item.id
+    url=f'/presets/{preset_id}/work-items/{item_id}'
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://fixture') as client:
+        assert (await client.get(url+'/observation-pauses')).status_code==401
+        headers={'X-Deck-Operator-Token':'fixture-operator'}
+        observed=await client.get(url+'/observation-pauses',headers=headers)
+        assert observed.status_code==200 and observed.json()['pauses'][0]['status']=='paused'
+        assert all(value not in observed.text for value in ('fixture-lease','fixture-hash','authority_sha256','wait_key'))
+        body={'pause_id':record.id,'reason':'Inspect complete'}
+        assert (await client.post(url+'/resume-observation',json=body)).status_code==401
+        result=await client.post(url+'/resume-observation',json=body,headers=headers)
+        assert result.status_code==200 and result.json()['status']=='resumed'
+        assert (await client.post(url+'/resume-observation',json=body,headers=headers)).json()['status']=='already_resumed'
+        assert (await client.post(url+'/resume-observation',json=body|{'reason':'changed'},headers=headers)).status_code==409
+        assert (await client.get(f'/presets/{preset_id+1}/work-items/{item_id}/observation-pauses',headers=headers)).status_code==404
+
+
+@pytest.mark.asyncio
+async def test_integration_failure_route_retains_approval_budget_and_rejects_conflicting_replay(db,monkeypatch,tmp_path):
+    from fastapi import FastAPI
+    import httpx
+    from app.api.v1.factory_maintenance import router
+    from app.database import get_db
+    from app.config import settings
+    scope,item,_workspace,revision,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    protected=(revision.status,revision.approval_request_id,revision.acknowledged_at,revision.max_failed_heads,revision.failed_head_count,item.retry_count)
+    app=FastAPI();app.include_router(router)
+    async def fixture_db(): yield db
+    app.dependency_overrides[get_db]=fixture_db
+    monkeypatch.setattr(settings,'operator_token','fixture-operator')
+    url=f'/presets/{scope.preset_id}/work-items/{item.id}/integration-outcome'
+    body={'operation_id':'fixture-update','expected_dispatch_nonce':item.dispatch_nonce,
+          'expected_scope_revision':item.active_scope_revision,'expected_owner_slot':item.owner_slot_id,'outcome':'needs_coordination'}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://fixture') as client:
+        assert (await client.post(url,json=body)).status_code==401
+        headers={'X-Deck-Operator-Token':'fixture-operator'}
+        assert (await client.post(url,json=body|{'expected_dispatch_nonce':'stale'},headers=headers)).status_code==409
+        result=await client.post(url,json=body,headers=headers)
+        assert result.status_code==200 and result.json()['status']=='recorded'
+        assert (await client.post(url,json=body,headers=headers)).json()['status']=='already_recorded'
+        assert (await client.post(url,json=body|{'outcome':'completed'},headers=headers)).status_code==409
+    await db.refresh(item);await db.refresh(revision)
+    assert item.escalation_reason=='integration_update_conflict'
+    assert (revision.status,revision.approval_request_id,revision.acknowledged_at,revision.max_failed_heads,revision.failed_head_count,item.retry_count)==protected
+
+
+@pytest.mark.asyncio
+async def test_failed_pause_notice_does_not_undo_the_committed_pause(db,monkeypatch,tmp_path):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope,item,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    await pause.handle_observation_gap(db,scope,item)
+    record=(await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline=datetime.utcnow()-timedelta(seconds=1);await db.commit()
+    async def fail(*_args,**_kwargs): raise OSError('synthetic unavailable notice')
+    monkeypatch.setattr(github_dispatch_service,'notify_team',fail)
+    assert await pause.handle_observation_gap(db,scope,item)
+    assert item.dispatch_status=='escalated' and record.status=='paused' and record.notice_status=='uncertain'

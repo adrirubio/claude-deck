@@ -54,6 +54,9 @@ State the goal in one or two sentences. List the main changes.
 State the completed checks and material limits. Distinguish source review, CI, and human trials.
 State the requested human action. Link the PR. State its target branch and any separate decision gate.
 Keep the summary brief. Link detailed evidence below it.
+Use deck_render_github_summary for a compact current summary when the team's process selects that format.
+Keep one responsible issue and PR body publisher. Replace owned sections instead of appending current status paragraphs.
+Keep superseded estimates and source states in history. Preserve human requirements and other Deck sections.
 Preserve the original issue facts and existing PR metadata. Update a clearly marked summary section.
 Update the summary when the PR head, results, or requested action changes.
 Do not use a comment as the only summary. Do not claim completion without evidence.

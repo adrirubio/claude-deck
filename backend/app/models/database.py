@@ -425,6 +425,39 @@ class GithubDeliveryPolicyEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class GithubMaintenanceEvent(Base):
+    """An operator reports a maintenance outcome without granting execution authority."""
+
+    __tablename__ = "github_maintenance_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation_id: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class GithubOwnerObservationPause(Base):
+    """A bounded observation wait and an operator recovery of unchanged authority."""
+
+    __tablename__ = "github_owner_observation_pauses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    work_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("github_work_items.id", ondelete="CASCADE"), index=True)
+    wait_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    authority_sha256: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="waiting", nullable=False)
+    deadline: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resume_deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resume_context_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    operator_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    notice_status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class GithubWorkspace(Base):
     """A checkout a dispatched work item may exclusively occupy."""
 
