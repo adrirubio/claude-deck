@@ -14,6 +14,47 @@ BLOB_SHA = "c" * 40
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("case", [
+    "ahead", "identical", "behind", "diverged", "wrong_common", "wrong_base",
+    "foreign_url", "missing_url", "malformed_url", "user_url", "missing_common",
+    "malformed_common", "unknown_status", "malformed_status", "foreign_endpoint",
+])
+async def test_exact_source_import_ancestry_response(case):
+    endpoint = f"/repos/owner/repo/compare/{COMMIT_SHA}...{TREE_SHA}"
+    seen = []
+    def handler(request):
+        seen.append(request)
+        # The real compare response has no head_commit field.
+        body = {"url": "https://api.github.com" + endpoint,
+                "base_commit": {"sha": COMMIT_SHA},
+                "merge_base_commit": {"sha": COMMIT_SHA}, "status": "ahead"}
+        if case in {"identical", "behind", "diverged"}: body["status"] = case
+        elif case == "wrong_common": body["merge_base_commit"]["sha"] = BLOB_SHA
+        elif case == "wrong_base": body["base_commit"]["sha"] = BLOB_SHA
+        elif case == "foreign_url": body["url"] = "https://example.invalid" + endpoint
+        elif case == "missing_url": body.pop("url")
+        elif case == "malformed_url": body["url"] = {"url": "invalid"}
+        elif case == "user_url": body["url"] = "https://user@api.github.com" + endpoint
+        elif case == "missing_common": body.pop("merge_base_commit")
+        elif case == "malformed_common": body["merge_base_commit"]["sha"] = "invalid"
+        elif case == "unknown_status": body["status"] = "unknown"
+        elif case == "malformed_status": body["status"] = []
+        return httpx.Response(200, request=request, json=body)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=(
+        "https://example.invalid" if case == "foreign_endpoint" else "https://api.github.com")) as http:
+        client = GithubClient(http=http, token="ambient-token")
+        if case in {"ahead", "identical", "behind", "diverged", "wrong_common"}:
+            assert await client.is_commit_ancestor("owner", "repo", COMMIT_SHA, TREE_SHA,
+                token="explicit-token") is (case in {"ahead", "identical"})
+        else:
+            with pytest.raises(GithubClientResponseError):
+                await client.is_commit_ancestor("owner", "repo", COMMIT_SHA, TREE_SHA,
+                    token="explicit-token")
+    assert seen[0].url.path == endpoint and seen[0].method == "GET"
+    assert seen[0].headers["Authorization"] == "Bearer explicit-token"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["valid", "missing", "wrong_number", "boolean", "pull", "foreign_url", "foreign_endpoint", "malformed"])
 async def test_exact_progress_issue_endpoint(case):
     seen = []

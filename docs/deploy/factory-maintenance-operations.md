@@ -99,3 +99,42 @@ A successful update retains both previous source history and the accepted base h
 Upstream issue #482 owns these generic features. Existing teams retain their recorded policy until explicit adoption. Keep each team's task gates. Deploy at a clean handoff. Do not restart a native member to activate communication guidance during an implementation batch.
 
 Focused tests use disposable databases and real disposable Git repositories. Controller service tests use a mock adapter; they are not a live deployment. Final review, required hosted CI and the installation's concrete version evidence remain necessary.
+
+## Accepted source imports
+
+An initial attempt has no continuation file boundary. The existing owner and
+maintenance checks still apply, but this operation does not create an import
+record for that attempt. Historical import records survive item or revision
+deletion. Their original IDs and immutable context remain in the record.
+An absent import table and an empty import table have the same maintenance
+authority value. Creating this table during an upgrade does not change authority.
+
+An integration update can change files outside an owner's approved paths. The operation records the exact accepted file mode, object type and object identity. The original approval baseline and owner permissions remain. Completion recognises a recorded import only while the item, revision, owner, lease, policy and scope still match. A changed imported file still requires coordination.
+
+The held integration operation records these identities in the same SQLite reservation as its final source checks. The record commits before the operation releases that reservation. A registration failure preserves source and reports `needs_coordination`. The operator inspects the result before releasing the owner hold.
+
+For an accepted import that predates this feature, the operator can use:
+
+`POST /api/v1/agent-teams/presets/{preset}/work-items/{item}/accepted-source-imports`
+
+Use the operator header and this data:
+
+```json
+{
+  "operation_id": "accepted-observer-import",
+  "expected_dispatch_nonce": "PRIVATE_CURRENT_NONCE",
+  "expected_scope_revision": 4,
+  "expected_baseline_head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "accepted_pull_number": 89,
+  "accepted_source_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "accepted_merge_sha": "dddddddddddddddddddddddddddddddddddddddd",
+  "paths": ["backend/app/services/example.py"]
+}
+```
+
+These values are examples. Read the current private context before use. Keep the source held during the request. The endpoint verifies the configured repository and branch, the merged pull, source identities, ancestry, current required CI and exact imported contents. It records only changed files outside the approved paths. The record preserves the original baseline, approval, ACK, lease and finite counters. Registration adds no member edit command or path permission.
+
+An exact replay returns `already_recorded`. A conflicting replay or changed context is refused. Inspect an uncertain response through the operator-protected `GET` at the same path. This history response omits the private authority digest and lease. It returns up to 64 records and states whether more records exist.
+
+After successful registration, the owner uses the normal completion and verification flow. Final source review, merge and product acceptance keep their existing gates. Upstream issue #486 owns this correction.
