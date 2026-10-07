@@ -25,7 +25,8 @@ from app.services.agent_mail_service import MCP_HEARTBEAT_TTL_SECONDS
 _SHA = r"^[0-9a-f]{40}$"
 _NAME = r"^[A-Za-z0-9_.-]{1,100}$"
 _TABLES = ("github_work_items", "github_approval_requests", "github_workspaces",
-           "github_attempt_scope_revisions", "github_delivery_policy_events", "github_owner_followups")
+           "github_attempt_scope_revisions", "github_delivery_policy_events", "github_owner_followups",
+           "github_accepted_source_imports")
 _GLOBAL_TABLES = ("team_github_scopes", "agent_team_presets", "agent_team_slots",
                   "github_backlog_coordination")
 _VOLATILE = {"updated_at", "github_updated_at", "issue_title", "issue_url"}
@@ -421,9 +422,10 @@ class Maintenance:
             db.execute('BEGIN IMMEDIATE')
             self.reservation_deadline=time.monotonic()+75
             if self.database_identity()!=identity: raise ValueError('database_identity_changed')
-            yield
+            yield db
             if time.monotonic()>self.reservation_deadline: raise ValueError('maintenance_reservation_deadline')
             if self.database_identity()!=identity: raise ValueError('database_identity_changed')
+            db.commit()
         finally:
             self.reservation_deadline=None
             db.rollback();db.close()
@@ -575,6 +577,58 @@ class Maintenance:
             finally: Path(temporary).unlink(missing_ok=True)
         return str(path)
 
+    def record_source_import(self, db, request, item, workspace, scope, after):
+        """The held Git operation records its exact accepted import before release."""
+        from app.services.accepted_source_imports import import_record_values, verified_import_snapshots
+        from app.services.github_client import GithubTreeEntry
+        db.row_factory = sqlite3.Row
+        revision = db.execute("SELECT * FROM github_attempt_scope_revisions WHERE work_item_id=? "
+            "AND dispatch_nonce=? AND revision=? AND status='active'",
+            (item['id'], item['dispatch_nonce'], item['active_scope_revision'])).fetchone()
+        if revision is None: raise ValueError('source_import_context_changed')
+        revision = dict(revision)
+        def tree(head):
+            entries = self.git(workspace['path'], 'ls-tree', '-r', '-z', head,
+                               user=self.profile.workspace_user).split(b'\0')
+            if len(entries) > 50001: raise ValueError('source_import_tree_limit')
+            result = {}
+            for entry in entries:
+                if not entry: continue
+                identity, raw_path = entry.split(b'\t', 1)
+                mode, kind, sha = identity.decode('ascii').split(' ')
+                path = raw_path.decode('utf-8', errors='strict')
+                if path in result: raise ValueError('source_import_tree_inconclusive')
+                result[path] = GithubTreeEntry(path, mode, kind, sha)
+            return result
+        baseline, current, accepted = tree(revision['baseline_head_sha']), tree(after['head']), tree(request.accepted_tip)
+        allowed = set(json.loads(revision['allowed_paths']))
+        def value(entries, path):
+            row = entries.get(path)
+            return None if row is None else (row.mode, row.object_type, row.sha)
+        outside = sorted(path for path in baseline.keys() | current.keys()
+                         if path not in allowed and value(baseline, path) != value(current, path))
+        if not outside: return {'status':'not_needed','paths':[]}
+        if len(outside) > 64: raise ValueError('source_import_path_limit')
+        snapshots = verified_import_snapshots(baseline, current, accepted, allowed, outside)
+        operation_id = 'import-' + hashlib.sha256(request.operation_id.encode()).hexdigest()
+        values = import_record_values(item, revision, workspace, scope, operation_id=operation_id,
+            request_sha256=digest(request.model_dump()), accepted_pull_number=request.accepted_pull.number,
+            accepted_source_sha=request.accepted_pull.head, accepted_merge_sha=request.accepted_tip,
+            observed_head_sha=after['head'], path_snapshots=snapshots)
+        old = db.execute('SELECT * FROM github_accepted_source_imports WHERE operation_id=?',
+                         (operation_id,)).fetchone()
+        if old:
+            expected = dict(values); expected['path_snapshots'] = json.dumps(snapshots)
+            if any(old[key] != value for key,value in expected.items()):
+                raise ValueError('source_import_replay_conflict')
+            return {'status':'already_recorded','import_id':old['id'],'paths':outside}
+        values['path_snapshots'] = json.dumps(snapshots)
+        values['created_at'] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=' ')
+        columns = ','.join(values)
+        cursor = db.execute('INSERT INTO github_accepted_source_imports (' + columns + ') VALUES ('
+                            + ','.join('?' for _ in values) + ')', tuple(values.values()))
+        return {'status':'recorded','import_id':cursor.lastrowid,'paths':outside}
+
     def integration_update(self, request):
         self.safety()
         items = self.rows("SELECT * FROM github_work_items WHERE id=?",(request.work_item_id,))
@@ -609,7 +663,7 @@ class Maintenance:
         record={"operation":"integration_update","status":"prepared","started_at":now(),"source_before":before,"checkpoint":checkpoint,"accepted_tip":tip}
         self.record(request.operation_id,record,first=True)
         try:
-            with self.reservation():
+            with self.reservation() as reservation:
                 # Finish slow external observations before the final owner,
                 # process, source and checkpoint freshness checks.
                 if self.accepted(request.accepted_pull)!=tip: raise ValueError('accepted_tip_changed')
@@ -633,7 +687,10 @@ class Maintenance:
                 self.git(path,"merge-base","--is-ancestor",tip,after["head"],user=user)
                 if self.authority(item['id'])!=authority or self.approved_owner(item,workspace)!=owner or self.bindings(item['owner_slot_id'])!=bindings or self.generations(item['owner_slot_id'])!=generations:
                     raise ValueError("post_update_context_changed")
-                self.safety();record.update(status="completed",source_after=after,finished_at=now())
+                self.safety()
+                record['source_import'] = self.record_source_import(
+                    reservation, request, item, workspace, scope, after)
+                record.update(status="completed",source_after=after,finished_at=now())
         except Exception as error:
             # Keep commits and any merge conflicts. Never reset, abort or force-push.
             record.update(status="needs_coordination",failure=type(error).__name__,finished_at=now())
