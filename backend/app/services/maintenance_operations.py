@@ -622,6 +622,9 @@ class Maintenance:
             if any(old[key] != value for key,value in expected.items()):
                 raise ValueError('source_import_replay_conflict')
             return {'status':'already_recorded','import_id':old['id'],'paths':outside}
+        if db.execute('SELECT COUNT(*) FROM github_accepted_source_imports WHERE scope_revision_id=?',
+                      (revision['id'],)).fetchone()[0] >= 64:
+            raise ValueError('source_import_read_limit')
         values['path_snapshots'] = json.dumps(snapshots)
         values['created_at'] = datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=' ')
         columns = ','.join(values)

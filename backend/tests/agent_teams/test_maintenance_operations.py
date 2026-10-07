@@ -114,6 +114,117 @@ def repository(tmp_path,diverged=False):
     return workspace,before,git(upstream,'rev-parse','HEAD')
 
 
+class StoredIntegrationFixture(IntegrationFixture):
+    """Real Git and storage; owner process and API transport remain adapters."""
+    rows = Maintenance.rows
+    authority = Maintenance.authority
+    record_source_import = Maintenance.record_source_import
+
+    def __init__(self, p, path, tip, baseline, mode):
+        super().__init__(p, path, tip, mode)
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from app.database import Base
+        from app.models.database import (
+            AgentTeamPreset, GithubAttemptScopeRevision, GithubWorkItem, GithubWorkspace, TeamGithubScope,
+        )
+        engine = create_engine('sqlite:///' + p.database)
+        Base.metadata.create_all(engine)
+        with Session(engine) as db:
+            db.add(AgentTeamPreset(id=1, name='Fixture', description='', created_by='test'))
+            db.add(TeamGithubScope(id=1, preset_id=1, repo_owner='fixture', repo_name='repo',
+                repo_path=str(path), base_ref='origin/integration'))
+            db.add(GithubWorkItem(id=1, scope_id=1, issue_number=1, issue_title='Fixture', issue_url='u',
+                github_updated_at=datetime.now(timezone.utc), owner_slot_id=2, dispatch_status='dispatched',
+                dispatch_nonce='fixture', active_scope_revision=4, pr_number=99, retry_count=3,
+                delivery_policy_revision=2, delivery_policy={'accepted_base_update':mode,'required_checks':[]}))
+            db.add(GithubWorkspace(id=1, scope_id=1, path=str(path), enabled=True, leased_item_id=1,
+                lease_token='fixture-lease', leased_owner_pid=6000, leased_owner_proc_start='fixture'))
+            db.add(GithubAttemptScopeRevision(id=1, work_item_id=1, dispatch_nonce='fixture', revision=4,
+                owner_slot_id=2, owner_member_id=2, phase='implementation', execution_target='workspace',
+                summary='Fixture', allowed_paths=['owned.txt'], allowed_actions=['edit_production'],
+                allowed_commands=['pytest'], prohibited_actions=[], tool_fallbacks={},
+                baseline_head_sha=baseline, baseline_tree_sha=git(path,'rev-parse',baseline+'^{tree}'),
+                expected_workspace_id=1, expected_lease_token_hash='f'*64, max_failed_heads=2,
+                status='active', acknowledged_at=datetime.now(timezone.utc)))
+            db.commit()
+        engine.dispose()
+
+
+@pytest.mark.parametrize('mode', ['fast_forward', 'merge'])
+def test_source_import_integration_records_exact_storage_without_changing_approval(tmp_path,mode):
+    from app.services.accepted_source_imports import source_import_context
+    workspace, baseline, tip = repository(tmp_path)
+    if mode == 'merge':
+        (workspace/'owned.txt').write_text('Owner checkpoint\n')
+        git(workspace,'add','owned.txt');git(workspace,'commit','-m','Owner checkpoint')
+    before = git(workspace,'rev-parse','HEAD')
+    service = StoredIntegrationFixture(profile(tmp_path), workspace, tip, baseline, mode)
+    original = {table: service.rows('SELECT * FROM '+table) for table in (
+        'github_work_items','github_attempt_scope_revisions','github_workspaces')}
+    request = IntegrationRequest(operation_id='integration-storage',work_item_id=1,expected_head=before,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=1)
+    service.integration_update(request)
+    record = read_json(tmp_path/'state/maintenance/integration-storage.json')
+    assert record['status']=='completed' and record['source_import']['status']=='recorded'
+    imported = service.rows('SELECT * FROM github_accepted_source_imports')[0]
+    expected_blob = git(workspace,'rev-parse',tip+':source.txt')
+    assert json.loads(imported['path_snapshots']) == {'source.txt':['100644','blob',expected_blob]}
+    assert imported['accepted_source_sha']==tip and imported['accepted_merge_sha']==tip
+    assert imported['observed_head_sha']==git(workspace,'rev-parse','HEAD')
+    assert imported['context_sha256']==source_import_context(
+        original['github_work_items'][0],original['github_attempt_scope_revisions'][0],
+        original['github_workspaces'][0],service.rows('SELECT * FROM team_github_scopes')[0])
+    assert {table:service.rows('SELECT * FROM '+table) for table in original}==original
+    assert imported['context_sha256'] in json.dumps(service.authority(1))
+    git(workspace,'merge-base','--is-ancestor',before,'HEAD')
+    git(workspace,'merge-base','--is-ancestor',tip,'HEAD')
+    assert not git(workspace,'status','--porcelain')
+
+
+def test_source_import_integration_refuses_unaccepted_outside_content_and_keeps_commits(tmp_path):
+    workspace, baseline, tip = repository(tmp_path)
+    (workspace/'outside.txt').write_text('Unaccepted owner change\n')
+    git(workspace,'add','outside.txt');git(workspace,'commit','-m','Keep owner work')
+    before = git(workspace,'rev-parse','HEAD')
+    service = StoredIntegrationFixture(profile(tmp_path),workspace,tip,baseline,'merge')
+    original = service.authority(1)
+    request = IntegrationRequest(operation_id='integration-refusal',work_item_id=1,expected_head=before,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=1)
+    with pytest.raises(ValueError,match='source_import_content_mismatch'): service.integration_update(request)
+    record = read_json(tmp_path/'state/maintenance/integration-refusal.json')
+    assert record['status']=='needs_coordination' and service.authority(1)==original
+    assert service.rows('SELECT * FROM github_accepted_source_imports')==[]
+    git(workspace,'merge-base','--is-ancestor',before,'HEAD')
+    assert (workspace/'outside.txt').read_text()=='Unaccepted owner change\n'
+
+
+def test_source_import_reservation_commits_and_rolls_back_real_records(tmp_path):
+    workspace, baseline, tip = repository(tmp_path)
+    service = StoredIntegrationFixture(profile(tmp_path),workspace,tip,baseline,'fast_forward')
+    git(workspace,'fetch','origin','integration');git(workspace,'merge','--ff-only',tip)
+    item=service.rows('SELECT * FROM github_work_items')[0]
+    owner=service.rows('SELECT * FROM github_workspaces')[0]
+    scope=service.rows('SELECT * FROM team_github_scopes')[0]
+    request=IntegrationRequest(operation_id='storage-rollback',work_item_id=1,expected_head=baseline,
+        accepted_pull=AcceptedPull(repository='fixture/repo',number=1,head=tip,base='integration',checks=['Tests']),
+        accepted_tip=tip,checkpoint_message=1)
+    with pytest.raises(ValueError,match='after_record'):
+        with service.reservation() as db:
+            assert service.record_source_import(db,request,item,owner,scope,service.source(workspace))['status']=='recorded'
+            raise ValueError('after_record')
+    assert service.rows('SELECT * FROM github_accepted_source_imports')==[]
+    with service.reservation() as db:
+        first=service.record_source_import(db,request,item,owner,scope,service.source(workspace))
+    with service.reservation() as db:
+        replay=service.record_source_import(db,request,item,owner,scope,service.source(workspace))
+    assert first['status']=='recorded' and replay['status']=='already_recorded'
+    assert first['import_id']==replay['import_id']
+    assert len(service.rows('SELECT * FROM github_accepted_source_imports'))==1
+
+
 @pytest.mark.parametrize('mode,diverged,result',[('fast_forward',False,'completed'),('fast_forward',True,'needs_coordination'),('merge',True,'needs_coordination')])
 def test_real_integration_update_preserves_commits_supervision_and_conflicts(tmp_path,mode,diverged,result):
     workspace,before,tip=repository(tmp_path,diverged)

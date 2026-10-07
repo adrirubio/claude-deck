@@ -3135,7 +3135,7 @@ async def _accepted_import_context(db, tmp_path, monkeypatch):
         if number == 999:
             return {"number": 999, "merged": True, "head": {"sha": "8" * 40},
                     "merge_commit_sha": "7" * 40, "base": base}
-        return {"state": "open", "head": {"sha": "d" * 40}, "base": base}
+        return {"number": item.pr_number, "state": "open", "head": {"sha": "d" * 40}, "base": base}
 
     async def snapshot(_owner, _repo, head, **_kwargs):
         return GithubCommitSnapshot(head, "e" * 40)
@@ -3250,8 +3250,120 @@ async def test_source_import_registration_refuses_without_proof_or_current_autho
         assert first.status_code == 200, first.text
         request["accepted_source_sha"] = "6" * 40
     refused = await client.post(url, json=request, headers={} if problem == "unauthenticated" else OPERATOR_HEADERS)
-    assert refused.status_code == (403 if problem == "unauthenticated" else 409), refused.text
+    assert refused.status_code == (401 if problem == "unauthenticated" else 409), refused.text
     await db.refresh(item); await db.refresh(revision)
     assert item.dispatch_status == "dispatched" and revision.status == "active"
     assert item.retry_count == 3 and revision.failed_head_count == 0
     assert await db.scalar(select(func.count(GithubAcceptedSourceImport.id))) == (1 if problem == "replay" else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", [
+    "accepted_base", "accepted_repo", "accepted_source", "accepted_unmerged",
+    "accepted_null_head", "accepted_null_repo", "current_number", "current_null_base",
+    "tree_incomplete", "confirmed_head", "CI_pending",
+])
+async def test_source_import_refuses_foreign_malformed_or_incomplete_evidence(client, db, tmp_path, monkeypatch, problem):
+    scope, item, _workspace, revision, _session, request = await _accepted_import_context(db, tmp_path, monkeypatch)
+    original = github_client.get_pull
+    count = 0
+    async def changed_pull(owner, repo, number, **kwargs):
+        nonlocal count
+        from copy import deepcopy
+        value = deepcopy(await original(owner, repo, number, **kwargs))
+        if number == 999:
+            if problem == "accepted_base": value["base"]["ref"] = "foreign"
+            elif problem == "accepted_repo": value["base"]["repo"]["full_name"] = "foreign/repo"
+            elif problem == "accepted_source": value["head"]["sha"] = "f" * 40
+            elif problem == "accepted_unmerged": value["merged"] = False
+            elif problem == "accepted_null_head": value["head"] = None
+            elif problem == "accepted_null_repo": value["base"]["repo"] = None
+        else:
+            count += 1
+            if problem == "current_number": value["number"] = 9999
+            elif problem == "current_null_base": value["base"] = None
+            elif problem == "confirmed_head" and count == 2: value["head"]["sha"] = "f" * 40
+        return value
+    monkeypatch.setattr(github_client, "get_pull", changed_pull)
+    if problem == "tree_incomplete":
+        async def incomplete(*_args, **_kwargs): raise GithubClientResponseError("Truncated tree")
+        monkeypatch.setattr(github_client, "get_recursive_tree", incomplete)
+    elif problem == "CI_pending":
+        async def pending(*_args, **_kwargs):
+            return [{"name": "Tests", "head_sha": "8" * 40, "app": {"slug": "github-actions"},
+                     "status": "in_progress", "conclusion": None}]
+        monkeypatch.setattr(github_client, "list_check_runs_for_ref", pending)
+    url = f"/api/v1/agent-teams/presets/{scope.preset_id}/work-items/{item.id}/accepted-source-imports"
+    refused = await client.post(url, json=request, headers=OPERATOR_HEADERS)
+    assert refused.status_code == 409, refused.text
+    await db.refresh(item); await db.refresh(revision)
+    assert item.dispatch_status == "dispatched" and item.retry_count == 3
+    assert revision.status == "active" and revision.failed_head_count == 0
+    assert await db.scalar(select(func.count(GithubAcceptedSourceImport.id))) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["nonce", "policy", "scope", "workspace", "revision", "approval", "capacity"])
+async def test_source_import_registration_refuses_late_authority_change(client, db, tmp_path, monkeypatch, change):
+    scope, item, workspace, revision, _session, request = await _accepted_import_context(db, tmp_path, monkeypatch)
+    original = github_client.get_pull
+    count = 0
+    async def changed_pull(owner, repo, number, **kwargs):
+        nonlocal count
+        value = await original(owner, repo, number, **kwargs)
+        if number != 999:
+            count += 1
+            if count == 2:
+                if change == "nonce": query = update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(dispatch_nonce="changed")
+                elif change == "policy": query = update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(delivery_policy_revision=99)
+                elif change == "scope": query = update(TeamGithubScope).where(TeamGithubScope.id == scope.id).values(base_ref="origin/other")
+                elif change == "workspace": query = update(GithubWorkspace).where(GithubWorkspace.id == workspace.id).values(path="/other")
+                elif change == "revision": query = update(GithubAttemptScopeRevision).where(GithubAttemptScopeRevision.id == revision.id).values(allowed_paths=["other.py"])
+                elif change == "approval": query = update(GithubApprovalRequest).where(GithubApprovalRequest.id == revision.approval_request_id).values(owner_member_id=999)
+                else:
+                    for i in range(64):
+                        db.add(GithubAcceptedSourceImport(operation_id=f"capacity-{i}", work_item_id=item.id,
+                            scope_revision_id=revision.id, context_sha256="0" * 64, request_sha256="0" * 64,
+                            accepted_repository="owner/repo", accepted_pull_number=1, accepted_source_sha="8" * 40,
+                            accepted_merge_sha="7" * 40, observed_head_sha="d" * 40, path_snapshots={}))
+                    await db.flush()
+                    return value
+                await db.execute(query.execution_options(synchronize_session=False))
+        return value
+    monkeypatch.setattr(github_client, "get_pull", changed_pull)
+    url = f"/api/v1/agent-teams/presets/{scope.preset_id}/work-items/{item.id}/accepted-source-imports"
+    refused = await client.post(url, json=request, headers=OPERATOR_HEADERS)
+    assert refused.status_code == 409 and refused.json()["detail"] == "source_import_context_changed"
+    await db.refresh(item); await db.refresh(revision)
+    assert item.dispatch_status == "dispatched" and item.retry_count == 3
+    assert revision.status == "active" and revision.failed_head_count == 0
+    assert await db.scalar(select(func.count(GithubAcceptedSourceImport.id))) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("problem", ["stale_context", "late_scope", "inconclusive"])
+async def test_source_import_completion_keeps_context_and_ancestry_guards(client, db, tmp_path, monkeypatch, problem):
+    monkeypatch.setattr(settings, "mail_capability_tokens_required", True)
+    scope, item, _workspace, revision, session, request = await _accepted_import_context(db, tmp_path, monkeypatch)
+    url = f"/api/v1/agent-teams/presets/{scope.preset_id}/work-items/{item.id}/accepted-source-imports"
+    response = await client.post(url, json=request, headers=OPERATOR_HEADERS)
+    assert response.status_code == 200, response.text
+    if problem == "stale_context":
+        item.delivery_policy_revision += 1
+        await db.commit()
+    else:
+        async def changed_ancestry(*_args, **_kwargs):
+            if problem == "inconclusive": raise GithubClientResponseError("Incomplete comparison")
+            await db.execute(update(TeamGithubScope).where(TeamGithubScope.id == scope.id)
+                .values(base_ref="origin/other").execution_options(synchronize_session=False))
+            return True
+        monkeypatch.setattr(github_client, "is_commit_ancestor", changed_ancestry)
+    async def authenticated_session(): return session
+    app.dependency_overrides[mail_session] = authenticated_session
+    refused = await client.post("/api/v1/agent-teams/dispatch-status", json=_completion_report(item))
+    expected = {"stale_context": "continuation_paths_out_of_scope", "late_scope": "stale_continuation_context",
+                "inconclusive": "continuation_import_inconclusive"}[problem]
+    assert refused.status_code == 409 and refused.json()["detail"] == expected, refused.text
+    await db.refresh(item); await db.refresh(revision)
+    assert item.dispatch_status == "dispatched" and item.retry_count == 3
+    assert revision.status == "active" and revision.failed_head_count == 0

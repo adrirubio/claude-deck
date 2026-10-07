@@ -9,7 +9,7 @@ import json
 from pathlib import PurePosixPath
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -121,6 +121,22 @@ def import_record_values(item, revision, workspace, scope, *, operation_id,
         path_snapshots=path_snapshots)
 
 
+def scoped_pull(value, scope, number, head):
+    """Malformed or foreign responses cannot establish import authority."""
+    if not isinstance(value, dict):
+        return False
+    base, source = value.get("base"), value.get("head")
+    if not isinstance(base, dict) or not isinstance(source, dict):
+        return False
+    repository = base.get("repo")
+    name = repository.get("full_name") if isinstance(repository, dict) else None
+    return (type(value.get("number")) is int and value["number"] == number
+            and source.get("sha") == head
+            and base.get("ref") == scope.base_ref.removeprefix("origin/")
+            and isinstance(name, str)
+            and name.lower() == f"{scope.repo_owner}/{scope.repo_name}".lower())
+
+
 def source_import_claim_conditions(item, revision, workspace, scope):
     """Freeze the same authority as the record before any external read."""
     context_rows = [
@@ -227,24 +243,26 @@ async def register_source_import(db: AsyncSession, item: GithubWorkItem,
     frozen_workspace = fields(workspace, ("id", "path", "leased_item_id", "enabled",
                                          "leased_owner_pid", "leased_owner_proc_start"))
     frozen_scope = fields(scope, ("id", "preset_id", "repo_owner", "repo_name", "base_ref"))
+    frozen_approval = fields(approval, ("id", "status", "request_kind", "scope_revision_id",
+                                       "work_item_id", "dispatch_nonce", "owner_member_id"))
+    record_values = import_record_values(
+        item, revision, workspace, scope, operation_id=request.operation_id,
+        request_sha256=request_hash, accepted_pull_number=request.accepted_pull_number,
+        accepted_source_sha=request.accepted_source_sha, accepted_merge_sha=request.accepted_merge_sha,
+        observed_head_sha=request.expected_head, path_snapshots={})
     lease = workspace.lease_token
     policy = effective_policy(item, scope)
     token = await github_approval_service.github_read_token(scope)
     owner_name, repo = scope.repo_owner, scope.repo_name
     accepted = await client.get_pull(owner_name, repo, request.accepted_pull_number, token=token)
-    if (type(accepted.get("number")) is not int or accepted["number"] != request.accepted_pull_number
-            or accepted.get("merged") is not True or accepted.get("head", {}).get("sha") != request.accepted_source_sha
-            or accepted.get("merge_commit_sha") != request.accepted_merge_sha
-            or accepted.get("base", {}).get("ref") != scope.base_ref.removeprefix("origin/")
-            or accepted.get("base", {}).get("repo", {}).get("full_name", "").lower()
-            != f"{owner_name}/{repo}".lower()):
+    if (not scoped_pull(accepted, scope, request.accepted_pull_number, request.accepted_source_sha)
+            or accepted.get("merged") is not True
+            or accepted.get("merge_commit_sha") != request.accepted_merge_sha):
         raise ValueError("source_import_accepted_pull_changed")
     pull = await client.get_pull(owner_name, repo, frozen_item["pr_number"], token=token)
     def current_pull(value):
-        return (value.get("state") == "open" and value.get("head", {}).get("sha") == request.expected_head
-                and value.get("base", {}).get("ref") == scope.base_ref.removeprefix("origin/")
-                and value.get("base", {}).get("repo", {}).get("full_name", "").lower()
-                == f"{owner_name}/{repo}".lower())
+        return (scoped_pull(value, scope, frozen_item["pr_number"], request.expected_head)
+                and value.get("state") == "open")
     if not current_pull(pull):
         raise ValueError("source_import_head_changed")
     for ancestor in (revision.baseline_head_sha, request.accepted_merge_sha):
@@ -268,9 +286,11 @@ async def register_source_import(db: AsyncSession, item: GithubWorkItem,
         *(getattr(GithubWorkItem, key) == value for key, value in frozen_item.items()),
         GithubWorkItem.dispatch_status == "dispatched",
         *policy_context_conditions(frozen_policy),
+        select(func.count(GithubAcceptedSourceImport.id)).where(
+            GithubAcceptedSourceImport.scope_revision_id == revision.id).scalar_subquery() < 64,
         exists(select(GithubAttemptScopeRevision.id).where(*revision_guard)),
-        exists(select(GithubApprovalRequest.id).where(GithubApprovalRequest.id == approval.id,
-                                                    GithubApprovalRequest.status == "approved")),
+        exists(select(GithubApprovalRequest.id).where(
+            *(getattr(GithubApprovalRequest, key) == value for key, value in frozen_approval.items()))),
         exists(select(GithubWorkspace.id).where(
             *(getattr(GithubWorkspace, key) == value for key, value in frozen_workspace.items()),
             GithubWorkspace.lease_token == lease)),
@@ -279,11 +299,8 @@ async def register_source_import(db: AsyncSession, item: GithubWorkItem,
     ).values(updated_at=GithubWorkItem.updated_at).execution_options(synchronize_session=False))
     if claimed.rowcount != 1:
         raise ValueError("source_import_context_changed")
-    record = GithubAcceptedSourceImport(**import_record_values(
-        item, revision, workspace, scope, operation_id=request.operation_id,
-        request_sha256=request_hash, accepted_pull_number=request.accepted_pull_number,
-        accepted_source_sha=request.accepted_source_sha, accepted_merge_sha=request.accepted_merge_sha,
-        observed_head_sha=request.expected_head, path_snapshots=paths))
+    record_values["path_snapshots"] = paths
+    record = GithubAcceptedSourceImport(**record_values)
     db.add(record)
     await db.commit()
     return {"status": "recorded", "import_id": record.id, "paths": sorted(paths)}
