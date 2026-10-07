@@ -193,7 +193,9 @@ async def build_metrics_window(
     # T02: one result per revision, however many call sites observed it.
     recovery_rows = (await db.execute(ledger_scoped(
         select(FactoryAuditEvent.id, FactoryAuditEvent.revision_id,
-               FactoryAuditEvent.operation_id,
+               FactoryAuditEvent.operation_id, FactoryAuditEvent.item_context_key,
+               func.json_extract(FactoryAuditEvent.context_snapshot,
+                                 '$.revision_created_at').label("revision_created_at"),
                func.json_extract(FactoryAuditEvent.after_values, '$.status').label("status"))
         .select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind == "revision_outcome")))).all()
@@ -202,6 +204,8 @@ async def build_metrics_window(
         revision_results.setdefault(_revision_result_identity(row), set()).add(row.status)
     recovery_applied = sum(1 for statuses in revision_results.values() if "completed" in statuses)
     recovery_total = len(revision_results)
+    recovery_unbound = sum(1 for identity in revision_results
+                           if identity.endswith("|legacy") or identity.startswith("event:"))
     recovery_uncertain = await _count(db, ledger_scoped(
         select(func.count()).select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
@@ -312,8 +316,10 @@ async def build_metrics_window(
                  reasons=["terminal status without result evidence"] if terminal_unknown else []),
         windowed("recovery_success", "preserved_revision_outcomes", float(recovery_applied),
                  recovery_total, unknown=recovery_uncertain,
-                 reasons=(["recovery actions with unsettled transport or external effects"]
-                          if recovery_uncertain else [])),
+                 reasons=((["recovery actions with unsettled transport or external effects"]
+                           if recovery_uncertain else [])
+                          + (["legacy revision results without lifetime identity are "
+                              "counted separately"] if recovery_unbound else []))),
         windowed("operator_interventions", "authenticated_actions", float(interventions),
                  interventions, excluded=intervention_excluded,
                  reasons=(["rejected or uncertain operator actions are excluded"]
@@ -356,17 +362,21 @@ _REVISION_RESULT_OPERATION = re.compile(r"^revision_outcome:(\d+):")
 
 
 def _revision_result_identity(row) -> str:
-    """B4 F03: the immutable revision of a result fact.
+    """B4 F03 / final P2: the immutable revision lifetime of a result fact.
 
     The retained operation identity names the revision, so deleting the live
-    revision (which nulls revision_id) never splits one result into two.
+    revision (which nulls revision_id) never splits one result into two. The
+    retained item lifetime key and the revision's recorded creation time
+    keep a reused numeric revision ID, after item deletion or within one
+    item, a distinct revision. A legacy fact without a creation time stays
+    its own explicitly unbound identity and never merges with bound facts.
     """
     match = _REVISION_RESULT_OPERATION.match(row.operation_id or "")
-    if match is not None:
-        return f"revision:{match.group(1)}"
-    if row.revision_id is not None:
-        return f"revision:{row.revision_id}"
-    return f"event:{row.id}"
+    number = match.group(1) if match is not None else row.revision_id
+    if number is None or not row.item_context_key:
+        return f"event:{row.id}"
+    lifetime = row.revision_created_at or "legacy"
+    return f"{row.item_context_key}|revision:{number}|{lifetime}"
 _DESIGN_COMPLETION_KINDS = ("merged_design", "design_artifact_accepted")
 
 

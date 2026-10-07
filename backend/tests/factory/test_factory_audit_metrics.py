@@ -4585,6 +4585,158 @@ async def test_b4f03_recovery_result_count_survives_live_revision_deletion(db):
     assert (retained.value, retained.sample_count) == (1.0, 1)
 
 
+_REVISION_INSERT = (
+    "INSERT INTO github_attempt_scope_revisions"
+    " ({id_column}work_item_id, dispatch_nonce, revision, owner_slot_id, owner_member_id, phase,"
+    " execution_target, summary, allowed_paths, allowed_actions, allowed_commands,"
+    " prohibited_actions, tool_fallbacks, baseline_head_sha, baseline_tree_sha,"
+    " originating_escalation_reason, expected_workspace_id, expected_lease_token_hash,"
+    " max_failed_heads, failed_head_count, status, delivery_attempt_count, created_at)"
+    " VALUES ({id_value}:item, :nonce, 1, :slot, :member, 'implementation', '/w', 's', '[]',"
+    " '[]', '[]', '[]', '{{}}', 'a', 'b', 'r', :workspace, 'h', 2, 0, 'completed', 0, :created)"
+    " RETURNING id")
+
+
+async def _insert_revision(db, item_id: int, *, revision_id: int | None = None,
+                           nonce: str = "n", created: str = "2026-10-07 10:00:00",
+                           slot: int = 1, member: int = 1, workspace: int = 1) -> int:
+    sql = _REVISION_INSERT.format(
+        id_column="id, " if revision_id is not None else "",
+        id_value=":id, " if revision_id is not None else "")
+    params = {"item": item_id, "nonce": nonce, "created": created, "slot": slot,
+              "member": member, "workspace": workspace}
+    if revision_id is not None:
+        params["id"] = revision_id
+    return (await db.execute(text(sql), params)).scalar_one()
+
+
+async def _recovery_sample(db):
+    from app.services import factory_metrics_service as metrics
+
+    now = datetime.utcnow()
+    result = await metrics.build_metrics_window(
+        db, window_start=now - timedelta(hours=1), window_end=now + timedelta(hours=1))
+    return next(s for s in result.metrics if s.name == "recovery_success")
+
+
+async def test_final_recovery_identity_survives_automatic_revision_id_reuse(db):
+    """Final P2 (B4 8bc review, owner copy of its probe; Astra): one revision
+    result observed by two call sites counts once, also after the live item
+    is deleted. A new item lifetime that reuses the numeric revision ID is a
+    second revision result, never merged with the first."""
+    await _seed_item(db, 40)
+    await _seed_slot_member(db)
+    await _seed_workspace(db)
+    first_id = await _insert_revision(db, 40, revision_id=1, created="2026-10-07 09:00:00")
+    await db.execute(text("UPDATE github_work_items SET dispatch_status = 'completed' WHERE id = 40"))
+    await db.commit()
+    for source in ("github_dispatch_service", "github_verification_service"):
+        await audit.record_revision_outcome(
+            db, item_id=40, revision_id=first_id, status="completed", source=source)
+    await db.commit()
+    first = await _recovery_sample(db)
+    assert (first.value, first.sample_count) == (1.0, 1)
+    await db.execute(text("DELETE FROM github_work_items WHERE id = 40"))
+    await db.commit()
+    retained = await _recovery_sample(db)
+    assert (retained.value, retained.sample_count) == (1.0, 1)
+
+    await _seed_item(db, 41)
+    new_id = await _insert_revision(db, 41, nonce="new-lifetime")
+    assert new_id == 1, "the probe requires normal SQLite automatic ID reuse"
+    await db.commit()
+    await audit.record_revision_outcome(
+        db, item_id=41, revision_id=new_id, status="completed", source="github_dispatch_service")
+    await db.commit()
+    result = await _recovery_sample(db)
+    # recovery_success counts completed revision results: two revisions.
+    assert (result.value, result.sample_count) == (2.0, 2)
+
+
+async def test_final_recovery_identity_separates_revision_reuse_within_one_item(db):
+    """Final P2 (B1 3826): a revision deleted and recreated with the same
+    numeric ID inside one item lifetime has a new recorded creation time and
+    is a second result. An exact retry adds nothing. A legacy fact without a
+    lifetime counts on its own, with an explicit reason."""
+    await _seed_item(db, 42)
+    await _seed_slot_member(db)
+    await _seed_workspace(db)
+    await _insert_revision(db, 42, revision_id=50, created="2026-10-07 09:00:00")
+    await db.commit()
+    await audit.record_revision_outcome(
+        db, item_id=42, revision_id=50, status="completed", source="github_dispatch_service")
+    await audit.record_revision_outcome(  # exact retry from the same call site
+        db, item_id=42, revision_id=50, status="completed", source="github_dispatch_service")
+    await db.commit()
+    assert (await _recovery_sample(db)).sample_count == 1
+
+    await db.execute(text("DELETE FROM github_attempt_scope_revisions WHERE id = 50"))
+    await _insert_revision(db, 42, revision_id=50, created="2026-10-07 11:00:00")
+    await db.commit()
+    await audit.record_revision_outcome(
+        db, item_id=42, revision_id=50, status="completed", source="github_dispatch_service")
+    await db.commit()
+    reused = await _recovery_sample(db)
+    assert (reused.value, reused.sample_count) == (2.0, 2)
+    assert not any("legacy" in reason for reason in reused.unknown_reasons)
+
+    # A legacy result written before the lifetime field existed.
+    await audit.record_event(
+        db, event_kind="revision_outcome", source="legacy.writer", occurred_at=datetime.utcnow(),
+        actor=audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+        item_id=42, after_values={"status": "completed"}, action_outcome="applied",
+        operation_id="revision_outcome:50:completed:legacy.writer")
+    await db.commit()
+    legacy = await _recovery_sample(db)
+    assert legacy.sample_count == 3
+    assert any("legacy revision results" in reason for reason in legacy.unknown_reasons)
+
+
+@pytest.mark.parametrize("reuse", ["item_lifetime", "same_item_revision"])
+async def test_final_recovery_lifetimes_through_public_metrics(store, client, reuse):
+    """Final P2 (consolidated U01): the production revision writer records
+    one result observed by two call sites; then a new lifetime reuses the
+    numeric revision ID, either on a new item lifetime after deletion or as
+    a recreated revision of the same item, with the same status and source.
+    The public metrics response reports two distinct recovery results."""
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=180, status="completed", workspace_id=180)
+    who = dict(slot=_OWNER["slot"], member=_OWNER["member"], workspace=180)
+    async with store() as db:
+        first_id = await _insert_revision(db, 180, created="2026-10-07 09:00:00", **who)
+        await db.commit()
+        for source in ("github_dispatch_service", "github_verification_service"):
+            await audit.record_revision_outcome(
+                db, item_id=180, revision_id=first_id, status="completed", source=source)
+        await db.commit()
+    window = (datetime.utcnow() - timedelta(hours=1), datetime.utcnow() + timedelta(hours=1))
+    public = await _public_metrics(client, *window)
+    assert public["recovery_success"]["sample_count"] == 1
+
+    async with store() as db:
+        if reuse == "item_lifetime":
+            await db.execute(text("DELETE FROM github_work_items WHERE id = 180"))
+            await db.commit()
+    if reuse == "item_lifetime":
+        await _seed_work(store, item_id=180, status="completed", workspace_id=181)
+        who["workspace"] = 181
+    async with store() as db:
+        if reuse == "same_item_revision":
+            await db.execute(text("DELETE FROM github_attempt_scope_revisions WHERE id = :id"),
+                             {"id": first_id})
+        new_id = await _insert_revision(db, 180, created="2026-10-07 11:00:00", **who)
+        assert new_id == first_id, "the case requires numeric revision ID reuse"
+        await db.commit()
+        await audit.record_revision_outcome(
+            db, item_id=180, revision_id=new_id, status="completed",
+            source="github_dispatch_service")
+        await db.commit()
+    public = await _public_metrics(client, *window)
+    assert (public["recovery_success"]["value"], public["recovery_success"]["sample_count"]) == (
+        2.0, 2)
+
+
 class _A34Client:
     """Fake client at the get_pull boundary; records each pull read."""
 

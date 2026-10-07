@@ -59,6 +59,8 @@ SAFE_SNAPSHOT_FIELDS = {
     # T05: original typed identities and creation times.
     "original_team_id", "original_scope_id", "original_item_id", "original_slot_id",
     "item_created_at", "slot_created_at",
+    # R-final: the stable lifetime of a revision result.
+    "revision_created_at",
 }
 
 # C10/C03: the typed fields of a human review evidence record.
@@ -302,7 +304,7 @@ def _canonical_fact(**fields: Any) -> tuple:
 # (names, types, runtime observations) are enrichment and may change.
 _STABLE_EVIDENCE_FIELDS = (
     "attempt", "launch_attempt", "artifact", "artifact_version", "fact_source",
-    "pull_closed_at", "issue_closed_at", "retry_class",
+    "pull_closed_at", "issue_closed_at", "retry_class", "revision_created_at",
 )
 
 
@@ -663,15 +665,24 @@ async def record_revision_outcome(
 
     T02: the identity names the observing call site, so a second site that
     observes the same result appends rather than conflicts; recovery counts
-    distinct revisions.
+    distinct revisions. R-final: the fact keeps the revision row's creation
+    time as a stable revision lifetime, so a reused numeric revision ID is
+    never the same revision.
     """
-    operation_id = f"revision_outcome:{revision_id}:{status}:{source}"
+    from app.models.database import GithubAttemptScopeRevision
+
+    revision = await db.get(GithubAttemptScopeRevision, revision_id)
+    created = _iso(getattr(revision, "created_at", None)) if revision is not None else None
+    snapshot = {"revision_created_at": created} if created else None
+    # The identity names the revision lifetime, so a recreated revision with
+    # the same numeric ID records its own result instead of conflicting.
+    operation_id = f"revision_outcome:{revision_id}:{created or 'unknown'}:{status}:{source}"
     return await record_event(
         db, event_kind="revision_outcome", source=source, occurred_at=datetime.utcnow(),
         actor=derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
         item_id=item_id, revision_id=revision_id, after_values={"status": status},
         action_outcome="applied", sanitized_reason=f"revision {status}",
-        operation_id=operation_id, correlation_id=operation_id)
+        operation_id=operation_id, correlation_id=operation_id, context_snapshot=snapshot)
 
 
 def replay_key_for(
