@@ -1199,10 +1199,11 @@ async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
 
 
 @pytest.mark.xfail(
-    reason="C09 v8 matrix in progress: the observer path executes (proven by "
-           "its reached deprecation sites) but the uncertain fact is not "
-           "persisted; the swallowed observer exception is now logged for "
-           "diagnosis and the exact persistence failure remains open",
+    reason="C09 v8 matrix in progress: the injected transport RuntimeError "
+           "escapes the watcher notify handler to the test despite the "
+           "wrapped notify call; the escape path is the exact open item; the "
+           "observer itself persists facts correctly in isolation; no "
+           "production guard is relaxed",
     strict=False)
 async def test_c09_tainted_session_and_real_send_failure(db, monkeypatch):
     """C09 v8: low-level transport failure inside the real notifier leaves the
