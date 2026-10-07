@@ -305,17 +305,24 @@ class GithubClient:
             body = self._json_object(response, "comparison")
             base, common = (body.get(name) for name in
                             ("base_commit", "merge_base_commit"))
-            binding = urlsplit(body.get("url", ""))
             if not all(isinstance(value, dict) for value in (base, common)):
                 raise GithubClientResponseError("GitHub comparison identities were missing")
-            if (binding.scheme != "https" or binding.hostname != "api.github.com"
+            binding_url = body.get("url")
+            if not isinstance(binding_url, str):
+                raise GithubClientResponseError("GitHub comparison binding was missing")
+            try:
+                binding = urlsplit(binding_url)
+            except ValueError:
+                raise GithubClientResponseError("GitHub comparison binding was malformed") from None
+            if (binding.scheme != "https" or binding.netloc != "api.github.com"
                     or binding.path != endpoint or binding.query or binding.fragment
                     or base.get("sha") != ancestor):
                 raise GithubClientResponseError("GitHub comparison identities changed")
             status = body.get("status")
-            if status not in {"ahead", "behind", "diverged", "identical"}:
+            if not isinstance(status, str) or status not in {"ahead", "behind", "diverged", "identical"}:
                 raise GithubClientResponseError("GitHub comparison status was unknown")
-            return status in {"ahead", "identical"} and common.get("sha") == ancestor
+            common_sha = self._git_sha(common.get("sha"), "comparison merge base")
+            return status in {"ahead", "identical"} and common_sha == ancestor
         finally:
             if self._http is None:
                 await client.aclose()
