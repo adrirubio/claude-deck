@@ -601,6 +601,41 @@ export const manifest = [
     }
   },
   {
+    "name": "deck_render_github_summary",
+    "description": "Render one short current summary in an issue or PR body.\n\n    Supply goal, status, completed, remaining, next_action and human_action.\n    Status is Working, Checking, Awaiting review, Blocked or Complete.\n    Optional effort bounds are minutes of active work, with confidence and scope.\n    Waiting is a separate description. Source SHA is an optional public checkpoint.\n    Read the current body with existing authorized GitHub access before rendering.\n    The tool preserves all text outside its deck:current-summary block.\n    It refuses ambiguous markers, private summary text and a changed expected body hash.\n    It performs no GitHub write and grants no approval, merge or milestone authority.\n    Use one responsible body publisher. Reconcile concurrent edits before publication.\n    ",
+    "inputSchema": {
+      "properties": {
+        "current_body": {
+          "title": "Current Body",
+          "type": "string"
+        },
+        "summary": {
+          "additionalProperties": true,
+          "title": "Summary",
+          "type": "object"
+        },
+        "expected_body_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expected Body Sha256"
+        }
+      },
+      "required": [
+        "current_body",
+        "summary"
+      ],
+      "title": "deck_render_github_summaryArguments",
+      "type": "object"
+    }
+  },
+  {
     "name": "deck_reply",
     "description": "Reply in an existing thread. If the root is a pending context request addressed\n    to you, your reply is recorded as the answer and resolves it.",
     "inputSchema": {

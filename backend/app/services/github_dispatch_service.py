@@ -88,6 +88,7 @@ ESCALATION_REASONS = frozenset(
         "brief_unread",
         "leader_ack_timeout",
         "owner_idle_timeout",
+        "owner_observation_unavailable",
         "retry_count_exhausted",
         "continuation_revision_exhausted",
         "continuation_budget_exhausted",
@@ -2167,6 +2168,9 @@ class GithubDispatchService:
             elif datetime.utcnow() - item.last_nudge_at > timedelta(
                 seconds=policy.owner_nudge_grace_seconds or settings.github_nudge_grace_seconds
             ):
+                from app.services.owner_observation_pause import handle_observation_gap
+                if await handle_observation_gap(db, scope, item):
+                    continue
                 await self.escalate(db, item, "owner_idle_timeout")
         await db.commit()
 
@@ -2364,6 +2368,9 @@ class GithubDispatchService:
                 )
                 continue
             if now - item.continuation_nudged_at <= nudge_grace:
+                continue
+            from app.services.owner_observation_pause import handle_observation_gap
+            if await handle_observation_gap(db, scope, item):
                 continue
             revision.status = "superseded"
             await self.escalate(

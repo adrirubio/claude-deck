@@ -416,3 +416,167 @@ async def test_initial_monitor_discards_changed_context_after_native_await(db, m
     await github_dispatch_service.monitor_dispatched(db, scope, [slot], wake_state_by_slot={slot.id: "ready"})
     await db.refresh(item)
     assert notices == [] and item.last_nudge_at is None and item.dispatch_status != "escalated"
+
+
+async def observation_fixture(db, monkeypatch, tmp_path, initial=False):
+    from app.models.database import GithubApprovalRequest
+    from app.services import owner_observation_pause as pause
+    rows = await native_fixture(db, monkeypatch, tmp_path)
+    scope, item, workspace, revision, slot, member, session, observed = rows
+    now = datetime.utcnow()
+    scope.continuation_enabled = True
+    item.delivery_policy = FactoryDeliveryPolicy(owner_contact="native", owner_idle_seconds=60,
+        owner_nudge_grace_seconds=30, owner_observation_wait_seconds=30,
+        owner_observation_resume_seconds=60).model_dump()
+    approval = GithubApprovalRequest(work_item_id=item.id, request_kind="initial_plan" if initial else "continuation",
+        dispatch_nonce=item.dispatch_nonce, approval_round=1, owner_member_id=member.id,
+        leader_member_id=member.id, request_fingerprint="fixture", status="approved", decided_at=now)
+    db.add(approval)
+    await db.flush()
+    if initial:
+        item.active_scope_revision = 0
+        item.pr_number = None
+        item.dispatched_at = now - timedelta(minutes=5)
+        item.ack_received_at = now - timedelta(minutes=4)
+        item.updated_at = item.dispatched_at
+        item.last_nudge_at = now - timedelta(minutes=2)
+    else:
+        revision.approved_at = now - timedelta(minutes=4)
+        revision.delivered_at = now - timedelta(minutes=3)
+        revision.approval_request_id = approval.id
+        approval.scope_revision_id = revision.id
+        item.continuation_activated_at = now - timedelta(minutes=5)
+        item.continuation_nudged_at = now - timedelta(minutes=2)
+    workspace.lease_last_owner_contact_at = now - timedelta(minutes=5)
+    observed.state = "unknown"
+    observed.reason = "observation_unavailable"
+    observed.identity = None
+    observed.binding_identity = None
+    monkeypatch.setattr(pause, "_process_identity", lambda *_args: "fixture-start")
+    async def notice(*_args, **_kwargs):
+        return None
+    monkeypatch.setattr(github_dispatch_service, "notify_team", notice)
+    monkeypatch.setattr(github_dispatch_service, "_brief_delivered", lambda *_args: asyncio.sleep(0, result=True))
+    await db.commit()
+    return rows
+
+
+@pytest.mark.parametrize("initial", [False, True])
+@pytest.mark.asyncio
+async def test_both_monitors_preserve_approval_through_bounded_observation_wait_and_pause(db, monkeypatch, tmp_path, initial):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, slot, *_ = await observation_fixture(db, monkeypatch, tmp_path, initial)
+    async def poll():
+        if initial:
+            await github_dispatch_service.monitor_dispatched(db, scope, [slot], wake_state_by_slot={slot.id:"ready"})
+        else:
+            await github_dispatch_service.monitor_continuation(db, scope, [slot])
+    contact = workspace.lease_last_owner_contact_at
+    protected = (item.dispatch_nonce, item.active_scope_revision, item.retry_count, revision.status,
+                 revision.acknowledged_at, revision.allowed_commands, revision.failed_head_count, workspace.lease_token)
+    await poll()
+    record = (await db.scalars(select(GithubOwnerObservationPause))).one()
+    assert record.status == "waiting" and item.dispatch_status == "dispatched"
+    assert workspace.lease_last_owner_contact_at == contact
+    record.deadline = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+    await poll()
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert record.status == "paused" and item.escalation_reason == pause.REASON
+    assert (item.dispatch_nonce, item.active_scope_revision, item.retry_count, revision.status,
+            revision.acknowledged_at, revision.allowed_commands, revision.failed_head_count, workspace.lease_token) == protected
+    assert record.notice_status == "sent"
+
+
+@pytest.mark.parametrize("change", ["stale_session", "new_generation", "dead", "idle", "mismatch", "unapproved", "policy_disabled"])
+@pytest.mark.asyncio
+async def test_observation_wait_refuses_unproved_or_changed_owner(db, monkeypatch, tmp_path, change):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, _slot, _member, session, observed = await observation_fixture(db, monkeypatch, tmp_path)
+    if change == "stale_session":
+        session.last_seen_at = datetime.utcnow() - timedelta(hours=1)
+    elif change == "new_generation":
+        session.bound_pane_proc_start = "replacement"
+    elif change == "dead":
+        def dead(*_args):
+            raise ProcessLookupError()
+        monkeypatch.setattr(pause, "_process_identity", dead)
+    elif change == "idle":
+        observed.state = "idle"
+    elif change == "mismatch":
+        observed.reason = "session_mismatch"
+    elif change == "unapproved":
+        revision.approved_at = None
+    else:
+        item.delivery_policy = FactoryDeliveryPolicy(owner_contact="native").model_dump()
+    await db.commit()
+    assert not await pause.handle_observation_gap(db, scope, item)
+    assert (await db.scalars(select(GithubOwnerObservationPause))).all() == []
+    assert item.dispatch_status == "dispatched"
+
+
+@pytest.mark.asyncio
+async def test_recorded_resume_preserves_scope_contact_budgets_and_exact_replay(db, monkeypatch, tmp_path):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, *_ = await observation_fixture(db, monkeypatch, tmp_path)
+    assert await pause.handle_observation_gap(db, scope, item)
+    record = (await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+    assert await pause.handle_observation_gap(db, scope, item)
+    protected = (revision.status, revision.acknowledged_at, revision.approval_request_id,
+                 revision.allowed_paths, revision.allowed_commands, revision.max_failed_heads,
+                 revision.failed_head_count, item.retry_count, workspace.lease_last_owner_contact_at)
+    assert (await pause.resume_observation_pause(db,item,scope,record.id,"Inspect complete"))["status"] == "resumed"
+    assert item.dispatch_status == "dispatched" and item.escalation_reason is None
+    assert (revision.status, revision.acknowledged_at, revision.approval_request_id,
+            revision.allowed_paths, revision.allowed_commands, revision.max_failed_heads,
+            revision.failed_head_count, item.retry_count, workspace.lease_last_owner_contact_at) == protected
+    assert (await pause.resume_observation_pause(db,item,scope,record.id,"Inspect complete"))["status"] == "already_resumed"
+    with pytest.raises(ValueError, match="replay_conflict"):
+        await pause.resume_observation_pause(db,item,scope,record.id,"Changed reason")
+
+
+@pytest.mark.parametrize("change", ["commands", "budget", "nonce", "generation", "lease", "expired", "unrelated_reason"])
+@pytest.mark.asyncio
+async def test_recorded_resume_refuses_changed_or_expired_authority(db, monkeypatch, tmp_path, change):
+    from app.models.database import GithubOwnerObservationPause
+    from app.services import owner_observation_pause as pause
+    scope, item, workspace, revision, _slot, _member, session, _observed = await observation_fixture(db, monkeypatch, tmp_path)
+    await pause.handle_observation_gap(db, scope, item)
+    record = (await db.scalars(select(GithubOwnerObservationPause))).one()
+    record.deadline = datetime.utcnow() - timedelta(seconds=1)
+    await db.commit()
+    await pause.handle_observation_gap(db, scope, item)
+    if change == "commands": revision.allowed_commands = ["different"]
+    elif change == "budget": revision.max_failed_heads = 10
+    elif change == "nonce": item.dispatch_nonce = "changed"
+    elif change == "generation": session.capability_token_hash = "changed"
+    elif change == "lease": workspace.lease_token = "changed"
+    elif change == "expired": record.resume_deadline = datetime.utcnow() - timedelta(seconds=1)
+    else: item.escalation_reason = "abandoned_by_operator"
+    await db.commit()
+    with pytest.raises(ValueError):
+        await pause.resume_observation_pause(db,item,scope,record.id,"Inspect complete")
+    await db.rollback()
+    await db.refresh(item)
+    assert item.dispatch_status == "escalated"
+
+
+@pytest.mark.asyncio
+async def test_observation_pause_does_not_overwrite_context_changed_during_read(db, monkeypatch, tmp_path):
+    from app.services import owner_observation_pause as pause
+    scope,item,_workspace,revision,slot,*_ = await observation_fixture(db,monkeypatch,tmp_path)
+    async def changed(*_args, **_kwargs):
+        await db.execute(update(GithubWorkItem).where(GithubWorkItem.id == item.id).values(dispatch_status="completed"))
+        await db.commit()
+        return {slot.id:observed_work("unknown","observation_unavailable",None,None,None)}
+    monkeypatch.setattr(pause.activity,"observe_private_team",changed)
+    await github_dispatch_service.monitor_continuation(db,scope,[slot])
+    await db.refresh(item)
+    await db.refresh(revision)
+    assert item.dispatch_status == "completed" and revision.status == "active"
