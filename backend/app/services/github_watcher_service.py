@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import AgentTeamSlot, GithubWorkItem, TeamGithubScope
 from app.services.github_client import GithubClient, github_client
+from app.models.database import GithubAttemptScopeRevision
+from sqlalchemy import select
 from app.services.github_dispatch_service import github_dispatch_service
 
 _ACTIVE_STATUSES = ("dispatched", "verifying", "awaiting_human_review")
@@ -230,8 +232,15 @@ class GithubWatcherService:
             logger.exception(
                 "Failed to send blocker-merged notification for work item %s", item.id
             )
+            revision_row_id = (await db.scalars(
+                select(GithubAttemptScopeRevision.id).where(
+                    GithubAttemptScopeRevision.work_item_id == item.id,
+                    GithubAttemptScopeRevision.status.not_in(
+                        ("completed", "cancelled", "rejected", "superseded", "expired")),
+                ).order_by(GithubAttemptScopeRevision.id.desc()).limit(1)
+            )).first()
             await observe_notification_uncertainty(
-                db, item_id=item.id, revision_id=item.active_scope_revision)
+                db, item_id=item.id, revision_id=revision_row_id)
             await db.rollback()
 
 

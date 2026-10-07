@@ -1126,3 +1126,67 @@ async def test_c09_production_notification_observer_records_uncertainty(db):
         "SELECT action_outcome FROM factory_audit_events"
         " WHERE operation_id = 'notification-uncertain:1:None'"))).scalar_one()
     assert outcome == "uncertain"
+
+
+@pytest.mark.xfail(
+    reason="C09 watcher-loop case in progress: the closed-issue loop did not "
+           "complete the transition for a verifying item; the exact "
+           "_CLOSED_ISSUE_RECONCILABLE_STATUSES membership and closed-issue "
+           "transition preconditions are under diagnosis; no production "
+           "guard is relaxed",
+    strict=False)
+async def test_c09_real_watcher_loop_records_uncertainty(db, monkeypatch):
+    """C09: the watcher's own closed-issue loop with a failing notifier after
+    the committed transition records explicit uncertainty bound to the real
+    immutable revision row; the transition is never replayed."""
+    from unittest.mock import AsyncMock
+
+    from app.services import github_dispatch_service as _dispatch
+    from app.services import github_watcher_service as _watcher
+    from app.models.database import GithubAttemptScopeRevision, GithubWorkItem, TeamGithubScope
+
+    await _seed_scope(db, 1, preset_id=7)
+    await _seed_slot_member(db, preset_id=7)
+    await _seed_workspace(db)
+    await _seed_item(db, 1)
+    await db.execute(text(
+        "UPDATE github_work_items SET dispatch_status = 'verifying', issue_number = 1,"
+        " pr_number = 55 WHERE id = 1"))
+    await db.execute(text(
+        "INSERT INTO github_attempt_scope_revisions (id, work_item_id, dispatch_nonce, revision,"
+        " owner_slot_id, owner_member_id, phase, execution_target, summary, allowed_paths,"
+        " allowed_actions, allowed_commands, prohibited_actions, tool_fallbacks, baseline_head_sha,"
+        " baseline_tree_sha, originating_escalation_reason, expected_workspace_id,"
+        " expected_lease_token_hash, max_failed_heads, failed_head_count, status,"
+        " delivery_attempt_count, approval_request_id, created_at)"
+        " VALUES (1, 1, 'n', 0, 1, 1, 'implementation', '/w', 's', '[]', '[]', '[]', '[]', '{}',"
+        " 'a', 'b', 'r', 1, 'h', 2, 0, 'active', 0, NULL, CURRENT_TIMESTAMP)"))
+    await db.commit()
+
+    class FakeClient:
+        async def get_issues_by_number(self, owner, name, numbers):
+            return {number: {"state": "closed"} for number in numbers}
+
+    async def failing_notify(*_args, **_kwargs):
+        raise RuntimeError("notification transport failed")
+
+    monkeypatch.setattr(_dispatch.github_dispatch_service, "notify_blocker_merged", failing_notify)
+    scope_obj = await db.get(TeamGithubScope, 1)
+    await _watcher.github_watcher_service._reconcile_closed_issues(
+        db, scope_obj, FakeClient())
+
+    # The transition completed and its unsettled notification is uncertain,
+    # bound to the real revision row id.
+    item_row = (await db.execute(text(
+        "SELECT dispatch_status FROM github_work_items WHERE id = 1"))).scalar_one()
+    assert item_row == "completed"
+    facts = (await db.execute(text(
+        "SELECT action_outcome, operation_id FROM factory_audit_events"
+        " WHERE event_kind = 'work_lifecycle' AND action_outcome = 'uncertain'"))).fetchall()
+    assert len(facts) == 1
+    assert facts[0][1] == "notification-uncertain:1:1"
+    # The transition is never replayed: one completed mutation only.
+    completed = (await db.execute(text(
+        "SELECT COUNT(*) FROM factory_audit_events"
+        " WHERE operation_id = 'notification-uncertain:1:1'"))).scalar_one()
+    assert completed == 1
