@@ -42,10 +42,11 @@ async def observe_notification_uncertainty(
         await db.rollback()
     except Exception:
         pass
-    if session_factory is None:
-        from app.database import AsyncSessionLocal as session_factory
-    fresh = session_factory()
+    fresh = None
     try:
+        if session_factory is None:
+            from app.database import AsyncSessionLocal as session_factory
+        fresh = session_factory()
         from app.services import factory_audit_service as _audit
         await _audit.record_event(
             fresh,
@@ -66,7 +67,8 @@ async def observe_notification_uncertainty(
             "Failed to record notification uncertainty for work item %s", item_id)
     finally:
         try:
-            await fresh.close()
+            if fresh is not None:
+                await fresh.close()
         except Exception:
             pass
 
@@ -195,17 +197,29 @@ class GithubWatcherService:
         ]
         if not stalled:
             return
+        from types import SimpleNamespace
         pending_items = [
-            (item.id, item.issue_number, item.pr_number) for item in stalled
+            (item.id, item.issue_number, item.issue_title, item.pr_number,
+             item.active_scope_revision, item.scope_id, item.owner_slot_id)
+            for item in stalled
         ]
+        stalled_by_id = {
+            entry[0]: SimpleNamespace(
+                id=entry[0], issue_number=entry[1], issue_title=entry[2],
+                pr_number=entry[3], active_scope_revision=entry[4],
+                scope_id=entry[5], owner_slot_id=entry[6],
+                dispatch_status="failed", escalation_reason=None,
+                updated_at=None)
+            for entry in pending_items
+        }
         current = await client.get_issues_by_number(
             scope.repo_owner,
             scope.repo_name,
-            [issue_number for _id, issue_number, _pr in pending_items],
+            [entry[1] for entry in pending_items],
         )
         pending_by_id = {entry[0]: entry for entry in pending_items}
-        for item in stalled:
-            _captured_id, issue_number, pr_number = pending_by_id[item.id]
+        for captured_id in list(pending_by_id):
+            _cid, issue_number, _title, pr_number, _rev, _scope, _owner = pending_by_id[captured_id]
             issue = current.get(issue_number)
             if issue is None or issue.get("state") != "closed":
                 continue
@@ -218,7 +232,7 @@ class GithubWatcherService:
                     item.pr_number,
                 )
                 continue
-            await self._complete_and_notify(db, scope, item)
+            await self._complete_and_notify(db, scope, stalled_by_id[captured_id])
 
     async def _complete_and_notify(
         self, db: AsyncSession, scope: TeamGithubScope, item: GithubWorkItem
@@ -228,6 +242,8 @@ class GithubWatcherService:
         captured_item_id = item.id
         captured_issue_number = item.issue_number
         captured_issue_title = item.issue_title
+        captured_pr_number = item.pr_number
+        captured_active_revision = item.active_scope_revision
         # A28-A35: the terminal transition records its sourced outcome fact.
         # A resolved PR on the closed issue is merge evidence (delivered).
         # A closure without any PR remains unknown: terminal tracking alone
@@ -241,16 +257,17 @@ class GithubWatcherService:
             fact_source="github_watcher_service._reconcile_closed_issues",
             fact_time=datetime.utcnow(),
         )
-        captured_active_revision = item.active_scope_revision
         captured_revision_id = (await db.scalars(
             select(GithubAttemptScopeRevision.id).where(
                 GithubAttemptScopeRevision.work_item_id == captured_item_id,
                 GithubAttemptScopeRevision.revision == captured_active_revision,
             ).limit(1)
         )).first()
-        item.dispatch_status = "completed"
-        item.escalation_reason = None
-        item.updated_at = datetime.utcnow()
+        from sqlalchemy import text as _sql_text
+        await db.execute(_sql_text(
+            "UPDATE github_work_items SET dispatch_status = 'completed',"
+            " escalation_reason = NULL, updated_at = :ts WHERE id = :item_id"),
+            {"ts": datetime.utcnow(), "item_id": captured_item_id})
         await db.commit()
         try:
             slots = (
@@ -270,7 +287,10 @@ class GithubWatcherService:
             await observe_notification_uncertainty(
                 db, item_id=captured_item_id, revision_id=captured_revision_id,
                 session_factory=getattr(self, "observer_session_factory", None))
-            await db.rollback()
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
 
 github_watcher_service = GithubWatcherService()
