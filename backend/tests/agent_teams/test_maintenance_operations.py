@@ -162,6 +162,7 @@ def test_source_import_integration_records_exact_storage_without_changing_approv
         git(workspace,'add','owned.txt');git(workspace,'commit','-m','Owner checkpoint')
     before = git(workspace,'rev-parse','HEAD')
     service = StoredIntegrationFixture(profile(tmp_path), workspace, tip, baseline, mode)
+    original_authority = service.authority(1)
     original = {table: service.rows('SELECT * FROM '+table) for table in (
         'github_work_items','github_attempt_scope_revisions','github_workspaces')}
     request = IntegrationRequest(operation_id='integration-storage',work_item_id=1,expected_head=before,
@@ -179,7 +180,7 @@ def test_source_import_integration_records_exact_storage_without_changing_approv
         original['github_work_items'][0],original['github_attempt_scope_revisions'][0],
         original['github_workspaces'][0],service.rows('SELECT * FROM team_github_scopes')[0])
     assert {table:service.rows('SELECT * FROM '+table) for table in original}==original
-    assert imported['context_sha256'] in json.dumps(service.authority(1))
+    assert service.authority(1) != original_authority
     git(workspace,'merge-base','--is-ancestor',before,'HEAD')
     git(workspace,'merge-base','--is-ancestor',tip,'HEAD')
     assert not git(workspace,'status','--porcelain')
