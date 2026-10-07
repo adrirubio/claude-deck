@@ -4737,6 +4737,59 @@ async def test_final_recovery_lifetimes_through_public_metrics(store, client, re
         2.0, 2)
 
 
+async def _public_recovery(client, scope_key=None):
+    now = datetime.utcnow()
+    params = {"window_start": (now - timedelta(hours=1)).isoformat(),
+              "window_end": (now + timedelta(hours=1)).isoformat()}
+    if scope_key:
+        params.update(filter_scope="scoped", scope_context_key=scope_key)
+    response = await client.get("/api/v1/factory/metrics", params=params)
+    assert response.status_code == 200, response.text
+    return next(s for s in response.json()["metrics"] if s["name"] == "recovery_success")
+
+
+@pytest.mark.parametrize(("statuses", "expected"), [
+    (("completed", "exhausted"), (1.0, 2)), (("completed", "completed"), (2.0, 2))])
+async def test_root3918_legacy_facts_keep_retained_event_identity(store, client, statuses, expected):
+    """Root 3918 (B4 38569491 F01, owner copy of its legacy-shape probe):
+    two old-format revision results with no recorded lifetime, on the same
+    item key and reused revision number, written by distinct operations.
+    Each keeps its own retained event identity; no shared legacy lifetime is
+    inferred. The public response counts both and states the uncertainty.
+    Limit: the legacy shape is written through the current record_event, as
+    the former writer did; the old module itself is not executed."""
+    await _install_marker(store)
+    await _seed_team(store)
+    await _seed_work(store, item_id=196, status="completed", workspace_id=196)
+    who = dict(slot=_OWNER["slot"], member=_OWNER["member"], workspace=196)
+    async with store() as db:
+        revision_id = await _insert_revision(db, 196, created="2026-10-07 10:00:00", **who)
+        await db.commit()
+        key = None
+        for index, status in enumerate(statuses):
+            if index:
+                await db.execute(text("DELETE FROM github_attempt_scope_revisions WHERE id = :id"),
+                                 {"id": revision_id})
+                replacement = await _insert_revision(db, 196, created="2026-10-07 11:00:00", **who)
+                assert replacement == revision_id
+                await db.commit()
+            source = ("github_dispatch_service", "github_verification_service")[index]
+            operation = f"revision_outcome:{revision_id}:{status}:{source}"
+            row = await audit.record_event(
+                db, event_kind="revision_outcome", source=source, occurred_at=datetime.utcnow(),
+                actor=audit.derive_actor(actor_kind="scheduler", scheduler="github_dispatch_scheduler"),
+                item_id=196, revision_id=revision_id, after_values={"status": status},
+                action_outcome="applied", sanitized_reason=f"revision {status}",
+                operation_id=operation, correlation_id=operation)
+            assert "revision_created_at" not in (row.context_snapshot or {})
+            key = row.scope_context_key
+            await db.commit()
+    for scope in (None, key):
+        sample = await _public_recovery(client, scope)
+        assert (sample["value"], sample["sample_count"]) == expected, sample
+        assert any("legacy revision results" in reason for reason in sample["unknown_reasons"])
+
+
 class _A34Client:
     """Fake client at the get_pull boundary; records each pull read."""
 

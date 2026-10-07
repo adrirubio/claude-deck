@@ -204,8 +204,7 @@ async def build_metrics_window(
         revision_results.setdefault(_revision_result_identity(row), set()).add(row.status)
     recovery_applied = sum(1 for statuses in revision_results.values() if "completed" in statuses)
     recovery_total = len(revision_results)
-    recovery_unbound = sum(1 for identity in revision_results
-                           if identity.endswith("|legacy") or identity.startswith("event:"))
+    recovery_unbound = sum(1 for identity in revision_results if identity.startswith("event:"))
     recovery_uncertain = await _count(db, ledger_scoped(
         select(func.count()).select_from(FactoryAuditEvent)
         .where(FactoryAuditEvent.event_kind.in_(("prepared_attempt_resume", "recovery_cancellation")),
@@ -318,8 +317,9 @@ async def build_metrics_window(
                  recovery_total, unknown=recovery_uncertain,
                  reasons=((["recovery actions with unsettled transport or external effects"]
                            if recovery_uncertain else [])
-                          + (["legacy revision results without lifetime identity are "
-                              "counted separately"] if recovery_unbound else []))),
+                          + (["legacy revision results without lifetime identity count "
+                              "once per retained event; their shared lifetime is unknown"]
+                             if recovery_unbound else []))),
         windowed("operator_interventions", "authenticated_actions", float(interventions),
                  interventions, excluded=intervention_excluded,
                  reasons=(["rejected or uncertain operator actions are excluded"]
@@ -368,15 +368,16 @@ def _revision_result_identity(row) -> str:
     revision (which nulls revision_id) never splits one result into two. The
     retained item lifetime key and the revision's recorded creation time
     keep a reused numeric revision ID, after item deletion or within one
-    item, a distinct revision. A legacy fact without a creation time stays
-    its own explicitly unbound identity and never merges with bound facts.
+    item, a distinct revision. Root 3918: a legacy fact without a recorded
+    lifetime keeps its own retained event identity. No shared legacy
+    lifetime is inferred from the item key or the numeric revision ID; the
+    metric states the uncertainty.
     """
     match = _REVISION_RESULT_OPERATION.match(row.operation_id or "")
     number = match.group(1) if match is not None else row.revision_id
-    if number is None or not row.item_context_key:
+    if number is None or not row.item_context_key or not row.revision_created_at:
         return f"event:{row.id}"
-    lifetime = row.revision_created_at or "legacy"
-    return f"{row.item_context_key}|revision:{number}|{lifetime}"
+    return f"{row.item_context_key}|revision:{number}|{row.revision_created_at}"
 _DESIGN_COMPLETION_KINDS = ("merged_design", "design_artifact_accepted")
 
 
